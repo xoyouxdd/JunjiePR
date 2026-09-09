@@ -1,0 +1,10 @@
+{
+  "name": "认可签卡绩效登记系统",
+  "short_name": "绩效登记",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#102033",
+  "description": "认可签卡绩效登记与查询系统：签卡登记、复核、缺勤、扣分、统计与PR排名。"
+}

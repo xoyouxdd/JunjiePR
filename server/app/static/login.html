@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#102033">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="canonical" href="https://124.220.229.9:28176/login">
+  <title>登录 - 认可签卡绩效登记系统</title>
+  <link rel="stylesheet" href="static/css/style.css?v=__STATIC_CACHE_VERSION__">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-panel">
+      <div class="brand-mark">FZ-PR</div>
+      <h1>认可签卡绩效登记系统</h1>
+      <p class="login-subtitle">内部运营工作台</p>
+      <form id="loginForm" class="form-stack">
+        <label>员工号 / 登录账号
+          <input name="employee_no" autocomplete="username" autocapitalize="off" required placeholder="请输入登录账号">
+        </label>
+        <label>密码 / PIN
+          <input name="password" type="password" autocomplete="current-password" required placeholder="请输入密码">
+        </label>
+        <button class="primary" type="submit">登录</button>
+      </form>
+      <div id="loginMsg" class="message"></div>
+    </section>
+  </main>
+  <script src="static/js/login.js?v=__STATIC_CACHE_VERSION__"></script>
+</body>
+</html>

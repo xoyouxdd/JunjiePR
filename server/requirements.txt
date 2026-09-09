@@ -1,0 +1,15 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+SQLAlchemy==2.0.36
+openpyxl==3.1.5
+Pillow==11.3.0
+PyMuPDF==1.26.3
+pillow-heif==1.1.0
+pytest==8.3.4
+httpx==0.28.1
+# pywebpush hard-imports these at runtime; pin them explicitly so
+# --no-deps or copy-style deployments never ship a broken push feature.
+pywebpush==2.4.0
+py-vapid>=1.7.0
+requests>=2.21.0

@@ -1,0 +1,76 @@
+{
+    email 785171846@qq.com
+    default_sni 124.220.229.9
+}
+
+admin.litepressure.cn {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:18081
+}
+
+http://124.220.229.9 {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:18082
+}
+
+# Existing global options must also contain: default_sni 124.220.229.9
+http://124.220.229.9:28190 {
+    redir https://124.220.229.9{uri} permanent
+}
+
+https://124.220.229.9 {
+    encode gzip zstd
+    tls {
+        issuer acme {
+            profile shortlived
+        }
+        renewal_window_ratio 0.5
+    }
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "DENY"
+        Referrer-Policy "same-origin"
+        Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+    }
+
+    # Standard-port entry for the recognition system. The marker cookie keeps
+    # subsequent absolute /static and /api requests on the same application.
+    @recognition_entry path /recognition /recognition/*
+    handle @recognition_entry {
+        uri strip_prefix /recognition
+        header Set-Cookie "RecognitionPortal=1; Path=/; Max-Age=2592000; Secure; HttpOnly; SameSite=Lax"
+        reverse_proxy 127.0.0.1:18082
+    }
+
+    # Clear the routing marker if this browser needs to return to the garden.
+    handle /recognition-exit {
+        header Set-Cookie "RecognitionPortal=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax"
+        redir /login 302
+    }
+
+    @recognition_session header Cookie *RecognitionPortal=1*
+    handle @recognition_session {
+        reverse_proxy 127.0.0.1:18082
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:18083
+    }
+}
+
+https://124.220.229.9:28176 {
+    encode gzip zstd
+    tls {
+        issuer acme {
+            profile shortlived
+        }
+        renewal_window_ratio 0.5
+    }
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Frame-Options "DENY"
+        Referrer-Policy "same-origin"
+        Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+    }
+    reverse_proxy 127.0.0.1:18082
+}

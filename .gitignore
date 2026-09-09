@@ -1,0 +1,35 @@
+# Never commit runtime data or credentials
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# User files and generated output
+uploads/
+data_v2/
+exports/
+output/
+outputs/
+*.zip
+*.tar.gz
+*.log
+
+# Runtime and build caches
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+.next/
+dist/
+build/
+.remote-runtime/
+.deploy-transport/
+.server-staging/
+
+# Historical operation material is deliberately not part of this audit snapshot
+docs/
