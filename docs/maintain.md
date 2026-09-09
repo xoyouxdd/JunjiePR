@@ -23,6 +23,14 @@
 | 用户能看见的功能 | `backend/app/changelog.py`（见 [changelog.md](changelog.md)） |
 | `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.py` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |
 
+## 上线前收口
+
+每次上线前必须确认：
+
+- 已生成并补齐应用内更新记录，记录按角色与权限配置展示范围；
+- `APP_VERSION`、最新更新记录版本一致；
+- 本次改动涉及的功能、接口、运维或发布说明均已同步到对应文档，新增文档已加入两个文档索引。
+
 ## 禁止
 
 - 不要把初始密码规则写成「应改为随机激活」
