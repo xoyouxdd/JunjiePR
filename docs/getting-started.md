@@ -1,11 +1,11 @@
 # 本地运行与测试
 
-工作目录必须是 `server/`。
+工作目录必须是 `backend/`。
 
 ## 启动
 
 ```bash
-cd server
+cd backend
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -16,7 +16,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 每个测试文件在导入时设置自己的数据目录，必须分进程跑：
 
 ```bash
-cd server
+cd backend
 python tests/run_all.py
 ```
 
@@ -28,7 +28,7 @@ python -m pytest tests/test_poc_idempotency.py -q
 
 ## 数据目录
 
-默认 `server/data_v2/`。可用环境变量 `RECOGNITION_V2_DATA_DIR` 指到隔离目录。
+默认 `backend/data_v2/`。可用环境变量 `RECOGNITION_V2_DATA_DIR` 指到隔离目录。表、主键、外键和索引见 [sqlite-schema.md](sqlite-schema.md)。
 
 不要把数据库、附件、`.env`、`.venv`、日志提交进 Git。
 

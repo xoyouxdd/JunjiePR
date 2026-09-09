@@ -30,6 +30,7 @@ build/
 .remote-runtime/
 .deploy-transport/
 .server-staging/
+.codex-local-data-*/
 
 # Local review and editor tooling, not product source
 .handover_review/
