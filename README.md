@@ -1,20 +1,26 @@
 # JunjiePR
 
-认可签卡绩效登记系统的当前可审核源码快照。
+认可签卡绩效登记系统。当前业务是 `server/`（FastAPI + SQLite + 原生 JS），不是 `portal/`。
 
-## 目录
+正式入口：`https://124.220.229.9:28176/`
 
-- `server/`：当前服务端候选 V2.23.74，包含 FastAPI 应用、测试和部署运维脚本。
-- `portal/`：原有门户前端源码。
+## 文档
 
-## 当前入口约定
+| 文档 | 内容 |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | 目录职责、现用栈、遗留门户 |
+| [docs/getting-started.md](docs/getting-started.md) | 本地运行、测试、数据目录 |
+| [docs/release.md](docs/release.md) | 发布打包与版本号 |
+| [docs/operations.md](docs/operations.md) | 备份、恢复演练、健康检查 |
+| [docs/security.md](docs/security.md) | 仓库边界与内部约定 |
+| [docs/changelog.md](docs/changelog.md) | 应用内「更新记录」怎么维护 |
+| [docs/maintain.md](docs/maintain.md) | 改代码时文档改哪 |
+| [docs/legacy-portal.md](docs/legacy-portal.md) | 旧门户说明（非正式入口） |
 
-正式使用入口为 `https://124.220.229.9:28176/`。当前候选已将规范链接、PWA 启动范围与站内通知跳转统一到该直连入口。
+脚本旁的详细手册：[`server/ops/README.md`](server/ops/README.md)。
 
-## 安全边界
+## 仓库
 
-本仓库只包含源码与测试，不包含生产或测试数据库、附件、上传文件、缓存、日志、运行时、会话、密码、密钥或服务器凭据。
-
-## 审核状态
-
-V2.23.74 已完成本地入口、文件选择与安全回归验证，但尚未部署生产。生产当前版本为 V2.23.73。
+- `server/`：现用业务系统
+- `docs/`：说明文档
+- `portal/`：遗留门户源码，不要当现用前端

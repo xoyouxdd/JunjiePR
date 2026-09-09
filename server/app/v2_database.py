@@ -152,6 +152,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-collaborative-materials-and-violation-absence", "ensure_collaborative_material_columns"),
     ("2026-09-account-status-password-timestamp", "ensure_account_status_password_timestamp"),
     ("2026-09-login-account-archive", "ensure_login_account_archive_columns"),
+    ("2026-09-submission-payload-digest", "ensure_submission_payload_digest"),
 ]
 
 
@@ -258,6 +259,13 @@ def ensure_account_status_password_timestamp(db) -> None:
             ")"
         )
     )
+    db.commit()
+
+
+def ensure_submission_payload_digest(db) -> None:
+    columns = {row[1] for row in db.execute(text("PRAGMA table_info(submission_requests)"))}
+    if "payload_digest" not in columns:
+        db.execute(text("ALTER TABLE submission_requests ADD COLUMN payload_digest VARCHAR(64)"))
     db.commit()
 
 

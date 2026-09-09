@@ -31,5 +31,6 @@ build/
 .deploy-transport/
 .server-staging/
 
-# Historical operation material is deliberately not part of this audit snapshot
-docs/
+# Local review and editor tooling, not product source
+.handover_review/
+.mimosa/

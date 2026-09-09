@@ -12,6 +12,8 @@ def test_mobile_date_submission_explicitly_normalizes_and_sets_required_dates():
     assert "function requireSubmittedDate(data,input,label)" in source
     assert "form.querySelectorAll('input[type=\"date\"][name]')" in source
     assert "data.set(input.name,value)" in source
+    assert "dataset.submitDateCleared" in source
+    assert "if(input?.dataset.submitDateCleared==='1')return ''" in source
 
 
 def test_all_business_date_write_forms_use_the_mobile_date_submission_guard():

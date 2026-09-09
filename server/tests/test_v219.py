@@ -23,7 +23,6 @@ from app.main import app  # noqa: E402
 from app.v2_database import SessionLocal, ensure_gsm_management_scopes, ensure_highest_admin_account  # noqa: E402
 from app.v2_models import (  # noqa: E402
     AttendanceMonthlyScore,
-    AppNotification,
     Attraction,
     AuditLog,
     CircleTransferRequest,
@@ -43,7 +42,6 @@ from app.v2_models import (  # noqa: E402
     Role,
     SickLeaveRecord,
     StoredFile,
-    PushSubscription,
     UserAccount,
     WorkGroup,
 )
@@ -176,6 +174,7 @@ def test_void_filter_export_and_security_watermarks() -> None:
         workbook = load_workbook(BytesIO(exported.content))
         assert workbook.sheetnames == ["导出说明", "月度综合分", "月度综合分明细", "层级绩效明细", "员工号变更对照", "签卡明细", "扣分明细", "病假明细", "作废操作记录"]
         assert workbook.active.title == "层级绩效明细"
+        assert "认可数据" in str(workbook["导出说明"]["A1"].value)
         export_context = {row[0].value: row[1].value for row in workbook["导出说明"].iter_rows(min_row=2)}
         assert export_context["统计月份"] == month
         assert export_context["景点圈"] == "热力追踪"
@@ -307,6 +306,8 @@ def test_v220_sick_loa_follow_up_and_password_permissions() -> None:
             files=proof,
         )
         assert first_range.status_code == 200, first_range.text
+        first_range_id = client.get("/api/sick-leaves", params={"month": month}).json()[0]["id"]
+        assert client.post(f"/api/sick-leaves/{first_range_id}/void", json={"reason": "延长缺勤区间前先作废原记录"}).status_code == 200
         extended = client.post(
             "/api/sick-leaves",
             data={
@@ -484,76 +485,6 @@ def test_four_role_groups_and_statistics_reads_are_business_read_only() -> None:
         assert client.get("/api/statistics", params={"month": month}).status_code == 200
         assert client.get("/api/member-score-summary", params={"month": month}).status_code == 403
         assert client.get("/api/hr/employees").status_code == 200
-
-
-def test_review_creates_in_app_notice_and_uses_registered_device(monkeypatch) -> None:
-    """A notification is durable even when browser push delivery is unavailable."""
-    from app.routers import v2 as v2_router
-
-    delivered: list[int] = []
-    monkeypatch.setattr(v2_router, "send_notification_pushes", lambda _db, notification_id: delivered.append(notification_id))
-    today_value = date.today().isoformat()
-    with SessionLocal() as db:
-        supervisor = db.query(Employee).filter_by(employee_no="TATEST01").one()
-        cm = db.query(Employee).filter_by(employee_no="CMTEST01").one()
-        recognition_type = db.query(RecognitionType).filter_by(active=True).first()
-        record = RecognitionRecord(
-            employee_id=cm.id,
-            employee_no=cm.employee_no,
-            employee_name=cm.name,
-            employee_role_snapshot="CM",
-            home_attraction_id=cm.attraction_id,
-            home_attraction_name="测试景点",
-            occurred_attraction_id=cm.attraction_id,
-            recognition_date=today_value,
-            recognition_month=today_value[:7],
-            recognition_type_id=recognition_type.id,
-            recognition_type_name=recognition_type.name,
-            content="系统外提醒回归",
-            recognizer_employee_id=supervisor.id,
-            recognizer_name=supervisor.name,
-            recognizer_role_snapshot="TA主管",
-            operator_employee_id=cm.id,
-            operator_name=cm.name,
-            source="self",
-            fraction=Decimal("0.50"),
-            status="pending",
-            assigned_reviewer_id=supervisor.id,
-        )
-        db.add(record)
-        db.commit()
-        record_id, cm_id = record.id, cm.id
-
-    with TestClient(app) as client:
-        login(client, "CMTEST01")
-        config = client.get("/api/notifications/push-config")
-        # Web Push is optional.  Approval notices must remain usable in-app
-        # even if the server has no VAPID configuration.
-        assert config.status_code in {200, 503}, config.text
-        push_configured = config.status_code == 200
-        if push_configured:
-            assert len(config.json()["public_key"]) > 40
-            saved = client.post(
-                "/api/push-subscriptions",
-                json={"subscription": {"endpoint": "https://push.invalid/test-device", "keys": {"p256dh": "a" * 40, "auth": "b" * 24}}},
-            )
-            assert saved.status_code == 200, saved.text
-        client.post("/api/logout")
-        login(client, "TATEST01")
-        reviewed = client.post(f"/api/reviews/{record_id}", json={"action": "confirm"})
-        assert reviewed.status_code == 200, reviewed.text
-        assert reviewed.json()["notification_created"] is True
-        client.post("/api/logout")
-        login(client, "CMTEST01")
-        notices = client.get("/api/notifications").json()
-        assert any(item["record_id"] == record_id and item["type"] == "recognition_review" for item in notices["items"])
-        notice_id = next(item["id"] for item in notices["items"] if item["record_id"] == record_id)
-        assert client.post("/api/notifications/read", json={"ids": [notice_id]}).status_code == 200
-
-    with SessionLocal() as db:
-        assert db.query(AppNotification).filter_by(employee_id=cm_id, record_id=record_id).count() == 1
-        assert db.query(PushSubscription).filter_by(employee_id=cm_id, active=True).count() == (1 if push_configured else 0)
-    assert delivered
 
 
 def test_pr_leader_ranking_counts_each_confirmed_record_once_per_supervisor() -> None:
@@ -1285,11 +1216,11 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['absence','缺勤登记'],['entries','主管登记记录']);" in script
     assert "items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','整组移交']" in script
     assert "async function renderMonthClose" in script
-    assert "if (!['CM','TR'].includes(r)) items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);" in script
+    assert "items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);" in script
     assert "function renderPasswordPage" in script
     assert "const canCorrectName=['HR_CIRCLE','SYSTEM_ADMIN'].includes(state.me.role_code);" in script
     assert '<h2>账号姓名修改</h2>' in script
-    assert 'id="passwordBtn"' in script
+    assert 'id="passwordBtn"' not in script
     assert "function recognizerGroups(rows)" in script
     assert "label:'热力追踪主管'" in script
     assert "label:'矮人迷宫主管'" in script
@@ -1358,11 +1289,11 @@ def test_v2234_imported_recognizers_are_available_from_policy_start() -> None:
     script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert 'data-evidence-camera' in script
     assert 'data-evidence-album' in script
-    assert 'data-evidence-camera-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" capture="environment" hidden' in script
-    assert 'data-evidence-album-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden' in script
+    assert 'data-evidence-camera-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" capture="environment"' in script
+    assert 'data-evidence-album-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"' in script
     assert 'data-image-preview' in script
     assert 'openImagePreview' in script
-    assert "data.set('image',evidence.files[0])" in script
+    assert "data.append('image',file,file.name)" in script
     stylesheet = (Path(__file__).parents[1] / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
     assert ".image-preview-dialog" in stylesheet
     assert ".image-preview-stage img[hidden]" in stylesheet

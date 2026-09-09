@@ -14,6 +14,8 @@ def test_file_selection_uses_native_labels_without_hidden_input_clicks() -> None
     # path, including browsers that block script-triggered hidden file inputs.
     assert 'class="secondary native-file-trigger" for="recognitionCameraInput"' in script
     assert 'class="secondary native-file-trigger" for="recognitionAlbumInput"' in script
+    assert 'class="secondary native-file-trigger" for="importEmployeesWorkbook"' in script
+    assert 'class="native-file-input" name="workbook"' in script
     assert 'class="native-file-input" data-material-pdf-input' in script
     assert 'class="native-file-input" data-material-camera-input' in script
     assert 'class="native-file-input" data-material-album-input' in script

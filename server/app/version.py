@@ -1,9 +1,11 @@
-"""Single source of truth for application and static-cache versions.
+"""Calendar edition versions.
 
-Bump APP_VERSION for every release; STATIC_CACHE_VERSION only needs a new
-marker when HTML/CSS/JS assets referenced by the app shell change, so that
-browsers drop their cached copies.
+APP_VERSION is YYYY.MM.DD.N: calendar date plus the nth edition that day
+(1-based). STATIC_CACHE_VERSION stays equal to APP_VERSION so browsers
+drop cached CSS/JS whenever a new edition ships.
+
+Same day → increment N. New day → YYYY.MM.DD.1.
 """
 
-APP_VERSION = "2.23.74"
-STATIC_CACHE_VERSION = "2.23.74-20260909-direct-entrypoint-r1"
+APP_VERSION = "2026.09.10.3"
+STATIC_CACHE_VERSION = APP_VERSION

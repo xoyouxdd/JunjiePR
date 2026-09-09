@@ -20,7 +20,6 @@ from app.main import app  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
 from app.v2_database import SessionLocal  # noqa: E402
 from app.v2_models import (  # noqa: E402
-    AppNotification,
     DeductionRecord,
     Employee,
     EmployeeMonthOrganizationSnapshot,
@@ -129,7 +128,6 @@ def test_appeal_independent_review_and_in_app_notice() -> None:
 
     with SessionLocal() as db:
         assert db.get(GovernanceCase, case_id).status == "resolved"
-        assert db.query(AppNotification).filter_by(employee_id=cm_id, record_type="governance_case", record_id=case_id).count() == 1
 
 
 def test_month_snapshot_correction_ledger_and_operations_aggregate() -> None:

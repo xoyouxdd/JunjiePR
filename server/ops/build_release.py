@@ -1,36 +1,59 @@
-﻿"""Build a production-safe source package without runtime data or uploads."""
+"""Build a production-safe source package without runtime data or uploads."""
 
 from __future__ import annotations
 
 import hashlib
-import shutil
+import re
 import zipfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT.parent
-DESTINATION = WORKSPACE / "recognition-v2295-candidate-20260904-001.zip"
-EXCLUDED_PARTS = {"data_v2", "__pycache__", ".pytest_cache"}
+EXCLUDED_PARTS = {"data_v2", "__pycache__", ".pytest_cache", ".venv", "venv", "node_modules", ".git"}
 EXCLUDED_SUFFIXES = {".db", ".sqlite", ".log", ".pyc", ".pem", ".key", ".zip"}
+EXCLUDED_NAMES = {".env", "secrets.json", ".coverage"}
 
 
-def should_include(path: Path) -> bool:
-    relative = path.relative_to(ROOT)
-    return not any(part in EXCLUDED_PARTS for part in relative.parts) and path.suffix.lower() not in EXCLUDED_SUFFIXES
+def read_app_version() -> str:
+    text = (ROOT / "app" / "version.py").read_text(encoding="utf-8")
+    match = re.search(r'^APP_VERSION\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+    if not match:
+        raise RuntimeError("APP_VERSION missing from app/version.py")
+    return match.group(1)
+
+
+def package_name(version: str, day: str | None = None) -> str:
+    del day  # Version already encodes the calendar day and edition.
+    return f"recognition-v{version}.zip"
+
+
+def should_include(path: Path, root: Path | None = None) -> bool:
+    root = root or ROOT
+    relative = path.relative_to(root)
+    if any(part in EXCLUDED_PARTS for part in relative.parts):
+        return False
+    if path.name in EXCLUDED_NAMES or path.name.startswith(".env"):
+        return False
+    if path.suffix.lower() in EXCLUDED_SUFFIXES:
+        return False
+    return True
 
 
 def main() -> None:
-    if DESTINATION.exists():
-        DESTINATION.unlink()
-    with zipfile.ZipFile(DESTINATION, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    version = read_app_version()
+    destination = WORKSPACE / package_name(version)
+    temp_path = destination.with_name(destination.name + ".partial")
+    if temp_path.exists():
+        temp_path.unlink()
+    with zipfile.ZipFile(temp_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in sorted(ROOT.rglob("*")):
             if path.is_file() and should_include(path):
                 archive.write(path, path.relative_to(ROOT).as_posix())
-    digest = hashlib.sha256(DESTINATION.read_bytes()).hexdigest().upper()
-    print(f"{DESTINATION.name} {digest}")
+    temp_path.replace(destination)
+    digest = hashlib.sha256(destination.read_bytes()).hexdigest().upper()
+    print(f"{destination.name} {digest}")
 
 
 if __name__ == "__main__":
     main()
-

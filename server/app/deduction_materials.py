@@ -161,13 +161,13 @@ async def stage_pdf_material(db, upload: UploadFile, uploader_id: int) -> Stored
         document = fitz.open(path)
         page_count = document.page_count
         document.close()
+        if page_count < 1 or page_count > MAX_PDF_PAGES:
+            raise HTTPException(400, f"当前PDF共{page_count}页，最多支持{MAX_PDF_PAGES}页，请拆分后重新提交")
     except Exception as exc:
         path.unlink(missing_ok=True)
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(400, "PDF无法读取，请重新选择文件") from exc
-    if page_count < 1 or page_count > MAX_PDF_PAGES:
-        raise HTTPException(400, f"当前PDF共{page_count}页，最多支持{MAX_PDF_PAGES}页，请拆分后重新提交")
     row = StoredFile(
         storage_key=storage_key,
         original_filename=Path(upload.filename).name,

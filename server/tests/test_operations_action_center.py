@@ -21,7 +21,7 @@ os.environ["RECOGNITION_BACKUP_HEALTH_STATUS_FILE"] = str(HEALTH_FILE)
 from app.main import app  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
 from app.v2_database import SessionLocal  # noqa: E402
-from app.v2_models import AppNotification, Employee, UserAccount  # noqa: E402
+from app.v2_models import Employee, UserAccount  # noqa: E402
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:
@@ -59,16 +59,10 @@ def enable_circle_hr_test_login() -> None:
 def test_action_center_respects_five_level_boundaries_and_operations_is_admin_only() -> None:
     prepare_health_report()
     with TestClient(app) as client:
-        with SessionLocal() as db:
-            cm = db.query(Employee).filter_by(employee_no="CMTEST01").one()
-            db.add(AppNotification(employee_id=cm.id, notification_type="review", title="测试审批", body="已确认", target_path="/"))
-            db.commit()
-
         login(client, "CMTEST01")
         cm_actions = client.get("/api/action-center")
         assert cm_actions.status_code == 200
         assert cm_actions.json()["role"] == "CM"
-        assert any(item["type"] == "approval_notification" for item in cm_actions.json()["items"])
         assert client.get("/api/admin/operations-health").status_code == 403
 
         client.post("/api/logout")

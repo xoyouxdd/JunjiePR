@@ -180,6 +180,7 @@ class SubmissionRequest(Base):
     operation: Mapped[str] = mapped_column(String(30), index=True)
     request_key: Mapped[str] = mapped_column(String(100))
     entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    payload_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
@@ -440,43 +441,6 @@ class RecognitionReview(Base):
     reviewer_name: Mapped[str] = mapped_column(String(100))
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-
-
-class AppNotification(Base):
-    """In-app notices.  Push delivery is optional and never replaces this record."""
-
-    __tablename__ = "app_notifications"
-    __table_args__ = (Index("ix_app_notification_employee_created", "employee_id", "created_at"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
-    notification_type: Mapped[str] = mapped_column(String(40), index=True)
-    title: Mapped[str] = mapped_column(String(120))
-    body: Mapped[str] = mapped_column(String(500))
-    target_path: Mapped[str] = mapped_column(String(255), default="/")
-    record_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    record_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
-    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
-
-
-class PushSubscription(Base):
-    """A browser/device subscription owned by the currently signed-in employee."""
-
-    __tablename__ = "push_subscriptions"
-    __table_args__ = (UniqueConstraint("endpoint", name="uq_push_subscription_endpoint"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
-    endpoint: Mapped[str] = mapped_column(Text)
-    p256dh: Mapped[str] = mapped_column(String(255))
-    auth: Mapped[str] = mapped_column(String(255))
-    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
-    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    failed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class StoredFile(Base):

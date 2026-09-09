@@ -81,6 +81,40 @@ def test_photo_material_creates_one_pending_record_then_activates_after_pdf_gene
         assert generated.content.startswith(b"%PDF")
 
 
+def test_overpage_pdf_is_rejected_without_orphan_source_files() -> None:
+    import fitz
+
+    from app.v2_database import FILE_DIR
+
+    document = fitz.open()
+    for _ in range(7):
+        document.new_page()
+    too_long = document.tobytes()
+    document.close()
+    FILE_DIR.mkdir(parents=True, exist_ok=True)
+    before = {path.name for path in FILE_DIR.iterdir() if path.is_file()}
+    with TestClient(app) as client:
+        login(client)
+        options = client.get("/api/options").json()
+        target = next(row for row in client.get("/api/employee-targets", params={"usage": "deduction", "keyword": "CMTEST01"}).json()["items"] if row["employee_no"] == "CMTEST01")
+        deduction_type = options["deduction_types"][0]
+        statement = next(row for row in options["deduction_levels"] if row["code"] == "STATEMENT")
+        rejected = client.post(
+            "/api/deductions",
+            data={
+                "employee_id": str(target["id"]),
+                "deduction_type_id": str(deduction_type["id"]),
+                "deduction_level_id": str(statement["id"]),
+                "occurred_on": date.today().isoformat(),
+                "description": "超页PDF应被拒收",
+            },
+            files={"document": ("too-long.pdf", too_long, "application/pdf")},
+        )
+        assert rejected.status_code == 400, rejected.text
+    after = {path.name for path in FILE_DIR.iterdir() if path.is_file()}
+    assert after == before
+
+
 def test_photo_picker_keeps_camera_and_album_as_distinct_mobile_entries() -> None:
     source = (Path(__file__).resolve().parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert "data-material-camera-input" in source
@@ -101,6 +135,8 @@ def test_photo_picker_supports_pre_submission_delete_replace_and_local_thumbnail
         "URL.createObjectURL",
         "URL.revokeObjectURL",
         "未上传时可先提交，主管可后续补充",
+        "材料已就绪",
+        "submitDateCleared",
     ):
         assert marker in source
 

@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import v2
@@ -184,15 +184,6 @@ def startup() -> None:
 
 app.include_router(v2.router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
-
-
-@app.get("/service-worker.js", include_in_schema=False)
-def service_worker():
-    return FileResponse(
-        BASE_DIR / "app" / "static" / "service-worker.js",
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
-    )
 
 
 @app.get("/")

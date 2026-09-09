@@ -107,6 +107,51 @@ def test_month_close_is_scoped_to_circle_hr_and_reopen_is_controlled() -> None:
         assert db.query(MonthClosure).filter(MonthClosure.closure_month == global_month, MonthClosure.attraction_id.is_(None)).count() == 1
 
 
+def test_global_month_close_uses_checklist_and_blocks_pending_work() -> None:
+    month = "2099-04"
+    with TestClient(app) as client:
+        restore_test_accounts()
+        login(client, "CMTEST01")
+        options = client.get("/api/options").json()
+        venue_id = next(row["id"] for row in options["recognition_venues"] if row["name"] == "热力追踪")
+        type_id = next(row["id"] for row in options["recognition_types"] if row["code"] == "SAFETY")
+        heat_id = next(row["id"] for row in options["employee_circles"] if row["name"] == "热力追踪")
+        recognizers = client.get("/api/recognizers", params={"attraction_id": heat_id, "recognition_date": f"{month}-10"}).json()
+        recognizer_id = next(row["id"] for row in recognizers if row["employee_no"] == "TATEST01")
+        pending = client.post(
+            "/api/recognitions",
+            data={
+                "recognition_date": f"{month}-10",
+                "occurred_attraction_id": str(venue_id),
+                "recognition_type_id": str(type_id),
+                "recognizer_employee_id": str(recognizer_id),
+                "content": "全局月结待复核",
+                "idempotency_key": "global-month-close-pending",
+            },
+            files={"image": ("recognition.png", make_png(), "image/png")},
+        )
+        assert pending.status_code == 200, pending.text
+        pending_id = pending.json()["record"]["id"]
+
+        client.post("/api/logout")
+        login(client, "HR01", "HR123")
+        preview = client.get(f"/api/month-closes/{month}")
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["attraction_name"] == "全部景点圈"
+        assert any(item["code"] == "recognition_review" and item["count"] for item in preview.json()["checklist"])
+        blocked = client.post(f"/api/month-closes/{month}/close", json={"attraction_id": None, "reason": "全局关闭"})
+        assert blocked.status_code == 409, blocked.text
+        assert blocked.json()["detail"]["code"] == "MONTH_CLOSE_CHECKLIST_INCOMPLETE"
+
+        client.post("/api/logout")
+        login(client, "TATEST01")
+        assert client.post(f"/api/reviews/{pending_id}", json={"action": "confirm"}).status_code == 200
+        client.post("/api/logout")
+        login(client, "HR01", "HR123")
+        closed = client.post(f"/api/month-closes/{month}/close", json={"attraction_id": None, "reason": "全局关闭"})
+        assert closed.status_code == 200, closed.text
+
+
 def test_closed_circle_blocks_record_mutations() -> None:
     month = "2099-02"
     with TestClient(app) as client:
