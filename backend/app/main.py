@@ -18,6 +18,9 @@ from app.deduction_materials import start_deduction_material_worker
 from app.v2_database import SessionLocal
 from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 
+# Starlette 0.47+ streams file parts to a spooled temp file. The 1MB
+# max_part_size only caps non-file form fields; 100MB materials are files.
+
 
 app = FastAPI(title="认可签卡绩效登记系统 V2", version=APP_VERSION)
 

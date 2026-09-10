@@ -7,6 +7,23 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.10.7",
+        "date": "2026-09-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "上传组件升级，大文件不再卡死服务",
+                "detail": "服务端解析库已升级到含大文件修复的版本，并与100MB材料上限对齐。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "弹窗和手机更多菜单共用同一套键盘操作",
+                "detail": "确认框、输入框、预览和更多抽屉都会锁住背景、Tab循环、Esc关闭，并回到原来的按钮。日期和文件选择器仍走系统原生窗口。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.10.6",
         "date": "2026-09-10",
         "status": "candidate",

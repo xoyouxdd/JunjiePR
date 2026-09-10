@@ -411,3 +411,63 @@ def test_circle_hr_alerts_are_filtered_before_the_page_limit() -> None:
         messages = [row["message"] for row in client.get("/api/hr/alerts").json()]
         assert "本圈必须可见的告警" in messages
         assert not any(message.startswith("其他圈告警") for message in messages)
+
+
+def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
+    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+    assert "function bindDialogLayer(" in script
+    assert "function isNativePickerControl(" in script
+    assert "node.inert=true" in script
+    assert "if(isNativePickerControl(document.activeElement))return" in script
+    assert "bindDialogLayer(overlay,{initialFocus:cancel,onClose:value=>resolve(value===true)})" in script
+    assert "bindDialogLayer(overlay,{initialFocus:input,onClose:value=>resolve(typeof value==='string'?value:null)})" in script
+    assert "bindDialogLayer(drawer,{" in script
+    assert "allowClose:()=>!submitting" in script
+
+
+def test_starlette_multipart_fix_and_hundred_megabyte_limit_are_locked() -> None:
+    import fastapi
+    import starlette
+    from starlette.formparsers import MultiPartParser
+
+    def version_tuple(value: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in value.split(".")[:3])
+
+    assert version_tuple(fastapi.__version__) >= (0, 116, 1)
+    assert version_tuple(starlette.__version__) >= (0, 47, 2)
+    assert MultiPartParser.max_part_size == 1024 * 1024
+    source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    assert "Starlette 0.47+" in source
+    assert "fastapi==0.116.2" in (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "starlette==0.47.3" in (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+
+def test_manager_recognition_accepts_an_image_larger_than_one_megabyte() -> None:
+    buffer = BytesIO()
+    Image.frombytes("RGB", (800, 800), os.urandom(800 * 800 * 3)).save(buffer, format="PNG")
+    payload = buffer.getvalue()
+    assert len(payload) > 1024 * 1024
+    with TestClient(app) as client:
+        _login(client)
+        options = client.get("/api/options").json()
+        target = next(
+            row
+            for row in client.get("/api/employee-targets", params={"usage": "recognition", "keyword": "CMTEST01"}).json()["items"]
+            if row["employee_no"] == "CMTEST01"
+        )
+        me = client.get("/api/me").json()
+        created = client.post(
+            "/api/recognitions",
+            data={
+                "recognition_date": "2098-09-01",
+                "occurred_attraction_id": str(next(row["id"] for row in options["recognition_venues"] if row["name"] == "热力追踪")),
+                "recognition_type_id": str(next(row["id"] for row in options["recognition_types"] if row["code"] == "SAFETY")),
+                "recognizer_employee_id": str(me["id"]),
+                "content": "大图上传上限验证",
+                "employee_id": str(target["id"]),
+                "idempotency_key": "audit-large-image",
+            },
+            files={"image": ("large.png", payload, "image/png")},
+        )
+        assert created.status_code == 200, created.text
