@@ -37,7 +37,7 @@ def test_submission_and_confirmation_paths_use_existing_interfaces_without_exter
     style = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
 
     assert "response[\"encouragement_options\"] = encouragement_options(" in router
-    assert "stage='confirmed'" in router
+    assert 'stage="submitted"' in router
     assert "showRecognitionEncouragement(result?.encouragement_options)" in script
     assert "recognition-v2:encouragement-seen:" in script
     assert "localStorage.setItem" in script

@@ -29,9 +29,11 @@ def test_recognition_rebuilds_file_payload_and_has_browser_compatibility_fallbac
 
     assert "function readableEvidenceFile(form)" in script
     assert "function evidenceSelectionAttempted(form)" in script
-    assert "function recognitionSubmissionData(form)" in script
+    assert "function recognitionSubmissionData(form,imageRequired=true)" in script
     assert "form.querySelectorAll('[name]').forEach(control=>" in script
     assert "data.append('image',file,file.name)" in script
+    assert "if(imageRequired&&!file)" in script
+    assert "if(file){data.append('image',file,file.name)" in script
     assert "function recognitionImageIssueMessage(form)" in script
     assert "当前浏览器不支持本次图片上传" in script
     assert "请先选择认可图片后提交。" in script

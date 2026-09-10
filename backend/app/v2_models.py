@@ -82,8 +82,8 @@ class EmployeeNumberHistory(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
-    old_employee_no: Mapped[str] = mapped_column(String(50), index=True)
-    new_employee_no: Mapped[str] = mapped_column(String(50), index=True)
+    old_employee_no: Mapped[str] = mapped_column(String(50))
+    new_employee_no: Mapped[str] = mapped_column(String(50))
     effective_on: Mapped[str] = mapped_column(String(10), index=True)
     reason: Mapped[str] = mapped_column(Text)
     changed_by: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
@@ -334,6 +334,7 @@ class RecognitionRecord(Base):
             "reviewed_at",
             "id",
         ),
+        Index("ix_recognition_month_close_scope", "home_attraction_id", "recognition_month", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -636,7 +637,10 @@ class DeductionLevel(Base):
 
 class DeductionRecord(Base):
     __tablename__ = "deduction_records"
-    __table_args__ = (Index("ix_deduction_repeat_lookup", "employee_id", "deduction_type_id", "status", "occurred_on"),)
+    __table_args__ = (
+        Index("ix_deduction_repeat_lookup", "employee_id", "deduction_type_id", "status", "occurred_on"),
+        Index("ix_deduction_month_close_scope", "attraction_id_snapshot", "deduction_month", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
@@ -785,6 +789,9 @@ class DeductionFollowUp(Base):
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("ix_audit_operator_action_recent", "operator_id", "action", text("created_at DESC"), text("id DESC")),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     operator_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)

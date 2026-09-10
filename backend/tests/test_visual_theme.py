@@ -49,3 +49,16 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert "外传可追溯" not in script
     assert "rgba(66, 78, 94, .08)" in css
     assert "#pageBindHint" in css
+
+
+def test_hr_new_employee_form_has_responsive_field_and_action_layout() -> None:
+    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
+
+    assert "hr-create-panel" in script
+    assert "hr-create-heading" in script
+    assert "hr-create-actions" in script
+    assert "创建账号" in script
+    assert "grid-template-columns: minmax(210px, 1.2fr)" in css
+    assert "@media (min-width: 761px) and (max-width: 1180px)" in css
+    assert "#newEmployee .hr-create-actions button { width: 100%" in css

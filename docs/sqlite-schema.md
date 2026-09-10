@@ -1,6 +1,6 @@
 # SQLite 表、键、索引
 
-对照当前程序 `2026.09.10.3`。权威定义在代码里，本文件只记录现在落地的结构：
+对照当前程序 `2026.09.10.5`。权威定义在代码里，本文件只记录现在落地的结构：
 
 - 表与字段：`backend/app/v2_models.py`
 - 启动建库、一次性补丁、额外索引、月度分值视图：`backend/app/v2_database.py`
@@ -535,6 +535,7 @@
 | `ix_recognition_pr_ranking` | `status`, `recognition_date`, `recognition_type_id`, `employee_id` |
 | `ix_recognition_leader_ranking` | `home_attraction_id`, `source`, `status`, `recognition_date`, `operator_employee_id` |
 | `ix_recognition_leader_participant_ranking` | `home_attraction_id`, `status`, `recognition_date`, `recognition_type_id` |
+| `ix_recognition_month_close_scope` | `home_attraction_id`, `recognition_month`, `status` |
 
 ### `recognition_attachments`
 
@@ -846,6 +847,7 @@
 | `ix_deduction_pending_material_lookup` | `status`, `material_status`, `employee_id`, `deduction_type_id`, `deduction_level_id`, `occurred_on` |
 | `ix_deduction_month_employee_status` | `deduction_month`, `employee_id`, `status` |
 | `ix_deduction_pr_ranking` | `status`, `occurred_on`, `deduction_type_id`, `employee_id` |
+| `ix_deduction_month_close_scope` | `attraction_id_snapshot`, `deduction_month`, `status` |
 
 ### `deduction_material_jobs`
 
@@ -970,6 +972,8 @@
 
 键：PK `id`；FK `operator_id`。列级索引：`action`、`entity_type`、`created_at`。
 
+复合索引：`ix_audit_operator_action_recent` (`operator_id`, `action`, `created_at DESC`, `id DESC`)；用于每个操作人最近导出记录。
+
 不记录图片内容、明文密码或会话 Cookie。
 
 ### `system_alerts`
@@ -1008,6 +1012,8 @@
 ---
 
 ## 视图 `v_employee_month_scores`
+
+该视图保留给兼容调用。现用首页、组员汇总、统计明细和统计/导出通过 `score_queries.py` 的参数化查询先把月份与员工范围下推到各聚合源，避免查询一个月或一个人时扫描全部历史。
 
 启动时 `DROP VIEW IF EXISTS` 再重建。按员工、月份汇总：
 

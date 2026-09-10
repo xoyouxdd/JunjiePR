@@ -899,11 +899,11 @@ def test_circle_hr_accounts_are_scoped_and_can_change_password() -> None:
             "/api/hr/score-rules",
             json={"role_code": "GSM", "score": "9.99", "effective_date": date.today().isoformat()},
         ).status_code == 403
-        allowed = client.post(
+        scoped_rule = client.post(
             "/api/hr/score-rules",
             json={"role_code": "SUPERVISOR", "score": "1.10", "effective_date": date.today().isoformat()},
         )
-        assert allowed.status_code == 200, allowed.text
+        assert scoped_rule.status_code == 403, scoped_rule.text
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         admin_rule = client.post(
@@ -911,6 +911,14 @@ def test_circle_hr_accounts_are_scoped_and_can_change_password() -> None:
             json={"role_code": "GSM", "score": "0.50", "effective_date": date.today().isoformat()},
         )
         assert admin_rule.status_code == 200, admin_rule.text
+        assert client.get("/api/admin/logs", params={"limit": -1}).status_code == 422
+        assert client.get("/api/admin/logs", params={"limit": 0}).status_code == 422
+        assert client.get("/api/admin/logs", params={"limit": 1001}).status_code == 422
+        assert client.get("/api/admin/logs", params={"limit": 1}).status_code == 200
+        assert client.post(
+            "/api/hr/score-rules",
+            json={"role_code": "SUPERVISOR", "score": "-0.01", "effective_date": date.today().isoformat()},
+        ).status_code == 400
         # Restore the seeded values so later tests in this file keep default scores.
         client.post("/api/hr/score-rules", json={"role_code": "SUPERVISOR", "score": "0.50", "effective_date": date.today().isoformat()})
         client.post("/api/hr/score-rules", json={"role_code": "GSM", "score": "1.00", "effective_date": date.today().isoformat()})
@@ -1222,6 +1230,9 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     assert '<h2>账号姓名修改</h2>' in script
     assert 'id="passwordBtn"' not in script
     assert "function recognizerGroups(rows)" in script
+    assert "recognitionSubmissionData(e.target,has('SELF_RECOGNITION')&&!has('EMPLOYEE_ADD'))" in script
+    assert 'id="hrBatchLeaderSave"' in script
+    assert "const canEdit=state.me.role_code==='SYSTEM_ADMIN'" in script
     assert "label:'热力追踪主管'" in script
     assert "label:'矮人迷宫主管'" in script
     assert "label:'小熊罐子主管'" in script

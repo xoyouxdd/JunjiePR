@@ -153,6 +153,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-account-status-password-timestamp", "ensure_account_status_password_timestamp"),
     ("2026-09-login-account-archive", "ensure_login_account_archive_columns"),
     ("2026-09-submission-payload-digest", "ensure_submission_payload_digest"),
+    ("2026-09-second-audit-query-indexes", "ensure_second_audit_query_indexes"),
 ]
 
 
@@ -636,6 +637,20 @@ def ensure_performance_indexes(db) -> None:
         "CREATE INDEX IF NOT EXISTS ix_sick_leave_pr_ranking ON sick_leave_records (status, leave_start_date, leave_end_date, employee_id)",
         "CREATE INDEX IF NOT EXISTS ix_attendance_month_employee ON attendance_monthly_scores (attendance_month, employee_id)",
         "CREATE INDEX IF NOT EXISTS ix_user_accounts_enabled_employee ON user_accounts (enabled, employee_id)",
+    )
+    for statement in statements:
+        db.execute(text(statement))
+    db.commit()
+
+
+def ensure_second_audit_query_indexes(db) -> None:
+    """Add measured query indexes and remove exact duplicate history indexes."""
+    statements = (
+        "CREATE INDEX IF NOT EXISTS ix_audit_operator_action_recent ON audit_logs (operator_id, action, created_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_recognition_month_close_scope ON recognition_records (home_attraction_id, recognition_month, status)",
+        "CREATE INDEX IF NOT EXISTS ix_deduction_month_close_scope ON deduction_records (attraction_id_snapshot, deduction_month, status)",
+        "DROP INDEX IF EXISTS ix_employee_number_history_old_employee_no",
+        "DROP INDEX IF EXISTS ix_employee_number_history_new_employee_no",
     )
     for statement in statements:
         db.execute(text(statement))

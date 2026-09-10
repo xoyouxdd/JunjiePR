@@ -12,12 +12,13 @@ from math import ceil
 from pathlib import Path
 from threading import Lock
 from time import monotonic
+from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import load_workbook
-from sqlalchemy import func, or_, text, update
+from sqlalchemy import and_, func, or_, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -64,6 +65,7 @@ from app.v2_models import (
     WorkGroup,
 )
 from app.recognition_encouragement import encouragement_options
+from app.score_queries import employee_month_scores, month_score_employee_ids
 from app.v2_services import (
     FRONTLINE_CODES,
     GSM_CODES,
@@ -463,11 +465,11 @@ def month_close_checklist(db: Session, month: str, attraction_id: int | None) ->
         )
     pending_transfers = transfer_query.count()
     return [
-        {"code": "recognition_review", "name": "待复核签卡", "count": pending_recognitions, "target": "review"},
-        {"code": "deduction_material", "name": "待补/生成失败材料", "count": unresolved_materials, "target": "entries"},
-        {"code": "deduction_upgrade", "name": "待升级工单", "count": upgrade_requests, "target": "actionCenter"},
-        {"code": "deduction_follow_up", "name": "重复违规待跟进", "count": follow_ups, "target": "entries"},
-        {"code": "circle_transfer", "name": "待确认跨圈调动", "count": pending_transfers, "target": "circleTransfers"},
+        {"code": "recognition_review", "name": "待复核签卡", "count": pending_recognitions, "target": None, "responsible": "请联系对应主管完成复核"},
+        {"code": "deduction_material", "name": "待补/生成失败材料", "count": unresolved_materials, "target": None, "responsible": "请联系登记人或主管补充材料"},
+        {"code": "deduction_upgrade", "name": "待升级工单", "count": upgrade_requests, "target": None, "responsible": "请联系被分配的TA GSM或GSM处理"},
+        {"code": "deduction_follow_up", "name": "重复违规待跟进", "count": follow_ups, "target": None, "responsible": "请联系对应主管完成跟进"},
+        {"code": "circle_transfer", "name": "待确认跨圈调动", "count": pending_transfers, "target": "circleTransfers", "responsible": "由目标景点圈HR确认"},
     ]
 
 
@@ -1261,10 +1263,7 @@ def appeal_record_for_employee(db: Session, employee_id: int, record_type: str, 
 
 def capture_month_organization_snapshots(db: Session, month: str, attraction_id: int | None) -> int:
     """Freeze organization context once; later transfers cannot rewrite closed reports."""
-    employee_ids = [
-        int(row[0])
-        for row in db.execute(text("SELECT employee_id FROM v_employee_month_scores WHERE score_month=:month"), {"month": month}).all()
-    ]
+    employee_ids = month_score_employee_ids(db, month)
     if not employee_ids:
         return 0
     employees = db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
@@ -1805,10 +1804,7 @@ def dashboard(month: str | None = None, db: Session = Depends(get_db), user: V2U
         return {"month": month, "role": user.role.name}
     recalculate_attendance(db, user.employee, month)
     db.commit()
-    score = db.execute(
-        text("SELECT recognition_score, attendance_score, deduction_score, total_score FROM v_employee_month_scores WHERE employee_id=:employee_id AND score_month=:month"),
-        {"employee_id": user.id, "month": month},
-    ).mappings().first()
+    score = next(iter(employee_month_scores(db, month, [user.id])), None)
     score = score or {"recognition_score": 0, "attendance_score": 0, "deduction_score": 0, "total_score": 0}
     categories = {
         name: float(total or 0)
@@ -2219,7 +2215,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
             GovernanceCase.status == "open",
         ).count()
         if open_appeals:
-            items.append(action_center_item("appeal", "我的申诉待处理", open_appeals, "governance", "warning", "申诉不会改变原记录，处理结果会以站内消息告知。"))
+            items.append(action_center_item("appeal", "我的申诉待处理", open_appeals, "governance", "warning", "申诉不会改变原记录，请在申诉页查看处理结果。"))
 
     if role_code in LEADER_CODES:
         member_ids = direct_member_ids(db, user.id)
@@ -2333,17 +2329,24 @@ def operations_health(db: Session = Depends(get_db), user: V2User = Depends(requ
 
 
 @router.get("/reviews")
-def reviews(db: Session = Depends(get_db), user: V2User = Depends(require_permissions("REVIEW_DIRECT"))):
+def reviews(
+    view: Literal["queue", "history"] = "queue",
+    limit: int = Query(200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: V2User = Depends(require_permissions("REVIEW_DIRECT")),
+):
     member_ids = direct_member_ids(db, user.id)
-    rows = (
+    query = (
         db.query(RecognitionRecord)
         .filter(
             RecognitionRecord.employee_id.in_(member_ids) if member_ids else RecognitionRecord.id == -1,
-            RecognitionRecord.status != "void",
         )
-        .order_by(RecognitionRecord.status == "confirmed", RecognitionRecord.submitted_at.desc())
-        .all()
     )
+    if view == "history":
+        query = query.filter(RecognitionRecord.status == "confirmed")
+    else:
+        query = query.filter(RecognitionRecord.status.in_(("pending", "rejected")))
+    rows = query.order_by(RecognitionRecord.submitted_at.desc(), RecognitionRecord.id.desc()).limit(limit).all()
     return [recognition_payload(row) for row in rows]
 
 
@@ -2663,21 +2666,9 @@ def member_score_summary(
 
     ensure_month_attendance(db, month, selected_ids)
     db.commit()
-    placeholders = []
-    params: dict[str, object] = {"month": month}
-    for index, employee_id in enumerate(selected_ids):
-        key = f"employee_{index}"
-        placeholders.append(f":{key}")
-        params[key] = employee_id
     scores = {
         row["employee_id"]: dict(row)
-        for row in db.execute(
-            text(
-                "SELECT employee_id, recognition_score, deduction_score, attendance_score, total_score "
-                f"FROM v_employee_month_scores WHERE score_month=:month AND employee_id IN ({','.join(placeholders)})"
-            ),
-            params,
-        ).mappings().all()
+        for row in employee_month_scores(db, month, selected_ids)
     }
     recognition_groups: dict[int, list[RecognitionRecord]] = {employee_id: [] for employee_id in selected_ids}
     deduction_groups: dict[int, list[DeductionRecord]] = {employee_id: [] for employee_id in selected_ids}
@@ -4344,16 +4335,74 @@ def gsm_recognizer_ranking_payload(db: Session, start_value: str, end_value: str
         query = query.filter(RecognitionRecord.home_attraction_id == attraction.id)
     if subtype:
         query = query.filter(RecognitionRecord.recognition_type_id == subtype.id)
+    sql_conditions = ["status='confirmed'", "recognition_date>=:start", "recognition_date<=:end"]
+    params: dict[str, object] = {"start": start_value, "end": end_value}
+    if attraction:
+        sql_conditions.append("home_attraction_id=:attraction_id")
+        params["attraction_id"] = attraction.id
+    if subtype:
+        sql_conditions.append("recognition_type_id=:subtype_id")
+        params["subtype_id"] = subtype.id
+    snapshot_rows = db.execute(
+        text(
+            f"""
+            WITH filtered AS (
+                SELECT id, recognizer_employee_id, recognizer_role_code_snapshot,
+                       operator_employee_id, operator_role_code_snapshot,
+                       credited_fraction, recognition_date
+                FROM recognition_records WHERE {' AND '.join(sql_conditions)}
+            ), participants AS (
+                SELECT recognizer_employee_id AS employee_id,
+                       recognizer_role_code_snapshot AS role_code,
+                       credited_fraction, recognition_date
+                FROM filtered WHERE recognizer_employee_id != operator_employee_id
+                UNION ALL
+                SELECT operator_employee_id AS employee_id,
+                       operator_role_code_snapshot AS role_code,
+                       credited_fraction, recognition_date
+                FROM filtered
+            )
+            SELECT employee_id, role_code, COUNT(*) AS event_count,
+                   SUM(credited_fraction) AS score, MAX(recognition_date) AS recent_date
+            FROM participants
+            WHERE role_code IN ('TA_GSM','GSM')
+            GROUP BY employee_id, role_code
+            """
+        ),
+        params,
+    ).mappings().all()
     aggregate: dict[int, dict] = {}
-    for row in query.all():
+    for row in snapshot_rows:
+        employee_id = int(row["employee_id"])
+        current = aggregate.setdefault(employee_id, {"count": 0, "score": 0.0, "recent_date": "", "role_code": row["role_code"]})
+        current["count"] += int(row["event_count"] or 0)
+        current["score"] += float(row["score"] or 0)
+        if str(row["recent_date"] or "") >= str(current["recent_date"] or ""):
+            current["recent_date"] = str(row["recent_date"] or "")
+            current["role_code"] = row["role_code"]
+
+    legacy_query = query.filter(
+        or_(
+            RecognitionRecord.recognizer_role_code_snapshot.is_(None),
+            RecognitionRecord.operator_role_code_snapshot.is_(None),
+        )
+    )
+    historical_role_cache: dict[tuple[int, str], Role | None] = {}
+    for row in legacy_query.all():
         participants: dict[int, str | None] = {
             row.recognizer_employee_id: row.recognizer_role_code_snapshot,
             row.operator_employee_id: row.operator_role_code_snapshot,
         }
         for participant_id, snap_code in participants.items():
+            if snap_code is not None:
+                continue
             # Older rows did not have role snapshots. Resolve them by the
             # recognition date, never by the employee's current role.
-            code = snap_code or (role_at(db, participant_id, row.recognition_date).code if role_at(db, participant_id, row.recognition_date) else None)
+            cache_key = (participant_id, row.recognition_date)
+            if cache_key not in historical_role_cache:
+                historical_role_cache[cache_key] = role_at(db, participant_id, row.recognition_date)
+            historical_role = historical_role_cache[cache_key]
+            code = historical_role.code if historical_role else None
             if code not in GSM_CODES:
                 continue
             data = aggregate.setdefault(participant_id, {"count": 0, "score": 0.0, "recent_date": row.recognition_date, "role_code": code})
@@ -4361,14 +4410,17 @@ def gsm_recognizer_ranking_payload(db: Session, start_value: str, end_value: str
             data["score"] += float(row.credited_fraction or 0)
             data["recent_date"] = max(data["recent_date"], row.recognition_date)
     employee_rows = db.query(Employee).filter(Employee.id.in_(aggregate.keys()) if aggregate else Employee.id == -1).all()
+    role_names = {
+        role.code: role.name
+        for role in db.query(Role).filter(Role.code.in_({item["role_code"] for item in aggregate.values()})).all()
+    } if aggregate else {}
     value = keyword.strip().lower()
     rows=[]
     for employee in employee_rows:
         if value and value not in employee.name.lower() and value not in employee.employee_no.lower():
             continue
         data=aggregate[employee.id]
-        role = db.query(Role).filter(Role.code == data["role_code"]).first()
-        rows.append({"employee_id":employee.id,"employee_no":employee.employee_no,"employee_name":employee.name,"role_name":role.name if role else data["role_code"],"leader_name":"","count":int(data["count"]),"score":round(float(data["score"]),2),"recent_date":data["recent_date"],"leave_days":0,"charged_days":0,"recognition_score":0,"deduction_score":0,"attendance_score":0,"total_score":0})
+        rows.append({"employee_id":employee.id,"employee_no":employee.employee_no,"employee_name":employee.name,"role_name":role_names.get(data["role_code"],data["role_code"]),"leader_name":"","count":int(data["count"]),"score":round(float(data["score"]),2),"recent_date":data["recent_date"],"leave_days":0,"charged_days":0,"recognition_score":0,"deduction_score":0,"attendance_score":0,"total_score":0})
     rows.sort(key=lambda item:(-item["count"],-item["score"],item["employee_no"]))
     for index,item in enumerate(rows,1): item["rank"]=index
     offset=(page-1)*page_size
@@ -4908,15 +4960,43 @@ def statistics_payload(
             attraction_id = next(iter(allowed_attractions))
         elif attraction_id not in allowed_attractions:
             raise HTTPException(403, "景点圈HR只能查看所属景点圈数据")
-    # Attendance materialization is retained for score-view compatibility, but the
-    # savepoint is always rolled back so statistics and export remain read-only.
+    candidate_query = (
+        db.query(Employee, EmployeeMonthOrganizationSnapshot, Attraction)
+        .outerjoin(
+            EmployeeMonthOrganizationSnapshot,
+            and_(
+                EmployeeMonthOrganizationSnapshot.employee_id == Employee.id,
+                EmployeeMonthOrganizationSnapshot.score_month == month,
+            ),
+        )
+        .outerjoin(Attraction, Attraction.id == Employee.attraction_id)
+    )
+    if attraction_id:
+        candidate_query = candidate_query.filter(
+            func.coalesce(EmployeeMonthOrganizationSnapshot.attraction_id, Employee.attraction_id) == attraction_id
+        )
+    if keyword:
+        keyword_value = f"%{keyword.strip()}%"
+        candidate_query = candidate_query.filter(or_(Employee.employee_no.like(keyword_value), Employee.name.like(keyword_value)))
+    candidate_rows = candidate_query.all()
+    if selected_title and candidate_rows:
+        candidate_roles = roles_at(db, [row[0].id for row in candidate_rows], month_end)
+        candidate_rows = [
+            row for row in candidate_rows
+            if candidate_roles.get(row[0].id) and candidate_roles[row[0].id].code == selected_title
+        ]
+    candidate_ids = [row[0].id for row in candidate_rows]
+
+    # Attendance remains materialized for compatibility, but only for employees
+    # in the requested scope. The savepoint keeps statistics and export read-only.
     statistics_savepoint = db.begin_nested()
     try:
-        ensure_month_attendance(db, month)
+        ensure_month_attendance(db, month, candidate_ids)
         loa_employee_ids = {
             row[0]
             for row in db.query(EmployeeLOAPeriod.employee_id)
             .filter(
+                EmployeeLOAPeriod.employee_id.in_(candidate_ids) if candidate_ids else EmployeeLOAPeriod.employee_id == -1,
                 EmployeeLOAPeriod.status != "cancelled",
                 EmployeeLOAPeriod.starts_on <= month_end,
                 or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= month_start.isoformat()),
@@ -4927,35 +5007,28 @@ def statistics_payload(
             for employee in db.query(Employee).filter(Employee.id.in_(loa_employee_ids)).all():
                 recalculate_attendance(db, employee, month)
         db.flush()
-        query = (
-            "SELECT s.*, e.account_deleted_at AS account_deleted_at, COALESCE(os.attraction_id, e.attraction_id) AS attraction_id, "
-            "COALESCE(os.attraction_name, a.name) AS attraction_name, "
-            "CASE WHEN os.id IS NULL THEN 'current' ELSE 'month_close_snapshot' END AS organization_basis "
-            "FROM v_employee_month_scores s "
-            "JOIN employees e ON e.id=s.employee_id "
-            "LEFT JOIN employee_month_organization_snapshots os ON os.employee_id=s.employee_id AND os.score_month=s.score_month "
-            "LEFT JOIN attractions a ON a.id=e.attraction_id WHERE s.score_month=:month"
-        )
-        params = {"month": month}
-        if attraction_id:
-            query += " AND COALESCE(os.attraction_id, e.attraction_id)=:attraction_id"
-            params["attraction_id"] = attraction_id
-        if keyword:
-            query += " AND (e.employee_no LIKE :keyword OR e.name LIKE :keyword)"
-            params["keyword"] = f"%{keyword.strip()}%"
-        query += " ORDER BY s.total_score DESC, e.employee_no"
-        score_rows = [dict(row) for row in db.execute(text(query), params).mappings().all()]
+        scores_by_employee = {
+            int(row["employee_id"]): row
+            for row in employee_month_scores(db, month, candidate_ids)
+        }
+        score_rows = []
+        for employee, snapshot, current_attraction in candidate_rows:
+            score = scores_by_employee.get(employee.id)
+            if not score:
+                continue
+            score_rows.append(
+                {
+                    **score,
+                    "account_deleted_at": employee.account_deleted_at,
+                    "attraction_id": snapshot.attraction_id if snapshot else employee.attraction_id,
+                    "attraction_name": snapshot.attraction_name if snapshot else (current_attraction.name if current_attraction else ""),
+                    "organization_basis": "month_close_snapshot" if snapshot else "current",
+                }
+            )
+        score_rows.sort(key=lambda row: (-float(row["total_score"] or 0), str(row["employee_no"])))
     finally:
         if statistics_savepoint.is_active:
             statistics_savepoint.rollback()
-    if selected_title and score_rows:
-        month_end_roles = roles_at(db, [int(row["employee_id"]) for row in score_rows], month_end)
-        score_rows = [
-            row
-            for row in score_rows
-            if month_end_roles.get(int(row["employee_id"]))
-            and month_end_roles[int(row["employee_id"])].code == selected_title
-        ]
     loa_rows = []
     filtered_score_rows = []
     for row in score_rows:
@@ -4987,9 +5060,10 @@ def statistics_payload(
     deduction_payloads: list[dict] = []
     sick_leave_rows_payload: list[dict] = []
     if include_records:
-        recognition_rows = db.query(RecognitionRecord).filter(RecognitionRecord.recognition_month == month).order_by(RecognitionRecord.submitted_at.desc()).all()
-        deduction_rows = db.query(DeductionRecord).filter(DeductionRecord.deduction_month == month).order_by(DeductionRecord.submitted_at.desc()).all()
-        sick_leave_rows = db.query(SickLeaveRecord).filter(SickLeaveRecord.attendance_month == month).order_by(SickLeaveRecord.submitted_at.desc()).all()
+        record_scope = visible_employee_ids or {-1}
+        recognition_rows = db.query(RecognitionRecord).filter(RecognitionRecord.recognition_month == month, RecognitionRecord.employee_id.in_(record_scope)).order_by(RecognitionRecord.submitted_at.desc()).all()
+        deduction_rows = db.query(DeductionRecord).filter(DeductionRecord.deduction_month == month, DeductionRecord.employee_id.in_(record_scope)).order_by(DeductionRecord.submitted_at.desc()).all()
+        sick_leave_rows = db.query(SickLeaveRecord).filter(SickLeaveRecord.attendance_month == month, SickLeaveRecord.employee_id.in_(record_scope)).order_by(SickLeaveRecord.submitted_at.desc()).all()
         all_record_rows = [*recognition_rows, *deduction_rows, *sick_leave_rows]
         record_employee_ids = {int(row.employee_id) for row in all_record_rows}
         employees = {
@@ -5064,21 +5138,9 @@ def statistics_payload(
 def statistics_details_payload(db: Session, month: str, employee_ids: list[int]) -> dict[str, dict]:
     if not employee_ids:
         return {}
-    placeholders = []
-    params: dict[str, object] = {"month": month}
-    for index, employee_id in enumerate(employee_ids):
-        key = f"employee_{index}"
-        placeholders.append(f":{key}")
-        params[key] = employee_id
     score_rows = {
         row["employee_id"]: dict(row)
-        for row in db.execute(
-            text(
-                "SELECT employee_id, recognition_score, deduction_score, attendance_score, total_score "
-                f"FROM v_employee_month_scores WHERE score_month=:month AND employee_id IN ({','.join(placeholders)})"
-            ),
-            params,
-        ).mappings().all()
+        for row in employee_month_scores(db, month, employee_ids)
     }
     employees = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()}
     recognition_groups: dict[int, list[RecognitionRecord]] = {employee_id: [] for employee_id in employee_ids}
@@ -6934,15 +6996,17 @@ def hr_score_rules(db: Session = Depends(get_db), user: V2User = Depends(require
 
 @router.post("/hr/score-rules")
 def update_score_rule(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    if user.role.code != "SYSTEM_ADMIN":
+        raise HTTPException(403, "认可角色分值是全局规则，仅最高管理员可调整")
     role = db.query(Role).filter(Role.code == str(payload.get("role_code") or "")).first()
     if not role or role.code not in RECOGNIZER_CODES:
         raise HTTPException(400, "认可人角色无效")
-    if user.role.code == SCOPED_HR_ROLE_CODE and role.code not in CIRCLE_HR_SCORE_RULE_ROLE_CODES:
-        raise HTTPException(403, "景点圈HR仅可调整本圈TA主管/主管的分值；GSM及以上角色分值由最高管理员统一调整")
     try:
         score = Decimal(str(payload.get("score"))).quantize(Decimal("0.01"))
     except InvalidOperation as exc:
         raise HTTPException(400, "分值格式错误") from exc
+    if not score.is_finite() or score < 0:
+        raise HTTPException(400, "分值必须是大于或等于0的有效数字")
     effective_date = str(payload.get("effective_date") or date.today().isoformat())
     parse_iso_date(effective_date, "生效日期")
     rule = db.query(RecognitionScoreRule).filter_by(role_id=role.id, effective_date=effective_date).first()
@@ -6959,10 +7023,10 @@ def update_score_rule(payload: dict, request: Request, db: Session = Depends(get
 
 
 @router.get("/admin/logs")
-def admin_logs(limit: int = 300, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SYSTEM_ADMIN"))):
+def admin_logs(limit: int = Query(300, ge=1, le=1000), db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SYSTEM_ADMIN"))):
     return [
         {"id": row.id, "time": row.created_at.strftime("%Y-%m-%d %H:%M:%S"), "operator": row.operator_name or "系统", "action": row.action, "entity": f"{row.entity_type}:{row.entity_id or ''}", "reason": row.reason or ""}
-        for row in db.query(AuditLog).order_by(AuditLog.created_at.desc()).limit(min(limit, 1000)).all()
+        for row in db.query(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit).all()
     ]
 
 

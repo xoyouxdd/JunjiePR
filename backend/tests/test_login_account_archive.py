@@ -127,4 +127,4 @@ def test_hr_archive_ui_and_export_marker_are_present() -> None:
     assert "账号已删除·留档" in script
     assert '"/hr/employees/{employee_id}/account"' in router
     assert "business_history_retained" in router
-    assert "e.account_deleted_at AS account_deleted_at" in router
+    assert '"account_deleted_at": employee.account_deleted_at' in router

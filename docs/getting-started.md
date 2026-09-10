@@ -2,6 +2,20 @@
 
 工作目录必须是 `backend/`。
 
+## 首次安装
+
+Windows PowerShell 在项目根目录执行：
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD = "由负责人现场设置的初始密码"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+首次启动会初始化 SQLite 结构并建立最高管理员 `HR01`。确认管理员可以登录后，在启动服务的环境中移除临时的 `RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD`。正式运行的数据目录、服务账号和监听地址由部署环境明确设置；不要把本地测试目录当作正式目录。
+
 ## 启动
 
 ```bash
@@ -37,3 +51,7 @@ python -m pytest tests/test_poc_idempotency.py -q
 - `RECOGNITION_ENABLE_TEST_ACCOUNTS=1`
 - `RECOGNITION_TEST_DEFAULT_PASSWORD`
 - `RECOGNITION_TEST_ADMIN_PASSWORD`
+
+## 从旧目录升级
+
+旧版本使用 `server/` 时，先停止旧服务并做在线 SQLite 备份；将原 `server/data_v2/` 整体复制到新项目的 `backend/data_v2/`，保留数据库与 `files/` 附件目录的相对关系。随后更新服务工作目录、Python 虚拟环境路径和 Windows 计划任务脚本路径，再启动一次让迁移步骤执行。核对 `/health` 版本、管理员登录、月度分数、附件预览和计划任务后，才移除旧目录。回退程序时不得用旧数据库覆盖升级后的新写入。

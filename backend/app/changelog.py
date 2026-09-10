@@ -7,6 +7,40 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.10.5",
+        "date": "2026-09-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "新建员工账号表单重新排版",
+                "detail": "电脑端字段顶部对齐并调整宽度，创建按钮收至右侧；平板自动两列，手机保持单列满宽。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
+        "version": "2026.09.10.4",
+        "date": "2026-09-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "查询、复核和页面切换更稳定",
+                "detail": "月度分数只计算当前范围；复核分开待处理与历史；切页会停止旧请求和材料轮询。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "管理代录和员工管理恢复可用",
+                "detail": "管理人员代录无需认可图片；员工批量保存按钮使用稳定绑定，手机端避开底部导航。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "SYSTEM_ADMIN", "HR_CIRCLE", "HR_ADMIN"],
+            },
+            {
+                "summary": "分值设置明确为全局规则",
+                "detail": "仅最高管理员可调整；其他HR角色可查看当前规则，历史签卡不追溯改分。",
+                "audiences": ["SYSTEM_ADMIN", "HR_CIRCLE", "HR_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.10.3",
         "date": "2026-09-10",
         "status": "candidate",
