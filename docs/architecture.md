@@ -6,7 +6,7 @@
 
 - 接口：FastAPI + SQLAlchemy，路由在 `backend/app/routers/v2.py`
 - 数据：SQLite（默认 `backend/data_v2/`）+ 独立附件目录；表、键、索引见 [sqlite-schema.md](sqlite-schema.md)
-- 页面：`backend/app/static/` 原生 HTML/JS/CSS，由 `backend/app/main.py` 直接提供
+- 页面：`backend/app/static/` 原生 HTML/JS/CSS，由 `backend/app/main.py` 直接提供。电脑端左侧分组导航（待办置顶，更新记录/密码在底部），窄桌面收成图标栏；手机端仍用底部栏加「更多」
 - Excel 写表：`backend/app/excel_export.py`（路由只负责取数、水印、审计、返回）
 - 月度分数读查询：`backend/app/score_queries.py`（先限定月份和员工范围，再聚合；旧视图保留兼容）
 

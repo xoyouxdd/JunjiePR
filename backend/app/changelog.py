@@ -7,6 +7,23 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.10.10",
+        "date": "2026-09-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "电脑端改为左侧分组导航，菜单带图标",
+                "detail": "宽屏显示一级分组和二级菜单，窄桌面收成图标栏。待办固定在顶部，更新记录和密码在底部。手机仍用底部导航，并补上小图标。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "启动时补齐查询索引，去掉工号历史重复索引",
+                "detail": "已有库会在启动时创建月结范围、审计最近操作等索引；旧的工号历史重复索引会删掉。不改业务数据。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.10.9",
         "date": "2026-09-10",
         "status": "candidate",

@@ -154,6 +154,82 @@ function menuItems() {
   items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);
   return items;
 }
+const NAV_FOOTER_IDS=['changelog','password'];
+const NAV_GROUP_DEFS=[
+  {id:'work',label:'工作',ids:['home','review','register','absence','members','entries']},
+  {id:'data',label:'数据',ids:['statistics','prRankings']},
+  {id:'people',label:'人事',ids:['hrEmployees','circleHrAccounts','hrGroups','circleTransfers']},
+  {id:'close',label:'结算',ids:['monthClose','hrScores']},
+  {id:'govern',label:'治理',ids:['governance','logs']},
+  {id:'system',label:'系统',ids:['operations']},
+];
+function navIcon(id){
+  const inner={
+    home:'<path d="M4 11 12 4l8 7"/><path d="M6 10.5V20h4.5v-6h3V20H18v-9.5"/>',
+    actionCenter:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8M8 14h5"/>',
+    register:'<circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/>',
+    governance:'<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z"/>',
+    review:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12.5 10.5 15l5.5-6"/>',
+    members:'<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.6 19c.6-3.2 2.8-5 5.4-5s4.8 1.8 5.4 5M14.2 14.4c2 .3 3.7 1.8 4.2 4.6"/>',
+    absence:'<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16M9.5 14.5l5 5M14.5 14.5l-5 5"/>',
+    entries:'<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>',
+    statistics:'<path d="M4 19h16M7 16V11M12 16V8M17 16v-5"/>',
+    prRankings:'<path d="M8 20h8M12 16v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H4.8A3.2 3.2 0 0 0 8 10.2M17 6h2.2A3.2 3.2 0 0 1 16 10.2"/>',
+    hrEmployees:'<circle cx="12" cy="8" r="3.4"/><path d="M5 20c1.1-3.6 3.6-5.5 7-5.5s5.9 1.9 7 5.5"/>',
+    monthClose:'<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16M8.5 15.5 11 18l4.5-5"/>',
+    circleHrAccounts:'<rect x="4" y="10" width="16" height="10" rx="1.5"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/>',
+    hrGroups:'<circle cx="8" cy="8" r="2.4"/><circle cx="16" cy="8" r="2.4"/><circle cx="12" cy="16" r="2.4"/><path d="M10 9.6 11.2 13.8M14 9.6 12.8 13.8"/>',
+    circleTransfers:'<path d="M8 7h11l-3.2-3.2M16 17H5l3.2 3.2"/>',
+    logs:'<path d="M6 4h9l3 3v13H6z"/><path d="M15 4v3h3M8 12h8M8 16h5.5"/>',
+    hrScores:'<path d="M4 7h10M4 12h16M4 17h7"/><circle cx="16.5" cy="7" r="2"/><circle cx="12.5" cy="17" r="2"/>',
+    operations:'<circle cx="12" cy="12" r="3"/><path d="M12 3.5V6M12 18v2.5M5 6.6 6.8 8M17.2 16l1.8 1.4M5 17.4 6.8 16M17.2 8l1.8-1.4"/>',
+    changelog:'<circle cx="12" cy="12" r="8"/><path d="M12 8v4.2L15 14"/>',
+    password:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+    more:'<circle cx="6" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/>',
+    circle:'<circle cx="12" cy="12" r="8"/>',
+  };
+  return `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner[id]||inner.circle}</svg>`;
+}
+function groupedMenu(items){
+  const byId=new Map(items.map(item=>[item[0],item]));
+  const used=new Set();
+  const pin=byId.get('actionCenter')||null;
+  if(pin) used.add('actionCenter');
+  const groups=[];
+  for(const def of NAV_GROUP_DEFS){
+    const groupItems=def.ids.map(id=>byId.get(id)).filter(Boolean);
+    if(!groupItems.length) continue;
+    groupItems.forEach(([id])=>used.add(id));
+    groups.push({id:def.id,label:def.label,items:groupItems});
+  }
+  const footer=NAV_FOOTER_IDS.map(id=>byId.get(id)).filter(Boolean);
+  footer.forEach(([id])=>used.add(id));
+  const leftover=items.filter(([id])=>!used.has(id));
+  if(leftover.length) groups.push({id:'other',label:'其他',items:leftover});
+  return {pin,groups,footer};
+}
+function isTabActive(id){return id===state.tab||(id==='statistics'&&state.tab==='statisticsDetail');}
+function currentPageMeta(items){
+  if(state.tab==='statisticsDetail') return {group:'数据',name:'绩效明细'};
+  const grouped=groupedMenu(items);
+  if(grouped.pin&&grouped.pin[0]===state.tab) return {group:'',name:grouped.pin[1]};
+  for(const group of grouped.groups){
+    const item=group.items.find(([id])=>id===state.tab);
+    if(item) return {group:group.label,name:item[1]};
+  }
+  const foot=grouped.footer.find(([id])=>id===state.tab);
+  if(foot) return {group:'',name:foot[1]};
+  const fallback=items.find(([id])=>id===state.tab);
+  return {group:'',name:fallback?fallback[1]:''};
+}
+function renderPageHeading(items){
+  const heading=document.getElementById('pageHeading');
+  if(!heading) return;
+  const meta=currentPageMeta(items);
+  if(!meta.name){heading.hidden=true;heading.innerHTML='';return;}
+  heading.hidden=false;
+  heading.innerHTML=`${meta.group?`<span class="page-heading-group">${esc(meta.group)}</span>`:''}<h1>${esc(meta.name)}</h1>`;
+}
 function syncAppBadge(total){
   const count=Math.max(0,Number(total)||0);
   try{
@@ -183,19 +259,28 @@ async function refreshActionBadge(){
 function renderTabs() {
   const items=menuItems();
   if (!state.tab || (!items.some(i=>i[0]===state.tab) && state.tab!=='statisticsDetail')) state.tab=items[0]?.[0];
-  const tabButton=([id,name],extraClass='')=>`<button type="button" data-tab="${id}" class="${id===state.tab?'active':''} ${extraClass}" ${id===state.tab?'aria-current="page"':''}><span>${name}</span>${id==='actionCenter'?`<b class="nav-count-badge" data-action-center-badge ${state.actionBadgeTotal?'':'hidden'}>${state.actionBadgeTotal>99?'99+':state.actionBadgeTotal}</b>`:''}</button>`;
+  const tabButton=([id,name],extraClass='')=>`<button type="button" data-tab="${id}" class="${isTabActive(id)?'active':''} ${extraClass}" ${isTabActive(id)?'aria-current="page"':''} title="${esc(name)}" aria-label="${esc(name)}">${navIcon(id)}<span class="nav-label">${esc(name)}</span>${id==='actionCenter'?`<b class="nav-count-badge" data-action-center-badge ${state.actionBadgeTotal?'':'hidden'}>${state.actionBadgeTotal>99?'99+':state.actionBadgeTotal}</b>`:''}</button>`;
+  const grouped=groupedMenu(items);
+  const desktopPin=grouped.pin?`<div class="nav-pin">${tabButton(grouped.pin)}</div>`:'';
+  const desktopGroups=grouped.groups.map(group=>{
+    const active=group.items.some(([id])=>isTabActive(id));
+    return `<section class="nav-group${active?' is-active':''}" aria-label="${esc(group.label)}"><p class="nav-group-label">${esc(group.label)}</p>${group.items.map(item=>tabButton(item)).join('')}</section>`;
+  }).join('');
+  const desktopFooter=grouped.footer.length?`<div class="nav-footer">${grouped.footer.map(item=>tabButton(item)).join('')}</div>`:'';
   const ids=[];
   if(items.some(i=>i[0]==='actionCenter')) ids.push('actionCenter');
   for(const item of items){ if(ids.length>=3) break; if(!ids.includes(item[0])) ids.push(item[0]); }
   const primary=ids.map(id=>items.find(i=>i[0]===id));
   const overflow=items.filter(i=>!ids.includes(i[0]));
   const overflowActive=overflow.some(([id])=>id===state.tab);
-  tabs.innerHTML=`<div class="tabs-desktop">${items.map(item=>tabButton(item)).join('')}</div><div class="tabs-mobile ${overflow.length?'has-overflow':'no-overflow'}">${primary.map(item=>tabButton(item)).join('')}${overflow.length?`<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能"><span>更多</span></button>`:''}</div>${overflow.length?`<div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header><div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div></div></div>`:''}`;
+  tabs.innerHTML=`<div class="tabs-desktop">${desktopPin}<div class="nav-scroll">${desktopGroups}</div>${desktopFooter}</div><div class="tabs-mobile ${overflow.length?'has-overflow':'no-overflow'}">${primary.map(item=>tabButton(item)).join('')}${overflow.length?`<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能" title="更多">${navIcon('more')}<span class="nav-label">更多</span></button>`:''}</div>${overflow.length?`<div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header><div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div></div></div>`:''}`;
+  document.body.classList.add('has-nav');
+  renderPageHeading(items);
   const drawer=tabs.querySelector('.mobile-more-drawer');
   let drawerLayer=null;
   const closeDrawer=()=>{drawerLayer?.close();};
   tabs.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;closeDrawer();renderTabs();render();});
-  tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawer.hidden=true;drawerLayer=null;}});});
+  tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawer.hidden=true;drawerLayer=null;}});});
   tabs.querySelector('[data-close-more]')?.addEventListener('click',closeDrawer);
 }
 let renderGeneration=0;
@@ -220,6 +305,9 @@ function passwordFieldsMarkup(){return `<label>当前密码<input name="current_
 function bindPasswordForm(form,onSuccess){const current=form.querySelector('[name=current_password]'),next=form.querySelector('[name=new_password]'),confirmPassword=form.querySelector('[name=confirm_password]'),button=form.querySelector('button[type=submit]'),rules=form.querySelector('[data-password-rules]');const update=()=>{const result=passwordRuleState(next.value);const required=['length'];rules.querySelectorAll('[data-password-rule]').forEach(item=>{const ok=Boolean(result[item.dataset.passwordRule]);item.classList.toggle('is-met',ok);item.querySelector('span').textContent=ok?'✓':'○';});const valid=required.every(key=>result[key])&&current.value.length>0&&confirmPassword.value.length>0&&next.value===confirmPassword.value;button.disabled=!valid;confirmPassword.setCustomValidity(confirmPassword.value&&next.value!==confirmPassword.value?'两次输入的新密码不一致':'');};[current,next,confirmPassword].forEach(input=>input.addEventListener('input',update));update();form.onsubmit=async event=>{event.preventDefault();if(button.disabled)return;try{await api('/api/password',json('POST',Object.fromEntries(new FormData(form))));onSuccess(form);}catch(error){toast(error.message,true)}};}
 function renderPasswordChangeRequired(){
   tabs.innerHTML='';
+  document.body.classList.remove('has-nav');
+  const heading=document.getElementById('pageHeading');
+  if(heading){heading.hidden=true;heading.innerHTML='';}
   app.innerHTML=`<section class="panel"><h2>首次登录请修改密码</h2><p>为保护账号安全，请先完成密码修改后再进入系统。</p><form id="requiredPasswordForm" class="form-stack password-form">${passwordFieldsMarkup()}<button type="submit" class="primary">保存并进入系统</button></form></section>`;
   bindPasswordForm(document.getElementById('requiredPasswordForm'),()=>location.reload());
 }

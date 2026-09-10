@@ -11,12 +11,17 @@
   <link rel="stylesheet" href="static/css/style.css?v=__STATIC_CACHE_VERSION__">
 </head>
 <body>
-  <header class="topbar app-topbar">
-    <div class="app-identity"><strong>认可签卡绩效登记系统</strong><span id="userBadge"></span><span id="pageBindHint" hidden></span></div>
-    <button id="logoutBtn" class="ghost">退出</button>
-  </header>
-  <nav id="tabs" class="tabs"></nav>
-  <main id="app" class="app-shell"><section class="empty">正在加载…</section></main>
+  <div class="app-frame">
+    <header class="topbar app-topbar">
+      <div class="app-identity"><strong>认可签卡绩效登记系统</strong><span id="userBadge"></span><span id="pageBindHint" hidden></span></div>
+      <button id="logoutBtn" class="ghost">退出</button>
+    </header>
+    <nav id="tabs" class="tabs" aria-label="系统导航"></nav>
+    <main class="app-shell">
+      <header class="page-heading" id="pageHeading" hidden></header>
+      <div id="app"><section class="empty">正在加载…</section></div>
+    </main>
+  </div>
   <div id="toast" class="toast"></div>
   <script src="static/js/app.js?v=__STATIC_CACHE_VERSION__"></script>
 </body>

@@ -49,6 +49,10 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert "外传可追溯" not in script
     assert "rgba(66, 78, 94, .08)" in css
     assert "#pageBindHint" in css
+    assert "app-frame" in index
+    assert 'id="pageHeading"' in index
+    assert 'id="app"' in index
+    assert "class=\"app-shell\"" in index or "app-shell" in index
 
 
 def test_hr_new_employee_form_has_responsive_field_and_action_layout() -> None:
@@ -62,3 +66,34 @@ def test_hr_new_employee_form_has_responsive_field_and_action_layout() -> None:
     assert "grid-template-columns: minmax(210px, 1.2fr)" in css
     assert "@media (min-width: 761px) and (max-width: 1180px)" in css
     assert "#newEmployee .hr-create-actions button { width: 100%" in css
+
+
+def test_desktop_sidebar_keeps_mobile_bottom_nav() -> None:
+    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
+    index = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert "class=\"app-frame\"" in index
+    assert 'id="pageHeading"' in index
+    assert "NAV_GROUP_DEFS" in script
+    assert "has-nav" in script
+    assert "function navIcon(id)" in script
+    assert "function groupedMenu(items)" in script
+    assert "class=\"nav-icon\"" in script
+    assert "nav-group-label" in script
+    assert "nav-footer" in script
+    assert "tabs-mobile" in script
+    assert "data-open-more" in script
+    assert "body.has-nav .app-frame { grid-template-columns: 232px minmax(0, 1fr); }" in css
+    assert "body.has-nav .app-frame { grid-template-columns: 72px minmax(0, 1fr); }" in css
+    assert "@media (min-width: 761px) and (max-width: 1199px)" in css
+    assert "position: fixed" in css[css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") : css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") + 220]
+    assert "bottom: 0" in css[css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") : css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") + 220]
+    icon_block = script[script.index("function navIcon(id)") : script.index("function groupedMenu")]
+    for key in (
+        "home", "actionCenter", "register", "governance", "review", "members",
+        "absence", "entries", "statistics", "prRankings", "hrEmployees", "monthClose",
+        "circleHrAccounts", "hrGroups", "circleTransfers", "logs", "hrScores",
+        "operations", "changelog", "password", "more",
+    ):
+        assert f"{key}:" in icon_block
