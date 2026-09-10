@@ -2352,9 +2352,9 @@ def reviews(
         )
     )
     if view == "history":
-        query = query.filter(RecognitionRecord.status == "confirmed")
+        query = query.filter(RecognitionRecord.status.in_(("confirmed", "rejected")))
     else:
-        query = query.filter(RecognitionRecord.status.in_(("pending", "rejected")))
+        query = query.filter(RecognitionRecord.status == "pending")
     rows = query.order_by(RecognitionRecord.submitted_at.desc(), RecognitionRecord.id.desc()).limit(limit).all()
     return [recognition_payload(row) for row in rows]
 

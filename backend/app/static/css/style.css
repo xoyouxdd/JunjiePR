@@ -299,16 +299,17 @@ button:disabled { cursor: not-allowed; opacity: .65; }
 .withdraw-icon {
   display: inline-grid;
   place-items: center;
-  flex: 0 0 28px;
-  width: 28px;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 44px;
   min-height: 28px;
   height: 28px;
-  padding: 0;
+  padding: 0 8px;
   border: 1px solid #cbd5e1;
   border-radius: 999px;
   background: rgba(255, 255, 255, .7);
   color: #64748b;
-  font-size: 16px;
+  font-size: 12px;
   line-height: 1;
 }
 .withdraw-icon:hover { background: #e8eef7; color: #334155; }
@@ -1148,7 +1149,7 @@ table.statistics-breakdown { min-width: 420px; }
   }
   .member-summary-table .badge { padding: 3px 4px; text-align: center; }
   .member-summary-table .summary-detail td { padding: 9px 10px; overflow-wrap: anywhere; }
-  .member-summary-table .withdraw-icon { width: 28px; min-height: 28px; margin: 0 auto; }
+  .member-summary-table .withdraw-icon { width: auto; min-width: 44px; min-height: 28px; margin: 0 auto; }
   .member-info-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
   .member-info-grid > div { padding: 10px 8px; }
   .member-info-grid strong { font-size: 14px; }

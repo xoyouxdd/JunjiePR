@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
-from sqlalchemy import or_
+from sqlalchemy import and_, or_, update
 import fitz
 
 from app.v2_database import FILE_DIR, SessionLocal
@@ -384,29 +384,59 @@ def _discard_failed_sources(db, job: DeductionMaterialJob) -> None:
         source.status = "conversion_failed"
 
 
+STALE_PROCESSING_AFTER = timedelta(minutes=15)
+
+
+def _claimable_material_jobs(now: datetime):
+    stale_before = now - STALE_PROCESSING_AFTER
+    return or_(
+        DeductionMaterialJob.status == "queued",
+        and_(DeductionMaterialJob.status == "processing", DeductionMaterialJob.started_at < stale_before),
+    )
+
+
+def claim_next_deduction_material_job(db, *, now: datetime | None = None) -> int | None:
+    """Atomically take one queued or stale job. Returns None if another worker won."""
+    now = now or datetime.now()
+    claimable = _claimable_material_jobs(now)
+    candidate_id = (
+        db.query(DeductionMaterialJob.id)
+        .filter(claimable)
+        .order_by(DeductionMaterialJob.created_at.asc(), DeductionMaterialJob.id.asc())
+        .limit(1)
+        .scalar()
+    )
+    if not candidate_id:
+        return None
+    result = db.execute(
+        update(DeductionMaterialJob)
+        .where(DeductionMaterialJob.id == candidate_id, claimable)
+        .values(
+            status="processing",
+            attempts=DeductionMaterialJob.attempts + 1,
+            started_at=now,
+            error_code=None,
+            error_message=None,
+        )
+    )
+    db.commit()
+    if result.rowcount != 1:
+        return None
+    return int(candidate_id)
+
+
 def process_next_deduction_material_job() -> bool:
     """Claim and complete one job. Safe to call repeatedly and across restarts."""
     db = SessionLocal()
     job_id: int | None = None
+    source_keys: list[str] = []
     try:
-        stale_before = datetime.now() - timedelta(minutes=15)
-        job = (
-            db.query(DeductionMaterialJob)
-            .filter(or_(DeductionMaterialJob.status == "queued", (DeductionMaterialJob.status == "processing") & (DeductionMaterialJob.started_at < stale_before)))
-            .order_by(DeductionMaterialJob.created_at.asc(), DeductionMaterialJob.id.asc())
-            .first()
-        )
+        job_id = claim_next_deduction_material_job(db)
+        if not job_id:
+            return False
+        job = db.get(DeductionMaterialJob, job_id)
         if not job:
             return False
-        job_id = job.id
-        job.status = "processing"
-        job.attempts = int(job.attempts or 0) + 1
-        job.started_at = datetime.now()
-        job.error_code = None
-        job.error_message = None
-        db.commit()
-
-        job = db.get(DeductionMaterialJob, job_id)
         deduction = db.get(DeductionRecord, job.deduction_id)
         output = db.get(StoredFile, job.output_file_id)
         source_ids = [int(value) for value in json.loads(job.source_file_ids_json)]
@@ -421,8 +451,8 @@ def process_next_deduction_material_job() -> bool:
         output.file_size = size
         output.sha256 = digest
         output.status = "active"
+        source_keys = [row.storage_key for row in sources if row and row.storage_key]
         for source in sources:
-            _safe_file_path(source.storage_key).unlink(missing_ok=True)
             source.status = "converted"
         deduction.material_status = "ready"
         deduction.material_error = None
@@ -442,6 +472,11 @@ def process_next_deduction_material_job() -> bool:
         job.completed_at = datetime.now()
         _write_audit(db, "材料PDF已就绪", deduction, {"material_status": "ready", "source_type": deduction.material_source_type, "source_count": len(sources), "job_id": job.id})
         db.commit()
+        for storage_key in source_keys:
+            try:
+                _safe_file_path(storage_key).unlink(missing_ok=True)
+            except MaterialError:
+                pass
         return True
     except MaterialError as exc:
         db.rollback()
@@ -461,17 +496,6 @@ def process_next_deduction_material_job() -> bool:
         return True
     except Exception:
         db.rollback()
-        if job_id:
-            job = db.get(DeductionMaterialJob, job_id)
-            if job:
-                deduction = db.get(DeductionRecord, job.deduction_id)
-                if deduction:
-                    deduction.status, deduction.material_status, deduction.material_error = "material_failed", "failed", "照片生成PDF失败，请重新提交材料"
-                    _restore_upgrade_source(db, job)
-                    _discard_failed_sources(db, job)
-                    _write_audit(db, "照片材料生成失败", deduction, {"material_status": "failed", "error_code": "conversion_failed", "job_id": job.id})
-                job.status, job.error_code, job.error_message, job.completed_at = "failed", "conversion_failed", "照片生成PDF失败，请重新提交材料", datetime.now()
-                db.commit()
         return True
     finally:
         db.close()

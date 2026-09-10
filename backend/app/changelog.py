@@ -7,6 +7,28 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.10.8",
+        "date": "2026-09-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "待复核列表不会被不通过记录挤掉",
+                "detail": "待处理只显示待复核；已确认和不通过放到已处理历史。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR"],
+            },
+            {
+                "summary": "材料任务改为一次只能被一个人领取",
+                "detail": "后台生成PDF时用条件更新抢任务；成功写入后再删除源文件，异常中断可在超时后重试。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM"],
+            },
+            {
+                "summary": "撤回和整组移交改用统一确认框",
+                "detail": "不再弹出浏览器原生确认；撤回按钮显示文字，并带有明确说明。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.10.7",
         "date": "2026-09-10",
         "status": "candidate",

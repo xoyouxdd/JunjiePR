@@ -26,6 +26,7 @@ from app.v2_models import (
     DeductionRecord,
     DeductionType,
     Employee,
+    RecognitionRecord,
     RecognitionScoreRule,
     Role,
     StoredFile,
@@ -424,6 +425,10 @@ def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
     assert "bindDialogLayer(overlay,{initialFocus:input,onClose:value=>resolve(typeof value==='string'?value:null)})" in script
     assert "bindDialogLayer(drawer,{" in script
     assert "allowClose:()=>!submitting" in script
+    assert "aria-label=\"撤回签卡\"" in script
+    assert "confirmModal('撤回签卡'" in script
+    assert "confirmModal('确认整组移交'" in script
+    assert "待复核记录" in script
 
 
 def test_starlette_multipart_fix_and_hundred_megabyte_limit_are_locked() -> None:
@@ -471,3 +476,103 @@ def test_manager_recognition_accepts_an_image_larger_than_one_megabyte() -> None
             files={"image": ("large.png", payload, "image/png")},
         )
         assert created.status_code == 200, created.text
+
+
+def test_review_queue_keeps_old_pending_when_rejected_overflows() -> None:
+    today = date.today().isoformat()
+    with TestClient(app) as client:
+        _login(client, "TATEST01")
+        options = client.get("/api/options").json()
+        target = next(
+            row
+            for row in client.get("/api/employee-targets", params={"usage": "recognition", "keyword": "CMTEST01"}).json()["items"]
+            if row["employee_no"] == "CMTEST01"
+        )
+        me = client.get("/api/me").json()
+        created = client.post(
+            "/api/recognitions",
+            data={
+                "recognition_date": "2098-05-01",
+                "occurred_attraction_id": str(next(row["id"] for row in options["recognition_venues"] if row["name"] == "热力追踪")),
+                "recognition_type_id": str(next(row["id"] for row in options["recognition_types"] if row["code"] == "SAFETY")),
+                "recognizer_employee_id": str(me["id"]),
+                "content": "复核队列模板",
+                "employee_id": str(target["id"]),
+                "idempotency_key": "audit-review-template",
+            },
+        )
+        assert created.status_code == 200, created.text
+        template_id = created.json()["record"]["id"]
+    now = datetime.now()
+    pending_ids: list[int] = []
+    with SessionLocal() as db:
+        base = db.get(RecognitionRecord, template_id)
+        assert base is not None
+        for index in range(220):
+            db.add(
+                RecognitionRecord(
+                    employee_id=base.employee_id,
+                    employee_no=base.employee_no,
+                    employee_name=base.employee_name,
+                    employee_role_snapshot=base.employee_role_snapshot,
+                    employee_role_code_snapshot=base.employee_role_code_snapshot,
+                    home_attraction_id=base.home_attraction_id,
+                    home_attraction_name=base.home_attraction_name,
+                    occurred_attraction_id=base.occurred_attraction_id,
+                    recognition_date=today,
+                    recognition_month=today[:7],
+                    recognition_type_id=base.recognition_type_id,
+                    recognition_type_name=base.recognition_type_name,
+                    content=f"拒{index}"[:20],
+                    recognizer_employee_id=base.recognizer_employee_id,
+                    recognizer_name=base.recognizer_name,
+                    recognizer_role_snapshot=base.recognizer_role_snapshot,
+                    operator_employee_id=base.operator_employee_id,
+                    operator_name=base.operator_name,
+                    source=base.source,
+                    fraction=base.fraction,
+                    credited_fraction=Decimal("0.00"),
+                    status="rejected",
+                    submitted_at=now,
+                )
+            )
+        old = now - timedelta(days=12)
+        for index in range(5):
+            row = RecognitionRecord(
+                employee_id=base.employee_id,
+                employee_no=base.employee_no,
+                employee_name=base.employee_name,
+                employee_role_snapshot=base.employee_role_snapshot,
+                employee_role_code_snapshot=base.employee_role_code_snapshot,
+                home_attraction_id=base.home_attraction_id,
+                home_attraction_name=base.home_attraction_name,
+                occurred_attraction_id=base.occurred_attraction_id,
+                recognition_date="2097-01-01",
+                recognition_month="2097-01",
+                recognition_type_id=base.recognition_type_id,
+                recognition_type_name=base.recognition_type_name,
+                content=f"待{index}"[:20],
+                recognizer_employee_id=base.recognizer_employee_id,
+                recognizer_name=base.recognizer_name,
+                recognizer_role_snapshot=base.recognizer_role_snapshot,
+                operator_employee_id=base.operator_employee_id,
+                operator_name=base.operator_name,
+                source=base.source,
+                fraction=base.fraction,
+                credited_fraction=Decimal("0.00"),
+                status="pending",
+                submitted_at=old,
+            )
+            db.add(row)
+            db.flush()
+            pending_ids.append(row.id)
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "TATEST01")
+        queue = client.get("/api/reviews", params={"view": "queue"}).json()
+        history = client.get("/api/reviews", params={"view": "history"}).json()
+        queue_ids = {row["id"] for row in queue}
+        assert all(row["status"] == "pending" for row in queue)
+        assert set(pending_ids) <= queue_ids
+        assert any(row["status"] == "rejected" for row in history)
+        assert all(row["status"] in {"confirmed", "rejected"} for row in history)
