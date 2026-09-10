@@ -187,6 +187,7 @@ SPECIAL_RECOGNITION_TYPES = {
         "monthly_limit": 1,
     },
 }
+DEDICATED_RECOGNITION_TYPE_CODES = {"POC"}
 # Five ordinary recognition categories are capped from the agreed effective
 # date.  Existing August history keeps its already-confirmed score unchanged.
 MONTHLY_CATEGORY_CAP_CODES = {"SAFETY", "COURTESY", "INCLUSION", "EFFICIENCY", "SHOW"}
@@ -264,21 +265,26 @@ def ensure_employee_number_change_target(db: Session, user: V2User, employee: Em
     return target_role
 
 
-def visible_system_alerts(db: Session, user: V2User) -> list[SystemAlert]:
-    """Return only alerts inside the caller's existing HR scope."""
-    rows = db.query(SystemAlert).order_by(SystemAlert.status.asc(), SystemAlert.created_at.desc()).limit(200).all()
+def visible_system_alerts(db: Session, user: V2User, *, limit: int = 200) -> list[SystemAlert]:
+    """Return only alerts inside the caller's existing HR scope, then page."""
+    query = db.query(SystemAlert)
     allowed_attractions = scoped_hr_attraction_ids(db, user)
-    if allowed_attractions is None:
-        return rows
-    group_ids = {
-        group.id
-        for group in db.query(WorkGroup).filter(WorkGroup.attraction_id.in_(allowed_attractions)).all()
-    }
-    employee_ids = {
-        employee.id
-        for employee in db.query(Employee).filter(Employee.attraction_id.in_(allowed_attractions)).all()
-    }
-    return [row for row in rows if (row.group_id in group_ids if row.group_id else row.employee_id in employee_ids)]
+    if allowed_attractions is not None:
+        group_ids = [
+            row[0]
+            for row in db.query(WorkGroup.id).filter(WorkGroup.attraction_id.in_(allowed_attractions)).all()
+        ]
+        employee_ids = [
+            row[0]
+            for row in db.query(Employee.id).filter(Employee.attraction_id.in_(allowed_attractions)).all()
+        ]
+        scope_clauses = []
+        if group_ids:
+            scope_clauses.append(SystemAlert.group_id.in_(group_ids))
+        if employee_ids:
+            scope_clauses.append(and_(SystemAlert.group_id.is_(None), SystemAlert.employee_id.in_(employee_ids)))
+        query = query.filter(or_(*scope_clauses) if scope_clauses else SystemAlert.id == -1)
+    return query.order_by(SystemAlert.status.asc(), SystemAlert.created_at.desc(), SystemAlert.id.desc()).limit(limit).all()
 
 
 def backup_health_payload() -> dict:
@@ -1677,6 +1683,7 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(current_user))
                 "name": row.name,
                 "fixed_score": float(SPECIAL_RECOGNITION_TYPES[row.code]["score"]) if row.code in SPECIAL_RECOGNITION_TYPES else None,
                 "monthly_limit": SPECIAL_RECOGNITION_TYPES[row.code]["monthly_limit"] if row.code in SPECIAL_RECOGNITION_TYPES else None,
+                "dedicated_entry": row.code in DEDICATED_RECOGNITION_TYPE_CODES,
             }
             for row in recognition_types
         ],
@@ -1892,6 +1899,8 @@ async def create_recognition(
     recognition_type = db.get(RecognitionType, int(recognition_type_id or 0))
     if not recognition_type or not recognition_type.active:
         raise HTTPException(400, "请选择有效认可类型")
+    if recognition_type.code in DEDICATED_RECOGNITION_TYPE_CODES:
+        raise HTTPException(400, "POC特别贡献只能通过专用入口开具")
     selected_recognizer = str(recognizer_employee_id or "").strip()
     special_rule = SPECIAL_RECOGNITION_TYPES.get(recognition_type.code)
     recognizer_role = None
@@ -6966,18 +6975,7 @@ def transfer_group(group_id: int, payload: dict, request: Request, db: Session =
 @router.get("/hr/alerts")
 def hr_alerts(db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
     process_role_expirations(db)
-    allowed_attractions = scoped_hr_attraction_ids(db, user)
-    rows = db.query(SystemAlert).order_by(SystemAlert.status.asc(), SystemAlert.created_at.desc()).limit(200).all()
-    if allowed_attractions is not None:
-        group_ids = {
-            group.id
-            for group in db.query(WorkGroup).filter(WorkGroup.attraction_id.in_(allowed_attractions)).all()
-        }
-        employee_ids = {
-            employee.id
-            for employee in db.query(Employee).filter(Employee.attraction_id.in_(allowed_attractions)).all()
-        }
-        rows = [row for row in rows if (row.group_id in group_ids if row.group_id else row.employee_id in employee_ids)]
+    rows = visible_system_alerts(db, user)
     return [
         {"id": row.id, "type": row.alert_type, "message": row.message, "due_date": row.due_date or "", "status": row.status, "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S")}
         for row in rows

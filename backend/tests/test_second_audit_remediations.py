@@ -1,6 +1,7 @@
 import os
 import tempfile
-from datetime import date
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 
@@ -17,6 +18,21 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app
 from app.score_queries import employee_month_scores
+from app.v2_crypto import hash_password
+from app.v2_database import SessionLocal, seed_reference_data
+from app.v2_models import (
+    AuditLog,
+    DeductionLevel,
+    DeductionRecord,
+    DeductionType,
+    Employee,
+    RecognitionScoreRule,
+    Role,
+    StoredFile,
+    SystemAlert,
+    UserAccount,
+)
+from app.v2_services import recognition_score_for_role
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,7 +86,11 @@ def test_required_recognition_fields_are_not_hidden_as_more_options() -> None:
 def test_mobile_review_and_material_status_keep_decision_fields_distinct() -> None:
     script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-    assert "认可人：${esc(r.recognizer_name)} · ${fmt(r.fraction)}分" in script
+    assert "function recognitionScoreText(r)" in script
+    assert "认可人：${esc(r.recognizer_name)} · ${recognitionScoreText(r)}" in script
+    assert "签卡人：${esc(row.recognizer_name)}" in script
+    assert "attachmentControl(row.image_url,'查看材料'" in script
+    assert ".filter(row=>!row.dedicated_entry)" in script
     assert "businessActive=businessStatus==='active'" in script
     assert "是否计分以业务状态为准" in script
     assert "if(error?.name==='AbortError'||!container?.isConnected)return" in script
@@ -203,3 +223,191 @@ def test_scoped_month_score_query_matches_the_legacy_view_business_rules() -> No
     assert rows[2]["attendance_score"] == 0
     assert rows[2]["deduction_score"] == 1
     assert rows[2]["total_score"] == -1
+
+
+def test_startup_seed_keeps_custom_scores_and_legacy_attendance_history() -> None:
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    today = date.today().isoformat()
+    next_month = (date.today().replace(day=28) + timedelta(days=8)).replace(day=1).isoformat()
+    with SessionLocal() as db:
+        role = db.query(Role).filter_by(code="SUPERVISOR").one()
+        assert recognition_score_for_role(db, role.id, today) == Decimal("0.50")
+        db.add(RecognitionScoreRule(role_id=role.id, score=Decimal("2.00"), effective_date=yesterday, active=True))
+        employee = db.query(Employee).filter_by(employee_no="CMTEST01").one()
+        level = db.query(DeductionLevel).first()
+        stored = StoredFile(
+            storage_key="legacy-attendance-keep.bin",
+            original_filename="keep.bin",
+            extension=".bin",
+            file_size=1,
+            sha256="a" * 64,
+            uploaded_by=employee.id,
+            status="active",
+        )
+        db.add(stored)
+        db.flush()
+        legacy_type = DeductionType(code="ATTENDANCE", name="旧考勤扣分", active=True)
+        db.add(legacy_type)
+        db.flush()
+        record = DeductionRecord(
+            employee_id=employee.id,
+            employee_no=employee.employee_no,
+            employee_name=employee.name,
+            employee_role_snapshot="CM",
+            deduction_type_id=legacy_type.id,
+            deduction_type_name=legacy_type.name,
+            deduction_level_id=level.id,
+            deduction_level_name=level.name,
+            points=Decimal("1.00"),
+            occurred_on=yesterday,
+            deduction_month=yesterday[:7],
+            description="保留旧考勤扣分",
+            document_file_id=stored.id,
+            submitter_id=employee.id,
+            submitter_name=employee.name,
+            submitter_role_snapshot="CM",
+            permission_scope_snapshot="test",
+            status="active",
+        )
+        db.add(record)
+        db.flush()
+        db.add(AuditLog(action="旧考勤", entity_type="deduction", entity_id=str(record.id), operator_name="测试"))
+        db.commit()
+        before_count = db.query(RecognitionScoreRule).filter_by(role_id=role.id).count()
+        record_id, type_id = record.id, legacy_type.id
+        seed_reference_data(db)
+        assert db.query(RecognitionScoreRule).filter_by(role_id=role.id).count() == before_count
+        assert recognition_score_for_role(db, role.id, yesterday) == Decimal("2.00")
+        assert recognition_score_for_role(db, role.id, today) == Decimal("2.00")
+        assert recognition_score_for_role(db, role.id, next_month) == Decimal("2.00")
+        assert db.query(RecognitionScoreRule).filter_by(role_id=role.id, effective_date=today).first() is None
+        assert db.get(DeductionType, type_id) is not None
+        assert db.get(DeductionRecord, record_id) is not None
+        assert db.query(AuditLog).filter_by(entity_type="deduction", entity_id=str(record_id)).first() is not None
+        assert db.query(StoredFile).filter_by(storage_key="legacy-attendance-keep.bin").first() is not None
+
+
+def test_ordinary_recognition_rejects_poc_and_dedicated_entry_still_works() -> None:
+    today = date.today().isoformat()
+    with TestClient(app) as client:
+        _login(client, "TATEST01")
+        options = client.get("/api/options").json()
+        poc = next(row for row in options["recognition_types"] if row["code"] == "POC")
+        safety = next(row for row in options["recognition_types"] if row["code"] == "SAFETY")
+        assert poc["dedicated_entry"] is True
+        assert safety["dedicated_entry"] is False
+        target = next(
+            row
+            for row in client.get("/api/employee-targets", params={"usage": "recognition", "keyword": "CMTEST01"}).json()["items"]
+            if row["employee_no"] == "CMTEST01"
+        )
+        me = client.get("/api/me").json()
+        venue_id = next(row["id"] for row in options["recognition_venues"] if row["name"] == "热力追踪")
+        denied = client.post(
+            "/api/recognitions",
+            data={
+                "recognition_date": today,
+                "occurred_attraction_id": str(venue_id),
+                "recognition_type_id": str(poc["id"]),
+                "recognizer_employee_id": str(me["id"]),
+                "content": "普通入口绕行POC",
+                "employee_id": str(target["id"]),
+                "idempotency_key": "audit-poc-bypass",
+            },
+        )
+        assert denied.status_code == 400, denied.text
+        assert "POC" in str(denied.json()["detail"])
+        assert client.post(
+            "/api/recognitions/poc",
+            data={
+                "recognition_date": today,
+                "employee_id": str(target["id"]),
+                "points": "2",
+                "poc_period_type": "month",
+                "poc_reason": "无权限绕行",
+            },
+        ).status_code == 403
+        ordinary = client.post(
+            "/api/recognitions",
+            data={
+                "recognition_date": "2098-08-01",
+                "occurred_attraction_id": str(venue_id),
+                "recognition_type_id": str(safety["id"]),
+                "recognizer_employee_id": str(me["id"]),
+                "content": "普通加分仍可用",
+                "employee_id": str(target["id"]),
+                "idempotency_key": "audit-ordinary-ok",
+            },
+        )
+        assert ordinary.status_code == 200, ordinary.text
+        client.post("/api/logout")
+        _login(client, "GSMTEST01")
+        issued = client.post(
+            "/api/recognitions/poc",
+            data={
+                "recognition_date": today,
+                "employee_id": str(target["id"]),
+                "points": "2",
+                "poc_period_type": "month",
+                "poc_reason": "合法POC特别贡献",
+                "idempotency_key": "audit-poc-legal",
+            },
+        )
+        assert issued.status_code == 200, issued.text
+        still_denied = client.post(
+            "/api/recognitions",
+            data={
+                "recognition_date": today,
+                "occurred_attraction_id": str(venue_id),
+                "recognition_type_id": str(poc["id"]),
+                "recognizer_employee_id": str(client.get("/api/me").json()["id"]),
+                "content": "GSM也不可走普通入口",
+                "employee_id": str(target["id"]),
+                "idempotency_key": "audit-poc-gsm-bypass",
+            },
+        )
+        assert still_denied.status_code == 400, still_denied.text
+
+
+def test_circle_hr_alerts_are_filtered_before_the_page_limit() -> None:
+    now = datetime.now()
+    with SessionLocal() as db:
+        heat = db.query(Employee).filter_by(employee_no="CMTEST01").one()
+        dwarf = db.query(Employee).filter_by(employee_no="HR-DWARF").one()
+        assert heat.attraction_id != dwarf.attraction_id
+        db.query(SystemAlert).delete()
+        db.add(
+            SystemAlert(
+                alert_type="test_home_circle",
+                dedupe_key="home-keep",
+                employee_id=heat.id,
+                message="本圈必须可见的告警",
+                status="open",
+                created_at=now - timedelta(days=1),
+            )
+        )
+        db.flush()
+        db.add_all(
+            [
+                SystemAlert(
+                    alert_type="test_other_circle",
+                    dedupe_key=f"other-{index}",
+                    employee_id=dwarf.id,
+                    message=f"其他圈告警{index}",
+                    status="open",
+                    created_at=now,
+                )
+                for index in range(220)
+            ]
+        )
+        hr = db.query(Employee).filter_by(employee_no="HR-HEAT").one()
+        account = db.query(UserAccount).filter_by(employee_id=hr.id).one()
+        account.password_hash = hash_password("1234")
+        account.enabled = True
+        account.must_change_password = False
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "HR-HEAT")
+        messages = [row["message"] for row in client.get("/api/hr/alerts").json()]
+        assert "本圈必须可见的告警" in messages
+        assert not any(message.startswith("其他圈告警") for message in messages)

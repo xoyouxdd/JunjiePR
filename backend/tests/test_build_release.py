@@ -41,8 +41,8 @@ def test_release_package_excludes_local_secrets_and_uses_app_version(tmp_path: P
     assert mod.should_include(local_data / "runtime.json", tmp_path) is False
     assert mod.should_include(app_dir / "main.py", tmp_path) is True
     version = mod.read_app_version()
-    assert version == "2026.09.10.5"
-    assert mod.package_name(version, "20260910") == "recognition-v2026.09.10.5.zip"
+    assert version == "2026.09.10.6"
+    assert mod.package_name(version, "20260910") == "recognition-v2026.09.10.6.zip"
 
 
 def test_release_whitelist_includes_docs_and_excludes_demo_seed() -> None:

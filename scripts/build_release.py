@@ -30,6 +30,7 @@ SCRIPT_FILES = {
     "Test-SqliteBackupHealth.ps1",
     "Test-SqliteBackupRestore.ps1",
     "build_release.py",
+    "purge_legacy_attendance.py",
     "verify_readiness.py",
 }
 

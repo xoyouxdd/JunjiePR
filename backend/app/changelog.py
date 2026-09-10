@@ -7,6 +7,28 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.10.6",
+        "date": "2026-09-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "启动不再覆盖已保存的角色分值",
+                "detail": "默认分值只在全新库补一次。已经人工改过的分值，跨日或跨月重启后仍按保存结果计分。",
+                "audiences": ["SYSTEM_ADMIN", "HR_CIRCLE", "HR_ADMIN"],
+            },
+            {
+                "summary": "POC只能走专用入口",
+                "detail": "普通加分登记不再出现POC类型；没有开具权限的账号用任何入口提交都会被拒绝。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM"],
+            },
+            {
+                "summary": "记录同时显示原始分和计入分",
+                "detail": "被月度上限卡住的加分会标明实际计入分，手机卡片也能看到签卡人、说明和材料。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.10.5",
         "date": "2026-09-10",
         "status": "candidate",

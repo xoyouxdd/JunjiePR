@@ -11,6 +11,7 @@
 - `Test-SqliteBackupHealth.ps1`：统一检查计划任务是否执行、最新备份时效、清单 SHA-256/大小和真实 SQLite `quick_check`，异常时返回退出码 `2`。
 - `Install-DailyBackupHealthTask.ps1`：安装独立于备份任务的每日健康检查，避免备份任务自身失败时无人发现。
 - `verify_readiness.py`：只读核对明确指定的 SQLite 副本，输出脱敏的账号、角色、景点圈、工作组和月结完整性摘要，供发布预检留档。
+- `purge_legacy_attendance.py`：一次性清理旧 `ATTENDANCE` 扣分类型。默认只打印影响清单，必须显式 `--apply` 才会删除。
 
 ## 正式备份
 

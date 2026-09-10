@@ -97,6 +97,18 @@ ROLE_PERMISSION_CODES = {
     "SYSTEM_ADMIN": ("SYSTEM_ADMIN", "HR_MANAGE", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET"),
 }
 
+# Seed only creates these when a role has no score rules at all. Later edits
+# go through the admin API; startup must not insert a new "today" default.
+INITIAL_SCORE_RULE_EFFECTIVE_DATE = "2020-01-01"
+DEFAULT_RECOGNIZER_SCORES = {
+    "TA_SUPERVISOR": Decimal("0.50"),
+    "SUPERVISOR": Decimal("0.50"),
+    "TA_GSM": Decimal("1.00"),
+    "GSM": Decimal("1.00"),
+    "AM": Decimal("1.50"),
+    "OM": Decimal("1.50"),
+}
+
 EMPLOYEE_CIRCLES = ("热力追踪", "矮人迷宫", "小熊罐子")
 RECOGNITION_VENUES = (
     "热力追踪",
@@ -664,12 +676,66 @@ def ensure_governance_case_indexes(db) -> None:
     db.commit()
 
 
+def legacy_attendance_cleanup_preview(db) -> dict:
+    """Describe leftover ATTENDANCE catalog rows without deleting them."""
+    from app.v2_models import AuditLog, DeductionRecord, DeductionType, StoredFile
+
+    legacy_attendance = db.query(DeductionType).filter(DeductionType.code == "ATTENDANCE").first()
+    if not legacy_attendance:
+        return {"found": False, "type_id": None, "record_ids": [], "file_keys": [], "audit_count": 0}
+    legacy_records = db.query(DeductionRecord).filter(DeductionRecord.deduction_type_id == legacy_attendance.id).all()
+    legacy_ids = [str(row.id) for row in legacy_records]
+    legacy_files = [db.get(StoredFile, row.document_file_id) for row in legacy_records]
+    audit_count = 0
+    if legacy_ids:
+        audit_count = (
+            db.query(AuditLog)
+            .filter(AuditLog.entity_type == "deduction", AuditLog.entity_id.in_(legacy_ids))
+            .count()
+        )
+    return {
+        "found": True,
+        "type_id": legacy_attendance.id,
+        "record_ids": [row.id for row in legacy_records],
+        "file_keys": [file_row.storage_key for file_row in legacy_files if file_row],
+        "audit_count": audit_count,
+    }
+
+
+def purge_legacy_attendance(db, *, apply: bool = False) -> dict:
+    """One-off ATTENDANCE cleanup. Default is dry-run; startup must not call this."""
+    from app.v2_models import AuditLog, DeductionRecord, DeductionType, StoredFile
+
+    preview = legacy_attendance_cleanup_preview(db)
+    preview["mode"] = "apply" if apply else "dry-run"
+    preview["applied"] = False
+    if not apply or not preview["found"]:
+        return preview
+    legacy_attendance = db.query(DeductionType).filter(DeductionType.code == "ATTENDANCE").first()
+    legacy_records = db.query(DeductionRecord).filter(DeductionRecord.deduction_type_id == legacy_attendance.id).all()
+    legacy_ids = [str(row.id) for row in legacy_records]
+    legacy_files = [db.get(StoredFile, row.document_file_id) for row in legacy_records]
+    if legacy_ids:
+        db.query(AuditLog).filter(AuditLog.entity_type == "deduction", AuditLog.entity_id.in_(legacy_ids)).delete(synchronize_session=False)
+    for row in legacy_records:
+        db.delete(row)
+    db.flush()
+    for file_row in legacy_files:
+        if file_row:
+            db.delete(file_row)
+    db.delete(legacy_attendance)
+    db.commit()
+    for storage_key in preview["file_keys"]:
+        path = (FILE_DIR / storage_key).resolve()
+        if FILE_DIR.resolve() in path.parents:
+            path.unlink(missing_ok=True)
+    preview["applied"] = True
+    return preview
+
+
 def seed_reference_data(db) -> None:
     from app.v2_models import (
-        Attraction,
         AttendanceRule,
-        AuditLog,
-        DeductionRecord,
         DeductionLevel,
         DeductionType,
         Permission,
@@ -677,10 +743,8 @@ def seed_reference_data(db) -> None:
         RecognitionType,
         Role,
         RolePermission,
-        StoredFile,
     )
 
-    today = date.today().isoformat()
     ensure_attraction_catalog(db)
     for code, name, rank, can_lead, attendance_eligible in ROLE_DEFINITIONS:
         role = db.query(Role).filter(Role.code == code).first()
@@ -729,18 +793,17 @@ def seed_reference_data(db) -> None:
         if not db.query(RecognitionType).filter(RecognitionType.code == code).first():
             db.add(RecognitionType(code=code, name=name, active=True))
 
-    role_scores = {
-        "TA_SUPERVISOR": Decimal("0.50"),
-        "SUPERVISOR": Decimal("0.50"),
-        "TA_GSM": Decimal("1.00"),
-        "GSM": Decimal("1.00"),
-        "AM": Decimal("1.50"),
-        "OM": Decimal("1.50"),
-    }
-    for role_code, score in role_scores.items():
+    for role_code, score in DEFAULT_RECOGNIZER_SCORES.items():
         role = db.query(Role).filter(Role.code == role_code).one()
-        if not db.query(RecognitionScoreRule).filter_by(role_id=role.id, effective_date=today).first():
-            db.add(RecognitionScoreRule(role_id=role.id, score=score, effective_date=today, active=True))
+        if not db.query(RecognitionScoreRule).filter_by(role_id=role.id).first():
+            db.add(
+                RecognitionScoreRule(
+                    role_id=role.id,
+                    score=score,
+                    effective_date=INITIAL_SCORE_RULE_EFFECTIVE_DATE,
+                    active=True,
+                )
+            )
 
     if not db.query(AttendanceRule).first():
         db.add(
@@ -749,30 +812,10 @@ def seed_reference_data(db) -> None:
                 perfect_bonus=Decimal("2.00"),
                 sick_day_deduction=Decimal("0.45"),
                 zero_threshold=Decimal("0.10"),
-                effective_date=today,
+                effective_date=INITIAL_SCORE_RULE_EFFECTIVE_DATE,
                 active=True,
             )
         )
-    legacy_attendance = db.query(DeductionType).filter(DeductionType.code == "ATTENDANCE").first()
-    if legacy_attendance:
-        legacy_records = db.query(DeductionRecord).filter(DeductionRecord.deduction_type_id == legacy_attendance.id).all()
-        legacy_ids = [str(row.id) for row in legacy_records]
-        legacy_files = [db.get(StoredFile, row.document_file_id) for row in legacy_records]
-        legacy_storage_keys = [file_row.storage_key for file_row in legacy_files if file_row]
-        if legacy_ids:
-            db.query(AuditLog).filter(AuditLog.entity_type == "deduction", AuditLog.entity_id.in_(legacy_ids)).delete(synchronize_session=False)
-        for row in legacy_records:
-            db.delete(row)
-        db.flush()
-        for file_row in legacy_files:
-            if file_row:
-                db.delete(file_row)
-        db.delete(legacy_attendance)
-        db.commit()
-        for storage_key in legacy_storage_keys:
-            path = (FILE_DIR / storage_key).resolve()
-            if FILE_DIR.resolve() in path.parents:
-                path.unlink(missing_ok=True)
 
     desired_deduction_types = (
         ("SAFETY", "安全"),
