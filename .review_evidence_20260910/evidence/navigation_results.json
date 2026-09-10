@@ -1,0 +1,9 @@
+{
+  "before": "当前新页面B",
+  "after": "更新记录当前系统 V · 。下面只列出和你这个角色相关的变更。暂无更新记录",
+  "oldPromiseResult": "resolved",
+  "overwritten_by_cancelled_old_view": true,
+  "mode": "original api/renderChangelog; native Response over controlled ReadableStream that errors on abort; synthetic navigation marker; NOT actual network/navigation integration",
+  "chromium_version": "144.0.7559.96",
+  "unavailable": "Attempted local HTTP navigation returned ERR_BLOCKED_BY_ADMINISTRATOR; no browser policy was changed"
+}

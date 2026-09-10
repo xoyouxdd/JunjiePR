@@ -56,7 +56,7 @@ def test_material_preview_metadata_and_all_image_entry_points() -> None:
     assert "function attachmentControl(url,title,previewKind='')" in script
     assert "bindFilePreviews(document.getElementById('entryResults'))" in script
     assert "bindFilePreviews(app);" in script
-    assert "bindReviewActions();" in script
+    assert "bindReviewActions(showHistory,pageOffset);" in script
     assert "proof_is_previewable" in router
     assert "image_is_previewable" in router
     assert "attachment_is_previewable" in router

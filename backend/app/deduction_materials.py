@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -16,6 +17,8 @@ import fitz
 
 from app.v2_database import FILE_DIR, SessionLocal
 from app.v2_models import AuditLog, DeductionFollowUp, DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, Employee, StoredFile
+
+logger = logging.getLogger("junjiepr.materials")
 
 try:  # HEIC is optional at import time but bundled in the application runtime.
     from pillow_heif import register_heif_opener
@@ -362,29 +365,41 @@ def _restore_upgrade_source(db, job: DeductionMaterialJob) -> None:
         first.upgrade_state = "eligible"
 
 
-def _discard_failed_sources(db, job: DeductionMaterialJob) -> None:
-    """Remove transient photo originals after a failed conversion.
-
-    The retry action stages a new set of originals.  Retaining old photos after a
-    conversion failure would serve no product purpose and would unnecessarily
-    extend the lifetime of sensitive material.
-    """
+def _source_ids(job: DeductionMaterialJob) -> list[int]:
     try:
-        source_ids = [int(value) for value in json.loads(job.source_file_ids_json or "[]")]
+        return [int(value) for value in json.loads(job.source_file_ids_json or "[]")]
     except (TypeError, ValueError, json.JSONDecodeError):
-        source_ids = []
-    for source_id in source_ids:
+        return []
+
+
+def _discard_failed_sources(db, job: DeductionMaterialJob) -> None:
+    """Mark failed source rows in the same transaction. Files are unlinked after commit."""
+    for source_id in _source_ids(job):
         source = db.get(StoredFile, source_id)
-        if not source:
+        if source:
+            source.status = "conversion_failed"
+
+
+def _unlink_storage_keys(keys: list[str]) -> bool:
+    ok = True
+    for storage_key in keys:
+        if not storage_key:
             continue
         try:
-            _safe_file_path(source.storage_key).unlink(missing_ok=True)
-        except MaterialError:
-            pass
-        source.status = "conversion_failed"
+            _safe_file_path(storage_key).unlink(missing_ok=True)
+        except (MaterialError, OSError):
+            logger.exception("无法删除材料文件 key=%s", storage_key)
+            ok = False
+    return ok
+
+
+def _commit(db) -> None:
+    db.commit()
 
 
 STALE_PROCESSING_AFTER = timedelta(minutes=15)
+HEARTBEAT_SECONDS = 30
+MAX_SOURCE_CLEANUP_ATTEMPTS = 8
 
 
 def _claimable_material_jobs(now: datetime):
@@ -408,6 +423,7 @@ def claim_next_deduction_material_job(db, *, now: datetime | None = None) -> int
     )
     if not candidate_id:
         return None
+    token = uuid4().hex
     result = db.execute(
         update(DeductionMaterialJob)
         .where(DeductionMaterialJob.id == candidate_id, claimable)
@@ -415,90 +431,253 @@ def claim_next_deduction_material_job(db, *, now: datetime | None = None) -> int
             status="processing",
             attempts=DeductionMaterialJob.attempts + 1,
             started_at=now,
+            claim_generation=DeductionMaterialJob.claim_generation + 1,
+            claim_token=token,
             error_code=None,
             error_message=None,
         )
+        .execution_options(synchronize_session=False)
     )
-    db.commit()
+    _commit(db)
     if result.rowcount != 1:
         return None
     return int(candidate_id)
+
+
+def _mark_job_terminal(db, job_id: int, token: str, **values) -> bool:
+    result = db.execute(
+        update(DeductionMaterialJob)
+        .where(
+            DeductionMaterialJob.id == job_id,
+            DeductionMaterialJob.claim_token == token,
+            DeductionMaterialJob.status == "processing",
+        )
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
+
+
+def _heartbeat_claim(job_id: int, token: str, stop_event: threading.Event) -> None:
+    while not stop_event.wait(HEARTBEAT_SECONDS):
+        db = SessionLocal()
+        try:
+            result = db.execute(
+                update(DeductionMaterialJob)
+                .where(
+                    DeductionMaterialJob.id == job_id,
+                    DeductionMaterialJob.claim_token == token,
+                    DeductionMaterialJob.status == "processing",
+                )
+                .values(started_at=datetime.now())
+                .execution_options(synchronize_session=False)
+            )
+            db.commit()
+            if result.rowcount != 1:
+                return
+        except Exception:
+            logger.exception("材料任务心跳失败 job_id=%s", job_id)
+            return
+        finally:
+            db.close()
+
+
+def _source_storage_keys(db, job: DeductionMaterialJob) -> list[str]:
+    keys = []
+    for source_id in _source_ids(job):
+        source = db.get(StoredFile, source_id)
+        if source and source.storage_key:
+            keys.append(source.storage_key)
+    return keys
+
+
+def _cleanup_source_files(db, job_id: int) -> None:
+    job = db.get(DeductionMaterialJob, job_id)
+    if not job or job.status not in {"succeeded", "failed"} or job.source_cleanup_status != "pending":
+        return
+    keys = _source_storage_keys(db, job)
+    cleaned = _unlink_storage_keys(keys)
+    job.source_cleanup_attempts = int(job.source_cleanup_attempts or 0) + 1
+    if cleaned:
+        job.source_cleanup_status = "done"
+    elif job.source_cleanup_attempts >= MAX_SOURCE_CLEANUP_ATTEMPTS:
+        job.source_cleanup_status = "needs_attention"
+        logger.error("材料源文件清理超过重试上限 job_id=%s", job_id)
+    try:
+        _commit(db)
+    except Exception:
+        logger.exception("记录材料源文件清理结果失败 job_id=%s", job_id)
+        db.rollback()
+
+
+def cleanup_pending_material_sources() -> bool:
+    db = SessionLocal()
+    try:
+        job_id = (
+            db.query(DeductionMaterialJob.id)
+            .filter(
+                DeductionMaterialJob.source_cleanup_status == "pending",
+                DeductionMaterialJob.status.in_(("succeeded", "failed")),
+            )
+            .order_by(DeductionMaterialJob.id.asc())
+            .limit(1)
+            .scalar()
+        )
+        if not job_id:
+            return False
+        _cleanup_source_files(db, int(job_id))
+        return True
+    finally:
+        db.close()
+
+
+def _persist_material_failure(job_id: int | None, token: str | None, exc: MaterialError) -> bool:
+    if not job_id or not token:
+        return True
+    db = SessionLocal()
+    try:
+        if not _mark_job_terminal(
+            db,
+            job_id,
+            token,
+            status="failed",
+            completed_at=datetime.now(),
+            error_code=exc.code,
+            error_message=exc.message,
+            source_cleanup_status="pending",
+        ):
+            db.rollback()
+            return True
+        db.expire_all()
+        job = db.get(DeductionMaterialJob, job_id)
+        deduction = db.get(DeductionRecord, job.deduction_id) if job else None
+        if job and deduction:
+            deduction.status = "material_failed"
+            deduction.material_status = "failed"
+            deduction.material_error = exc.message
+            deduction.upgrade_state = "material_failed" if job.mode == "upgrade" else deduction.upgrade_state
+            _restore_upgrade_source(db, job)
+            _discard_failed_sources(db, job)
+            _write_audit(db, "照片材料生成失败", deduction, {"material_status": "failed", "error_code": exc.code, "job_id": job.id})
+        _commit(db)
+        _cleanup_source_files(db, job_id)
+        return True
+    except Exception:
+        logger.exception("保存材料失败状态时出错 job_id=%s", job_id)
+        db.rollback()
+        return False
+    finally:
+        db.close()
+
+
+def _apply_success_result(db, job: DeductionMaterialJob, output: StoredFile, deduction: DeductionRecord, sources: list[StoredFile], key: str, size: int, digest: str) -> None:
+    output.storage_key = key
+    output.original_filename = "PDF材料已优化.pdf" if job.mode == "pdf_compress" else "照片材料合成.pdf"
+    output.extension = ".pdf"
+    output.mime_type = "application/pdf"
+    output.file_size = size
+    output.sha256 = digest
+    output.status = "active"
+    for source in sources:
+        source.status = "converted"
+    deduction.material_status = "ready"
+    deduction.material_error = None
+    deduction.material_revision = int(deduction.material_revision or 0) + 1
+    if job.mode in {"upgrade", "upgrade_pdf_compress"}:
+        _finalize_upgrade(db, job, deduction)
+    else:
+        deduction.status = "active"
+        follow_ups = db.query(DeductionFollowUp).filter_by(employee_id=deduction.employee_id, deduction_type_id=deduction.deduction_type_id, occurred_on=deduction.occurred_on, status="pending").all()
+        for follow_up in follow_ups:
+            follow_up.status = "issued"
+            follow_up.issued_deduction_id = deduction.id
+            follow_up.issued_by = deduction.submitter_id
+            follow_up.issued_by_name = deduction.submitter_name
+            follow_up.issued_at = datetime.now()
+    _write_audit(db, "材料PDF已就绪", deduction, {"material_status": "ready", "source_type": deduction.material_source_type, "source_count": len(sources), "job_id": job.id})
 
 
 def process_next_deduction_material_job() -> bool:
     """Claim and complete one job. Safe to call repeatedly and across restarts."""
     db = SessionLocal()
     job_id: int | None = None
-    source_keys: list[str] = []
+    token: str | None = None
+    generated_key: str | None = None
+    heartbeat_stop = threading.Event()
     try:
         job_id = claim_next_deduction_material_job(db)
         if not job_id:
             return False
         job = db.get(DeductionMaterialJob, job_id)
-        if not job:
+        if not job or not job.claim_token:
             return False
+        token = job.claim_token
+        threading.Thread(
+            target=_heartbeat_claim,
+            args=(job_id, token, heartbeat_stop),
+            daemon=True,
+            name=f"material-heartbeat-{job_id}",
+        ).start()
         deduction = db.get(DeductionRecord, job.deduction_id)
         output = db.get(StoredFile, job.output_file_id)
-        source_ids = [int(value) for value in json.loads(job.source_file_ids_json)]
+        source_ids = _source_ids(job)
         sources = [db.get(StoredFile, value) for value in source_ids]
         if not deduction or not output or any(row is None for row in sources):
             raise MaterialError("source_missing", "材料源文件不存在，请重新提交材料")
-        key, size, digest = (_make_compressed_pdf(sources[0]) if job.mode in {"pdf_compress", "upgrade_pdf_compress"} else _make_pdf([row for row in sources if row]))
-        output.storage_key = key
-        output.original_filename = "PDF材料已优化.pdf" if job.mode == "pdf_compress" else "照片材料合成.pdf"
-        output.extension = ".pdf"
-        output.mime_type = "application/pdf"
-        output.file_size = size
-        output.sha256 = digest
-        output.status = "active"
-        source_keys = [row.storage_key for row in sources if row and row.storage_key]
-        for source in sources:
-            source.status = "converted"
-        deduction.material_status = "ready"
-        deduction.material_error = None
-        deduction.material_revision = int(deduction.material_revision or 0) + 1
-        if job.mode in {"upgrade", "upgrade_pdf_compress"}:
-            _finalize_upgrade(db, job, deduction)
-        else:
-            deduction.status = "active"
-            follow_ups = db.query(DeductionFollowUp).filter_by(employee_id=deduction.employee_id, deduction_type_id=deduction.deduction_type_id, occurred_on=deduction.occurred_on, status="pending").all()
-            for follow_up in follow_ups:
-                follow_up.status = "issued"
-                follow_up.issued_deduction_id = deduction.id
-                follow_up.issued_by = deduction.submitter_id
-                follow_up.issued_by_name = deduction.submitter_name
-                follow_up.issued_at = datetime.now()
-        job.status = "succeeded"
-        job.completed_at = datetime.now()
-        _write_audit(db, "材料PDF已就绪", deduction, {"material_status": "ready", "source_type": deduction.material_source_type, "source_count": len(sources), "job_id": job.id})
-        db.commit()
-        for storage_key in source_keys:
-            try:
-                _safe_file_path(storage_key).unlink(missing_ok=True)
-            except MaterialError:
-                pass
+        generated_key, size, digest = (
+            _make_compressed_pdf(sources[0])
+            if job.mode in {"pdf_compress", "upgrade_pdf_compress"}
+            else _make_pdf([row for row in sources if row])
+        )
+        if not _mark_job_terminal(
+            db,
+            job_id,
+            token,
+            status="succeeded",
+            completed_at=datetime.now(),
+            source_cleanup_status="pending",
+            error_code=None,
+            error_message=None,
+        ):
+            db.rollback()
+            _unlink_storage_keys([generated_key] if generated_key else [])
+            return True
+        db.expire_all()
+        job = db.get(DeductionMaterialJob, job_id)
+        deduction = db.get(DeductionRecord, job.deduction_id) if job else None
+        output = db.get(StoredFile, job.output_file_id) if job else None
+        sources = [db.get(StoredFile, value) for value in source_ids]
+        if not job or not deduction or not output or any(row is None for row in sources):
+            db.rollback()
+            _unlink_storage_keys([generated_key] if generated_key else [])
+            return False
+        _apply_success_result(db, job, output, deduction, sources, generated_key, size, digest)
+        _commit(db)
+        _cleanup_source_files(db, job_id)
         return True
     except MaterialError as exc:
         db.rollback()
-        job = db.get(DeductionMaterialJob, job_id) if job_id else None
-        if job:
-            deduction = db.get(DeductionRecord, job.deduction_id)
-            if deduction:
-                deduction.status = "material_failed"
-                deduction.material_status = "failed"
-                deduction.material_error = exc.message
-                deduction.upgrade_state = "material_failed" if job.mode == "upgrade" else deduction.upgrade_state
-                _restore_upgrade_source(db, job)
-                _discard_failed_sources(db, job)
-                _write_audit(db, "照片材料生成失败", deduction, {"material_status": "failed", "error_code": exc.code, "job_id": job.id})
-            job.status, job.error_code, job.error_message, job.completed_at = "failed", exc.code, exc.message, datetime.now()
-            db.commit()
-        return True
+        _unlink_storage_keys([generated_key] if generated_key else [])
+        return _persist_material_failure(job_id, token, exc)
     except Exception:
+        logger.exception("材料任务处理意外失败 job_id=%s", job_id)
         db.rollback()
-        return True
+        _unlink_storage_keys([generated_key] if generated_key else [])
+        return False
     finally:
+        heartbeat_stop.set()
         db.close()
+
+
+def worker_tick() -> bool:
+    """Process at most one conversion and one deferred cleanup. Never raises to the loop."""
+    try:
+        processed = process_next_deduction_material_job()
+        processed = cleanup_pending_material_sources() or processed
+        return processed
+    except Exception:
+        logger.exception("材料任务线程遇到未预期错误，将继续等待下一轮")
+        return False
 
 
 def start_deduction_material_worker() -> None:
@@ -510,7 +689,7 @@ def start_deduction_material_worker() -> None:
 
     def run() -> None:
         while not _worker_stop.is_set():
-            processed = process_next_deduction_material_job()
+            processed = worker_tick()
             _worker_stop.wait(0.35 if processed else 1.5)
 
     threading.Thread(target=run, name="deduction-photo-pdf-worker", daemon=True).start()

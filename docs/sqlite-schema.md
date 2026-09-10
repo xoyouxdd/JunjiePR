@@ -1,6 +1,6 @@
 # SQLite 表、键、索引
 
-对照当前程序 `2026.09.10.8`。权威定义在代码里，本文件只记录现在落地的结构：
+对照当前程序 `2026.09.10.9`。权威定义在代码里，本文件只记录现在落地的结构：
 
 - 表与字段：`backend/app/v2_models.py`
 - 启动建库、一次性补丁、额外索引、月度分值视图：`backend/app/v2_database.py`
@@ -866,6 +866,10 @@
 | `error_code` | VARCHAR(50) | 是 | |
 | `error_message` | TEXT | 是 | |
 | `attempts` | INTEGER | 否 | |
+| `claim_generation` | INTEGER | 否 | 领取代次，默认 0 |
+| `claim_token` | VARCHAR(64) | 是 | 当前领取令牌 |
+| `source_cleanup_status` | VARCHAR(20) | 否 | `idle` / `pending` / `done` / `needs_attention` |
+| `source_cleanup_attempts` | INTEGER | 否 | 源文件清理次数 |
 | `created_at` | DATETIME | 否 | |
 | `started_at` | DATETIME | 是 | |
 | `completed_at` | DATETIME | 是 | |
@@ -878,6 +882,7 @@
 
 - `ix_deduction_material_job_status_created` (`status`, `created_at`)
 - `ix_deduction_material_job_deduction` (`deduction_id`, `id`)
+- `ix_deduction_material_job_cleanup` (`source_cleanup_status`, `status`, `id`)
 
 ### `deduction_upgrade_requests`
 

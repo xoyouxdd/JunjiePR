@@ -1,0 +1,72 @@
+[
+  {
+    "path": "JunjiePR_2026.09.10.8_独立复核报告.md",
+    "size": 22705,
+    "sha256": "fd77402fb57de4de31ffdce27964b0b35f5c4722bb7b50f5e503ac298d247759"
+  },
+  {
+    "path": "audit_metadata.json",
+    "size": 716,
+    "sha256": "63973ae626abfcbfe8682777ed42584bd27357cbeba28a5c17fab5fae82fa482"
+  },
+  {
+    "path": "evidence/README.md",
+    "size": 835,
+    "sha256": "b0dd691a3a54b4dfad021b330f37450293c080c419bd3403d5832bcceb2944c8"
+  },
+  {
+    "path": "evidence/material_excerpt.py",
+    "size": 6643,
+    "sha256": "f8a5e586e923fed0d0c9dfa5f226a13250a633f874b271eb735753486a3dc401"
+  },
+  {
+    "path": "evidence/material_results.json",
+    "size": 2468,
+    "sha256": "b753168d785ad5caa39af62cc7841273d619c752e2c1ed86a3a17d2a524886a0"
+  },
+  {
+    "path": "evidence/navigation_excerpt.js",
+    "size": 2090,
+    "sha256": "2a942dc8559328f59e3f6a58e83804d6bc52b4eac3dbbfb75ba6a826be634209"
+  },
+  {
+    "path": "evidence/navigation_results.json",
+    "size": 573,
+    "sha256": "ddd0c20289cc3a537daaa3417aa7f0305b354b76de9c2e636159e0a301b25447"
+  },
+  {
+    "path": "evidence/review_after_1366x768.png",
+    "size": 45964,
+    "sha256": "42bad46ebbd3ec7ccb3038d7417abfc50152b4238e6f89377193bb1f599a4241"
+  },
+  {
+    "path": "evidence/review_after_390x844.png",
+    "size": 34364,
+    "sha256": "68bf8d0653049a4abc44e91b259c6d85f191583720a7f42c7f408071596850fa"
+  },
+  {
+    "path": "evidence/review_browser_results.json",
+    "size": 7697,
+    "sha256": "94e6734b201c30054483f85c5c0145e404b0d4887d778c0df13228b2668930dc"
+  },
+  {
+    "path": "evidence/review_excerpt.js",
+    "size": 4226,
+    "sha256": "c7bf2393714004f45d3dd9597192e2cf837e6617599a1f1a4322874bf583234e"
+  },
+  {
+    "path": "evidence/test_material_isolated.py",
+    "size": 8404,
+    "sha256": "a2c910c77facba3a7fea5a1b9607c696eb0819ee913e5f1908d84e12c70fce98"
+  },
+  {
+    "path": "evidence/test_navigation_browser.py",
+    "size": 2578,
+    "sha256": "b0787fc2cf2b934f495aa2100ba6003488b41847aa451065bf22057d13d08698"
+  },
+  {
+    "path": "evidence/test_review_browser.py",
+    "size": 4542,
+    "sha256": "ddd363fe072d1b0a4436ed4e2542aab009e2306f9a728a0d665b0b058cc8d143"
+  }
+]

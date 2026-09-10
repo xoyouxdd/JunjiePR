@@ -49,6 +49,9 @@ def test_render_navigation_cancels_stale_read_requests_without_recursive_redraw(
     assert "clearPageResources();" in script
     assert "pageTimeout(poll,1500)" in script
     assert "if(generation!==renderGeneration) return render();" not in script
+    assert "function readApiBody(res)" in script
+    assert "JSON.parse(text)" in script
+    assert "res.json().catch(() => ({}))" not in script
 
 
 def test_manager_recognition_can_submit_without_a_self_evidence_control() -> None:
@@ -429,6 +432,13 @@ def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
     assert "confirmModal('撤回签卡'" in script
     assert "confirmModal('确认整组移交'" in script
     assert "待复核记录" in script
+    assert "function readApiBody(res)" in script
+    assert "function beginViewRequest()" in script
+    assert "function replaceReviewRows(record)" in script
+    assert "function reviewCard(r)" in script
+    assert "function reviewTableRow(r)" in script
+    assert "recognitionScoreText(r)" in script
+    assert "recognitionScoreNote(r)" in script
 
 
 def test_starlette_multipart_fix_and_hundred_megabyte_limit_are_locked() -> None:
@@ -439,13 +449,15 @@ def test_starlette_multipart_fix_and_hundred_megabyte_limit_are_locked() -> None
     def version_tuple(value: str) -> tuple[int, ...]:
         return tuple(int(part) for part in value.split(".")[:3])
 
-    assert version_tuple(fastapi.__version__) >= (0, 116, 1)
-    assert version_tuple(starlette.__version__) >= (0, 47, 2)
+    assert version_tuple(fastapi.__version__) >= (0, 120, 2)
+    assert version_tuple(starlette.__version__) >= (0, 49, 1)
     assert MultiPartParser.max_part_size == 1024 * 1024
     source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
     assert "Starlette 0.47+" in source
-    assert "fastapi==0.116.2" in (ROOT / "requirements.txt").read_text(encoding="utf-8")
-    assert "starlette==0.47.3" in (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "Starlette 0.49.1+" in source
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "fastapi==0.120.2" in requirements
+    assert "starlette==0.49.3" in requirements
 
 
 def test_manager_recognition_accepts_an_image_larger_than_one_megabyte() -> None:
@@ -571,8 +583,110 @@ def test_review_queue_keeps_old_pending_when_rejected_overflows() -> None:
         _login(client, "TATEST01")
         queue = client.get("/api/reviews", params={"view": "queue"}).json()
         history = client.get("/api/reviews", params={"view": "history"}).json()
-        queue_ids = {row["id"] for row in queue}
-        assert all(row["status"] == "pending" for row in queue)
+        queue_rows = queue["items"]
+        history_rows = history["items"]
+        queue_ids = {row["id"] for row in queue_rows}
         assert set(pending_ids) <= queue_ids
-        assert any(row["status"] == "rejected" for row in history)
-        assert all(row["status"] in {"confirmed", "rejected"} for row in history)
+        assert queue["total"] >= 5
+        assert queue["has_more"] is False
+        assert all(row["status"] == "pending" for row in queue_rows)
+        assert set(pending_ids) <= queue_ids
+        assert any(row["status"] == "rejected" for row in history_rows)
+        assert all(row["status"] in {"confirmed", "rejected"} for row in history_rows)
+
+
+def test_review_queue_paginates_more_than_two_hundred_pending() -> None:
+    today = date.today().isoformat()
+    with TestClient(app) as client:
+        _login(client, "TATEST01")
+        options = client.get("/api/options").json()
+        target = next(
+            row
+            for row in client.get("/api/employee-targets", params={"usage": "recognition", "keyword": "CMTEST01"}).json()["items"]
+            if row["employee_no"] == "CMTEST01"
+        )
+        me = client.get("/api/me").json()
+        created = client.post(
+            "/api/recognitions",
+            data={
+                "recognition_date": "2098-06-01",
+                "occurred_attraction_id": str(next(row["id"] for row in options["recognition_venues"] if row["name"] == "热力追踪")),
+                "recognition_type_id": str(next(row["id"] for row in options["recognition_types"] if row["code"] == "SAFETY")),
+                "recognizer_employee_id": str(me["id"]),
+                "content": "分页模板",
+                "employee_id": str(target["id"]),
+                "idempotency_key": "audit-review-page-template",
+            },
+        )
+        assert created.status_code == 200, created.text
+        template_id = created.json()["record"]["id"]
+    pending_ids: list[int] = []
+    with SessionLocal() as db:
+        base = db.get(RecognitionRecord, template_id)
+        assert base is not None
+        for index in range(205):
+            row = RecognitionRecord(
+                employee_id=base.employee_id,
+                employee_no=base.employee_no,
+                employee_name=base.employee_name,
+                employee_role_snapshot=base.employee_role_snapshot,
+                employee_role_code_snapshot=base.employee_role_code_snapshot,
+                home_attraction_id=base.home_attraction_id,
+                home_attraction_name=base.home_attraction_name,
+                occurred_attraction_id=base.occurred_attraction_id,
+                recognition_date="2097-02-01",
+                recognition_month="2097-02",
+                recognition_type_id=base.recognition_type_id,
+                recognition_type_name=base.recognition_type_name,
+                content=f"页{index}"[:20],
+                recognizer_employee_id=base.recognizer_employee_id,
+                recognizer_name=base.recognizer_name,
+                recognizer_role_snapshot=base.recognizer_role_snapshot,
+                operator_employee_id=base.operator_employee_id,
+                operator_name=base.operator_name,
+                source=base.source,
+                fraction=base.fraction,
+                credited_fraction=Decimal("0.00"),
+                status="pending",
+                submitted_at=datetime.now() - timedelta(minutes=205 - index),
+            )
+            db.add(row)
+            db.flush()
+            pending_ids.append(row.id)
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "TATEST01")
+        first = client.get("/api/reviews", params={"view": "queue", "limit": 200, "offset": 0}).json()
+        second = client.get("/api/reviews", params={"view": "queue", "limit": 200, "offset": 200}).json()
+        first_ids = [row["id"] for row in first["items"]]
+        second_ids = [row["id"] for row in second["items"]]
+        assert first["total"] >= 205
+        assert first["has_more"] is True
+        assert len(first_ids) == 200
+        assert not set(first_ids) & set(second_ids)
+        seen = set(first_ids) | set(second_ids)
+        assert set(pending_ids) <= seen
+        assert all(row["status"] == "pending" for row in first["items"] + second["items"])
+        confirm = client.post(f"/api/reviews/{pending_ids[0]}", json={"action": "confirm"})
+        assert confirm.status_code == 200, confirm.text
+        record = confirm.json()["record"]
+        assert "credited_fraction" in record
+        assert "monthly_cap_reason" in record
+        assert record["status"] == "confirmed"
+        queue_after = client.get("/api/reviews", params={"view": "queue", "limit": 200}).json()
+        assert pending_ids[0] not in {row["id"] for row in queue_after["items"]}
+
+
+def test_static_range_request_completes_quickly() -> None:
+    import time
+
+    with TestClient(app) as client:
+        single = client.get("/static/css/style.css", headers={"Range": "bytes=0-99"})
+        assert single.status_code in {200, 206}
+        assert len(single.content) <= 100 or single.status_code == 200
+        ranges = ",".join(f"{index}-{index}" for index in range(0, 80, 2))
+        started = time.perf_counter()
+        many = client.get("/static/css/style.css", headers={"Range": f"bytes={ranges}"})
+        elapsed = time.perf_counter() - started
+        assert elapsed < 2
+        assert many.status_code in {200, 206, 400, 416}

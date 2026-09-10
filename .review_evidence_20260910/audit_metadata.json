@@ -1,0 +1,17 @@
+{
+  "repository": "xoyouxdd/JunjiePR",
+  "commit": "1c9da27ac3844c34f7f4aa2980ce2291690d9dea",
+  "base": "f05b9b10a0f9e56f7b255972e555a4b8ea0ecefa",
+  "app_version": "2026.09.10.8",
+  "source_blobs": {
+    "backend/app/deduction_materials.py": "a1b6cc77c7fa0eedd557ca17c14408f5166c7810",
+    "backend/app/static/js/app.js": "dd31723a0811d8b2c10f3a651a5b117c6c81207f",
+    "backend/app/routers/v2.py": "d42b9cc60a75431adeac266d1c00faf5db3a6941",
+    "backend/requirements.txt": "c3ecac1f1ca0f9cbfe4d89038b086824af783251"
+  },
+  "tests_are": "isolated excerpts, NOT full repository suite",
+  "repository_suite_run": false,
+  "production_touched": false,
+  "full_app_screenshots": false,
+  "github_actions_for_sha": 0
+}

@@ -27,4 +27,4 @@
 
 日常启动不会删除历史 `ATTENDANCE` 扣分类型及其记录、审计或附件。如业务批准一次性清理，先在隔离副本运行 `python scripts/purge_legacy_attendance.py` 查看影响清单，确认备份后再加 `--apply`。
 
-上线前可用 `python scripts/audit_score_rules.py` 只读核对正式库分值规则，不要按默认分值自动删除。生产建议继续单进程运行；材料任务已改为条件领取，仍不要默认开多个 worker。
+上线前用 `python scripts/audit_score_rules.py --data-dir <已存在的隔离快照目录>` 只读核对分值规则，不要按默认分值自动删除。必须指向已有库文件，脚本用 SQLite `mode=ro` 打开，不会新建库。生产继续单进程运行；材料任务虽有领取令牌，仍不要默认开多个 worker。

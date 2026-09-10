@@ -1,0 +1,210 @@
+{
+  "mode": "real Chromium, latest extracted renderReview + bindReviewActions; synthetic API/helper/CSS fixture; NOT full app or real devices",
+  "chromium_version": "144.0.7559.96",
+  "results": [
+    {
+      "viewport": "1920x1080",
+      "before_text": "2026-09-10 09:00\t合成测试员工\n0000077\t安全 · 测试主管\n月度上限场景\t0.50分\t待复核\t确认 不通过",
+      "after_text": "2026-09-10 09:00\t合成测试员工\n0000077\t安全 · 测试主管\n月度上限场景\t0.50分\t已确认\t还原",
+      "response": {
+        "id": 77,
+        "employee_name": "合成测试员工",
+        "employee_no": "0000077",
+        "submitted_at": "2026-09-10 09:00",
+        "recognition_type": "安全",
+        "recognizer_name": "测试主管",
+        "content": "月度上限场景",
+        "fraction": 0.5,
+        "credited_fraction": 0,
+        "status": "confirmed",
+        "status_name": "已确认",
+        "image_url": "",
+        "monthly_cap_reason": "本月安全已达5分上限，本条保留认可记录但不再计分"
+      },
+      "calls": [
+        {
+          "url": "/api/reviews?view=queue",
+          "method": "GET"
+        },
+        {
+          "url": "/api/reviews/77",
+          "method": "POST"
+        }
+      ],
+      "stale_score_visible": true,
+      "cap_reason_missing": true,
+      "processed_row_still_in_queue": true,
+      "screenshot": null
+    },
+    {
+      "viewport": "1440x900",
+      "before_text": "2026-09-10 09:00\t合成测试员工\n0000077\t安全 · 测试主管\n月度上限场景\t0.50分\t待复核\t确认 不通过",
+      "after_text": "2026-09-10 09:00\t合成测试员工\n0000077\t安全 · 测试主管\n月度上限场景\t0.50分\t已确认\t还原",
+      "response": {
+        "id": 77,
+        "employee_name": "合成测试员工",
+        "employee_no": "0000077",
+        "submitted_at": "2026-09-10 09:00",
+        "recognition_type": "安全",
+        "recognizer_name": "测试主管",
+        "content": "月度上限场景",
+        "fraction": 0.5,
+        "credited_fraction": 0,
+        "status": "confirmed",
+        "status_name": "已确认",
+        "image_url": "",
+        "monthly_cap_reason": "本月安全已达5分上限，本条保留认可记录但不再计分"
+      },
+      "calls": [
+        {
+          "url": "/api/reviews?view=queue",
+          "method": "GET"
+        },
+        {
+          "url": "/api/reviews/77",
+          "method": "POST"
+        }
+      ],
+      "stale_score_visible": true,
+      "cap_reason_missing": true,
+      "processed_row_still_in_queue": true,
+      "screenshot": null
+    },
+    {
+      "viewport": "1366x768",
+      "before_text": "2026-09-10 09:00\t合成测试员工\n0000077\t安全 · 测试主管\n月度上限场景\t0.50分\t待复核\t确认 不通过",
+      "after_text": "2026-09-10 09:00\t合成测试员工\n0000077\t安全 · 测试主管\n月度上限场景\t0.50分\t已确认\t还原",
+      "response": {
+        "id": 77,
+        "employee_name": "合成测试员工",
+        "employee_no": "0000077",
+        "submitted_at": "2026-09-10 09:00",
+        "recognition_type": "安全",
+        "recognizer_name": "测试主管",
+        "content": "月度上限场景",
+        "fraction": 0.5,
+        "credited_fraction": 0,
+        "status": "confirmed",
+        "status_name": "已确认",
+        "image_url": "",
+        "monthly_cap_reason": "本月安全已达5分上限，本条保留认可记录但不再计分"
+      },
+      "calls": [
+        {
+          "url": "/api/reviews?view=queue",
+          "method": "GET"
+        },
+        {
+          "url": "/api/reviews/77",
+          "method": "POST"
+        }
+      ],
+      "stale_score_visible": true,
+      "cap_reason_missing": true,
+      "processed_row_still_in_queue": true,
+      "screenshot": "review_after_1366x768.png"
+    },
+    {
+      "viewport": "390x844",
+      "before_text": "合成测试员工\n0000077\n待复核\n\n2026-09-10 09:00 · 安全 · 认可人：测试主管 · 0.50分\n\n月度上限场景\n\n确认 不通过",
+      "after_text": "合成测试员工\n0000077\n已确认\n\n2026-09-10 09:00 · 安全 · 认可人：测试主管 · 0.50分\n\n月度上限场景\n\n还原",
+      "response": {
+        "id": 77,
+        "employee_name": "合成测试员工",
+        "employee_no": "0000077",
+        "submitted_at": "2026-09-10 09:00",
+        "recognition_type": "安全",
+        "recognizer_name": "测试主管",
+        "content": "月度上限场景",
+        "fraction": 0.5,
+        "credited_fraction": 0,
+        "status": "confirmed",
+        "status_name": "已确认",
+        "image_url": "",
+        "monthly_cap_reason": "本月安全已达5分上限，本条保留认可记录但不再计分"
+      },
+      "calls": [
+        {
+          "url": "/api/reviews?view=queue",
+          "method": "GET"
+        },
+        {
+          "url": "/api/reviews/77",
+          "method": "POST"
+        }
+      ],
+      "stale_score_visible": true,
+      "cap_reason_missing": true,
+      "processed_row_still_in_queue": true,
+      "screenshot": "review_after_390x844.png"
+    },
+    {
+      "viewport": "375x667",
+      "before_text": "合成测试员工\n0000077\n待复核\n\n2026-09-10 09:00 · 安全 · 认可人：测试主管 · 0.50分\n\n月度上限场景\n\n确认 不通过",
+      "after_text": "合成测试员工\n0000077\n已确认\n\n2026-09-10 09:00 · 安全 · 认可人：测试主管 · 0.50分\n\n月度上限场景\n\n还原",
+      "response": {
+        "id": 77,
+        "employee_name": "合成测试员工",
+        "employee_no": "0000077",
+        "submitted_at": "2026-09-10 09:00",
+        "recognition_type": "安全",
+        "recognizer_name": "测试主管",
+        "content": "月度上限场景",
+        "fraction": 0.5,
+        "credited_fraction": 0,
+        "status": "confirmed",
+        "status_name": "已确认",
+        "image_url": "",
+        "monthly_cap_reason": "本月安全已达5分上限，本条保留认可记录但不再计分"
+      },
+      "calls": [
+        {
+          "url": "/api/reviews?view=queue",
+          "method": "GET"
+        },
+        {
+          "url": "/api/reviews/77",
+          "method": "POST"
+        }
+      ],
+      "stale_score_visible": true,
+      "cap_reason_missing": true,
+      "processed_row_still_in_queue": true,
+      "screenshot": null
+    },
+    {
+      "viewport": "360x800",
+      "before_text": "合成测试员工\n0000077\n待复核\n\n2026-09-10 09:00 · 安全 · 认可人：测试主管 · 0.50分\n\n月度上限场景\n\n确认 不通过",
+      "after_text": "合成测试员工\n0000077\n已确认\n\n2026-09-10 09:00 · 安全 · 认可人：测试主管 · 0.50分\n\n月度上限场景\n\n还原",
+      "response": {
+        "id": 77,
+        "employee_name": "合成测试员工",
+        "employee_no": "0000077",
+        "submitted_at": "2026-09-10 09:00",
+        "recognition_type": "安全",
+        "recognizer_name": "测试主管",
+        "content": "月度上限场景",
+        "fraction": 0.5,
+        "credited_fraction": 0,
+        "status": "confirmed",
+        "status_name": "已确认",
+        "image_url": "",
+        "monthly_cap_reason": "本月安全已达5分上限，本条保留认可记录但不再计分"
+      },
+      "calls": [
+        {
+          "url": "/api/reviews?view=queue",
+          "method": "GET"
+        },
+        {
+          "url": "/api/reviews/77",
+          "method": "POST"
+        }
+      ],
+      "stale_score_visible": true,
+      "cap_reason_missing": true,
+      "processed_row_still_in_queue": true,
+      "screenshot": null
+    }
+  ]
+}

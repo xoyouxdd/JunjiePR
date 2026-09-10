@@ -1,0 +1,84 @@
+{
+  "mode": "isolated current function bodies + minimal model subset + controlled conversion/clock/commit faults",
+  "python": "3.13.5 (main, Jul 15 2026, 20:25:40) [GCC 14.2.0]",
+  "sqlite": "3.46.1",
+  "sqlalchemy": "2.0.50",
+  "results": [
+    {
+      "test": "atomic_normal_claim",
+      "claim_results": [
+        1,
+        null
+      ],
+      "exceptions": [],
+      "expected_single_claim": true,
+      "final_job_status": "processing",
+      "final_attempts": 1,
+      "final_business_status": "material_processing",
+      "output_key": "placeholder.pdf",
+      "audit_rows": 0,
+      "source_exists": true,
+      "remaining_files": [
+        "source.jpg",
+        "test.db-shm",
+        "test.db-wal"
+      ]
+    },
+    {
+      "test": "stale_owner_can_overwrite_new_owner",
+      "outer_worker_A_return": true,
+      "after_B": [
+        {
+          "worker_B_return": true,
+          "B_output_after_commit": "worker_B.pdf",
+          "B_status": "succeeded"
+        }
+      ],
+      "scenario": "A paused; B reclaims after 16min and succeeds; then A finishes",
+      "final_job_status": "succeeded",
+      "final_attempts": 2,
+      "final_business_status": "active",
+      "output_key": "worker_A_late.pdf",
+      "audit_rows": 2,
+      "source_exists": false,
+      "remaining_files": [
+        "test.db-shm",
+        "test.db-wal",
+        "worker_A_late.pdf",
+        "worker_B.pdf"
+      ]
+    },
+    {
+      "test": "failure_path_source_cleanup_before_commit",
+      "exception_escaped_worker_function": "OperationalError",
+      "scenario": "MaterialError -> delete source -> injected failure committing error status",
+      "final_job_status": "processing",
+      "final_attempts": 1,
+      "final_business_status": "material_processing",
+      "output_key": "placeholder.pdf",
+      "audit_rows": 0,
+      "source_exists": false,
+      "remaining_files": [
+        "test.db-shm",
+        "test.db-wal"
+      ]
+    },
+    {
+      "test": "success_path_precommit_fault_preserves_source",
+      "worker_return": true,
+      "scenario": "conversion succeeds; injected failure before success commit",
+      "final_job_status": "processing",
+      "final_attempts": 1,
+      "final_business_status": "material_processing",
+      "output_key": "placeholder.pdf",
+      "audit_rows": 0,
+      "source_exists": true,
+      "remaining_files": [
+        "generated.pdf",
+        "source.jpg",
+        "test.db-shm",
+        "test.db-wal"
+      ]
+    }
+  ]
+}

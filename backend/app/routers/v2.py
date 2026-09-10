@@ -2341,6 +2341,7 @@ def operations_health(db: Session = Depends(get_db), user: V2User = Depends(requ
 def reviews(
     view: Literal["queue", "history"] = "queue",
     limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("REVIEW_DIRECT")),
 ):
@@ -2353,10 +2354,20 @@ def reviews(
     )
     if view == "history":
         query = query.filter(RecognitionRecord.status.in_(("confirmed", "rejected")))
+        query = query.order_by(RecognitionRecord.submitted_at.desc(), RecognitionRecord.id.desc())
     else:
         query = query.filter(RecognitionRecord.status == "pending")
-    rows = query.order_by(RecognitionRecord.submitted_at.desc(), RecognitionRecord.id.desc()).limit(limit).all()
-    return [recognition_payload(row) for row in rows]
+        query = query.order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc())
+    total = query.count()
+    rows = query.offset(offset).limit(limit).all()
+    return {
+        "view": view,
+        "items": [recognition_payload(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(rows) < total,
+    }
 
 
 @router.post("/reviews/{record_id}")

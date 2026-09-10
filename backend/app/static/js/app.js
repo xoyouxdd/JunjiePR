@@ -101,6 +101,14 @@ function imagePreviewButton(url,title='签卡图片'){return `<button type="butt
 function attachmentControl(url,title,previewKind=''){if(!url)return '';if(previewKind==='image')return `<button type="button" class="evidence-link evidence-preview-link" data-file-preview="${esc(url)}" data-file-kind="image" data-file-title="${esc(title)}">${esc(title)}</button>`;if(previewKind==='pdf')return `<button type="button" class="evidence-link evidence-preview-link" data-file-preview="${esc(url)}" data-file-kind="pdf" data-file-title="${esc(title)}">${esc(title)}</button>`;return `<a class="evidence-link" href="${esc(portalPath(url))}" target="_blank" rel="noopener">${esc(title)}</a>`;}
 function validationErrorMessage(detail){if(!detail||typeof detail!=='object')return '';if(detail.code==='SICK_LEAVE_VALIDATION_ERROR'&&Array.isArray(detail.fields)){return detail.fields.map(item=>item?.message).filter(Boolean).join(' ');}if(Array.isArray(detail)){const names={employee_id:'缺勤员工',leave_start_date:'开始日期',leave_end_date:'结束日期',leave_days:'缺勤天数',proof:'缺勤证明'};const fields=[...new Set(detail.map(item=>item?.loc?.[item.loc.length-1]).filter(Boolean))];return fields.length?`${fields.map(field=>`${names[field]||field}未成功提交`).join('、')}，请检查后重试。`:'';}return ''}
 function apiFallbackMessage(status){const messages={400:'提交内容不符合要求，请检查页面提示后重试。',403:'当前账号没有执行此操作的权限，请确认操作范围或联系管理员。',404:'所需记录不存在，或已被其他人处理，请刷新页面后重试。',409:'数据刚刚被其他操作更新，请刷新页面确认最新状态后再试。',413:'上传文件过大，请选择不超过100MB的业务材料后重试。',422:'提交内容不完整，请确认已选择员工、日期和必填材料后重试。',429:'操作过于频繁，请稍候再试。',500:'系统暂时无法处理本次操作，请稍后重试；若持续发生请记录操作时间并联系管理员。',502:'服务正在恢复，请稍后重试。',503:'服务暂不可用，请稍后重试。'};return messages[status]||`请求失败（${status}），请稍后重试。`;}
+async function readApiBody(res){
+  let text='';
+  try{ text=await res.text(); }
+  catch(error){ if(error?.name==='AbortError')throw error; throw new Error('读取服务器响应失败，请稍后重试。'); }
+  if(!text) return {};
+  try{ return JSON.parse(text); }
+  catch{ throw new Error('服务器返回了无法解析的数据，请稍后重试。'); }
+}
 async function api(url, options={}) {
   const requestOptions={...options};
   if(!requestOptions.signal&&(!requestOptions.method||requestOptions.method==='GET')&&renderAbortController)requestOptions.signal=renderAbortController.signal;
@@ -108,7 +116,7 @@ async function api(url, options={}) {
   try { res = await fetch(portalPath(url), requestOptions); }
   catch(error) { if(error?.name==='AbortError')throw error; throw new Error('网络连接失败，请检查网络后重试；若持续发生请记录操作时间并联系管理员。'); }
   if (res.status === 401) { location.href=portalPath('/login'); throw new Error('登录已失效'); }
-  const body = await res.json().catch(() => ({}));
+  const body = await readApiBody(res);
   if (!res.ok) { const detail=body.detail; const fallback=apiFallbackMessage(res.status); const error=new Error(typeof detail==='object'?(detail.message||validationErrorMessage(detail)||fallback):(detail||fallback)); error.detail=detail; error.status=res.status; throw error; }
   return body;
 }
@@ -191,7 +199,16 @@ function renderTabs() {
   tabs.querySelector('[data-close-more]')?.addEventListener('click',closeDrawer);
 }
 let renderGeneration=0;
+let viewRequestId=0;
 let renderAbortController=null;
+function beginViewRequest(){
+  const id=++viewRequestId;
+  const generation=renderGeneration;
+  return {
+    isCurrent(){return id===viewRequestId&&generation===renderGeneration;},
+    write(html){if(!this.isCurrent())return false;app.innerHTML=html;return true;}
+  };
+}
 const activePageTimers=new Set();
 const activePageCleanups=new Set();
 function pageTimeout(callback,delay){const timer=setTimeout(()=>{activePageTimers.delete(timer);callback();},delay);activePageTimers.add(timer);return timer;}
@@ -219,20 +236,22 @@ async function render(){
     await (views[state.tab] || renderHome)();
     if(generation!==renderGeneration) return;
   } catch(e) {
-    if(generation!==renderGeneration) return;
+    if(generation!==renderGeneration||e?.name==='AbortError') return;
     app.innerHTML=`<section class="panel"><div class="error">${esc(e.message)}</div></section>`;
   }
 }
 
 async function renderActionCenter(){
+  const request=beginViewRequest();
   const isUpgradeReviewer=['TA_GSM','GSM'].includes(state.me.role_code);
   const [data,upgradeData]=await Promise.all([api('/api/action-center'),isUpgradeReviewer?api('/api/deduction-upgrades/pending'):Promise.resolve({items:[]})]);
+  if(!request.isCurrent())return;
   const items=data.items||[],upgradeItems=upgradeData.items||[],total=Number(data.total||0)+upgradeItems.length;
   setActionBadge(total);
   const todoCards=items.map(item=>`<article class="action-card severity-${esc(item.severity)}"><div class="action-card-main"><span class="action-severity">${item.severity==='critical'?'优先处理':item.severity==='warning'?'请跟进':'待核对'}</span><strong>${esc(item.title)}</strong><p>${esc(item.description)}</p></div><div class="action-card-side"><div class="action-count"><b>${Number(item.count)}</b><span>项</span></div><button type="button" class="secondary" data-action-tab="${esc(item.tab)}">立即查看</button></div></article>`).join('')||'<section class="empty action-center-empty"><strong>当前没有待处理事项</strong><span>新的待办出现后会在这里提醒你。</span></section>';
   const reviewTab=isUpgradeReviewer?`<button type="button" class="secondary" data-action-pane-tab="review">待审核 <span class="badge warn">${upgradeItems.length}</span></button>`:'';
   const reviewPane=isUpgradeReviewer?`<section class="action-center-pane" data-action-pane="review" hidden><p class="field-hint">声明升级工单仅显示分配给当前账户的记录。备忘录和一级警告无需上传文件，处理说明必填。</p><div class="governance-case-list">${upgradeReviewCards(upgradeItems)}</div></section>`:'';
-  app.innerHTML=`<div class="section-gap action-center-page"><section class="panel action-center-heading"><div><span class="eyebrow">行动中心</span><h2>待办中心</h2><p>${esc(data.month)} · 当前共 <strong>${total}</strong> 项待处理事项</p></div><button type="button" class="secondary" id="refreshActionCenter" title="刷新待办中心">刷新待办</button></section><section class="panel action-center-panel"><div class="action-center-switch"><button type="button" class="primary" data-action-pane-tab="todo">待办 <span class="badge">${Number(data.total||0)}</span></button>${reviewTab}</div><section class="action-center-pane" data-action-pane="todo"><section class="action-center-list">${todoCards}</section></section>${reviewPane}</section></div>`;
+  if(!request.write(`<div class="section-gap action-center-page"><section class="panel action-center-heading"><div><span class="eyebrow">行动中心</span><h2>待办中心</h2><p>${esc(data.month)} · 当前共 <strong>${total}</strong> 项待处理事项</p></div><button type="button" class="secondary" id="refreshActionCenter" title="刷新待办中心">刷新待办</button></section><section class="panel action-center-panel"><div class="action-center-switch"><button type="button" class="primary" data-action-pane-tab="todo">待办 <span class="badge">${Number(data.total||0)}</span></button>${reviewTab}</div><section class="action-center-pane" data-action-pane="todo"><section class="action-center-list">${todoCards}</section></section>${reviewPane}</section></div>`))return;
   const setPane=name=>{app.querySelectorAll('[data-action-pane]').forEach(pane=>{pane.hidden=pane.dataset.actionPane!==name;});app.querySelectorAll('[data-action-pane-tab]').forEach(button=>{const active=button.dataset.actionPaneTab===name;button.classList.toggle('primary',active);button.classList.toggle('secondary',!active);});};
   app.querySelectorAll('[data-action-pane-tab]').forEach(button=>button.onclick=()=>setPane(button.dataset.actionPaneTab));
   document.getElementById('refreshActionCenter').onclick=renderActionCenter;
@@ -251,17 +270,20 @@ function governanceCaseMarkup(row, canReview){
 }
 
 async function renderGovernance(){
+  const request=beginViewRequest();
   const frontline=['CM','TR'].includes(state.me.role_code);
   if(frontline){
     const [caseData,appealable]=await Promise.all([api('/api/governance/cases'),api('/api/governance/appealable-records')]);
+    if(!request.isCurrent())return;
     const items=appealable.items||[],cases=caseData.items||[];
-    app.innerHTML=`<div class="section-gap"><section class="panel"><h2>记录申诉</h2><p class="field-hint">仅可申诉本人被拒绝、撤回的认可记录或有效扣分记录。处理结论不会直接修改原始记录，实质更正仍须走既有受控流程。</p><form id="appealForm" class="form-stack"><label>选择记录<select name="record_key" required><option value="">请选择</option>${items.map(row=>`<option value="${esc(row.record_type)}:${Number(row.record_id)}">${esc(row.label)}</option>`).join('')}</select></label><label>申诉说明<textarea name="reason" minlength="5" maxlength="500" required placeholder="请说明需要复核的事实与依据"></textarea></label><button class="primary" type="submit" ${items.length?'':'disabled'}>提交申诉</button></form>${items.length?'':'<p class="field-hint">当前没有可申诉记录</p>'}</section><section class="panel"><h2>我的申诉</h2><div class="governance-case-list">${cases.map(row=>governanceCaseMarkup(row,false)).join('')||'<p class="empty">暂无申诉记录</p>'}</div></section></div>`;
+    if(!request.write(`<div class="section-gap"><section class="panel"><h2>记录申诉</h2><p class="field-hint">仅可申诉本人被拒绝、撤回的认可记录或有效扣分记录。处理结论不会直接修改原始记录，实质更正仍须走既有受控流程。</p><form id="appealForm" class="form-stack"><label>选择记录<select name="record_key" required><option value="">请选择</option>${items.map(row=>`<option value="${esc(row.record_type)}:${Number(row.record_id)}">${esc(row.label)}</option>`).join('')}</select></label><label>申诉说明<textarea name="reason" minlength="5" maxlength="500" required placeholder="请说明需要复核的事实与依据"></textarea></label><button class="primary" type="submit" ${items.length?'':'disabled'}>提交申诉</button></form>${items.length?'':'<p class="field-hint">当前没有可申诉记录</p>'}</section><section class="panel"><h2>我的申诉</h2><div class="governance-case-list">${cases.map(row=>governanceCaseMarkup(row,false)).join('')||'<p class="empty">暂无申诉记录</p>'}</div></section></div>`))return;
     const form=document.getElementById('appealForm');
     form.onsubmit=async event=>{event.preventDefault();const [record_type,record_id]=String(form.elements.record_key.value||'').split(':');if(!record_type||!record_id)return;const button=form.querySelector('button[type=submit]');button.disabled=true;try{await api('/api/governance/appeals',json('POST',{record_type,record_id:Number(record_id),reason:form.elements.reason.value.trim()}));toast('申诉已提交，请在本页查看处理结果');renderGovernance()}catch(error){toast(error.message,true);button.disabled=false;}};
     return;
   }
   const caseData=await api('/api/governance/cases'),cases=caseData.items||[];
-  app.innerHTML=`<div class="section-gap"><section class="panel"><h2>治理复核</h2><p class="field-hint">复核人不得是原登记、复核、作废操作人或申诉提交人。结论不直接变更原始记录；需要更正时，仍通过月结、作废等既有受控流程和审计完成。</p><div class="governance-case-list">${cases.map(row=>governanceCaseMarkup(row,Boolean(caseData.can_review))).join('')||'<p class="empty">当前范围没有治理事项</p>'}</div></section></div>`;
+  if(!request.isCurrent())return;
+  if(!request.write(`<div class="section-gap"><section class="panel"><h2>治理复核</h2><p class="field-hint">复核人不得是原登记、复核、作废操作人或申诉提交人。结论不直接变更原始记录；需要更正时，仍通过月结、作废等既有受控流程和审计完成。</p><div class="governance-case-list">${cases.map(row=>governanceCaseMarkup(row,Boolean(caseData.can_review))).join('')||'<p class="empty">当前范围没有治理事项</p>'}</div></section></div>`))return;
   app.querySelectorAll('[data-governance-case]').forEach(form=>form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button[type=submit]');button.disabled=true;try{await api(`/api/governance/cases/${Number(form.dataset.governanceCase)}/resolve`,json('POST',{decision:form.elements.decision.value,resolution:form.elements.resolution.value.trim()}));toast('复核结论已保存，申请人可在申诉页查看');renderGovernance()}catch(error){toast(error.message,true);button.disabled=false;}});
 }
 
@@ -271,29 +293,35 @@ function operationsBackupHtml(backup){
 }
 
 async function renderOperations(){
+  const request=beginViewRequest();
   const data=await api('/api/admin/operations-health'),closures=data.month_closures||[],governance=data.governance||{};
-  app.innerHTML=`<div class="section-gap">${operationsBackupHtml(data.backup||{})}<section class="panel"><div class="operations-heading"><div><h2>运营概览</h2><p>${esc(data.month)} 当前状态</p></div></div><div class="operations-metrics"><div><span>未处理系统告警</span><strong>${Number(data.open_system_alerts||0)}</strong></div><div><span>待确认跨圈调动</span><strong>${Number(data.pending_circle_transfers||0)}</strong></div><div><span>已关闭月结</span><strong>${closures.filter(row=>row.is_closed).length} / ${closures.length}</strong></div></div><div class="operations-closures">${closures.map(row=>`<div><strong>${esc(row.attraction_name)}</strong><span class="badge ${row.is_closed?'ok':'warn'}">${row.is_closed?'已月结':'未月结'}</span><small>${row.is_closed?`关闭人：${esc(row.closed_by_name||'系统')}`:'等待核对'}</small></div>`).join('')||'<span class="field-hint">暂无景点圈月结信息</span>'}</div></section><section class="panel"><div class="operations-heading"><div><h2>治理与留存复核</h2><p>仅显示聚合数量，不展示人员或附件内容。</p></div></div><div class="operations-metrics"><div><span>待处理治理事项</span><strong>${Number(governance.open_cases||0)}</strong></div><div><span>超时申诉</span><strong>${Number(governance.overdue_cases||0)}</strong></div><div><span>超过48小时待复核</span><strong>${Number(governance.overdue_recognition_reviews||0)}</strong></div><div><span>附件留存待复核</span><strong>${Number(governance.retention_review_files||0)}</strong></div></div></section></div>`;
+  if(!request.isCurrent())return;
+  if(!request.write(`<div class="section-gap">${operationsBackupHtml(data.backup||{})}<section class="panel"><div class="operations-heading"><div><h2>运营概览</h2><p>${esc(data.month)} 当前状态</p></div></div><div class="operations-metrics"><div><span>未处理系统告警</span><strong>${Number(data.open_system_alerts||0)}</strong></div><div><span>待确认跨圈调动</span><strong>${Number(data.pending_circle_transfers||0)}</strong></div><div><span>已关闭月结</span><strong>${closures.filter(row=>row.is_closed).length} / ${closures.length}</strong></div></div><div class="operations-closures">${closures.map(row=>`<div><strong>${esc(row.attraction_name)}</strong><span class="badge ${row.is_closed?'ok':'warn'}">${row.is_closed?'已月结':'未月结'}</span><small>${row.is_closed?`关闭人：${esc(row.closed_by_name||'系统')}`:'等待核对'}</small></div>`).join('')||'<span class="field-hint">暂无景点圈月结信息</span>'}</div></section><section class="panel"><div class="operations-heading"><div><h2>治理与留存复核</h2><p>仅显示聚合数量，不展示人员或附件内容。</p></div></div><div class="operations-metrics"><div><span>待处理治理事项</span><strong>${Number(governance.open_cases||0)}</strong></div><div><span>超时申诉</span><strong>${Number(governance.overdue_cases||0)}</strong></div><div><span>超过48小时待复核</span><strong>${Number(governance.overdue_recognition_reviews||0)}</strong></div><div><span>附件留存待复核</span><strong>${Number(governance.retention_review_files||0)}</strong></div></div></section></div>`))return;
 }
 
 async function renderChangelog(){
+  const request=beginViewRequest();
   const data=await api('/api/changelog');
+  if(!request.isCurrent())return;
   const releases=(data.releases||[]).map(release=>{
     const badge=release.current?'<span class="badge ok">当前版本</span>':release.status==='production'?'<span class="badge">生产</span>':release.status==='candidate'?'<span class="badge warn">候选</span>':'';
     const items=(release.items||[]).map(item=>`<li><strong>${esc(item.summary)}</strong>${item.detail?`<p>${esc(item.detail)}</p>`:''}</li>`).join('')||'<li>本版本对你的功能没有单独说明。</li>';
     return `<article class="changelog-release"><div class="record-line"><h3>V${esc(release.version)}</h3>${badge}<small>${esc(release.date||'')}</small></div><ul class="changelog-items">${items}</ul></article>`;
   }).join('')||'<div class="empty">暂无更新记录</div>';
-  app.innerHTML=`<section class="panel changelog-page"><h2>更新记录</h2><p>当前系统 V${esc(data.app_version||'')} · ${esc(data.role_name||'')}。下面只列出和你这个角色相关的变更。</p>${releases}</section>`;
+  request.write(`<section class="panel changelog-page"><h2>更新记录</h2><p>当前系统 V${esc(data.app_version||'')} · ${esc(data.role_name||'')}。下面只列出和你这个角色相关的变更。</p>${releases}</section>`);
 }
 
 async function renderHome(){
+  const request=beginViewRequest();
   const visibleMonths=memberHomeMonths();
   const selectedMonth=visibleMonths.includes(state.homeMonth)?state.homeMonth:visibleMonths[0];
   const isHistoricalMonth=selectedMonth!==visibleMonths[0];
   state.homeMonth=selectedMonth;
   const selectedMonthLabel=memberHomeMonthLabel(selectedMonth);
   const d=await api('/api/dashboard?month='+encodeURIComponent(selectedMonth));
+  if(!request.isCurrent())return;
   const cats=['安全','礼仪','包容','效率','演出'];
-  app.innerHTML=`<div class="section-gap">
+  if(!request.write(`<div class="section-gap">
     <section class="panel"><div class="home-info-heading"><h2>我的信息</h2><label class="home-month-control">数据月份<select id="homeMonthSelect" aria-label="查看绩效月份">${visibleMonths.map((month,index)=>`<option value="${month}" ${month===selectedMonth?'selected':''}>${memberHomeMonthLabel(month)}${index===0?'（本月）':''}</option>`).join('')}</select></label>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div><div class="member-info-grid">
       <div><span>姓名 / 角色</span><strong>${esc(state.me.name)} · ${esc(state.me.role_name)}</strong></div>
       <div><span>景点圈</span><strong>${esc(state.me.attraction_name||'未分配')}</strong></div>
@@ -306,7 +334,7 @@ async function renderHome(){
       </div></div>
     </div><details class="score-explainer"><summary>${isHistoricalMonth?`${selectedMonthLabel}绩效分怎么算的？`:'本月总分怎么算的？'}</summary><ul><li>加分：认可人签卡确认后，按认可人当日角色分值计入对应类别（安全/礼仪/包容/效率/演出等）。</li><li>全勤分：基础分 10 分；当月无病假满勤再加 2 分；病假按天扣减（0.5 天扣 0.25 分），最低 0 分。</li><li>扣分：声明/备忘录/警告等扣分记录按等级计分，作废后不再计入。</li><li>本月总分 = 加分 + 全勤分 − 扣分（仅统计已确认的有效记录）。</li></ul></details></section>
     <section class="panel"><h2>我的签卡${isHistoricalMonth?` · ${selectedMonthLabel}`:''}</h2><div class="mobile-records">${(d.records||[]).length?d.records.map((r,i)=>recognitionCard(r,i,isHistoricalMonth)).join(''):`<div class="empty">${isHistoricalMonth?`${selectedMonthLabel}暂无签卡`:'本月暂无签卡'}</div>`}</div></section>
-  </div>`;
+  </div>`))return;
   document.getElementById('homeMonthSelect').onchange=event=>{state.homeMonth=event.target.value;renderHome();};
   bindImagePreviews(app);
   bindWithdraw(app, ()=>renderHome());
@@ -490,9 +518,11 @@ async function renderEntries(){
   app.innerHTML=`<div class="section-gap"><section class="panel"><h2>${title}</h2><p>${description}</p><form id="entryFilter" class="entry-filter">${scopeField}<label>开始日期<input name="start_date" type="date" value="${monthStart()}"></label><label>结束日期<input name="end_date" type="date" value="${today()}"></label><label>记录类型<select name="record_type">${recordTypes}</select></label><label>状态<select name="status"><option value="">全部</option><option value="confirmed">已确认</option><option value="pending">待复核 / 待经理跟进</option><option value="issued">已开具</option><option value="rejected">不通过</option><option value="pending_material">待补充材料</option><option value="material_processing">材料生成中</option><option value="material_failed">材料生成失败</option><option value="active">已生效</option><option value="void">已作废</option></select></label><label>员工搜索<input name="keyword" placeholder="姓名/员工号"></label><button class="primary">查询</button></form><div class="actions"><button id="allHistoryBtn" class="secondary">查看全部历史</button></div></section><div id="entryResults"></div></div>`;
   const form=document.getElementById('entryFilter');let currentPage=1;
   const load=async()=>{
+    const request=beginViewRequest();
     const qs=new URLSearchParams([...new FormData(form)].filter(([,value])=>value));qs.set('page',String(currentPage));qs.set('page_size','100');
     const materialScope=state.pendingMaterialScope||'mine';
     const [data,pendingMaterials]=await Promise.all([api('/api/my-entries?'+qs),canCollaborate?api('/api/deductions/pending-materials?'+new URLSearchParams({scope:materialScope})):Promise.resolve({items:[]})]);
+    if(!request.isCurrent())return;
     const collaboration=(pendingMaterials.items||[]);
     const collaborationPanel=canCollaborate?`<section class="panel"><h3>待补充声明材料</h3><p class="field-hint">TA主管、主管、TA GSM和GSM均可协作补充；补齐并处理成功后才会正式扣分。本人提交且尚未计分的记录可作废。</p><label class="material-scope-filter">景点圈范围<select data-pending-material-scope><option value="mine" ${materialScope==='mine'?'selected':''}>我的景点圈</option><option value="all" ${materialScope==='all'?'selected':''}>全部景点圈</option></select></label>${collaboration.length?`<div class="mobile-only work-card-list">${collaboration.map(row=>{const own=Number(row.submitter_id)===Number(state.me.id);const origin=own?'<small class="material-inline-state">我提交</small>':'<small class="material-inline-state">协作补充</small>';const ownVoid=own?` <button data-entry-void="${row.id}" class="secondary">作废</button>`:'';return `<article class="work-card"><div class="work-card-head"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small>${statusBadge(row)}</div><p>${esc(row.occurred_on)} · ${esc(row.deduction_type)}</p><p>${origin}</p><div class="work-card-actions"><button data-entry-material-retry="${row.id}" class="secondary">补充材料</button>${ownVoid}</div></article>`;}).join('')}</div><div class="desktop-only table-wrap sticky-col"><table><thead><tr><th>登记时间</th><th>员工</th><th>事件日期</th><th>内容</th><th>状态</th><th>操作</th></tr></thead><tbody>${collaboration.map(row=>{const own=Number(row.submitter_id)===Number(state.me.id);const origin=own?'<br><small class="material-inline-state">我提交</small>':'<br><small class="material-inline-state">协作补充</small>';const ownVoid=own?` <button data-entry-void="${row.id}" class="secondary">作废</button>`:'';return `<tr><td>${esc(row.submitted_at)}</td><td>${esc(row.employee_name)}<br><small>${esc(row.employee_no)}</small></td><td>${esc(row.occurred_on)}</td><td>${esc(row.deduction_type)} · ${esc(row.deduction_level)}${origin}<br>${esc(row.description)}</td><td>${statusBadge(row)}</td><td><button data-entry-material-retry="${row.id}" class="secondary">补充材料</button>${ownVoid}</td></tr>`;}).join('')}</tbody></table></div>`:'<div class="empty">当前范围暂无待补充声明材料</div>'}</section>`:'';
     document.getElementById('entryResults').innerHTML=`${collaborationPanel}<section class="panel"><div class="mobile-only work-card-list">${data.items.map(entryCard).join('')||'<div class="empty">无匹配记录</div>'}</div><div class="desktop-only table-wrap sticky-col"><table><thead><tr><th>登记时间</th><th>类别</th><th>员工</th><th>业务日期</th><th>内容</th><th>分值/天数</th><th>状态</th><th>操作</th></tr></thead><tbody>${data.items.map(entryRow).join('')||'<tr><td colspan="8" class="empty">无匹配记录</td></tr>'}</tbody></table></div><div class="pagination"><button id="entryPrev" class="secondary" ${data.page<=1?'disabled':''}>上一页</button><span>第${data.page}页，共${data.total}条</span><button id="entryNext" class="secondary" ${data.page*data.page_size>=data.total?'disabled':''}>下一页</button></div></section>`;
@@ -556,21 +586,36 @@ function bindEntryActions(done){
   document.querySelectorAll('[data-entry-sick-void]').forEach(button=>button.onclick=async()=>{const reason=await promptModal('作废缺勤记录','请输入作废原因（必填）：','作废原因');if(!reason)return;try{await api('/api/sick-leaves/'+button.dataset.entrySickVoid+'/void',json('POST',{reason}));toast('缺勤记录已作废，全勤分已重新计算');done()}catch(error){toast(error.message,true)}});
 }
 
-async function renderReview(showHistory=false){
-  const rows=await api('/api/reviews?view='+(showHistory?'history':'queue'));
+function reviewCard(r){return `<article class="work-card" data-review-row="${r.id}"><div class="work-card-head"><strong>${esc(r.employee_name)}</strong><small>${esc(r.employee_no)}</small><span class="review-status">${statusBadge(r)}</span></div><p>${esc(r.submitted_at)} · ${esc(r.recognition_type)} · 认可人：${esc(r.recognizer_name)} · ${recognitionScoreText(r)}</p><p>${esc(r.content)}${sameDayDuplicateBadge(r)}${r.image_url?` ${attachmentControl(r.image_url,'查看认可图片',r.image_preview_kind)}`:''}</p>${recognitionScoreNote(r)}${r.review_note?`<small>复核说明：${esc(r.review_note)}</small>`:''}<div class="review-actions">${reviewActions(r)}</div></article>`;}
+function reviewTableRow(r){return `<tr data-review-row="${r.id}"><td>${esc(r.submitted_at)}</td><td>${esc(r.employee_name)}<br><small>${esc(r.employee_no)}</small></td><td>${esc(r.recognition_type)} · ${esc(r.recognizer_name)}${sameDayDuplicateBadge(r)}<br>${esc(r.content)}${r.image_url?`<br>${attachmentControl(r.image_url,'查看认可图片',r.image_preview_kind)}`:''}${r.monthly_cap_reason?`<br><small>${esc(r.monthly_cap_reason)}</small>`:''}${r.review_note?`<br><small>复核说明：${esc(r.review_note)}</small>`:''}</td><td>${recognitionScoreText(r)}</td><td class="review-status">${statusBadge(r)}</td><td class="review-actions">${reviewActions(r)}</td></tr>`;}
+function replaceReviewRows(record){app.querySelectorAll(`[data-review-row="${record.id}"]`).forEach(row=>{row.outerHTML=row.tagName==='TR'?reviewTableRow(record):reviewCard(record);});bindFilePreviews(app);}
+async function renderReview(showHistory=false, offset=0){
+  const request=beginViewRequest();
+  const view=showHistory?'history':'queue';
+  const data=await api('/api/reviews?view='+view+'&limit=200&offset='+offset);
+  if(!request.isCurrent())return;
+  const rows=data.items||[];
+  const total=Number(data.total||0);
+  const limit=Number(data.limit||200);
+  const pageOffset=Number(data.offset||offset||0);
+  const hasMore=Boolean(data.has_more);
   const mobileQuery=window.matchMedia('(max-width: 760px)');
-  const cards=rows.map(r=>`<article class="work-card" data-review-row="${r.id}"><div class="work-card-head"><strong>${esc(r.employee_name)}</strong><small>${esc(r.employee_no)}</small><span class="review-status">${statusBadge(r)}</span></div><p>${esc(r.submitted_at)} · ${esc(r.recognition_type)} · 认可人：${esc(r.recognizer_name)} · ${recognitionScoreText(r)}</p><p>${esc(r.content)}${sameDayDuplicateBadge(r)}${r.image_url?` ${attachmentControl(r.image_url,'查看认可图片',r.image_preview_kind)}`:''}</p>${recognitionScoreNote(r)}<div class="review-actions">${reviewActions(r)}</div></article>`).join('')||'<div class="empty">暂无记录</div>';
-  const table=`<div class="table-wrap sticky-col"><table><thead><tr><th>提交时间</th><th>组员</th><th>认可信息</th><th>分值</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(r=>`<tr data-review-row="${r.id}"><td>${esc(r.submitted_at)}</td><td>${esc(r.employee_name)}<br><small>${esc(r.employee_no)}</small></td><td>${esc(r.recognition_type)} · ${esc(r.recognizer_name)}${sameDayDuplicateBadge(r)}<br>${esc(r.content)}${r.image_url?`<br>${attachmentControl(r.image_url,'查看认可图片',r.image_preview_kind)}`:''}${r.monthly_cap_reason?`<br><small>${esc(r.monthly_cap_reason)}</small>`:''}</td><td>${recognitionScoreText(r)}</td><td class="review-status">${statusBadge(r)}</td><td class="review-actions">${reviewActions(r)}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">暂无记录</td></tr>'}</tbody></table></div>`;
-  app.innerHTML=`<section class="panel"><div class="record-line"><div><h2>复核</h2><p>${showHistory?'已处理记录（已确认和不通过，最多200条）':'待复核记录'}</p></div><button type="button" class="secondary" id="reviewHistoryToggle">${showHistory?'返回待处理':'查看已处理历史'}</button></div>${mobileQuery.matches?`<div class="work-card-list">${cards}</div>`:table}</section>`;
-  const handleLayoutChange=()=>{clearPageResources();renderReview(showHistory);};
+  const cards=rows.map(reviewCard).join('')||'<div class="empty">暂无记录</div>';
+  const table=`<div class="table-wrap sticky-col"><table><thead><tr><th>提交时间</th><th>组员</th><th>认可信息</th><th>分值</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(reviewTableRow).join('')||'<tr><td colspan="6" class="empty">暂无记录</td></tr>'}</tbody></table></div>`;
+  const hint=showHistory?`已处理记录（已确认和不通过，共${total}条）`:`待复核记录（共${total}条，最早提交的在前）`;
+  const pager=(total>limit||pageOffset>0||hasMore)?`<div class="pagination"><button type="button" id="reviewPrev" class="secondary" ${pageOffset<=0?'disabled':''}>上一页</button><span>本页${rows.length}条 · 共${total}条</span><button type="button" id="reviewNext" class="secondary" ${hasMore?'':'disabled'}>下一页</button></div>`:'';
+  if(!request.write(`<section class="panel"><div class="record-line"><div><h2>复核</h2><p>${hint}</p></div><button type="button" class="secondary" id="reviewHistoryToggle">${showHistory?'返回待处理':'查看已处理历史'}</button></div>${mobileQuery.matches?`<div class="work-card-list">${cards}</div>`:table}${pager}</section>`))return;
+  const handleLayoutChange=()=>{clearPageResources();renderReview(showHistory,pageOffset);};
   mobileQuery.addEventListener?.('change',handleLayoutChange);
   registerPageCleanup(()=>mobileQuery.removeEventListener?.('change',handleLayoutChange));
-  document.getElementById('reviewHistoryToggle').onclick=()=>{clearPageResources();renderReview(!showHistory);};
+  document.getElementById('reviewHistoryToggle').onclick=()=>{clearPageResources();renderReview(!showHistory,0);};
+  document.getElementById('reviewPrev')?.addEventListener('click',()=>{if(pageOffset<=0)return;clearPageResources();renderReview(showHistory,Math.max(0,pageOffset-limit));});
+  document.getElementById('reviewNext')?.addEventListener('click',()=>{if(!hasMore)return;clearPageResources();renderReview(showHistory,pageOffset+limit);});
   bindFilePreviews(app);
-  bindReviewActions();
+  bindReviewActions(showHistory,pageOffset);
 }
 function reviewActions(r){return r.status==='pending'?`<button data-review="${r.id}" data-action="confirm" class="primary">确认</button> <button data-review="${r.id}" data-action="reject" class="danger">不通过</button>`:`<button data-review="${r.id}" data-action="restore" class="secondary">还原</button>`}
-function bindReviewActions(){app.querySelectorAll('[data-review]').forEach(b=>b.onclick=async()=>{const note=b.dataset.action==='reject'?(await promptModal('请输入不通过原因','请填写不通过原因（必填）','不通过原因'))||'':'';if(b.dataset.action==='reject'&&!note)return;try{const out=await api('/api/reviews/'+b.dataset.review,json('POST',{action:b.dataset.action,note}));app.querySelectorAll(`[data-review-row="${b.dataset.review}"]`).forEach(row=>{const status=row.querySelector('.review-status'),actions=row.querySelector('.review-actions');if(status)status.innerHTML=statusBadge(out.record);if(actions)actions.innerHTML=reviewActions(out.record);});bindReviewActions();toast('操作成功');}catch(x){toast(x.message,true)}})}
+function bindReviewActions(showHistory=false, offset=0){app.querySelectorAll('[data-review]').forEach(b=>b.onclick=async()=>{if(b.dataset.busy==='1')return;const note=b.dataset.action==='reject'?(await promptModal('请输入不通过原因','请填写不通过原因（必填）','不通过原因'))||'':'';if(b.dataset.action==='reject'&&!note)return;b.dataset.busy='1';try{const out=await api('/api/reviews/'+b.dataset.review,json('POST',{action:b.dataset.action,note}));const record=out.record;if(!record){toast('操作成功');return;}if(!showHistory&&record.status!=='pending'){await renderReview(showHistory,offset);}else{replaceReviewRows(record);bindReviewActions(showHistory,offset);}refreshActionBadge();toast('操作成功');}catch(x){toast(x.message,true)}finally{delete b.dataset.busy;}})}
 function upgradeReviewCards(items){
   return items.map(row=>`<article class="group-card" data-upgrade="${row.id}"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge warn">待审核</span></div><p>${esc(row.deduction_type)} · 提交人：${esc(row.submitted_by)} · ${esc(row.created_at)}</p><p><strong>A1：</strong>${esc(row.first_record?.occurred_on||'')} · ${esc(row.first_record?.description||'')} ${attachmentControl(row.first_record?.document_url||'','查看A1声明',row.first_record?.document_preview_kind||'')}</p><p><strong>A2：</strong>${esc(row.second_record?.occurred_on||'')} · ${esc(row.second_record?.description||'')} ${attachmentControl(row.second_record?.document_url||'','查看A2声明',row.second_record?.document_preview_kind||'')}</p><div class="actions"><button type="button" class="secondary" data-upgrade-transfer="${row.id}">转交工单</button><button type="button" class="danger" data-upgrade-reject="${row.id}">不通过</button><button type="button" class="primary" data-upgrade-approve="${row.id}">同意升级</button></div></article>`).join('')||'<p class="empty">暂无声明升级待审核工单</p>';
 }
@@ -584,8 +629,10 @@ function bindUpgradeReviewActions(root,refresh){
 }
 
 async function renderUpgradeReview(){
+  const request=beginViewRequest();
   const data=await api('/api/deduction-upgrades/pending'),items=data.items||[];
-  app.innerHTML=`<section class="panel"><h2>待审核 · 声明升级审核</h2><p>该页面已并入“待办中心”的待审核标签，此入口仅用于兼容已打开页面。</p><div class="governance-case-list">${upgradeReviewCards(items)}</div></section>`;
+  if(!request.isCurrent())return;
+  if(!request.write(`<section class="panel"><h2>待审核 · 声明升级审核</h2><p>该页面已并入“待办中心”的待审核标签，此入口仅用于兼容已打开页面。</p><div class="governance-case-list">${upgradeReviewCards(items)}</div></section>`))return;
   bindUpgradeReviewActions(app,renderUpgradeReview);
 }
 
@@ -629,7 +676,7 @@ function bindMemberScoreDetails(data){
 async function renderMembers(){
   app.innerHTML=`<div class="section-gap"><section class="panel"><h2>组员记录</h2><p>每名直属CM/TR一行汇总。点击加分、扣分、全勤分查看分类明细；点击综合分查看当月所有记录。</p><form id="memberFilter" class="entry-filter member-score-filter"><label>月份<input name="month" type="month" value="${monthNow()}" required></label><label>员工搜索<input name="keyword" placeholder="姓名/员工号"></label><button class="primary">查询</button></form></section><section class="panel"><div id="memberResults"></div></section><div id="memberDetail"></div></div>`;
   const form=document.getElementById('memberFilter');
-  const load=async()=>{const qs=new URLSearchParams([...new FormData(form)].filter(([,value])=>value));const data=await api('/api/member-score-summary?'+qs);document.getElementById('memberResults').innerHTML=`<div class="table-wrap member-score-wrap"><table class="member-score-table"><thead><tr><th>员工</th><th>加分</th><th>扣分</th><th>全勤分</th><th>综合分</th></tr></thead><tbody>${data.rows.map(memberScoreRow).join('')||'<tr><td colspan="5" class="empty">无直属CM/TR或无匹配员工</td></tr>'}</tbody></table></div>`;document.getElementById('memberDetail').innerHTML='';bindMemberScoreDetails(data)};
+  const load=async()=>{const request=beginViewRequest();const qs=new URLSearchParams([...new FormData(form)].filter(([,value])=>value));const data=await api('/api/member-score-summary?'+qs);if(!request.isCurrent())return;document.getElementById('memberResults').innerHTML=`<div class="table-wrap member-score-wrap"><table class="member-score-table"><thead><tr><th>员工</th><th>加分</th><th>扣分</th><th>全勤分</th><th>综合分</th></tr></thead><tbody>${data.rows.map(memberScoreRow).join('')||'<tr><td colspan="5" class="empty">无直属CM/TR或无匹配员工</td></tr>'}</tbody></table></div>`;document.getElementById('memberDetail').innerHTML='';bindMemberScoreDetails(data)};
   form.onsubmit=e=>{e.preventDefault();load()};
   await load();
 }
@@ -957,10 +1004,10 @@ async function renderMonthClose(){
   await show();
 }
 
-async function renderHrGroups(){const [groups,leaders,alerts]=await Promise.all([api('/api/hr/groups'),api('/api/hr/leader-options'),api('/api/hr/alerts')]);app.innerHTML=`<div class="section-gap"><section class="panel"><h2>整组移交</h2><p>组和成员不变，待复核数据一并转给新组长。新组长必须为同景点圈在职 TA 主管/主管。</p>${groups.map(g=>`<article class="group-card"><h3>${esc(g.name)}</h3><p>${esc(g.attraction_name)} · 当前组长：${esc(g.leader_name)} · ${g.member_count}人</p>${g.previous_leader_name?`<p class="field-hint">原组长：${esc(g.previous_leader_name)}（展示至 ${esc(g.previous_leader_until)}）</p>`:''}<p>成员：${g.members.map(m=>esc(m.name)).join('、')||'无'}</p><form data-transfer="${g.id}" data-revision="${g.revision}" class="grid two"><label>新组长<select name="new_leader_id">${opt(leaders.filter(x=>x.attraction_id===g.attraction_id),'id',x=>`${x.name} · ${x.role_name}`)}</select></label><label>移交原因<input name="reason" required></label><div class="actions form-sticky-actions"><button type="submit" class="primary">确认整组移交</button></div></form></article>`).join('')}</section><section class="panel"><h2>组织提醒</h2>${alerts.map(a=>`<div class="notice">${esc(a.message)} ${a.due_date?`· ${a.due_date}`:''}</div>`).join('')||'<div class="empty">无提醒</div>'}</section></div>`;app.querySelectorAll('[data-transfer]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();if(!await confirmModal('确认整组移交','<p>组和成员不变，待复核数据一并转给新组长。</p>','确认移交'))return;const body=Object.fromEntries(new FormData(f));body.revision=Number(f.dataset.revision);body.effective_date=today();try{await api('/api/hr/groups/'+f.dataset.transfer+'/transfer',json('POST',body));toast('整组移交已生效');renderHrGroups()}catch(x){toast(x.message,true)}})}
+async function renderHrGroups(){const request=beginViewRequest();const [groups,leaders,alerts]=await Promise.all([api('/api/hr/groups'),api('/api/hr/leader-options'),api('/api/hr/alerts')]);if(!request.isCurrent())return;if(!request.write(`<div class="section-gap"><section class="panel"><h2>整组移交</h2><p>组和成员不变，待复核数据一并转给新组长。新组长必须为同景点圈在职 TA 主管/主管。</p>${groups.map(g=>`<article class="group-card"><h3>${esc(g.name)}</h3><p>${esc(g.attraction_name)} · 当前组长：${esc(g.leader_name)} · ${g.member_count}人</p>${g.previous_leader_name?`<p class="field-hint">原组长：${esc(g.previous_leader_name)}（展示至 ${esc(g.previous_leader_until)}）</p>`:''}<p>成员：${g.members.map(m=>esc(m.name)).join('、')||'无'}</p><form data-transfer="${g.id}" data-revision="${g.revision}" class="grid two"><label>新组长<select name="new_leader_id">${opt(leaders.filter(x=>x.attraction_id===g.attraction_id),'id',x=>`${x.name} · ${x.role_name}`)}</select></label><label>移交原因<input name="reason" required></label><div class="actions form-sticky-actions"><button type="submit" class="primary">确认整组移交</button></div></form></article>`).join('')}</section><section class="panel"><h2>组织提醒</h2>${alerts.map(a=>`<div class="notice">${esc(a.message)} ${a.due_date?`· ${a.due_date}`:''}</div>`).join('')||'<div class="empty">无提醒</div>'}</section></div>`))return;app.querySelectorAll('[data-transfer]').forEach(f=>f.onsubmit=async e=>{e.preventDefault();if(!await confirmModal('确认整组移交','<p>组和成员不变，待复核数据一并转给新组长。</p>','确认移交'))return;const body=Object.fromEntries(new FormData(f));body.revision=Number(f.dataset.revision);body.effective_date=today();try{await api('/api/hr/groups/'+f.dataset.transfer+'/transfer',json('POST',body));toast('整组移交已生效');renderHrGroups()}catch(x){toast(x.message,true)}})}
 
-async function renderHrScores(){const rows=await api('/api/hr/score-rules');const canEdit=state.me.role_code==='SYSTEM_ADMIN',editable=canEdit?rows:[],readOnly=canEdit?[]:rows,scopeHint=canEdit?'<div class="notice">这是全系统统一分值规则，修改后会影响所有景点圈后续新登记的认可；历史签卡不追溯改分。</div>':'<div class="notice">当前显示全系统统一分值规则，仅最高管理员可调整；本页面为只读。</div>';app.innerHTML=`<section class="panel"><h2>认可人角色默认分值</h2><p>分值按角色和生效日期保留历史，已登记签卡不追溯改分。</p>${scopeHint}<div class="table-wrap sticky-col"><table><thead><tr><th>角色</th><th>当前分值</th><th>新分值</th><th>生效日期</th><th>操作</th></tr></thead><tbody>${editable.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td><input name="score" type="number" min="0" step="0.01" value="${r.score}"></td><td><input name="date" type="date" value="${today()}"></td><td><button class="primary" data-score-role="${r.role_code}">生效</button></td></tr>`).join('')}${readOnly.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td colspan="3"><span class="not-applicable">全局规则只读</span></td></tr>`).join('')}</tbody></table></div></section>`;app.querySelectorAll('[data-score-role]').forEach(b=>b.onclick=async()=>{const tr=b.closest('tr');try{await api('/api/hr/score-rules',json('POST',{role_code:b.dataset.scoreRole,score:tr.querySelector('[name=score]').value,effective_date:tr.querySelector('[name=date]').value}));toast('新分值规则已生效');render()}catch(x){toast(x.message,true)}})}
-async function renderLogs(){const rows=await api('/api/admin/logs');app.innerHTML=`<section class="panel"><h2>审计日志</h2><div class="table-wrap sticky-col"><table><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>对象</th><th>原因</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.time}</td><td>${esc(r.operator)}</td><td>${esc(r.action)}</td><td>${esc(r.entity)}</td><td>${esc(r.reason)}</td></tr>`).join('')}</tbody></table></div></section>`;}
+async function renderHrScores(){const request=beginViewRequest();const rows=await api('/api/hr/score-rules');if(!request.isCurrent())return;const canEdit=state.me.role_code==='SYSTEM_ADMIN',editable=canEdit?rows:[],readOnly=canEdit?[]:rows,scopeHint=canEdit?'<div class="notice">这是全系统统一分值规则，修改后会影响所有景点圈后续新登记的认可；历史签卡不追溯改分。</div>':'<div class="notice">当前显示全系统统一分值规则，仅最高管理员可调整；本页面为只读。</div>';if(!request.write(`<section class="panel"><h2>认可人角色默认分值</h2><p>分值按角色和生效日期保留历史，已登记签卡不追溯改分。</p>${scopeHint}<div class="table-wrap sticky-col"><table><thead><tr><th>角色</th><th>当前分值</th><th>新分值</th><th>生效日期</th><th>操作</th></tr></thead><tbody>${editable.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td><input name="score" type="number" min="0" step="0.01" value="${r.score}"></td><td><input name="date" type="date" value="${today()}"></td><td><button class="primary" data-score-role="${r.role_code}">生效</button></td></tr>`).join('')}${readOnly.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td colspan="3"><span class="not-applicable">全局规则只读</span></td></tr>`).join('')}</tbody></table></div></section>`))return;app.querySelectorAll('[data-score-role]').forEach(b=>b.onclick=async()=>{const tr=b.closest('tr');try{await api('/api/hr/score-rules',json('POST',{role_code:b.dataset.scoreRole,score:tr.querySelector('[name=score]').value,effective_date:tr.querySelector('[name=date]').value}));toast('新分值规则已生效');render()}catch(x){toast(x.message,true)}})}
+async function renderLogs(){const request=beginViewRequest();const rows=await api('/api/admin/logs');if(!request.isCurrent())return;if(!request.write(`<section class="panel"><h2>审计日志</h2><div class="table-wrap sticky-col"><table><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>对象</th><th>原因</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.time}</td><td>${esc(r.operator)}</td><td>${esc(r.action)}</td><td>${esc(r.entity)}</td><td>${esc(r.reason)}</td></tr>`).join('')}</tbody></table></div></section>`))return;}
 
 document.getElementById('logoutBtn').onclick=async()=>{await api('/api/logout',{method:'POST'});location.href=portalPath('/login')};
 (async()=>{try{state.me=await api('/api/me');if(state.me.must_change_password){renderPasswordChangeRequired();return;}state.options=await api('/api/options');if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';applyCircleTheme();installScreenWatermark();installPageBindHint();document.getElementById('userBadge').textContent=`${state.me.name} · ${state.me.role_name}${state.me.attraction_name?` · ${state.me.attraction_name}`:''}${state.me.member_count?` · ${state.me.member_count}名组员`:''}`;renderTabs();void refreshActionBadge();await render();}catch(e){if(!location.pathname.includes('/login'))location.href=portalPath('/login');}})();

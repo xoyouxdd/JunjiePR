@@ -7,6 +7,38 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.10.9",
+        "date": "2026-09-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "文件服务依赖升级，限制复杂 Range 请求",
+                "detail": "服务端锁定含 Range 解析修复的组合。静态文件和带水印预览仍走原接口；这不等于所有负载场景都已压测。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "材料失败先保存状态，再清理源文件",
+                "detail": "转换失败会先写入失败状态，源文件清理可重试。后台线程遇到意外错误会记录后继续运行，不会直接退出。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM"],
+            },
+            {
+                "summary": "超时接管后，旧任务不能覆盖新结果",
+                "detail": "每次领取都带唯一代次。被接手的旧执行者只能丢掉自己的临时文件，不能改业务状态或删除共享源文件。生产仍按单进程运行。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM"],
+            },
+            {
+                "summary": "复核确认后同步显示计入分和封顶原因",
+                "detail": "确认、不通过、还原后会按接口返回刷新整行或整张卡片；待复核按最早提交排序，并显示总数和翻页。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR"],
+            },
+            {
+                "summary": "切页时取消的请求不再写成空列表",
+                "detail": "读取响应正文时的取消会按取消处理；无效 JSON 会提示协议错误，而不是当成空数据成功写入当前页。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.10.8",
         "date": "2026-09-10",
         "status": "candidate",
@@ -17,8 +49,8 @@ RELEASES: list[dict] = [
                 "audiences": ["TA_SUPERVISOR", "SUPERVISOR"],
             },
             {
-                "summary": "材料任务改为一次只能被一个人领取",
-                "detail": "后台生成PDF时用条件更新抢任务；成功写入后再删除源文件，异常中断可在超时后重试。",
+                "summary": "普通材料任务改为条件领取",
+                "detail": "后台生成PDF时用条件更新抢任务，同一时刻只有一个领取成功。成功写入后再删除源文件。超时接管后的旧执行者隔离在后续版本处理。",
                 "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM"],
             },
             {
@@ -34,8 +66,8 @@ RELEASES: list[dict] = [
         "status": "candidate",
         "items": [
             {
-                "summary": "上传组件升级，大文件不再卡死服务",
-                "detail": "服务端解析库已升级到含大文件修复的版本，并与100MB材料上限对齐。",
+                "summary": "上传解析库升级，大文件滚到磁盘",
+                "detail": "服务端解析库已升级到含大文件滚盘修复的版本，并与100MB材料上限对齐。不等于所有负载和恢复场景都已验证。",
                 "audiences": ["all"],
             },
             {

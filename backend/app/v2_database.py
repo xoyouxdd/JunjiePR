@@ -166,6 +166,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-login-account-archive", "ensure_login_account_archive_columns"),
     ("2026-09-submission-payload-digest", "ensure_submission_payload_digest"),
     ("2026-09-second-audit-query-indexes", "ensure_second_audit_query_indexes"),
+    ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
 ]
 
 
@@ -415,6 +416,34 @@ def ensure_deduction_photo_pdf_materials(db) -> None:
     )
     db.execute(text("CREATE INDEX IF NOT EXISTS ix_deduction_material_job_status_created ON deduction_material_jobs (status, created_at)"))
     db.execute(text("CREATE INDEX IF NOT EXISTS ix_deduction_material_job_deduction ON deduction_material_jobs (deduction_id, id)"))
+    db.commit()
+
+
+def ensure_material_job_claim_generation(db) -> None:
+    """Add claim generation and deferred source-cleanup columns to existing jobs.
+
+    Old rows keep generation 0 and idle cleanup. New claims increment generation
+    and write a token; rollback does not drop the new columns.
+    """
+    columns = {row[1] for row in db.execute(text("PRAGMA table_info(deduction_material_jobs)"))}
+    required = {
+        "claim_generation": "INTEGER NOT NULL DEFAULT 0",
+        "claim_token": "VARCHAR(64)",
+        "source_cleanup_status": "VARCHAR(20) NOT NULL DEFAULT 'idle'",
+        "source_cleanup_attempts": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, definition in required.items():
+        if name not in columns:
+            db.execute(text(f"ALTER TABLE deduction_material_jobs ADD COLUMN {name} {definition}"))
+    db.execute(text("UPDATE deduction_material_jobs SET claim_generation=0 WHERE claim_generation IS NULL"))
+    db.execute(text("UPDATE deduction_material_jobs SET source_cleanup_status='idle' WHERE source_cleanup_status IS NULL OR source_cleanup_status=''"))
+    db.execute(text("UPDATE deduction_material_jobs SET source_cleanup_attempts=0 WHERE source_cleanup_attempts IS NULL"))
+    db.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_deduction_material_job_cleanup "
+            "ON deduction_material_jobs (source_cleanup_status, status, id)"
+        )
+    )
     db.commit()
 
 

@@ -20,6 +20,7 @@ from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 
 # Starlette 0.47+ streams file parts to a spooled temp file. The 1MB
 # max_part_size only caps non-file form fields; 100MB materials are files.
+# Starlette 0.49.1+ bounds FileResponse/StaticFiles Range parsing (GHSA-7f5h-v6xp-fcq8).
 
 
 app = FastAPI(title="认可签卡绩效登记系统 V2", version=APP_VERSION)
