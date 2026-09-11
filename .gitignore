@@ -32,9 +32,6 @@ build/
 .server-staging/
 .codex-local-data-*/
 
-# Local-only test data seeding script
-scripts/seed_level_accounts.py
-
 # Local review and editor tooling, not product source
 .handover_review/
 .mimosa/
