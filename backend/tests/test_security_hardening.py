@@ -156,7 +156,7 @@ def test_frontline_password_change_keeps_existing_four_digit_rule() -> None:
         restore_account(login_account, original_password)
 
 
-def test_employee_reset_uses_one_time_password_revokes_sessions_and_forces_change() -> None:
+def test_employee_reset_uses_account_suffix_revokes_sessions_and_forces_change() -> None:
     target_account = "CMTEST02"
     resetter_account = "GSMTEST01"
     restore_account(target_account, "1234")
@@ -170,14 +170,13 @@ def test_employee_reset_uses_one_time_password_revokes_sessions_and_forces_chang
                 json={"employee_no": target_account, "name": "测试CM乙"},
             )
             assert reset.status_code == 200, reset.text
-            temporary_password = reset.json()["temporary_password"]
-            assert len(temporary_password) >= 12
-            assert temporary_password != target_account[-4:]
+            reset_password = reset.json()["temporary_password"]
+            assert reset_password == target_account[-4:]
             assert target_client.get("/api/me").status_code == 401
 
         with TestClient(app) as first_login:
             assert login(first_login, target_account, "1234").status_code == 401
-            assert login(first_login, target_account, temporary_password).status_code == 200
+            assert login(first_login, target_account, reset_password).status_code == 200
             assert first_login.get("/api/me").json()["must_change_password"] is True
             blocked = first_login.get("/api/options")
             assert blocked.status_code == 403
@@ -185,7 +184,7 @@ def test_employee_reset_uses_one_time_password_revokes_sessions_and_forces_chang
             changed = first_login.post(
                 "/api/password",
                 json={
-                    "current_password": temporary_password,
+                    "current_password": reset_password,
                     "new_password": "6789",
                     "confirm_password": "6789",
                 },

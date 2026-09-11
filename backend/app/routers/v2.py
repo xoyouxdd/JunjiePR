@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_crypto import default_initial_password, hash_password, new_session_token, new_temporary_password, token_hash, verify_password
+from app.v2_crypto import default_initial_password, hash_password, new_session_token, token_hash, verify_password
 from app.v2_database import CIRCLE_HR_ACCOUNTS, EMPLOYEE_CIRCLES, EXPORT_DIR, FILE_DIR, LEGACY_CIRCLE_BY_VENUE, RECOGNITION_VENUES, get_db, synchronize_gsm_management_scope
 from app.v2_models import (
     Attraction,
@@ -5713,8 +5713,8 @@ def reset_employee_password(
     account = db.query(UserAccount).filter(UserAccount.employee_id == employee.id).first()
     if not account:
         raise HTTPException(400, "该员工尚未开通登录账号")
-    temporary_password = new_temporary_password()
-    account.password_hash = hash_password(temporary_password)
+    reset_password = account.login_account[-4:]
+    account.password_hash = hash_password(reset_password)
     account.failed_attempts = 0
     account.locked_until = None
     account.must_change_password = True
@@ -5732,7 +5732,7 @@ def reset_employee_password(
             "employee_name": employee.name,
             "role": target_role.name,
             "account_enabled": account.enabled,
-            "password_rule": "随机一次性临时密码",
+            "password_rule": "登录账号后四位",
             "must_change_password": True,
             "sessions_revoked": True,
         },
@@ -5744,8 +5744,8 @@ def reset_employee_password(
         "employee_no": employee.employee_no,
         "employee_name": employee.name,
         "account_enabled": account.enabled,
-        "password_rule": "随机一次性临时密码",
-        "temporary_password": temporary_password,
+        "password_rule": "登录账号后四位",
+        "temporary_password": reset_password,
         "must_change_password": True,
         "sessions_revoked": True,
     }
@@ -7085,8 +7085,8 @@ def reset_circle_hr_password(
     account = db.query(UserAccount).filter(UserAccount.employee_id == employee.id).first()
     if not account:
         raise HTTPException(400, "该景点圈HR尚未开通登录账号")
-    temporary_password = new_temporary_password()
-    account.password_hash = hash_password(temporary_password)
+    reset_password = account.login_account[-4:]
+    account.password_hash = hash_password(reset_password)
     account.failed_attempts = 0
     account.locked_until = None
     account.must_change_password = True
@@ -7104,7 +7104,7 @@ def reset_circle_hr_password(
             "employee_no": employee.employee_no,
             "employee_name": employee.name,
             "attraction_name": employee.attraction.name if employee.attraction else "",
-            "password_rule": "管理员生成的一次性临时密码",
+            "password_rule": "登录账号后四位",
             "must_change_password": True,
         },
         reason="最高管理员重置景点圈HR账号密码",
@@ -7115,7 +7115,7 @@ def reset_circle_hr_password(
         "ok": True,
         "employee_no": employee.employee_no,
         "employee_name": employee.name,
-        "temporary_password": temporary_password,
+        "temporary_password": reset_password,
         "must_change_password": True,
-        "message": "临时密码仅显示本次，请立即转交账号本人并要求登录后修改。",
+        "message": "密码已重置为登录账号后四位，请要求账号本人登录后立即修改。",
     }

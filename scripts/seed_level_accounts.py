@@ -1,10 +1,11 @@
-"""为五个权限等级各初始化一个演示登录账号（不含最高管理员）。
+"""初始化本地演示登录账号（不含最高管理员）。
 
 - 账号 1 / 密码 1111 → CM（一线员工，热力追踪）
 - 账号 2 / 密码 2222 → TA主管（热力追踪，任演示组组长，账号 1 是其组员）
 - 账号 3 / 密码 3333 → GSM（管辖三个景点圈）
 - 账号 4 / 密码 4444 → AM（管辖三个景点圈）
 - 账号 5 / 密码 5555 → HR管理员
+- 账号 6 / 密码 6666 → 热力追踪专属HR（景点圈HR）
 
 说明：
 - 系统密码策略要求至少 4 位，故密码用重复数字而不是单个数字。
@@ -44,6 +45,7 @@ LEVEL_ACCOUNTS = (
     ("3", "演示GSM", "GSM", "3333"),
     ("4", "演示AM", "AM", "4444"),
     ("5", "演示HR", "HR_ADMIN", "5555"),
+    ("6", "热力追踪专属HR", "HR_CIRCLE", "6666"),
 )
 DEMO_GROUP_NAME = "演示组-热力追踪"
 
@@ -74,7 +76,7 @@ def main() -> None:
                 db.flush()
             employee.name = name
             employee.is_active = True
-            if role_code in {"CM", "TA_SUPERVISOR"}:
+            if role_code in {"CM", "TA_SUPERVISOR", "HR_CIRCLE"}:
                 employee.attraction_id = heat.id
             elif role_code == "HR_ADMIN":
                 employee.attraction_id = None

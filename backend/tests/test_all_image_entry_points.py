@@ -51,7 +51,7 @@ def test_material_preview_metadata_and_all_image_entry_points() -> None:
     assert "/api/accounts/update-name" in script
     assert '<button type="submit" class="primary" disabled>确认修改姓名</button>' in script
     assert "可重置范围" in script
-    assert "一次性临时密码" in script
+    assert "登录账号后四位" in script
     assert "至少4位" in script
     assert "function attachmentControl(url,title,previewKind='')" in script
     assert "bindFilePreviews(document.getElementById('entryResults'))" in script

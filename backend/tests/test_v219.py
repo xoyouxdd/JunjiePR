@@ -92,12 +92,13 @@ def login_circle_hr(client: TestClient, employee_no: str) -> str:
     account = next(item for item in items if item["login_account"] == employee_no)
     reset = client.post(f"/api/admin/circle-hr-accounts/{account['employee_id']}/reset-password")
     assert reset.status_code == 200, reset.text
-    temporary = reset.json()["temporary_password"]
+    reset_password = reset.json()["temporary_password"]
+    assert reset_password == employee_no[-4:]
     client.post("/api/logout")
-    login(client, employee_no, temporary)
+    login(client, employee_no, reset_password)
     assert client.get("/api/options").status_code == 403
     replacement = f"{employee_no.replace('-', '')}Test1"
-    changed = client.post("/api/password", json={"current_password": temporary, "new_password": replacement, "confirm_password": replacement})
+    changed = client.post("/api/password", json={"current_password": reset_password, "new_password": replacement, "confirm_password": replacement})
     assert changed.status_code == 200, changed.text
     return replacement
 
@@ -1099,10 +1100,10 @@ def test_highest_admin_can_manage_circle_hr_passwords_and_senior_roles() -> None
         heat = next(item for item in items if item["login_account"] == "HR-HEAT")
         reset = client.post(f"/api/admin/circle-hr-accounts/{heat['employee_id']}/reset-password")
         assert reset.status_code == 200, reset.text
-        temporary_password = reset.json()["temporary_password"]
-        assert temporary_password and reset.json()["must_change_password"] is True
+        reset_password = reset.json()["temporary_password"]
+        assert reset_password == "HEAT" and reset.json()["must_change_password"] is True
         client.post("/api/logout")
-        login(client, "HR-HEAT", temporary_password)
+        login(client, "HR-HEAT", reset_password)
         client.post("/api/logout")
 
         login(client, "HR01", "HR123")
