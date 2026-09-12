@@ -12,6 +12,7 @@
 | [docs/sqlite-schema.md](docs/sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [docs/getting-started.md](docs/getting-started.md) | 本地运行、测试、数据目录 |
 | [docs/release.md](docs/release.md) | 发布打包与版本号 |
+| [docs/deployment.md](docs/deployment.md) | 生产自动部署 |
 | [docs/operations.md](docs/operations.md) | 备份、恢复演练、健康检查 |
 | [docs/security.md](docs/security.md) | 仓库边界与内部约定 |
 | [docs/changelog.md](docs/changelog.md) | 应用内「更新记录」怎么维护 |

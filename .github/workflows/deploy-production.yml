@@ -1,0 +1,37 @@
+name: Deploy approved production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git commit, tag, or main to deploy
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recognition-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # This runner is installed on the production server. This workflow is
+    # deliberately dispatch-only: a push can never deploy by itself.
+    runs-on: [self-hosted, windows, recognition-production]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r backend/requirements.txt
+      - run: python backend/tests/run_all.py
+      - run: python scripts/build_release.py
+      - shell: powershell
+        run: |
+          $package = Get-ChildItem recognition-v*.zip | Select-Object -First 1 -ExpandProperty FullName
+          & .\scripts\Deploy-RecognitionRelease.ps1 -ReleasePackage $package

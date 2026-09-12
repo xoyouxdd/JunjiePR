@@ -8,7 +8,7 @@ python scripts/build_release.py
 
 包名从 `backend/app/version.py` 的 `APP_VERSION` 生成，写成 `recognition-v年.月.日.第几版.zip`，放在仓库根目录。打包只允许从干净的 Git 工作区执行；未提交改动会直接阻止打包。
 
-包内使用明确白名单：`backend/app/`、`backend/tests/`、后端依赖与说明、正式 `scripts/`、`docs/` 和根 `README.md`。演示账号脚本 `scripts/seed_level_accounts.py`、运行数据和本地配置不进入正式包。`release-manifest.json` 记录版本、完整 Git commit，以及每个文件的大小和 SHA-256，供发布前后读回核对。
+包内使用明确白名单：`backend/app/`、`backend/requirements.txt` 和服务器部署脚本。`backend/tests/`、`scripts/tests/`、开发文档、演示账号脚本、运行数据和本地配置都不进入正式包。`release-manifest.json` 记录版本、完整 Git commit，以及每个文件的大小和 SHA-256，供发布前后读回核对；`RELEASE-NOTES.md` 会从 `backend/app/changelog.py` 的最新版本条目自动生成，作为本次发布留档。
 
 ## 每次上线的固定检查
 
@@ -30,4 +30,4 @@ python scripts/build_release.py
 
 改静态资源时把 `APP_VERSION` 进一版（`STATIC_CACHE_VERSION` 跟它走），否则浏览器可能继续用旧 CSS/JS。用户可见的功能变更还要写入 `backend/app/changelog.py`，规则见 [changelog.md](changelog.md)。
 
-解包核验时至少确认 `README.md`、`docs/release.md`、`backend/app/main.py` 和 `release-manifest.json` 存在，并逐项复算清单中的 SHA-256。清单 commit 必须等于本次批准发布的提交。
+解包核验时至少确认 `backend/app/main.py`、`release-manifest.json` 和 `RELEASE-NOTES.md` 存在，并逐项复算清单中的 SHA-256。清单 commit 必须等于本次批准发布的提交。

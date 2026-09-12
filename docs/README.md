@@ -8,6 +8,7 @@
 | [sqlite-schema.md](sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |
 | [release.md](release.md) | 发布打包 |
+| [deployment.md](deployment.md) | 生产自动部署 |
 | [operations.md](operations.md) | 备份与恢复入口 |
 | [security.md](security.md) | 仓库边界与内部约定 |
 | [changelog.md](changelog.md) | 应用内更新记录的数据源 |

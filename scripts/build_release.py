@@ -18,21 +18,9 @@ DOCS_ROOT = WORKSPACE / "docs"
 EXCLUDED_PARTS = {"data_v2", "__pycache__", ".pytest_cache", ".venv", "venv", "node_modules", ".git"}
 EXCLUDED_SUFFIXES = {".db", ".sqlite", ".log", ".pyc", ".pem", ".key", ".zip"}
 EXCLUDED_NAMES = {".env", "secrets.json", ".coverage"}
-BACKEND_TOP_LEVEL = {"app", "tests", "README.md", "requirements.txt"}
+BACKEND_TOP_LEVEL = {"app", "requirements.txt"}
 SCRIPT_FILES = {
-    "Install-DailyBackupHealthTask.ps1",
-    "Install-DailyBackupTask.ps1",
-    "Invoke-SqliteOnlineBackup.ps1",
-    "README.md",
-    "Reset-NeverLoggedInInitialPasswords.py",
-    "Run-MonthlyRestoreRehearsal.ps1",
-    "Start-LocalJunjiePR.ps1",
-    "Test-SqliteBackupHealth.ps1",
-    "Test-SqliteBackupRestore.ps1",
-    "build_release.py",
-    "audit_score_rules.py",
-    "purge_legacy_attendance.py",
-    "verify_readiness.py",
+    "Deploy-RecognitionRelease.ps1",
 }
 
 
@@ -79,6 +67,27 @@ def ensure_release_contract(version: str) -> None:
         raise RuntimeError("broken documentation links: " + "; ".join(broken))
 
 
+def render_release_notes(version: str) -> bytes:
+    """Render the user-facing current release from the single in-app source."""
+    changelog = (BACKEND_ROOT / "app" / "changelog.py").read_text(encoding="utf-8")
+    # Import only after the version gate above has established the current block.
+    import sys
+
+    if str(BACKEND_ROOT) not in sys.path:
+        sys.path.insert(0, str(BACKEND_ROOT))
+    from app.changelog import RELEASES
+
+    release = RELEASES[0]
+    if release["version"] != version:
+        raise RuntimeError("cannot generate notes for a non-current release")
+    lines = [f"# 更新记录 V{version}", "", f"发布日期：{release.get('date', '')}", ""]
+    for item in release.get("items") or []:
+        audiences = "、".join(item.get("audiences") or ["all"])
+        permissions = "、".join(item.get("permissions") or []) or "无额外权限"
+        lines.extend([f"## {item['summary']}", "", item.get("detail") or "", "", f"可见角色：{audiences}", f"所需权限：{permissions}", ""])
+    return ("\n".join(lines)).encode("utf-8")
+
+
 def should_include(path: Path, root: Path | None = None) -> bool:
     root = root or BACKEND_ROOT
     relative = path.relative_to(root)
@@ -108,13 +117,8 @@ def release_sources() -> list[tuple[Path, str]]:
         if not path.is_file() or not should_include(path, SCRIPTS_ROOT):
             continue
         relative = path.relative_to(SCRIPTS_ROOT)
-        if relative.parts[0] in SCRIPT_FILES or relative.parts[0] == "tests":
+        if relative.parts[0] in SCRIPT_FILES:
             sources.append((path, (Path("scripts") / relative).as_posix()))
-    for path in sorted(DOCS_ROOT.rglob("*.md")):
-        if path.is_symlink():
-            raise RuntimeError(f"release source must not contain symlinks: {path}")
-        sources.append((path, (Path("docs") / path.relative_to(DOCS_ROOT)).as_posix()))
-    sources.append((WORKSPACE / "README.md", "README.md"))
     return sources
 
 
@@ -165,6 +169,7 @@ def main() -> None:
             "release-manifest.json",
             json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
         )
+        archive.writestr("RELEASE-NOTES.md", render_release_notes(version))
     temp_path.replace(destination)
     digest = hashlib.sha256(destination.read_bytes()).hexdigest().upper()
     print(f"{destination.name} {digest}")

@@ -15,7 +15,7 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
-from app.changelog import RELEASES, visible_releases
+from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
@@ -43,7 +43,15 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    assert cm[0]["current"] is True
+    assert not any(release["current"] for release in cm)
+    assert admin[0]["current"] is True
+
+
+def test_changelog_requires_matching_role_and_all_extra_permissions() -> None:
+    item = {"audiences": ["GSM"], "permissions": ["DATA_EXPORT", "DATA_VIEW"]}
+    assert item_visible(item, "GSM", {"DATA_EXPORT", "DATA_VIEW"}) is True
+    assert item_visible(item, "GSM", {"DATA_EXPORT"}) is False
+    assert item_visible(item, "CM", {"DATA_EXPORT", "DATA_VIEW"}) is False
 
 
 def test_changelog_api_and_navigation_exist() -> None:

@@ -7,6 +7,23 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.12.1",
+        "date": "2026-09-12",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "发布包改为仅含生产运行文件",
+                "detail": "上线包不再包含测试代码、测试脚本和开发文档；发布时会从本页最新记录自动生成随包留档的更新说明。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "更新记录按角色和权限同时核对",
+                "detail": "同时配置角色和额外权限时，只有角色匹配且具备全部所需权限的用户才会看到对应内容。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.10.10",
         "date": "2026-09-10",
         "status": "candidate",
@@ -301,10 +318,8 @@ RELEASES: list[dict] = [
 
 def item_visible(item: dict, role_code: str, permissions: set[str]) -> bool:
     audiences = item.get("audiences") or ["all"]
-    if "all" in audiences or role_code in audiences:
-        return True
     needed = set(item.get("permissions") or [])
-    return bool(needed and needed & permissions)
+    return ("all" in audiences or role_code in audiences) and needed.issubset(permissions)
 
 
 def visible_releases(role_code: str, permissions: set[str]) -> list[dict]:
