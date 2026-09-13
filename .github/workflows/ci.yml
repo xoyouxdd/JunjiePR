@@ -1,9 +1,7 @@
-name: Verify and build release candidate
+name: Verify and build production package
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 permissions:
@@ -22,7 +20,7 @@ jobs:
       - run: python scripts/build_release.py
       - uses: actions/upload-artifact@v4
         with:
-          name: recognition-production-package
+          name: recognition-production-package-${{ github.sha }}
           path: recognition-v*.zip
           if-no-files-found: error
           retention-days: 14

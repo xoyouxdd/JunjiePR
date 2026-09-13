@@ -2,12 +2,16 @@
 param(
     [Parameter(Mandatory)]
     [string]$ReleasePackage,
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[0-9a-fA-F]{40}$')]
+    [string]$ExpectedGitCommit,
     [string]$LiveRoot = "C:\Server\zhaojunjie\recognition-card-system",
     [string]$ServiceTaskName = "RecognitionCardSystem",
     [string]$WatchdogTaskName = "RecognitionCardSystemWatchdog",
     [string]$BackupScript = "C:\Server\zhaojunjie\recognition-card-system\ops\Invoke-SqliteOnlineBackup.ps1",
     [ValidateRange(1, 65535)]
-    [int]$HealthPort = 18082
+    [int]$HealthPort = 18082,
+    [uri]$ExternalHealthUrl = "https://124.220.229.9:28176/health"
 )
 
 <#!
@@ -55,6 +59,13 @@ function Start-App([string]$ExpectedVersion) {
     throw "Health check did not return version $ExpectedVersion"
 }
 
+function Confirm-ExternalHealth([string]$ExpectedVersion) {
+    $health = Invoke-RestMethod -UseBasicParsing $ExternalHealthUrl.AbsoluteUri -TimeoutSec 15
+    if ($health.ok -ne $true -or $health.version -ne $ExpectedVersion) {
+        throw "External health check did not return version $ExpectedVersion"
+    }
+}
+
 $live = [IO.Path]::GetFullPath($LiveRoot).TrimEnd('\')
 $package = [IO.Path]::GetFullPath($ReleasePackage)
 Assert-Path $live "Container"
@@ -82,6 +93,7 @@ try {
 
     $manifest = Get-Content (Join-Path $staging "release-manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.app_version -notmatch '^\d{4}\.\d{2}\.\d{2}\.\d+$') { throw "Invalid release version in manifest" }
+    if ($manifest.git_commit -ne $ExpectedGitCommit) { throw "Release manifest commit does not match approved commit" }
     foreach ($entry in $manifest.files) {
         if ($entry.path -match '(^|/)(tests|docs)/' -or $entry.path -match '^backend/tests/') { throw "Release contains forbidden test or document path: $($entry.path)" }
         $candidate = [IO.Path]::GetFullPath((Join-Path $staging $entry.path))
@@ -111,6 +123,7 @@ try {
     & (Join-Path $live ".venv\Scripts\python.exe") -m pip install --disable-pip-version-check -r $oldRequirements
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
     Start-App $manifest.app_version
+    Confirm-ExternalHealth $manifest.app_version
     Set-Content -LiteralPath (Join-Path $live "release-manifest.json") -Value ($manifest | ConvertTo-Json -Depth 8) -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $live "RELEASE-NOTES.md") -Value (Get-Content (Join-Path $staging "RELEASE-NOTES.md") -Raw -Encoding UTF8) -Encoding UTF8
     Write-Output "DEPLOYED version=$($manifest.app_version) commit=$($manifest.git_commit)"

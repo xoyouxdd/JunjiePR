@@ -77,3 +77,22 @@ def test_release_manifest_binds_each_file_to_commit_and_hash(tmp_path: Path) -> 
             "sha256": "55721654F9F5EE40E2ACD466F488DE43BCF890EE0D7FCB20272C5BFD0708EA8C",
         }
     ]
+
+
+def test_deployment_script_requires_approved_commit_and_external_health_check() -> None:
+    source = (ROOT / "scripts" / "Deploy-RecognitionRelease.ps1").read_text(encoding="utf-8")
+    assert "[string]$ExpectedGitCommit" in source
+    assert '$manifest.git_commit -ne $ExpectedGitCommit' in source
+    assert "https://124.220.229.9:28176/health" in source
+    assert "Confirm-ExternalHealth $manifest.app_version" in source
+
+
+def test_ci_only_verifies_and_builds_on_main_push() -> None:
+    source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "branches: [main]" in source
+    assert "python backend/tests/run_all.py" in source
+    assert "python scripts/build_release.py" in source
+    assert "actions/upload-artifact@v4" in source
+    assert "recognition-production-package-${{ github.sha }}" in source
+    assert "workflow_dispatch" not in source
+    assert "Deploy-RecognitionRelease.ps1" not in source
