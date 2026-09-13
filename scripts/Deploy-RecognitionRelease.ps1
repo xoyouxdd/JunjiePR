@@ -15,8 +15,9 @@ Deploy one verified release package on the production server.
 
 The script deliberately replaces only app/ and requirements.txt. SQLite data,
 uploads, the virtual environment, Caddy, task definitions and backups stay in
-place. It is intended for the GitHub self-hosted runner after a manual
-workflow dispatch, never for a push-triggered job.
+place. It is invoked by Codex through the approved SSH deployment channel
+only after an explicit user release request; a push-triggered job never calls
+this script.
 #>
 
 $ErrorActionPreference = "Stop"
