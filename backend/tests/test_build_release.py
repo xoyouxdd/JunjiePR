@@ -41,8 +41,8 @@ def test_release_package_excludes_local_secrets_and_uses_app_version(tmp_path: P
     assert mod.should_include(local_data / "runtime.json", tmp_path) is False
     assert mod.should_include(app_dir / "main.py", tmp_path) is True
     version = mod.read_app_version()
-    assert version == "2026.09.12.1"
-    assert mod.package_name(version, "20260912") == "recognition-v2026.09.12.1.zip"
+    assert version == "2026.09.14.1"
+    assert mod.package_name(version, "20260914") == "recognition-v2026.09.14.1.zip"
 
 
 def test_release_whitelist_excludes_tests_and_docs() -> None:
@@ -57,8 +57,8 @@ def test_release_whitelist_excludes_tests_and_docs() -> None:
     assert not any(name.startswith("docs/") for name in names)
     mod.ensure_release_contract(mod.read_app_version())
     notes = mod.render_release_notes(mod.read_app_version()).decode("utf-8")
-    assert "# 更新记录 V2026.09.12.1" in notes
-    assert "可见角色：SYSTEM_ADMIN" in notes
+    assert "# 更新记录 V2026.09.14.1" in notes
+    assert "登录账号后四位" in notes
 
 
 def test_release_manifest_binds_each_file_to_commit_and_hash(tmp_path: Path) -> None:

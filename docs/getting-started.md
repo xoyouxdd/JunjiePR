@@ -1,26 +1,25 @@
 # 本地运行与测试
 
-工作目录必须是 `backend/`。
+本地命令从仓库根目录执行，默认且唯一应使用根目录的 `.venv`。业务代码工作目录仍是 `backend/`，启动命令会明确传入该应用目录。
 
 ## 首次安装
 
 Windows PowerShell 在项目根目录执行：
 
 ```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$python = "./.venv/Scripts/python.exe"
+if (-not (Test-Path $python)) { python -m venv .venv }
+& $python -m pip install -r backend/requirements.txt pytest
 $env:RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD = "由负责人现场设置的初始密码"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+& $python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
 首次启动会初始化 SQLite 结构并建立最高管理员 `HR01`。确认管理员可以登录后，在启动服务的环境中移除临时的 `RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD`。正式运行的数据目录、服务账号和监听地址由部署环境明确设置；不要把本地测试目录当作正式目录。
 
 ## 启动
 
-```bash
-cd backend
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
 ```
 
 浏览器打开 `http://127.0.0.1:8000/login`。登录前可访问 `/health`，返回当前 `APP_VERSION`。
@@ -29,22 +28,23 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 每个测试文件在导入时设置自己的数据目录，必须分进程跑：
 
-```bash
-cd backend
-python tests/run_all.py
+```powershell
+.\.venv\Scripts\python.exe backend/tests/run_all.py
 ```
 
 不要用一次 `pytest tests` 代替。单文件可以：
 
-```bash
-python -m pytest tests/test_poc_idempotency.py -q
+```powershell
+Push-Location backend
+..\.venv\Scripts\python.exe -m pytest tests/test_poc_idempotency.py -q
+Pop-Location
 ```
 
 ## 数据目录
 
 默认 `backend/data_v2/`。可用环境变量 `RECOGNITION_V2_DATA_DIR` 指到隔离目录。表、主键、外键和索引见 [sqlite-schema.md](sqlite-schema.md)。
 
-不要把数据库、附件、`.env`、`.venv`、日志提交进 Git。
+不要把数据库、附件、`.env`、`.venv`、日志提交进 Git。旧的 `backend/.venv` 不再作为默认本地环境；新命令统一使用根目录 `.venv`。
 
 启用测试账号时必须同时设置：
 

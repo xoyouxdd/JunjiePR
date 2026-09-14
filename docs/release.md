@@ -2,9 +2,11 @@
 
 在项目根目录下：
 
-```bash
-python scripts/build_release.py
+```powershell
+.\.venv\Scripts\python.exe scripts/build_release.py
 ```
+
+本地发布前的测试也使用同一环境：`.\.venv\Scripts\python.exe backend/tests/run_all.py`。
 
 包名从 `backend/app/version.py` 的 `APP_VERSION` 生成，写成 `recognition-v年.月.日.第几版.zip`，放在仓库根目录。打包只允许从干净的 Git 工作区执行；未提交改动会直接阻止打包。
 

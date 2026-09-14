@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.14.1",
+        "date": "2026-09-14",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "管理员重置密码改为登录账号后四位",
+                "detail": "重置后会立即注销原登录会话，账号本人首次登录仍必须修改密码。普通账号和景点圈HR账号均使用同一规则。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.12.1",
         "date": "2026-09-12",
         "status": "candidate",

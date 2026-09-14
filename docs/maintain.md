@@ -22,6 +22,7 @@
 | 密码/打包/仓库边界约定 | `docs/security.md` |
 | 用户能看见的功能 | `backend/app/changelog.py`（见 [changelog.md](changelog.md)） |
 | `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.py` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |
+| 本地依赖或测试命令 | 统一使用仓库根目录 `.venv`，见 `docs/getting-started.md`；不要默认使用系统 Python 或 `backend/.venv` |
 
 ## 上线前收口
 
