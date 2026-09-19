@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,8 +156,20 @@ def build_manifest(sources: list[tuple[Path, str]], version: str, commit: str) -
     }
 
 
+def run_test_suite() -> None:
+    """Run the whole suite before packaging.
+
+    The project has no CI, so this is the only place that can still stop a
+    broken build from being packaged and shipped.
+    """
+    result = subprocess.run([sys.executable, str(BACKEND_ROOT / "tests" / "run_all.py")], cwd=str(BACKEND_ROOT))
+    if result.returncode != 0:
+        raise RuntimeError("full test suite failed; refusing to build a release package")
+
+
 def main() -> None:
     ensure_clean_checkout()
+    run_test_suite()
     version = read_app_version()
     ensure_release_contract(version)
     commit = git_commit()

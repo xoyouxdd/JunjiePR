@@ -139,3 +139,12 @@ def test_repository_configures_no_automated_workflows() -> None:
     workflows = ROOT / ".github" / "workflows"
     found = sorted(p.name for p in workflows.glob("*.y*ml")) if workflows.is_dir() else []
     assert not found, f"本项目约定不使用 CI，但发现工作流: {found}"
+
+def test_packaging_runs_the_full_suite_first() -> None:
+    """Without CI, packaging is the last gate that can catch a broken build."""
+    source = (ROOT / "scripts" / "build_release.py").read_text(encoding="utf-8")
+    assert "def run_test_suite()" in source
+    assert "tests" in source and "run_all.py" in source
+    assert "refusing to build a release package" in source
+    body = source[source.index("def main() -> None:"):]
+    assert body.index("run_test_suite()") < body.index("release_sources()")
