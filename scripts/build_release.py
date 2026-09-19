@@ -47,7 +47,13 @@ def read_latest_changelog_version() -> str:
 
 def broken_markdown_links() -> list[str]:
     broken: list[str] = []
-    for document in [WORKSPACE / "README.md", *sorted(DOCS_ROOT.rglob("*.md"))]:
+    documents = [
+        WORKSPACE / "README.md",
+        BACKEND_ROOT / "README.md",
+        SCRIPTS_ROOT / "README.md",
+        *sorted(DOCS_ROOT.rglob("*.md")),
+    ]
+    for document in documents:
         text_value = document.read_text(encoding="utf-8")
         for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", text_value):
             if re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE) or target.startswith("#"):
@@ -69,7 +75,6 @@ def ensure_release_contract(version: str) -> None:
 
 def render_release_notes(version: str) -> bytes:
     """Render the user-facing current release from the single in-app source."""
-    changelog = (BACKEND_ROOT / "app" / "changelog.py").read_text(encoding="utf-8")
     # Import only after the version gate above has established the current block.
     import sys
 

@@ -34,7 +34,7 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert '.login-panel .primary:active' in css
     assert '.login-panel label:focus-within' in css
     assert '#loginMsg.message.error' in css
-    assert 'linear-gradient(to bottom, #102033 0 38%, #f7f9fc 38%)' in css
+    assert 'linear-gradient(to bottom, var(--surface-dark) 0 38%, var(--surface-soft) 38%)' in css
     assert '@media (min-width: 761px)' in css
     assert '.login-shell .login-panel' in css
     assert 'junjiepr.login.employee_no' in login_js

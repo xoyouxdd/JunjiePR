@@ -6,8 +6,8 @@ first imported module's data directory win. Running each file in a separate
 process keeps the directories truly isolated, matching the per-module
 regression flow recorded in operation-records.
 
-Usage (from the candidate root):
-    python tests/run_all.py
+Usage (from the repository root, matching docs/getting-started.md):
+    backend/.venv/Scripts/python.exe backend/tests/run_all.py
 """
 
 from __future__ import annotations

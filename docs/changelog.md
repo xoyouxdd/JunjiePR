@@ -8,7 +8,7 @@
 
 1. 改 `backend/app/version.py` 的 `APP_VERSION`（`STATIC_CACHE_VERSION` 与它相同，不用另写）
 2. 在 `changelog.py` 的 `RELEASES` **最前面**加一个与 `APP_VERSION` 相同版本号的块
-3. 每条写 `audiences`（角色代码或 `all`），必要时加 `permissions`
+3. 每条写 `audiences`（角色代码或 `all`），必要时加 `permissions`。两者是**且**的关系：只有角色命中 `audiences`（或 `audiences` 含 `all`）**并且**同时具备 `permissions` 里全部权限的用户才看得到该条目；`permissions` 留空时只按角色判断。配置前确认目标用户确实有这些权限，否则条目对他们不可见。
 4. `tests/test_changelog.py` 会检查最新版本号必须等于 `APP_VERSION`
 
 版本号格式是 **年.月.日.当天第几版**，例如 `2026.09.10.3`。同一天再发就加最后一位；换日从 `.1` 起。历史版本 `2.23.73` 仍保留在更新记录里。

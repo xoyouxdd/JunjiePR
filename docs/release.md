@@ -3,14 +3,14 @@
 在项目根目录下：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/build_release.py
+.\backend\.venv\Scripts\python.exe scripts\build_release.py
 ```
 
-本地发布前的测试也使用同一环境：`.\.venv\Scripts\python.exe backend/tests/run_all.py`。
+本地发布前的测试也使用同一环境：`.\backend\.venv\Scripts\python.exe backend\tests\run_all.py`。
 
 包名从 `backend/app/version.py` 的 `APP_VERSION` 生成，写成 `recognition-v年.月.日.第几版.zip`，放在仓库根目录。打包只允许从干净的 Git 工作区执行；未提交改动会直接阻止打包。
 
-包内使用明确白名单：`backend/app/`、`backend/requirements.txt` 和服务器部署脚本。`backend/tests/`、`scripts/tests/`、开发文档、演示账号脚本、运行数据、上传文件、凭据和本地配置都不进入正式包。`release-manifest.json` 记录版本、完整 Git commit，以及每个文件的大小和 SHA-256，供发布前后读回核对；`RELEASE-NOTES.md` 会从 `backend/app/changelog.py` 的最新版本条目自动生成，作为本次发布留档。
+包内使用明确白名单：`backend/app/`、`backend/requirements.txt` 和服务器部署脚本。白名单按 `backend/` 下第一层名字精确匹配，所以只有生产依赖 `requirements.txt` 入包，测试依赖 `backend/requirements-dev.txt` 不进正式包，生产服务器不会装上 `pytest`、`httpx`。`backend/tests/`、`scripts/tests/`、开发文档、演示账号脚本、运行数据、上传文件、凭据和本地配置也都不进入正式包。`release-manifest.json` 记录版本、完整 Git commit，以及每个文件的大小和 SHA-256，供发布前后读回核对；`RELEASE-NOTES.md` 会从 `backend/app/changelog.py` 的最新版本条目自动生成，作为本次发布留档。
 
 ## 每次上线的固定检查
 

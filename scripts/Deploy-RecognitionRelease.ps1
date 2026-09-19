@@ -1,3 +1,4 @@
+#Requires -Version 7.0
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
@@ -5,10 +6,10 @@ param(
     [Parameter(Mandatory)]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$ExpectedGitCommit,
-    [string]$LiveRoot = "C:\Server\zhaojunjie\recognition-card-system",
+    [string]$LiveRoot = "C:\Server\zhaojunjie\recognition-card-system\backend",
     [string]$ServiceTaskName = "RecognitionCardSystem",
     [string]$WatchdogTaskName = "RecognitionCardSystemWatchdog",
-    [string]$BackupScript = "C:\Server\zhaojunjie\recognition-card-system\ops\Invoke-SqliteOnlineBackup.ps1",
+    [string]$BackupScript = "C:\Server\zhaojunjie\recognition-card-system\scripts\Invoke-SqliteOnlineBackup.ps1",
     [ValidateRange(1, 65535)]
     [int]$HealthPort = 18082,
     [uri]$ExternalHealthUrl = "https://124.220.229.9:28176/health"
@@ -17,9 +18,12 @@ param(
 <#!
 Deploy one verified release package on the production server.
 
-The script deliberately replaces only app/ and requirements.txt. SQLite data,
-uploads, the virtual environment, Caddy, task definitions and backups stay in
-place. It is invoked by Codex through the approved SSH deployment channel
+LiveRoot is the deployed application directory
+C:\Server\zhaojunjie\recognition-card-system\backend, the same root the daily
+backup scripts validate. The script deliberately replaces only app/ and
+requirements.txt below it. SQLite data (data_v2), uploads, the virtual
+environment, Caddy, task definitions and backups stay in place. It is
+invoked by Codex through the approved SSH deployment channel
 only after an explicit user release request; a push-triggered job never calls
 this script.
 #>
@@ -60,7 +64,8 @@ function Start-App([string]$ExpectedVersion) {
 }
 
 function Confirm-ExternalHealth([string]$ExpectedVersion) {
-    $health = Invoke-RestMethod -UseBasicParsing $ExternalHealthUrl.AbsoluteUri -TimeoutSec 15
+    # The public endpoint is reached by IP, so the certificate host name never matches.
+    $health = Invoke-RestMethod $ExternalHealthUrl.AbsoluteUri -TimeoutSec 15 -SkipCertificateCheck
     if ($health.ok -ne $true -or $health.version -ne $ExpectedVersion) {
         throw "External health check did not return version $ExpectedVersion"
     }
@@ -81,7 +86,8 @@ $newRequirements = Join-Path $staging "backend\requirements.txt"
 $oldApp = Join-Path $live "app"
 $oldRequirements = Join-Path $live "requirements.txt"
 $watchdogWasEnabled = $false
-$swapped = $false
+# Set the instant the live app directory leaves its place, so every later failure rolls back.
+$oldAppMoved = $false
 
 try {
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
@@ -114,11 +120,12 @@ try {
     Stop-App
 
     New-Item -ItemType Directory -Path $rollback -Force | Out-Null
-    Move-Item -LiteralPath $oldApp -Destination (Join-Path $rollback "app")
+    # requirements.txt is preserved first so the rollback copy exists before anything moves.
     Copy-Item -LiteralPath $oldRequirements -Destination (Join-Path $rollback "requirements.txt") -Force
+    Move-Item -LiteralPath $oldApp -Destination (Join-Path $rollback "app")
+    $oldAppMoved = $true
     Move-Item -LiteralPath $newApp -Destination $oldApp
     Copy-Item -LiteralPath $newRequirements -Destination $oldRequirements -Force
-    $swapped = $true
 
     & (Join-Path $live ".venv\Scripts\python.exe") -m pip install --disable-pip-version-check -r $oldRequirements
     if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
@@ -130,13 +137,25 @@ try {
 }
 catch {
     $failure = $_
-    if ($swapped -and (Test-Path -LiteralPath (Join-Path $rollback "app"))) {
-        Stop-App
-        $failedApp = Join-Path $rollback "failed-app"
-        if (Test-Path -LiteralPath $oldApp) { Move-Item -LiteralPath $oldApp -Destination $failedApp }
-        Move-Item -LiteralPath (Join-Path $rollback "app") -Destination $oldApp
-        Copy-Item -LiteralPath (Join-Path $rollback "requirements.txt") -Destination $oldRequirements -Force
-        Start-App ((Select-String -LiteralPath (Join-Path $oldApp "version.py") -Pattern '^APP_VERSION\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value)
+    # Every rollback step is isolated so it can never replace or hide the original failure.
+    if ($oldAppMoved -and (Test-Path -LiteralPath (Join-Path $rollback "app"))) {
+        try { Stop-App }
+        catch { Write-Warning "Rollback could not stop the application cleanly: $($_.Exception.Message)" }
+        $restored = $false
+        try {
+            $failedApp = Join-Path $rollback "failed-app"
+            if (Test-Path -LiteralPath $oldApp) { Move-Item -LiteralPath $oldApp -Destination $failedApp }
+            Move-Item -LiteralPath (Join-Path $rollback "app") -Destination $oldApp
+            $restored = $true
+            Copy-Item -LiteralPath (Join-Path $rollback "requirements.txt") -Destination $oldRequirements -Force
+        }
+        catch { Write-Warning "Rollback could not restore the previous app directory: $($_.Exception.Message)" }
+        if ($restored) {
+            try {
+                Start-App ((Select-String -LiteralPath (Join-Path $oldApp "version.py") -Pattern '^APP_VERSION\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value)
+            }
+            catch { Write-Warning "Rollback restored the previous app but it did not become healthy: $($_.Exception.Message)" }
+        }
     }
     throw $failure
 }

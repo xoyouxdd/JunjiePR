@@ -18,6 +18,7 @@
 | `purge_legacy_attendance.py` | 旧 ATTENDANCE 类型一次性清理，默认 dry-run |
 | `audit_score_rules.py` | 只读列出角色分值规则，不改数据 |
 | `build_release.py` | 源码发布包，见 [release.md](release.md) |
+| `Deploy-RecognitionRelease.ps1` | 人工授权后上线已核验的发布包，见 [deployment.md](deployment.md) |
 
 ## 范围说明
 
@@ -25,6 +26,6 @@
 
 完整恢复验收至少包括：使用对应版本源码启动、管理员登录、抽样核对月度分数、打开一份附件、执行只读预检，以及确认备份与健康检查任务路径有效。数据库快照恢复通过不等于整机恢复完成。
 
-日常启动不会删除历史 `ATTENDANCE` 扣分类型及其记录、审计或附件。如业务批准一次性清理，先在隔离副本运行 `python scripts/purge_legacy_attendance.py` 查看影响清单，确认备份后再加 `--apply`。
+日常启动不会删除历史 `ATTENDANCE` 扣分类型及其记录、审计或附件。如业务批准一次性清理，先在隔离副本运行 `.\backend\.venv\Scripts\python.exe scripts\purge_legacy_attendance.py` 查看影响清单，确认备份后再加 `--apply`。
 
-上线前用 `python scripts/audit_score_rules.py --data-dir <已存在的隔离快照目录>` 只读核对分值规则，不要按默认分值自动删除。必须指向已有库文件，脚本用 SQLite `mode=ro` 打开，不会新建库。生产继续单进程运行；材料任务虽有领取令牌，仍不要默认开多个 worker。
+上线前用 `.\backend\.venv\Scripts\python.exe scripts\audit_score_rules.py --data-dir <已存在的隔离快照目录>` 只读核对分值规则，不要按默认分值自动删除。必须指向已有库文件，脚本用 SQLite `mode=ro` 打开，不会新建库。生产继续单进程运行；材料任务虽有领取令牌，仍不要默认开多个 worker。

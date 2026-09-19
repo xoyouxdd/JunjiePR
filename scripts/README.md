@@ -1,6 +1,6 @@
 # PR 加分系统 SQLite 备份与恢复演练
 
-本目录提供独立运维脚本，不修改业务数据模型，也不会自动部署应用。正式模式固定校验生产目录和专用备份目录；测试模式必须显式指定隔离的 `TestRoot`。
+本目录提供独立运维脚本，不修改业务数据模型。备份、恢复演练、健康检查和核对脚本本身不会部署应用；部署由单独的 `Deploy-RecognitionRelease.ps1` 完成，它不由 CI 自动触发，只在人工明确下达上线指令并指定经批准的提交后通过既有 SSH 通道执行。正式模式固定校验生产目录和专用备份目录；测试模式必须显式指定隔离的 `TestRoot`。
 
 ## 文件
 
@@ -13,6 +13,7 @@
 - `verify_readiness.py`：只读核对明确指定的 SQLite 副本，输出脱敏的账号、角色、景点圈、工作组和月结完整性摘要，供发布预检留档。
 - `purge_legacy_attendance.py`：一次性清理旧 `ATTENDANCE` 扣分类型。默认只打印影响清单，必须显式 `--apply` 才会删除。
 - `audit_score_rules.py`：只读列出角色分值规则，供上线前核对。必须用 `--data-dir` 指向已存在的隔离快照，SQLite 以 `mode=ro` 打开，不会改库或新建库。
+- `Deploy-RecognitionRelease.ps1`：在生产服务器上线一个已核验的发布包。必须传入经批准的完整 git commit，并逐个文件核对 `release-manifest.json` 里的 SHA-256 清单；核验通过后先做一次在线 SQLite 备份，再只替换 `app/` 与 `requirements.txt`，`data_v2/`、上传文件和 `.venv/` 保持不动。任一步失败会自动还原上一版并重启服务。它不由 CI 自动触发，只在人工明确授权后执行，完整流程和前置检查见 [../docs/deployment.md](../docs/deployment.md)。
 
 ## 正式备份
 
@@ -98,19 +99,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Invoke-SqliteOnlin
 
 计划任务安装脚本在 `TestMode` 下强制要求 `DryRun`，不会注册或覆盖 Windows 任务。
 
-## 日常检查与告警边界
-
 ## 发布副本核对
 
 正式发布前先用在线快照或预检快照执行一次只读核对。脚本始终以 SQLite `mode=ro` 打开数据库，输出只包含数量和问题代码，不输出员工、账号、附件或凭据：
 
 ```powershell
-python .\scripts\verify_readiness.py `
+C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe .\scripts\verify_readiness.py `
   --database C:\Server\zhaojunjie\backups\recognition-v2268-preflight-时间\recognition_v2.db `
   --output C:\Server\zhaojunjie\backups\recognition-v2268-preflight-时间\readiness-report.json
 ```
 
 报告中的未分组 CM/TR 是 `warning`，需要由负责人核对但不阻断候选启动；SQLite 完整性、外键、账号唯一性、当前角色、景点圈和月结引用异常为 `blocking`，应在上线前解决。
+
+## 日常检查与告警边界
 
 安装独立健康检查任务前先预览。默认在备份任务之后的 `03:30` 检查，允许备份最多运行 60 分钟：
 

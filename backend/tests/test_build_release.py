@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 
@@ -41,8 +42,8 @@ def test_release_package_excludes_local_secrets_and_uses_app_version(tmp_path: P
     assert mod.should_include(local_data / "runtime.json", tmp_path) is False
     assert mod.should_include(app_dir / "main.py", tmp_path) is True
     version = mod.read_app_version()
-    assert version == "2026.09.14.1"
-    assert mod.package_name(version, "20260914") == "recognition-v2026.09.14.1.zip"
+    assert re.fullmatch(r"\d{4}\.\d{2}\.\d{2}\.\d+", version), version
+    assert mod.package_name(version, version.replace(".", "")[:8]) == f"recognition-v{version}.zip"
 
 
 def test_release_whitelist_excludes_tests_and_docs() -> None:
@@ -51,14 +52,32 @@ def test_release_whitelist_excludes_tests_and_docs() -> None:
 
     assert "backend/app/main.py" in names
     assert "backend/requirements.txt" in names
+    # Test-only dependencies must never reach a production server.
+    assert "backend/requirements-dev.txt" not in names
+    assert not any("requirements-dev" in name for name in names)
     assert "scripts/seed_level_accounts.py" not in names
     assert not any(name.startswith("backend/tests/") for name in names)
     assert not any(name.startswith("scripts/tests/") for name in names)
     assert not any(name.startswith("docs/") for name in names)
+
+    # The production lock carries runtime deps only; test deps live in the dev lock,
+    # which inherits it so both files stay on one set of pinned versions.
+    production = (ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8")
+    development = (ROOT / "backend" / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert "pytest" not in production
+    assert "httpx" not in production
+    assert "-r requirements.txt" in development
+    assert "pytest==8.3.4" in development
+    assert "httpx==0.28.1" in development
+
     mod.ensure_release_contract(mod.read_app_version())
     notes = mod.render_release_notes(mod.read_app_version()).decode("utf-8")
-    assert "# 更新记录 V2026.09.14.1" in notes
-    assert "登录账号后四位" in notes
+    assert f"# 更新记录 V{mod.read_app_version()}" in notes
+    # The notes must render the current release's own items, not a stale copy.
+    from app.changelog import RELEASES  # render_release_notes put backend/ on sys.path
+
+    for item in RELEASES[0]["items"]:
+        assert item["summary"] in notes
 
 
 def test_release_manifest_binds_each_file_to_commit_and_hash(tmp_path: Path) -> None:
@@ -85,11 +104,37 @@ def test_deployment_script_requires_approved_commit_and_external_health_check() 
     assert '$manifest.git_commit -ne $ExpectedGitCommit' in source
     assert "https://124.220.229.9:28176/health" in source
     assert "Confirm-ExternalHealth $manifest.app_version" in source
+    assert "-SkipCertificateCheck" in source
+
+
+def test_deployment_script_targets_the_real_production_layout() -> None:
+    source = (ROOT / "scripts" / "Deploy-RecognitionRelease.ps1").read_text(encoding="utf-8")
+    assert '$LiveRoot = "C:\\Server\\zhaojunjie\\recognition-card-system\\backend"' in source
+    assert (
+        '$BackupScript = "C:\\Server\\zhaojunjie\\recognition-card-system\\scripts'
+        '\\Invoke-SqliteOnlineBackup.ps1"'
+    ) in source
+
+
+def test_deployment_script_rolls_back_from_the_moment_the_live_app_moves() -> None:
+    source = (ROOT / "scripts" / "Deploy-RecognitionRelease.ps1").read_text(encoding="utf-8")
+    # The rollback gate must not depend on a flag set after the swap completes.
+    assert "$swapped" not in source
+    assert 'if ($oldAppMoved -and (Test-Path -LiteralPath (Join-Path $rollback "app")))' in source
+    swap = source.index('Move-Item -LiteralPath $oldApp -Destination (Join-Path $rollback "app")')
+    flag = source.index("$oldAppMoved = $true")
+    restore = source.index('Move-Item -LiteralPath $newApp -Destination $oldApp')
+    assert swap < flag < restore
+    # The rollback path must never let Stop-App replace the original failure.
+    assert "try { Stop-App }" in source
+    assert source.rindex("throw $failure") > source.index("try { Stop-App }")
 
 
 def test_ci_only_verifies_and_builds_on_main_push() -> None:
     source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "branches: [main]" in source
+    # CI runs the suite, so it must install the dev lock, not the production one.
+    assert "python -m pip install -r backend/requirements-dev.txt" in source
     assert "python backend/tests/run_all.py" in source
     assert "python scripts/build_release.py" in source
     assert "actions/upload-artifact@v4" in source

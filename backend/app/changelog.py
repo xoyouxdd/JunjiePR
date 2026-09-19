@@ -7,6 +7,34 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.19.1",
+        "date": "2026-09-19",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "确认弹窗统一为系统样式",
+                "detail": "扣分提交、组长调整、密码重置的确认，以及截图提醒，都改用系统统一弹窗，可以用键盘操作。浏览器屏蔽网页弹窗时，不会再出现点了确认却没有任何反应的情况。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "登录账号不足四位时不再重置出过短密码",
+                "detail": "重置密码前会先检查登录账号长度。不足四位的账号会直接提示无法按“登录账号后四位”规则重置，原密码保持不变，避免生成低于系统长度下限、本人也改不回来的密码。",
+                "audiences": ["all"],
+                "permissions": ["PASSWORD_RESET"],
+            },
+            {
+                "summary": "上线脚本目录与回滚流程修正",
+                "detail": "部署脚本改为指向真实的生产应用目录和备份脚本位置。回滚判定从应用目录被移走的那一刻起生效，中途任何一步失败都会还原上一版，并保留原始失败原因。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "发布包不再安装测试依赖",
+                "detail": "测试用的 pytest 和 httpx 已从生产依赖清单移出，单独放在开发清单里。生产服务器今后只安装运行所需的依赖；服务器上已经装过的存量包不会被自动清理。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.14.1",
         "date": "2026-09-14",
         "status": "candidate",

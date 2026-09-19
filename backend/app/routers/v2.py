@@ -23,7 +23,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_crypto import default_initial_password, hash_password, new_session_token, token_hash, verify_password
+from app.v2_crypto import (
+    account_reset_password,
+    default_initial_password,
+    hash_password,
+    new_session_token,
+    token_hash,
+    verify_password,
+)
 from app.v2_database import CIRCLE_HR_ACCOUNTS, EMPLOYEE_CIRCLES, EXPORT_DIR, FILE_DIR, LEGACY_CIRCLE_BY_VENUE, RECOGNITION_VENUES, get_db, synchronize_gsm_management_scope
 from app.v2_models import (
     Attraction,
@@ -5686,6 +5693,19 @@ def create_employee(payload: dict, request: Request, db: Session = Depends(get_d
     }
 
 
+def resolved_reset_password(account: UserAccount) -> str:
+    """Apply the documented "登录账号后四位" reset rule with the policy length guard."""
+    try:
+        return account_reset_password(account.login_account)
+    except ValueError as exc:
+        raise HTTPException(
+            400,
+            f"该账号的登录账号“{account.login_account}”不足四位，无法按“登录账号后四位”规则重置密码，"
+            "否则新密码会低于系统密码长度下限、本人也无法自行改回。请管理员先规范该账号的登录账号，"
+            "或改用其他方式处理该账号。",
+        ) from exc
+
+
 @router.post("/accounts/reset-password")
 def reset_employee_password(
     payload: dict,
@@ -5713,7 +5733,7 @@ def reset_employee_password(
     account = db.query(UserAccount).filter(UserAccount.employee_id == employee.id).first()
     if not account:
         raise HTTPException(400, "该员工尚未开通登录账号")
-    reset_password = account.login_account[-4:]
+    reset_password = resolved_reset_password(account)
     account.password_hash = hash_password(reset_password)
     account.failed_attempts = 0
     account.locked_until = None
@@ -7085,7 +7105,7 @@ def reset_circle_hr_password(
     account = db.query(UserAccount).filter(UserAccount.employee_id == employee.id).first()
     if not account:
         raise HTTPException(400, "该景点圈HR尚未开通登录账号")
-    reset_password = account.login_account[-4:]
+    reset_password = resolved_reset_password(account)
     account.password_hash = hash_password(reset_password)
     account.failed_attempts = 0
     account.locked_until = None

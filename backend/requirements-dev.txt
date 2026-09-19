@@ -1,0 +1,5 @@
+# 本地开发与 CI 用：继承生产依赖，再加测试专用包。
+# 生产发布包只含 requirements.txt，本文件不会进入正式包。
+-r requirements.txt
+pytest==8.3.4
+httpx==0.28.1

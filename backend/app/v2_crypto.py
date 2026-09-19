@@ -12,11 +12,26 @@ def default_initial_password(employee_no: str) -> str:
     """Return the documented first-login password for a seven-digit employee ID.
 
     This is intentionally limited to account creation and the separately audited
-    one-time test recovery tool. Password resets remain random, one-time values.
+    one-time test recovery tool. Administrator password resets follow the
+    related documented rule implemented by :func:`account_reset_password`.
     """
     value = str(employee_no or "").strip()
     if len(value) != 7 or not value.isdigit():
         raise ValueError("employee number must be a seven-digit number")
+    return value[-4:]
+
+
+def account_reset_password(login_account: str) -> str:
+    """Return the documented administrator reset password: the login account suffix.
+
+    Resets are recorded in docs/security.md as "登录账号后四位". Login accounts
+    shorter than four characters cannot produce a password that satisfies the
+    system password policy (minimum four characters), which would leave the
+    owner unable to change it back, so they are rejected here instead.
+    """
+    value = str(login_account or "").strip()
+    if len(value) < 4:
+        raise ValueError("login account must have at least four characters to reset by suffix")
     return value[-4:]
 
 
