@@ -1,6 +1,6 @@
 # PR 加分系统 SQLite 备份与恢复演练
 
-本目录提供独立运维脚本，不修改业务数据模型。备份、恢复演练、健康检查和核对脚本本身不会部署应用；部署由单独的 `Deploy-RecognitionRelease.ps1` 完成，它不由 CI 自动触发，只在人工明确下达上线指令并指定经批准的提交后通过既有 SSH 通道执行。正式模式固定校验生产目录和专用备份目录；测试模式必须显式指定隔离的 `TestRoot`。
+本目录提供独立运维脚本，不修改业务数据模型。备份、恢复演练、健康检查和核对脚本本身不会部署应用；部署由单独的 `Deploy-RecognitionRelease.ps1` 完成，只在人工明确下达上线指令并指定经批准的提交后通过既有 SSH 通道执行。正式模式固定校验生产目录和专用备份目录；测试模式必须显式指定隔离的 `TestRoot`。
 
 ## 文件
 
@@ -13,7 +13,7 @@
 - `verify_readiness.py`：只读核对明确指定的 SQLite 副本，输出脱敏的账号、角色、景点圈、工作组和月结完整性摘要，供发布预检留档。
 - `purge_legacy_attendance.py`：一次性清理旧 `ATTENDANCE` 扣分类型。默认只打印影响清单，必须显式 `--apply` 才会删除。
 - `audit_score_rules.py`：只读列出角色分值规则，供上线前核对。必须用 `--data-dir` 指向已存在的隔离快照，SQLite 以 `mode=ro` 打开，不会改库或新建库。
-- `Deploy-RecognitionRelease.ps1`：在生产服务器上线一个已核验的发布包。必须传入经批准的完整 git commit，并逐个文件核对 `release-manifest.json` 里的 SHA-256 清单；核验通过后先做一次在线 SQLite 备份，再只替换 `app/` 与 `requirements.txt`，`data_v2/`、上传文件和 `.venv/` 保持不动。任一步失败会自动还原上一版并重启服务。它不由 CI 自动触发，只在人工明确授权后执行，完整流程和前置检查见 [../docs/deployment.md](../docs/deployment.md)。
+- `Deploy-RecognitionRelease.ps1`：在生产服务器上线一个已核验的发布包。必须传入经批准的完整 git commit，并逐个文件核对 `release-manifest.json` 里的 SHA-256 清单；核验通过后先做一次在线 SQLite 备份，再只替换 `app/` 与 `requirements.txt`，`data_v2/`、上传文件和 `.venv/` 保持不动。任一步失败会自动还原上一版并重启服务。它只在人工明确授权后执行，完整流程和前置检查见 [../docs/deployment.md](../docs/deployment.md)。
 
 ## 正式备份
 

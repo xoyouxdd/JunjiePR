@@ -14,7 +14,7 @@ $env:RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD = "由负责人现场设置的初始�
 & $python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
-依赖分两份：`backend/requirements.txt` 只有生产运行依赖，正式包里装的就是它；`backend/requirements-dev.txt` 用 `-r requirements.txt` 继承这份生产依赖，再锁定 `pytest` 和 `httpx` 两个测试依赖。本地和 CI 都装 `requirements-dev.txt`，生产服务器只装 `requirements.txt`。两份文件里的版本都是锁定值，安装时不要再额外追加 `pytest` 或 `httpx`，否则会装上最新版并覆盖锁定版本。
+依赖分两份：`backend/requirements.txt` 只有生产运行依赖，正式包里装的就是它；`backend/requirements-dev.txt` 用 `-r requirements.txt` 继承这份生产依赖，再锁定 `pytest` 和 `httpx` 两个测试依赖。本地开发和测试装 `requirements-dev.txt`，生产服务器只装 `requirements.txt`。两份文件里的版本都是锁定值，安装时不要再额外追加 `pytest` 或 `httpx`，否则会装上最新版并覆盖锁定版本。
 
 首次启动会初始化 SQLite 结构并建立最高管理员 `HR01`。确认管理员可以登录后，在启动服务的环境中移除临时的 `RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD`。正式运行的数据目录、服务账号和监听地址由部署环境明确设置；不要把本地测试目录当作正式目录。
 

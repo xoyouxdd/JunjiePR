@@ -130,14 +130,12 @@ def test_deployment_script_rolls_back_from_the_moment_the_live_app_moves() -> No
     assert source.rindex("throw $failure") > source.index("try { Stop-App }")
 
 
-def test_ci_only_verifies_and_builds_on_main_push() -> None:
-    source = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert "branches: [main]" in source
-    # CI runs the suite, so it must install the dev lock, not the production one.
-    assert "python -m pip install -r backend/requirements-dev.txt" in source
-    assert "python backend/tests/run_all.py" in source
-    assert "python scripts/build_release.py" in source
-    assert "actions/upload-artifact@v4" in source
-    assert "recognition-production-package-${{ github.sha }}" in source
-    assert "workflow_dispatch" not in source
-    assert "Deploy-RecognitionRelease.ps1" not in source
+def test_repository_configures_no_automated_workflows() -> None:
+    """The project deliberately builds and deploys by hand; CI is not used.
+
+    Releases are built locally from a clean tree and deployed only after an
+    explicit human instruction, so no workflow may reintroduce automation.
+    """
+    workflows = ROOT / ".github" / "workflows"
+    found = sorted(p.name for p in workflows.glob("*.y*ml")) if workflows.is_dir() else []
+    assert not found, f"本项目约定不使用 CI，但发现工作流: {found}"

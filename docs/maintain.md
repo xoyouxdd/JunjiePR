@@ -19,7 +19,7 @@
 | 怎么跑测试、数据目录、环境变量 | `docs/getting-started.md` |
 | `build_release.py` 排除规则或包名 | `docs/release.md` |
 | `scripts/` 脚本 | `scripts/README.md`，必要时改 `docs/operations.md` 一览表 |
-| CI 工作流、生产部署流程 | `docs/deployment.md` |
+| 发布构建与生产部署流程 | `docs/deployment.md` |
 | 密码/打包/仓库边界约定 | `docs/security.md` |
 | 用户能看见的功能 | `backend/app/changelog.py`（见 [changelog.md](changelog.md)） |
 | `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.py` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |
