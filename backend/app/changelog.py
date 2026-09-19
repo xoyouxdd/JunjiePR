@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.19.2",
+        "date": "2026-09-19",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "统计页新增月度趋势",
+                "detail": "景点数据统计页可切换到「月度趋势」，查看最近 3、6 或 12 个月的认可、出勤、扣分与总分变化，含整体和各景点圈的折线对比、环比升降。计分口径与当月统计完全一致；历史月份按该月封存的组织归属计算，调动过景点圈的员工不会算错。",
+                "audiences": ["GSM", "AM", "OM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.19.1",
         "date": "2026-09-19",
         "status": "candidate",

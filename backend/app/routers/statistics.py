@@ -1057,6 +1057,7 @@ def statistics_payload(
     user: V2User | None = None,
     *,
     include_records: bool = False,
+    include_hierarchy: bool = True,
 ) -> dict:
     try:
         month_start = date.fromisoformat(f"{month}-01")
@@ -1215,6 +1216,24 @@ def statistics_payload(
         recognition_payloads = [recognition_payload(row) for row in recognition_rows if record_is_visible(row)]
         deduction_payloads = [deduction_payload(row) for row in deduction_rows if record_is_visible(row)]
         sick_leave_rows_payload = sick_leave_payloads(db, [row for row in sick_leave_rows if record_is_visible(row)])
+    attraction_totals: dict[object, dict] = {}
+    for row in score_rows:
+        key = row.get("attraction_id")
+        node = attraction_totals.setdefault(key, {
+            "attraction_id": key,
+            "attraction_name": row.get("attraction_name") or "未设置景点圈",
+            "employee_count": 0,
+            "recognition_score": 0.0,
+            "attendance_score": 0.0,
+            "deduction_score": 0.0,
+            "total_score": 0.0,
+        })
+        node["employee_count"] += 1
+        for field in ("recognition_score", "attendance_score", "deduction_score", "total_score"):
+            node[field] += float(row[field] or 0)
+    for node in attraction_totals.values():
+        for field in ("recognition_score", "attendance_score", "deduction_score", "total_score"):
+            node[field] = round(node[field], 2)
     payload = {
         "month": month,
         "title": selected_title,
@@ -1232,8 +1251,9 @@ def statistics_payload(
             "deduction_score": round(sum(float(row["deduction_score"] or 0) for row in score_rows), 2),
             "total_score": round(sum(float(row["total_score"] or 0) for row in score_rows), 2),
         },
-        "hierarchy": statistics_hierarchy(db, score_rows, month_end, user) if user else [],
+        "hierarchy": statistics_hierarchy(db, score_rows, month_end, user) if user and include_hierarchy else [],
         "loa_rows": loa_rows,
+        "by_attraction": sorted(attraction_totals.values(), key=lambda item: str(item["attraction_name"])),
     }
     if include_records:
         payload.update(
@@ -1315,6 +1335,95 @@ def statistics(month: str, attraction_id: int | None = None, keyword: str | None
             content = cached[1]
         else:
             payload = statistics_payload(db, month, attraction_id, keyword, title, user)
+            content = json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=lambda value: float(value) if isinstance(value, Decimal) else str(value),
+            ).encode("utf-8")
+            _statistics_response_cache[cache_key] = (now + STATISTICS_CACHE_SECONDS, content)
+            if len(_statistics_response_cache) > 128:
+                _statistics_response_cache.clear()
+                _statistics_response_cache[cache_key] = (now + STATISTICS_CACHE_SECONDS, content)
+    return Response(content=content, media_type="application/json")
+
+
+TREND_DEFAULT_MONTHS = 6
+TREND_MAX_MONTHS = 12
+TREND_SCORE_FIELDS = ("recognition_score", "attendance_score", "deduction_score", "total_score")
+
+
+def trend_month_keys(end_month: str, count: int) -> list[str]:
+    """Return `count` YYYY-MM keys ending at end_month, oldest first."""
+    try:
+        anchor = date.fromisoformat(f"{end_month}-01")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "月份格式应为YYYY-MM") from exc
+    keys: list[str] = []
+    year, index = anchor.year, anchor.month
+    for _ in range(count):
+        keys.append(f"{year:04d}-{index:02d}")
+        index -= 1
+        if index == 0:
+            year, index = year - 1, 12
+    keys.reverse()
+    return keys
+
+
+def statistics_trend_payload(db: Session, end_month: str, months: int, attraction_id: int | None, title: str | None, user: V2User) -> dict:
+    """Month-by-month totals built from statistics_payload so figures match /statistics exactly.
+
+    Scope, organization basis (month snapshot first) and LOA exclusion all come
+    from that one function; the trend never re-implements the scoring rules.
+    """
+    # An explicit out-of-range value is clamped, not silently replaced by the default.
+    span = min(max(int(TREND_DEFAULT_MONTHS if months is None else months), 1), TREND_MAX_MONTHS)
+    keys = trend_month_keys(end_month, span)
+    overall: list[dict] = []
+    circles: dict[object, dict] = {}
+    for key in keys:
+        payload = statistics_payload(db, key, attraction_id, None, title, user, include_hierarchy=False)
+        summary = payload["summary"]
+        overall.append({"month": key, "employee_count": summary["employee_count"],
+                        **{field: summary[field] for field in TREND_SCORE_FIELDS}})
+        for node in payload["by_attraction"]:
+            circle = circles.setdefault(node["attraction_id"], {
+                "attraction_id": node["attraction_id"],
+                "attraction_name": node["attraction_name"],
+                "points": {},
+            })
+            circle["points"][key] = {"month": key, "employee_count": node["employee_count"],
+                                     **{field: node[field] for field in TREND_SCORE_FIELDS}}
+    blank = {"employee_count": 0, **{field: 0.0 for field in TREND_SCORE_FIELDS}}
+    series = [
+        {
+            "attraction_id": circle["attraction_id"],
+            "attraction_name": circle["attraction_name"],
+            "series": [circle["points"].get(key, {"month": key, **blank}) for key in keys],
+        }
+        for circle in circles.values()
+    ]
+    series.sort(key=lambda item: str(item["attraction_name"]))
+    return {
+        "months": keys,
+        "end_month": keys[-1],
+        "overall": overall,
+        "by_attraction": series,
+        "filters": {"attraction_id": attraction_id or "", "title": (title or "").strip().upper(), "months": span},
+        "max_months": TREND_MAX_MONTHS,
+    }
+
+
+@router.get("/statistics/trend")
+def statistics_trend(month: str, months: int = TREND_DEFAULT_MONTHS, attraction_id: int | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_VIEW", "DATA_EXPORT"))):
+    cache_key = ("trend", user.id, user.role.code, month, months, attraction_id, (title or "").strip().upper())
+    with _statistics_cache_lock:
+        now = monotonic()
+        cached = _statistics_response_cache.get(cache_key)
+        if cached and cached[0] > now:
+            content = cached[1]
+        else:
+            payload = statistics_trend_payload(db, month, months, attraction_id, title, user)
             content = json.dumps(
                 payload,
                 ensure_ascii=False,

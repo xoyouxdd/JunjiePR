@@ -1751,3 +1751,29 @@ details.form-more > summary {
   }
   .mobile-more-menu .nav-icon { width: 18px; height: 18px; }
 }
+
+/* Monthly trend view on the statistics page. */
+.statistics-views { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.statistics-view-tabs { display: flex; gap: 8px; }
+.statistics-view-tabs button { min-width: 104px; }
+.trend-span { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+.trend-span[hidden] { display: none; }
+.trend-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); gap: 10px; margin: 14px 0 16px; }
+.trend-card { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); }
+.trend-card-label { color: var(--muted); font-size: 12px; }
+.trend-card strong { font-size: 22px; color: var(--text-label); }
+/* good/bad describe the business direction, not the arrow: more deductions is bad. */
+.trend-delta { font-size: 12px; font-weight: 700; }
+.trend-delta.good { color: var(--ok); }
+.trend-delta.bad { color: var(--danger-text); }
+.trend-delta.flat { color: var(--muted); font-weight: 600; }
+.trend-chart { display: block; width: 100%; height: auto; margin-bottom: 8px; }
+.trend-axis { fill: var(--muted); font-size: 11px; }
+.trend-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; color: var(--text-secondary); font-size: 12px; }
+.trend-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.trend-legend i { width: 14px; height: 3px; border-radius: 2px; }
+@media (max-width: 760px) {
+  .statistics-view-tabs { width: 100%; }
+  .statistics-view-tabs button { flex: 1; min-width: 0; }
+  .trend-card strong { font-size: 19px; }
+}
