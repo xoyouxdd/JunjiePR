@@ -17,7 +17,7 @@ def test_material_preview_metadata_and_all_image_entry_points() -> None:
     assert preview_kind(pdf) == "pdf"
 
     script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
-    router = (Path(__file__).parents[1] / "app" / "routers" / "v2.py").read_text(encoding="utf-8")
+    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).parents[1] / "app" / "routers").glob("*.py")))
     assert "function openPdfPreview" in script
     assert "function usesNativeMobilePdfViewer" in script
     assert "window.location.assign(previewUrl)" in script

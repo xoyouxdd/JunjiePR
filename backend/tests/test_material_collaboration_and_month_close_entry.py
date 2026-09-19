@@ -159,6 +159,6 @@ def test_material_scope_ui_and_month_close_copy_are_present() -> None:
     assert "我的景点圈" in source
     assert "全部景点圈" in source
     assert "TA GSM和GSM均可协作补充" in source
-    router = (Path(__file__).resolve().parents[1] / "app" / "routers" / "v2.py").read_text(encoding="utf-8")
+    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).resolve().parents[1] / "app" / "routers").glob("*.py")))
     assert '"上月待月结景点圈"' in router
     assert '"monthClose"' in router

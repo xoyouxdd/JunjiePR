@@ -1311,7 +1311,7 @@ def test_v2234_imported_recognizers_are_available_from_policy_start() -> None:
     assert ".image-preview-stage img[hidden]" in stylesheet
     assert 'id="recognitionDate"' in script
     assert "RECOGNIZER_ELIGIBILITY_START" in (Path(__file__).parents[1] / "app" / "v2_services.py").read_text(encoding="utf-8")
-    assert "recognizer_role_for_date" in (Path(__file__).parents[1] / "app" / "routers" / "v2.py").read_text(encoding="utf-8")
+    assert "recognizer_role_for_date" in "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).parents[1] / "app" / "routers").glob("*.py")))
 
 
 def test_same_day_recognition_warning_and_editable_hierarchy_export() -> None:

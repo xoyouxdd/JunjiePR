@@ -31,7 +31,7 @@ def test_confirmation_feedback_is_deterministic_and_only_claims_confirmation_the
 
 
 def test_submission_and_confirmation_paths_use_existing_interfaces_without_external_ai() -> None:
-    router = (ROOT / "app" / "routers" / "v2.py").read_text(encoding="utf-8")
+    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((ROOT / "app" / "routers").glob("*.py")))
     script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     helper = (ROOT / "app" / "recognition_encouragement.py").read_text(encoding="utf-8")
     style = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")

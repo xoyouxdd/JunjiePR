@@ -121,7 +121,7 @@ def test_delete_endpoint_enforces_the_full_seven_day_wait() -> None:
 
 def test_hr_archive_ui_and_export_marker_are_present() -> None:
     script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
-    router = (ROOT / "app" / "routers" / "v2.py").read_text(encoding="utf-8")
+    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((ROOT / "app" / "routers").glob("*.py")))
     assert "data-delete-login-account" in script
     assert "删除登录账号" in script
     assert "账号已删除·留档" in script

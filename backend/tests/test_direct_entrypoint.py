@@ -9,7 +9,7 @@ def test_direct_entrypoint_assets_do_not_use_legacy_prefix():
     index = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     login = (ROOT / "app" / "static" / "login.html").read_text(encoding="utf-8")
     manifest = (ROOT / "app" / "static" / "manifest.json").read_text(encoding="utf-8")
-    router = (ROOT / "app" / "routers" / "v2.py").read_text(encoding="utf-8")
+    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((ROOT / "app" / "routers").glob("*.py")))
 
     assert 'href="https://124.220.229.9:28176/"' in index
     assert 'href="https://124.220.229.9:28176/login"' in login
