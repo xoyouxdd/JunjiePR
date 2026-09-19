@@ -6,7 +6,7 @@
 .\backend\.venv\Scripts\python.exe scripts\build_release.py
 ```
 
-本地发布前的测试也使用同一环境：`.\backend\.venv\Scripts\python.exe backend\tests\run_all.py`。
+打包脚本在工作区干净检查之后会**自动跑一次全量测试**，任一模块失败即拒绝出包——本项目不使用 CI，这里是最后一道自动关卡。也可以先单独跑一遍看失败详情：`.\backend\.venv\Scripts\python.exe backend\tests\run_all.py`。
 
 包名从 `backend/app/version.py` 的 `APP_VERSION` 生成，写成 `recognition-v年.月.日.第几版.zip`，放在仓库根目录。打包只允许从干净的 Git 工作区执行；未提交改动会直接阻止打包。
 

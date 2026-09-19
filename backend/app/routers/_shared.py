@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionLevel, DeductionFollowUp, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, GroupLeaderAssignment, MonthClosure, RecognitionRecord, Role, SickLeaveRecord, StoredFile, SubmissionRequest, SystemAlert, UserAccount, WorkGroup
 from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, active_group_leaders_bulk, groups_led_by, managed_attraction_ids, role_at
+from app.v2_models import EmployeeLOAPeriod, GroupMembership
+from app.v2_services import roles_at
 
 
 STATISTICS_CACHE_SECONDS = 2.0
@@ -1019,3 +1021,154 @@ def months_between(start: date, end: date) -> list[str]:
 def primary_gsm_for_attraction(db: Session, attraction_id: int, on_date: str | None = None) -> tuple[Employee | None, Role | None]:
     candidates = gsm_candidates_for_attraction(db, attraction_id, on_date)
     return candidates[0] if candidates else (None, None)
+
+
+def login_account_archive_state(employee: Employee, account: UserAccount | None, role: Role | None) -> dict:
+    """Return non-sensitive eligibility for removing only a login account.
+
+    The employee primary key and every business row remain untouched.  Both
+    the directory and the write endpoint use this same policy so the seven-day
+    rule cannot be bypassed by calling the API directly.
+    """
+    result = {"deleted": bool(employee.account_deleted_at), "eligible": False, "reason": "", "eligible_on": ""}
+    if employee.account_deleted_at:
+        result["reason"] = "账号已删除，业务档案已保留"
+        return result
+    if not account:
+        result["reason"] = "该员工尚未开通登录账号"
+        return result
+    if not role or role.code not in REGULAR_ACCOUNT_ROLE_CODES:
+        result["reason"] = "HR和最高管理员账号不支持在此删除"
+        return result
+    reference_day: date | None = None
+    if not employee.is_active:
+        try:
+            reference_day = date.fromisoformat(str(employee.terminated_on or ""))
+        except ValueError:
+            result["reason"] = "离职日期未记录，暂不能删除登录账号"
+            return result
+    elif not account.enabled:
+        if not account.disabled_at:
+            result["reason"] = "停用时间未记录，暂不能删除登录账号"
+            return result
+        reference_day = account.disabled_at.date()
+    else:
+        result["reason"] = "需先离职或停用账号"
+        return result
+    eligible_on = reference_day + timedelta(days=7)
+    result["eligible_on"] = eligible_on.isoformat()
+    if date.today() < eligible_on:
+        result["reason"] = f"{eligible_on.isoformat()} 起可删除登录账号"
+        return result
+    result["eligible"] = True
+    result["reason"] = "可删除登录账号；员工及所有业务档案会保留"
+    return result
+
+
+def employee_payloads(db: Session, employees: list[Employee], on_date: str | None = None) -> dict[int, dict]:
+    """Build the HR employee directory with a bounded set of batch queries."""
+    if not employees:
+        return {}
+    value = on_date or date.today().isoformat()
+    employee_ids = [employee.id for employee in employees]
+    role_map = roles_at(db, employee_ids, value)
+    accounts = {
+        account.employee_id: account
+        for account in db.query(UserAccount).filter(UserAccount.employee_id.in_(employee_ids)).all()
+    }
+    loa_periods = (
+        db.query(EmployeeLOAPeriod)
+        .filter(
+            EmployeeLOAPeriod.employee_id.in_(employee_ids),
+            EmployeeLOAPeriod.status != "cancelled",
+            EmployeeLOAPeriod.starts_on <= value,
+            or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= value),
+        )
+        .order_by(EmployeeLOAPeriod.employee_id, EmployeeLOAPeriod.starts_on.desc(), EmployeeLOAPeriod.id.desc())
+        .all()
+    )
+    loa_by_employee: dict[int, EmployeeLOAPeriod] = {}
+    for period in loa_periods:
+        loa_by_employee.setdefault(period.employee_id, period)
+    attraction_ids = {employee.attraction_id for employee in employees if employee.attraction_id}
+    attractions = {
+        attraction.id: attraction
+        for attraction in db.query(Attraction).filter(Attraction.id.in_(attraction_ids)).all()
+    } if attraction_ids else {}
+    memberships = (
+        db.query(GroupMembership)
+        .filter(
+            GroupMembership.employee_id.in_(employee_ids),
+            GroupMembership.status == "active",
+            GroupMembership.starts_on <= value,
+            or_(GroupMembership.ends_on.is_(None), GroupMembership.ends_on >= value),
+        )
+        .order_by(GroupMembership.employee_id, GroupMembership.starts_on.desc(), GroupMembership.id.desc())
+        .all()
+    )
+    membership_by_employee: dict[int, GroupMembership] = {}
+    for membership in memberships:
+        membership_by_employee.setdefault(membership.employee_id, membership)
+    group_ids = {membership.group_id for membership in membership_by_employee.values()}
+    groups = {
+        group.id: group
+        for group in db.query(WorkGroup).filter(WorkGroup.id.in_(group_ids)).all()
+    } if group_ids else {}
+    leader_assignments = (
+        db.query(GroupLeaderAssignment)
+        .filter(
+            GroupLeaderAssignment.group_id.in_(group_ids),
+            GroupLeaderAssignment.status == "active",
+            GroupLeaderAssignment.starts_on <= value,
+            or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= value),
+        )
+        .order_by(GroupLeaderAssignment.group_id, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
+        .all()
+    ) if group_ids else []
+    leader_assignment_by_group: dict[int, GroupLeaderAssignment] = {}
+    for assignment in leader_assignments:
+        leader_assignment_by_group.setdefault(assignment.group_id, assignment)
+    leader_ids = {assignment.leader_employee_id for assignment in leader_assignment_by_group.values()}
+    leaders = {
+        leader.id: leader
+        for leader in db.query(Employee).filter(Employee.id.in_(leader_ids)).all()
+    } if leader_ids else {}
+    group_display = group_display_metadata_bulk(db, group_ids, value)
+    result: dict[int, dict] = {}
+    for employee in employees:
+        role = role_map.get(employee.id)
+        account = accounts.get(employee.id)
+        membership = membership_by_employee.get(employee.id)
+        group = groups.get(membership.group_id) if membership else None
+        leader_assignment = leader_assignment_by_group.get(group.id) if group else None
+        leader = leaders.get(leader_assignment.leader_employee_id) if leader_assignment else None
+        display = group_display.get(group.id, {}) if group else {}
+        attraction = attractions.get(employee.attraction_id)
+        loa_period = loa_by_employee.get(employee.id)
+        archive_state = login_account_archive_state(employee, account, role)
+        result[employee.id] = {
+        "id": employee.id,
+        "employee_no": employee.employee_no,
+        "name": employee.name,
+        "role_code": role.code if role else "",
+        "role_name": role.name if role else "未配置",
+        "attraction_id": employee.attraction_id,
+        "attraction_name": attraction.name if attraction else "",
+        "group_id": group.id if group else None,
+        "group_name": display.get("name", group.name if group else ""),
+        "previous_group_leader_name": display.get("previous_leader_name", ""),
+        "previous_group_leader_until": display.get("previous_leader_until", ""),
+        "leader_id": leader.id if leader else None,
+        "leader_name": leader.name if leader else "",
+        "is_active": employee.is_active,
+        "employment_status": "loa" if employee.is_active and loa_period else "active" if employee.is_active else "terminated",
+        "loa_start_date": loa_period.starts_on if loa_period else "",
+        "account_enabled": bool(account and account.enabled),
+        "login_account": account.login_account if account else "",
+        "account_deleted_at": employee.account_deleted_at.strftime("%Y-%m-%d %H:%M:%S") if employee.account_deleted_at else "",
+        "account_deleted_by_name": employee.account_deleted_by_name or "",
+        "account_deletion_eligible": archive_state["eligible"],
+        "account_deletion_reason": archive_state["reason"],
+        "account_deletion_eligible_on": archive_state["eligible_on"],
+        }
+    return result

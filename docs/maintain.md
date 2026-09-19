@@ -6,7 +6,7 @@
 
 - 根目录 `README.md`：索引
 - `docs/`：说明正文
-- `scripts/README.md`：备份脚本命令，跟脚本放在一起
+- `scripts/README.md`：运维与发布脚本的命令，跟脚本放在一起
 
 新增一篇文档时，同时改根 `README.md` 和 `docs/README.md` 的表格。
 
@@ -20,6 +20,7 @@
 | `build_release.py` 排除规则或包名 | `docs/release.md` |
 | `scripts/` 脚本 | `scripts/README.md`，必要时改 `docs/operations.md` 一览表 |
 | 发布构建与生产部署流程 | `docs/deployment.md` |
+| 前端样式、配色或弹窗 | 复用 `style.css` 的 `:root` 变量与 `confirmModal`，约定见 `docs/architecture.md` |
 | 密码/打包/仓库边界约定 | `docs/security.md` |
 | 用户能看见的功能 | `backend/app/changelog.py`（见 [changelog.md](changelog.md)） |
 | `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.py` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |

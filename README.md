@@ -18,7 +18,7 @@
 | [docs/changelog.md](docs/changelog.md) | 应用内「更新记录」怎么维护 |
 | [docs/maintain.md](docs/maintain.md) | 改代码时文档改哪 |
 
-脚本旁的详细手册：[`scripts/README.md`](scripts/README.md)。
+脚本旁的详细手册：[`scripts/README.md`](scripts/README.md)（运维、备份与发布脚本）。
 
 ## 仓库
 

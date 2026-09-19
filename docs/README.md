@@ -14,4 +14,4 @@
 | [changelog.md](changelog.md) | 应用内更新记录的数据源 |
 | [maintain.md](maintain.md) | 改代码时文档改哪 |
 
-备份命令细节仍写在脚本旁边：[../scripts/README.md](../scripts/README.md)。
+运维与发布脚本的命令细节写在脚本旁边：[../scripts/README.md](../scripts/README.md)。

@@ -5,10 +5,9 @@
 发版前必须在本地依次完成两步，顺序不能颠倒：
 
 1. 跑全量测试：`.\backend\.venv\Scripts\python.exe backend\tests\run_all.py`，确认全部模块通过。
-un_all.py`，确认全部模块通过。
 2. 从**干净的 Git 工作区**构建：`.\backend\.venv\Scripts\python.exe scripts\build_release.py`。未提交的改动会直接阻止打包。
 
-打包脚本会校验 `APP_VERSION` 与最新更新记录版本一致、检查文档本地链接，并把版本、完整 Git commit 和每个文件的 SHA-256 写进 `release-manifest.json`。**打包脚本本身不跑测试**，第 1 步是发版前不可省略的人工步骤。
+打包脚本在确认工作区干净后会**自动执行一次全量测试**，任一模块失败就拒绝出包；随后校验 `APP_VERSION` 与最新更新记录版本一致、检查文档本地链接，并把版本、完整 Git commit 和每个文件的 SHA-256 写进 `release-manifest.json`。第 1 步单独先跑一遍，是为了在打包前就看到失败详情，不是因为打包不查。
 
 把发布包传到服务器后，由负责人执行部署脚本并传入经批准的完整提交号。部署前必须核实包名和 `release-manifest.json` 的 `git_commit` 都等于批准提交。
 

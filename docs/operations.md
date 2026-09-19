@@ -17,6 +17,7 @@
 | `verify_readiness.py` | 只读预检脱敏摘要 |
 | `purge_legacy_attendance.py` | 旧 ATTENDANCE 类型一次性清理，默认 dry-run |
 | `audit_score_rules.py` | 只读列出角色分值规则，不改数据 |
+| `Reset-NeverLoggedInInitialPasswords.py` | 恢复从未登录账号的初始密码，默认 dry-run |
 | `build_release.py` | 源码发布包，见 [release.md](release.md) |
 | `Deploy-RecognitionRelease.ps1` | 人工授权后上线已核验的发布包，见 [deployment.md](deployment.md) |
 

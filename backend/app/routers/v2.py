@@ -7,12 +7,36 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.routers import auth, deductions, files, governance, hr, recognitions, sick_leaves, statistics
+from app.routers import (
+    accounts,
+    auth,
+    deductions,
+    employees,
+    files,
+    governance,
+    hr_admin,
+    organization,
+    recognitions,
+    sick_leaves,
+    statistics,
+)
 
 from app.routers._shared import is_previewable_image, preview_kind  # noqa: F401  (re-exported)
 
 
 router = APIRouter(prefix="/api", tags=["v2"])
 
-for _module in (auth, deductions, files, governance, hr, recognitions, sick_leaves, statistics):
+for _module in (
+    accounts,
+    auth,
+    deductions,
+    employees,
+    files,
+    governance,
+    hr_admin,
+    organization,
+    recognitions,
+    sick_leaves,
+    statistics,
+):
     router.include_router(_module.router)
