@@ -741,7 +741,7 @@
 
 键：PK `id`；UNIQUE `violation_deduction_id`（可空）；FK `employee_id`、`proof_file_id`、`violation_deduction_id`、`submitted_by`、`voided_by`。
 
-列级索引：`employee_id`、`employee_no_snapshot`、`employee_name_snapshot`、`attraction_id_snapshot`、`attendance_month`、`is_violation`、`violation_deduction_id`、`status`、`submitted_by`。
+列级索引：`employee_id`、`employee_no_snapshot`、`employee_name_snapshot`、`attraction_id_snapshot`、`attendance_month`、`leave_type`、`import_source`、`is_violation`、`violation_deduction_id`、`status`、`submitted_by`。
 
 部分 UNIQUE：`ix_sick_leave_violation_deduction` (`violation_deduction_id`) WHERE `violation_deduction_id IS NOT NULL`。
 
@@ -749,6 +749,7 @@
 
 - `ix_sick_leave_month_employee_status` (`attendance_month`, `employee_id`, `status`)
 - `ix_sick_leave_pr_ranking` (`status`, `leave_start_date`, `leave_end_date`, `employee_id`)
+- `ix_sick_leave_type` (`leave_type`, `attendance_month`, `employee_id`, `status`)
 
 日期交集拦截在服务端按有效记录闭区间判断，没有额外 UNIQUE 约束。
 

@@ -7,6 +7,35 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.23.2",
+        "date": "2026-09-23",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "LOA结束登记与月份重算修正",
+                "detail": "补登LOA结束日期、登记或撤销LOA时，只对计分状态实际变化的月份做月结检查和全勤重算：开始月已月结时仍可补结束日期，结束后的月份会恢复计分。",
+                "audiences": ["TA_GSM", "GSM", "HR_CIRCLE"],
+                "permissions": ["LOA_REGISTER"],
+            },
+            {
+                "summary": "病假导入兼容数字格式员工ID",
+                "detail": "事务文件中数字格式的员工ID会补齐前导0后再匹配；预检失效时提示更明确。",
+                "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["SICK_LEAVE_IMPORT"],
+            },
+            {
+                "summary": "LOA结束后全勤分按时恢复",
+                "detail": "LOA登记结束或撤销后，恢复计分的月份会立即按最新状态重算全勤分。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "病假表升级后补齐索引",
+                "detail": "修复旧库升级病假表时丢失列级索引的问题，已升级过的数据库启动时自动补齐。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.23.1",
         "date": "2026-09-23",
         "status": "candidate",

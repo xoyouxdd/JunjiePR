@@ -7,13 +7,13 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_crypto import default_initial_password, hash_password
 from app.v2_database import get_db, synchronize_gsm_management_scope
-from app.v2_models import Attraction, Employee, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupLeaderAssignment, GroupMembership, RecognitionRecord, Role, SystemAlert, UserAccount, UserSession, WorkGroup
+from app.v2_models import Attraction, AttendanceMonthlyScore, Employee, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupLeaderAssignment, GroupMembership, RecognitionRecord, Role, SystemAlert, UserAccount, UserSession, WorkGroup
 from app.v2_services import FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_memberships, groups_led_by, recalculate_attendance, role_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
@@ -35,6 +35,8 @@ from app.routers._shared import (
 )
 
 router = APIRouter()
+
+LOA_REGISTRAR_ROLE_CODES = {"TA_GSM", "GSM", "HR_CIRCLE"}
 
 
 def ensure_employee_number_change_target(db: Session, user: V2User, employee: Employee, role: Role | None = None) -> Role:
@@ -118,7 +120,7 @@ def employee_targets(
         # LOA registration deliberately permits its three authorized roles to
         # locate every active employee.  This expands lookup only, not any
         # other HR management scope.
-        if user.role.code not in {"TA_GSM", "GSM", "HR_CIRCLE"}:
+        if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
             raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以登记LOA")
         if not keyword.strip():
             return {"items": [], "total": 0, "limit": max(1, min(limit, 50)), "search_scope": "全部在职员工（请输入姓名或员工号）"}
@@ -187,6 +189,35 @@ def loa_period_payload(row: EmployeeLOAPeriod, employee: Employee | None = None)
     }
 
 
+def loa_today() -> date:
+    """Indirection so tests can pin the "today" used by the open-LOA horizon."""
+    return date.today()
+
+
+def loa_open_horizon(db: Session, employee_id: int, starts_on: date, *extra_dates: date) -> date:
+    """Return the first day of the last month an open-ended LOA must cover.
+
+    An open LOA excludes every month from its start onward.  Only months that
+    can already hold attendance rows need recalculation, so the horizon is the
+    latest of the start month, the current month, the employee's latest stored
+    attendance month and any extra dates supplied by the caller.
+    """
+    latest_month = (
+        db.query(func.max(AttendanceMonthlyScore.attendance_month))
+        .filter(AttendanceMonthlyScore.employee_id == employee_id)
+        .scalar()
+    )
+    candidates = [starts_on, loa_today(), *extra_dates]
+    if latest_month:
+        candidates.append(date.fromisoformat(f"{latest_month}-01"))
+    return max(candidates).replace(day=1)
+
+
+def loa_excluded_months(starts_on: date, ends_on: date | None, horizon: date) -> set[str]:
+    """Months an LOA excludes from scoring; open LOAs run up to ``horizon``."""
+    return set(months_between(starts_on, ends_on or horizon))
+
+
 @router.get("/loa-periods")
 def list_loa_periods(month: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
     query = db.query(EmployeeLOAPeriod).filter(EmployeeLOAPeriod.status != "cancelled")
@@ -202,7 +233,7 @@ def list_loa_periods(month: str | None = None, db: Session = Depends(get_db), us
 
 @router.post("/loa-periods")
 def create_loa_period(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
-    if user.role.code not in {"TA_GSM", "GSM", "HR_CIRCLE"}:
+    if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
         raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以登记LOA")
     try:
         employee_id = int(payload.get("employee_id") or 0)
@@ -226,7 +257,13 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
         starts_on = parse_iso_date(open_period.starts_on, "LOA进入日期")
         if ends_on < starts_on:
             raise HTTPException(400, "LOA结束日期不能早于进入日期")
-        for month in months_between(starts_on, ends_on):
+        # Closing an open LOA only changes months after the end month that the
+        # open period used to exclude; start..end stays excluded either way, so
+        # a closed start month must not block the completion.
+        horizon = loa_open_horizon(db, employee.id, starts_on, ends_on)
+        excluded_months = loa_excluded_months(starts_on, ends_on, horizon)
+        changed_months = sorted(loa_excluded_months(starts_on, None, horizon) ^ excluded_months)
+        for month in changed_months:
             ensure_month_open(db, month, employee.attraction_id, "登记LOA结束")
         try:
             before = loa_period_payload(open_period, employee)
@@ -236,7 +273,9 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
             open_period.ended_at = datetime.now()
             if str(payload.get("note") or "").strip():
                 open_period.note = str(payload.get("note")).strip()
-            for month in months_between(starts_on, ends_on):
+            # The session does not autoflush; recalculation must see the new end date.
+            db.flush()
+            for month in changed_months:
                 recalculate_attendance(db, employee, month)
             write_audit(db, user.employee, "登记LOA结束", "employee_loa_period", open_period.id, before=before, after=loa_period_payload(open_period, employee), ip_address=client_ip(request))
             db.commit()
@@ -244,10 +283,12 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
             db.rollback()
             raise
         invalidate_data_caches()
-        return {"ok": True, "record": loa_period_payload(open_period, employee), "excluded_months": months_between(starts_on, ends_on), "completed": True}
+        return {"ok": True, "record": loa_period_payload(open_period, employee), "excluded_months": sorted(excluded_months), "completed": True}
     if ends_on and ends_on < starts_on:
         raise HTTPException(400, "LOA结束日期不能早于进入日期")
-    affected_months = months_between(starts_on, ends_on or starts_on)
+    # A new LOA changes every month it excludes; an open one reaches every
+    # already-materialized month after its start as well.
+    affected_months = sorted(loa_excluded_months(starts_on, ends_on, loa_open_horizon(db, employee.id, starts_on)))
     for month in affected_months:
         ensure_month_open(db, month, employee.attraction_id, "登记LOA")
     overlap = db.query(EmployeeLOAPeriod).filter(
@@ -283,6 +324,8 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
 
 @router.delete("/loa-periods/{period_id}")
 def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
+    if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
+        raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以撤销LOA")
     row = db.get(EmployeeLOAPeriod, period_id)
     if not row or row.status == "cancelled":
         raise HTTPException(404, "LOA记录不存在或已撤销")
@@ -290,20 +333,23 @@ def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Sessi
     if not employee:
         raise HTTPException(404, "员工不存在")
     starts_on = parse_iso_date(row.starts_on, "LOA开始日期")
-    ends_on = parse_iso_date(row.ends_on or date.today().isoformat(), "LOA结束日期")
-    for month in months_between(starts_on, ends_on):
+    ends_on = parse_iso_date(row.ends_on, "LOA结束日期") if row.ends_on else None
+    # Cancelling restores every month the period excluded.
+    changed_months = sorted(loa_excluded_months(starts_on, ends_on, loa_open_horizon(db, employee.id, starts_on)))
+    for month in changed_months:
         ensure_month_open(db, month, employee.attraction_id, "撤销LOA")
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "请填写撤销原因")
     try:
         before = loa_period_payload(row, employee)
+        # ended_* keeps whoever registered the end date; the canceller is
+        # recorded by the audit entry below.
         row.status = "cancelled"
-        row.ended_by = user.id
-        row.ended_by_name = user.name
-        row.ended_at = datetime.now()
         row.note = f"{row.note or ''}\n撤销原因：{reason}".strip()
-        for month in months_between(starts_on, ends_on):
+        # The session does not autoflush; recalculation must see the cancellation.
+        db.flush()
+        for month in changed_months:
             recalculate_attendance(db, employee, month)
         write_audit(db, user.employee, "撤销LOA", "employee_loa_period", row.id, before=before, after=loa_period_payload(row, employee), reason=reason, ip_address=client_ip(request))
         db.commit()

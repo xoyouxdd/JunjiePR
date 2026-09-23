@@ -172,6 +172,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-second-audit-query-indexes", "ensure_second_audit_query_indexes"),
     ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
     ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
+    ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
 ]
 
 
@@ -494,48 +495,94 @@ def ensure_sick_leave_import_columns(db) -> None:
             db.execute(text(f"ALTER TABLE sick_leave_records ADD COLUMN {name} {definition}"))
     db.execute(text("UPDATE sick_leave_records SET leave_type='病假' WHERE leave_type IS NULL OR leave_type=''"))
     db.execute(text("UPDATE sick_leave_records SET import_source='manual' WHERE import_source IS NULL OR import_source=''"))
-    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_type ON sick_leave_records (leave_type, attendance_month, employee_id, status)"))
     db.commit()
 
     # SQLite cannot relax a NOT NULL constraint in place. Rebuild only when an
     # existing database still requires proof_file_id, preserving every row.
     proof_column = columns.get("proof_file_id")
-    if not proof_column or not proof_column[3]:
-        return
-    db.execute(text("PRAGMA foreign_keys=OFF"))
-    db.execute(text("ALTER TABLE sick_leave_records RENAME TO sick_leave_records_legacy_import"))
-    db.execute(
-        text(
-            "CREATE TABLE sick_leave_records ("
-            "id INTEGER NOT NULL PRIMARY KEY, employee_id INTEGER NOT NULL REFERENCES employees(id), "
-            "employee_no_snapshot VARCHAR(50), employee_name_snapshot VARCHAR(100), employee_role_snapshot VARCHAR(30), "
-            "attraction_id_snapshot INTEGER, attendance_month VARCHAR(7) NOT NULL, leave_start_date VARCHAR(10) NOT NULL, "
-            "leave_end_date VARCHAR(10) NOT NULL, leave_days NUMERIC(6,1) NOT NULL, charged_days NUMERIC(6,1) NOT NULL, "
-            "proof_file_id INTEGER REFERENCES stored_files(id), leave_type VARCHAR(30) NOT NULL DEFAULT '病假', "
-            "import_source VARCHAR(30) NOT NULL DEFAULT 'manual', is_violation BOOLEAN NOT NULL DEFAULT 0, "
-            "violation_deduction_id INTEGER UNIQUE REFERENCES deduction_records(id), note TEXT, status VARCHAR(20) NOT NULL DEFAULT 'active', "
-            "submitted_by INTEGER NOT NULL REFERENCES employees(id), submitted_by_name VARCHAR(100) NOT NULL, submitted_at DATETIME NOT NULL, "
-            "voided_by INTEGER REFERENCES employees(id), voided_by_name VARCHAR(100), voided_by_role_code VARCHAR(30), "
-            "voided_by_role_name VARCHAR(30), void_permission_scope_snapshot VARCHAR(255), voided_from_status VARCHAR(20), "
-            "voided_at DATETIME, void_reason TEXT)"
-        )
-    )
-    db.execute(
-        text(
-            "INSERT INTO sick_leave_records SELECT id, employee_id, employee_no_snapshot, employee_name_snapshot, employee_role_snapshot, "
-            "attraction_id_snapshot, attendance_month, leave_start_date, leave_end_date, leave_days, charged_days, proof_file_id, "
-            "COALESCE(leave_type, '病假'), COALESCE(import_source, 'manual'), is_violation, violation_deduction_id, note, status, "
-            "submitted_by, submitted_by_name, submitted_at, voided_by, voided_by_name, voided_by_role_code, voided_by_role_name, "
-            "void_permission_scope_snapshot, voided_from_status, voided_at, void_reason FROM sick_leave_records_legacy_import"
-        )
-    )
-    db.execute(text("DROP TABLE sick_leave_records_legacy_import"))
-    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_month_employee_status ON sick_leave_records (attendance_month, employee_id, status)"))
-    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_pr_ranking ON sick_leave_records (status, leave_start_date, leave_end_date, employee_id)"))
-    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_type ON sick_leave_records (leave_type, attendance_month, employee_id, status)"))
-    db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sick_leave_violation_deduction ON sick_leave_records (violation_deduction_id) WHERE violation_deduction_id IS NOT NULL"))
-    db.execute(text("PRAGMA foreign_keys=ON"))
+    if proof_column and proof_column[3]:
+        _rebuild_sick_leave_records(db)
+    ensure_sick_leave_record_indexes(db)
+
+
+# Hand-written composite/partial indexes on sick_leave_records. Column-level
+# indexes come from SickLeaveRecord.__table__.indexes.
+SICK_LEAVE_EXTRA_INDEX_STATEMENTS = (
+    "CREATE INDEX IF NOT EXISTS ix_sick_leave_month_employee_status ON sick_leave_records (attendance_month, employee_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_sick_leave_pr_ranking ON sick_leave_records (status, leave_start_date, leave_end_date, employee_id)",
+    "CREATE INDEX IF NOT EXISTS ix_sick_leave_type ON sick_leave_records (leave_type, attendance_month, employee_id, status)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_sick_leave_violation_deduction ON sick_leave_records (violation_deduction_id) WHERE violation_deduction_id IS NOT NULL",
+)
+
+
+def ensure_sick_leave_record_indexes(db) -> None:
+    """Idempotently create every model and hand-written sick leave index.
+
+    Also repairs databases where the first 2026.09.23.1 rebuild dropped the
+    SQLAlchemy column-level indexes.
+    """
+    from app.v2_models import SickLeaveRecord
+
+    connection = db.connection()
+    for index in SickLeaveRecord.__table__.indexes:
+        index.create(bind=connection, checkfirst=True)
+    for statement in SICK_LEAVE_EXTRA_INDEX_STATEMENTS:
+        db.execute(text(statement))
     db.commit()
+
+
+def _foreign_key_violations(db, table_name: str) -> set[tuple]:
+    return {(row[1], row[2]) for row in db.execute(text(f"PRAGMA foreign_key_check({table_name})"))}
+
+
+def _rebuild_sick_leave_records(db) -> None:
+    """Rebuild sick_leave_records from the model definition in one transaction.
+
+    Follows the SQLite "other kinds of table schema changes" procedure: create
+    the new table under a temporary name, copy, drop the old table, then rename.
+    Indexes are recreated afterwards by ensure_sick_leave_record_indexes.
+    """
+    from sqlalchemy.schema import CreateTable
+
+    from app.v2_models import SickLeaveRecord
+
+    table = SickLeaveRecord.__table__
+    temp_name = "sick_leave_records_rebuild"
+    create_sql = str(CreateTable(table).compile(dialect=db.get_bind().dialect)).strip()
+    prefix = f"CREATE TABLE {table.name} ("
+    if not create_sql.startswith(prefix):
+        raise RuntimeError(f"Unexpected DDL for {table.name}: {create_sql[:80]}")
+    create_sql = f"CREATE TABLE {temp_name} (" + create_sql[len(prefix):]
+
+    existing = {row[1] for row in db.execute(text("PRAGMA table_info(sick_leave_records)"))}
+    copy_columns = ", ".join(column.name for column in table.columns if column.name in existing)
+
+    # PRAGMA foreign_keys is a no-op inside a transaction, so switch it off
+    # before BEGIN and back on only after COMMIT/ROLLBACK.
+    db.commit()
+    db.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+        dbapi_connection = db.connection().connection.dbapi_connection
+        if not dbapi_connection.in_transaction:
+            db.execute(text("BEGIN"))
+        preexisting_violations = _foreign_key_violations(db, "sick_leave_records")
+        db.execute(text(f"DROP TABLE IF EXISTS {temp_name}"))
+        db.execute(text(create_sql))
+        db.execute(text(f"INSERT INTO {temp_name} ({copy_columns}) SELECT {copy_columns} FROM sick_leave_records"))
+        db.execute(text("DROP TABLE sick_leave_records"))
+        db.execute(text(f"ALTER TABLE {temp_name} RENAME TO sick_leave_records"))
+        # Rows are copied verbatim, so only violations the rebuild itself
+        # introduced (e.g. a column mapping error) abort the migration.
+        new_violations = _foreign_key_violations(db, "sick_leave_records") - preexisting_violations
+        if new_violations:
+            raise RuntimeError(f"sick_leave_records rebuild broke foreign keys: {sorted(new_violations)[:10]}")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.execute(text("PRAGMA foreign_keys=ON"))
+        db.commit()
 
 
 def disable_test_accounts(db) -> None:

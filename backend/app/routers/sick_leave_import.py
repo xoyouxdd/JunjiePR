@@ -29,6 +29,10 @@ _MAX_CACHED_PREVIEWS = 8
 _MAX_CACHED_BYTES = 40 * 1024 * 1024
 _PREVIEW_TTL = timedelta(minutes=20)
 _SICK_TYPES = {"法定病假", "全薪病假", "无薪病假"}
+_SOURCE_ID_LENGTH = 8
+_TRANSACTION_MARKERS = ("事务:", "事务：")
+_SUMMARY_MARKERS = ("总数:", "总数：")
+_PREVIEW_EXPIRED_MESSAGE = "预检结果已失效（超时、服务重启或被较新的预检挤出），请重新上传文件预检"
 
 
 def _prune_previews(now: datetime) -> None:
@@ -67,11 +71,12 @@ def _cell(row: list, index: int) -> str:
     return str(row[index]).strip() if index < len(row) and row[index] not in (None, "") else ""
 
 
-def _find_row(sheet, label: str) -> int:
+def _find_row(sheet, labels: tuple[str, ...]) -> int:
+    """Locate a block marker; half- and full-width colons are both accepted."""
     for index in range(sheet.nrows):
-        if any(_cell(sheet.row_values(index), column) == label for column in range(sheet.ncols)):
+        if any(_cell(sheet.row_values(index), column) in labels for column in range(sheet.ncols)):
             return index
-    raise HTTPException(400, f"未找到“{label}”区块")
+    raise HTTPException(400, f"未找到“{labels[0]}”区块")
 
 
 def _header_index(row: list, name: str) -> int:
@@ -82,23 +87,49 @@ def _header_index(row: list, name: str) -> int:
 
 
 def _date_value(book, value) -> str:
-    if isinstance(value, float):
-        return xlrd.xldate_as_datetime(value, book.datemode).date().isoformat()
-    raw = str(value).strip().replace("/", "-")
     try:
-        return date.fromisoformat(raw).isoformat()
-    except ValueError as exc:
-        raise HTTPException(400, f"事务日期无效：{value}") from exc
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return xlrd.xldate_as_datetime(value, book.datemode).date().isoformat()
+        return date.fromisoformat(str(value).strip().replace("/", "-")).isoformat()
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(f"事务日期无效：{value}") from exc
+
+
+def _hours_value(value) -> Decimal:
+    """Parse an hours cell; xlrd returns numeric cells as float (e.g. 8.0)."""
+    raw = repr(value) if isinstance(value, float) else str(value).strip()
+    try:
+        return Decimal(raw).quantize(Decimal("0.01"))
+    except ArithmeticError as exc:
+        raise ValueError(f"时数无效：{value}") from exc
 
 
 def _chinese_name(value: str) -> str:
     return value.split(",")[-1].strip().replace("，", "").strip()
 
 
+def _source_id(value) -> str:
+    """Normalize an ID cell to the 8-digit source ID.
+
+    Numeric-formatted cells come back from xlrd as float (1727264.0) and have
+    lost their leading zeros, so they are converted to int text and left-padded.
+    Text cells are taken as-is and validated by _system_number.
+    """
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"源文件 ID 必须为 {_SOURCE_ID_LENGTH} 位数字：{value}")
+        value = int(value)
+    if isinstance(value, int):
+        return str(value).zfill(_SOURCE_ID_LENGTH) if value >= 0 else str(value)
+    return str(value).strip() if value is not None else ""
+
+
 def _system_number(source_id: str) -> str:
     value = str(source_id).strip()
-    if len(value) < 2 or not value.isdigit():
-        raise ValueError("源文件 ID 必须为数字且至少两位")
+    if len(value) != _SOURCE_ID_LENGTH or not value.isdigit():
+        raise ValueError(f"源文件 ID 必须为 {_SOURCE_ID_LENGTH} 位数字：{value or '空'}")
     return value[1:]
 
 
@@ -108,8 +139,8 @@ def _read_workbook(content: bytes) -> tuple[list[dict], dict[tuple[str, str], De
     except xlrd.biffh.XLRDError as exc:
         raise HTTPException(400, "仅支持 Excel 97-2003 格式（.xls）文件") from exc
     sheet = book.sheet_by_index(0)
-    transaction_marker = _find_row(sheet, "事务:")
-    summary_marker = _find_row(sheet, "总数:")
+    transaction_marker = _find_row(sheet, _TRANSACTION_MARKERS)
+    summary_marker = _find_row(sheet, _SUMMARY_MARKERS)
     transaction_header = sheet.row_values(transaction_marker + 2)
     summary_header = sheet.row_values(summary_marker + 3)
     t_name, t_id, t_date, t_type, t_hours = (_header_index(transaction_header, label) for label in ("员工", "ID", "日期", "工资代码", "时数"))
@@ -121,12 +152,13 @@ def _read_workbook(content: bytes) -> tuple[list[dict], dict[tuple[str, str], De
         leave_type = _cell(row, t_type)
         if leave_type not in _SICK_TYPES:
             continue
-        source_id, source_name = _cell(row, t_id), _cell(row, t_name)
+        source_name = _cell(row, t_name)
         try:
-            hours = Decimal(_cell(row, t_hours)).quantize(Decimal("0.01"))
+            source_id = _source_id(row[t_id])
+            hours = _hours_value(row[t_hours])
             employee_no = _system_number(source_id)
             leave_date = _date_value(book, row[t_date])
-        except (ArithmeticError, ValueError, IndexError) as exc:
+        except (ValueError, IndexError) as exc:
             errors.append(f"事务区第 {row_index + 1} 行：{exc}")
             continue
         if hours <= 0 or hours % 4 != 0:
@@ -144,10 +176,14 @@ def _read_workbook(content: bytes) -> tuple[list[dict], dict[tuple[str, str], De
         if summary_type not in {"病假时间总计", "无薪病假"}:
             continue
         try:
-            source_id = _cell(row, s_id)
-            summaries[(source_id, summary_type)] = Decimal(_cell(row, s_hours)).quantize(Decimal("0.01"))
-        except ArithmeticError:
-            errors.append(f"总数区第 {row_index + 1} 行：时数无效")
+            # Same normalization as the transaction block so _reconcile keys match.
+            source_id = _source_id(row[s_id])
+            _system_number(source_id)
+            hours = _hours_value(row[s_hours])
+        except (ValueError, IndexError) as exc:
+            errors.append(f"总数区第 {row_index + 1} 行：{exc}")
+            continue
+        summaries[(source_id, summary_type)] = hours
     return records, summaries, errors
 
 
@@ -222,7 +258,7 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
     token = str(payload.get("token") or "")
     preview = _get_preview(token, user.id)
     if not preview:
-        raise HTTPException(400, "预检结果已失效，请重新上传文件")
+        raise HTTPException(400, _PREVIEW_EXPIRED_MESSAGE)
     if preview["errors"] or not preview["matched"]:
         raise HTTPException(400, "预检未通过，不能覆盖")
     month = preview["month"]
@@ -282,7 +318,7 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
 def download_unmatched_sick_leave_file(token: str, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SICK_LEAVE_IMPORT"))):
     preview = _get_preview(token, user.id)
     if not preview:
-        raise HTTPException(404, "未找到该预检文件")
+        raise HTTPException(404, _PREVIEW_EXPIRED_MESSAGE)
     try:
         source = xlrd.open_workbook(file_contents=preview["content"])
     except (KeyError, xlrd.biffh.XLRDError) as exc:
