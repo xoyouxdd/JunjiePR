@@ -36,6 +36,8 @@ $env:RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD = "由负责人现场设置的初始�
 
 `run_all.py` 用当前解释器逐个文件起子进程，工作目录固定为 `backend/`，所以在仓库根目录直接执行即可。
 
+中文 Windows 默认按 GBK 读取子进程输出，`test_audit_score_rules.py` 会因此报 `UnicodeDecodeError`。跑测试前先在同一个 PowerShell 里执行 `$env:PYTHONUTF8 = "1"`。
+
 不要用一次 `pytest tests` 代替。单文件可以：
 
 ```powershell

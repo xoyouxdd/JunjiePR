@@ -27,6 +27,6 @@ def test_visual_system_keeps_semantic_status_and_mobile_action_styles() -> None:
         ".status-chip",
         ".action-center-empty",
         ".action-card-side",
-        "@media (max-width: 700px)",
+        "@media (max-width: 760px)",
     ):
         assert marker in css

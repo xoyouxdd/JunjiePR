@@ -7,6 +7,33 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.23.3",
+        "date": "2026-09-23",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "平板和大屏布局优化",
+                "detail": "平板和窄屏电脑上，筛选表单改为自动换行，不再出现横向滚动；左侧图标栏在图标下显示菜单名称。超宽屏幕上内容区最宽 1440px 并居中。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "手机端显示修正",
+                "detail": "登录页副标题不再被登录框遮挡；顶栏避让刘海屏状态栏；底部导航的待办角标不再撑高导航栏，页面底部的操作按钮不会被遮住；「更多」菜单改为横排图标加名称。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "月度趋势图在手机上可读",
+                "detail": "趋势图按屏幕宽度绘制，手机上坐标文字不再缩小；月份较多时自动间隔显示。较上月的变化会标注「改善」或「变差」，扣分增加算作变差。",
+                "audiences": ["GSM", "AM", "OM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "配色、键盘操作与动效统一",
+                "detail": "状态颜色统一为红、琥珀、绿、蓝四组，次要文字加深便于阅读；键盘切换时有统一的焦点框；弹窗和「更多」菜单打开关闭时有过渡动画，系统设置了减少动效时自动关闭动画。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.23.2",
         "date": "2026-09-23",
         "status": "candidate",

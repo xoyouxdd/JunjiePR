@@ -28,13 +28,15 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert 'enterkeyhint="next"' in login
     assert 'enterkeyhint="go"' in login
     assert 'data-password-toggle' in login
-    assert 'align-items: start' not in css[css.index('.login-body {\n    min-height: 100svh'):css.index('.login-panel { padding: 20px 16px')]
+    assert 'align-items: start' not in css[css.index('.login-body {\n    min-height: 100svh'):css.index('.login-panel { width: 100%; padding: 24px 20px')]
     assert '.login-panel input:focus' in css
     assert 'box-shadow: 0 0 0 3px rgba(18,103,216,.15)' in css
     assert '.login-panel .primary:active' in css
     assert '.login-panel label:focus-within' in css
     assert '#loginMsg.message.error' in css
-    assert 'linear-gradient(to bottom, var(--surface-dark) 0 38%, var(--surface-soft) 38%)' in css
+    # The mobile dark band belongs to the hero, so the subtitle never straddles the colour edge.
+    assert 'clip-path: inset(-100vmax -100vmax 0 -100vmax)' in css
+    assert 'linear-gradient(to bottom, var(--surface-dark) 0 38%' not in css
     assert '@media (min-width: 761px)' in css
     assert '.login-shell .login-panel' in css
     assert 'junjiepr.login.employee_no' in login_js
@@ -64,7 +66,7 @@ def test_hr_new_employee_form_has_responsive_field_and_action_layout() -> None:
     assert "hr-create-actions" in script
     assert "创建账号" in script
     assert "grid-template-columns: minmax(210px, 1.2fr)" in css
-    assert "@media (min-width: 761px) and (max-width: 1180px)" in css
+    assert "@media (min-width: 761px) and (max-width: 1199px)" in css
     assert "#newEmployee .hr-create-actions button { width: 100%" in css
 
 
@@ -85,7 +87,7 @@ def test_desktop_sidebar_keeps_mobile_bottom_nav() -> None:
     assert "tabs-mobile" in script
     assert "data-open-more" in script
     assert "body.has-nav .app-frame { grid-template-columns: 232px minmax(0, 1fr); }" in css
-    assert "body.has-nav .app-frame { grid-template-columns: 72px minmax(0, 1fr); }" in css
+    assert "body.has-nav .app-frame { grid-template-columns: 88px minmax(0, 1fr); }" in css
     assert "@media (min-width: 761px) and (max-width: 1199px)" in css
     assert "position: fixed" in css[css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") : css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") + 220]
     assert "bottom: 0" in css[css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") : css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") + 220]
