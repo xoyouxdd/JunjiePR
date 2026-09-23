@@ -111,9 +111,9 @@ def _chinese_name(value: str) -> str:
 def _source_id(value) -> str:
     """Normalize an ID cell to the 8-digit source ID.
 
-    Numeric-formatted cells come back from xlrd as float (1727264.0) and have
-    lost their leading zeros, so they are converted to int text and left-padded.
-    Text cells are taken as-is and validated by _system_number.
+    Leading zeros can be lost either way: numeric-formatted cells come back
+    from xlrd as float (1727264.0), and text cells may be exported as "1727264".
+    Both are left-padded; the name check during preview still guards the match.
     """
     if isinstance(value, bool):
         return str(value)
@@ -123,7 +123,8 @@ def _source_id(value) -> str:
         value = int(value)
     if isinstance(value, int):
         return str(value).zfill(_SOURCE_ID_LENGTH) if value >= 0 else str(value)
-    return str(value).strip() if value is not None else ""
+    text = str(value).strip() if value is not None else ""
+    return text.zfill(_SOURCE_ID_LENGTH) if text.isdigit() else text
 
 
 def _system_number(source_id: str) -> str:

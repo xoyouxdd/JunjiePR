@@ -18,8 +18,8 @@ RELEASES: list[dict] = [
                 "permissions": ["LOA_REGISTER"],
             },
             {
-                "summary": "病假导入兼容数字格式员工ID",
-                "detail": "事务文件中数字格式的员工ID会补齐前导0后再匹配；预检失效时提示更明确。",
+                "summary": "病假导入自动补齐员工ID前导0",
+                "detail": "事务文件中丢失前导0的员工ID（数字或文本格式）会补齐后再匹配；预检失效时提示更明确。",
                 "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
                 "permissions": ["SICK_LEAVE_IMPORT"],
             },
