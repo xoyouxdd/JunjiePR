@@ -16,7 +16,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, DeductionRecord, DeductionType, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, ManagementScope, RecognitionRecord, RecognitionType, Role, SickLeaveRecord, WorkGroup
 from app.score_queries import employee_month_scores
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, direct_member_ids, ensure_month_attendance, full_month_loa, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, direct_member_ids, ensure_month_attendance, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export_utils import content_disposition
 from app.excel_export import build_pr_rankings_workbook, build_statistics_workbook
@@ -982,7 +982,18 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
     for attraction_key, attraction in sorted(attractions.items(), key=lambda item: item[1]["name"]):
         attraction_id = f"attraction-{attraction_key or 'none'}"
         result.append({"node_id": attraction_id, "parent_id": "", "level": 0, "node_type": "attraction", "name": attraction["name"]})
-        for manager_key, manager in sorted(attraction["managers"].items(), key=lambda item: item[1]["name"]):
+        for manager_key, manager in sorted(
+            attraction["managers"].items(),
+            key=lambda item: (
+                -sum(
+                    employee["total_score"]
+                    for leader in item[1]["leaders"].values()
+                    for employee in leader["employees"]
+                ),
+                item[1]["name"],
+                str(item[0]),
+            ),
+        ):
             manager_id = f"{attraction_id}-gsm-{manager_key or 'none'}"
             gsms = manager["gsms"]
             ta_gsms = manager["ta_gsms"]
@@ -1010,9 +1021,22 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
                 manager_id = f"{manager_id}-employee-{gsms[0][0].id}"
             else:
                 result.append({"node_id": manager_id, "parent_id": attraction_id, "level": 1, "node_type": "gsm", "name": manager["name"], "role_name": manager["role_name"]})
-            for leader_key, leader in sorted(manager["leaders"].items(), key=lambda item: item[1]["name"]):
+            # Sort the supervisor groups and their member rows independently by
+            # comprehensive score. Names/numbers only break score ties.
+            for leader_key, leader in sorted(
+                manager["leaders"].items(),
+                key=lambda item: (
+                    item[1]["name"] == "未配置主管",
+                    -sum(employee["total_score"] for employee in item[1]["employees"]),
+                    item[1]["name"],
+                    item[0],
+                ),
+            ):
                 leader_id = f"{manager_id}-leader-{leader_key}"
-                sorted_employees = sorted(leader["employees"], key=lambda item: (item["employee_name"], item["employee_no"]))
+                sorted_employees = sorted(
+                    leader["employees"],
+                    key=lambda item: (-item["total_score"], item["employee_name"], item["employee_no"]),
+                )
                 leader_recognition_score = round(sum(employee["recognition_score"] for employee in leader["employees"]), 2)
                 leader_deduction_score = round(sum(employee["deduction_score"] for employee in leader["employees"]), 2)
                 leader_attendance_score = round(sum(employee["attendance_score"] for employee in leader["employees"]), 2)
@@ -1145,11 +1169,37 @@ def statistics_payload(
     loa_rows = []
     filtered_score_rows = []
     for row in score_rows:
-        if full_month_loa(db, int(row["employee_id"]), month):
-            loa_rows.append({**row, "employment_status": "LOA（长期病假）"})
+        if loa_excludes_month(db, int(row["employee_id"]), month):
+            loa_rows.append({
+                **row,
+                "recognition_score": 0,
+                "attendance_score": 0,
+                "deduction_score": 0,
+                "total_score": 0,
+                "employment_status": "LOA（当月不参与计分）",
+            })
         else:
             filtered_score_rows.append(row)
     score_rows = filtered_score_rows
+    loa_period_payloads = []
+    if candidate_ids:
+        for period in (
+            db.query(EmployeeLOAPeriod)
+            .filter(
+                EmployeeLOAPeriod.employee_id.in_(candidate_ids),
+                EmployeeLOAPeriod.status != "cancelled",
+                EmployeeLOAPeriod.starts_on <= month_end,
+                or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= month_start.isoformat()),
+            )
+            .order_by(EmployeeLOAPeriod.starts_on, EmployeeLOAPeriod.id)
+            .all()
+        ):
+            loa_period_payloads.append({
+                "employee_id": period.employee_id,
+                "starts_on": max(period.starts_on, month_start.isoformat()),
+                "ends_on": min(period.ends_on or month_end, month_end),
+                "note": period.note or "",
+            })
     visible_employee_ids = {
         int(row["employee_id"])
         for row in [*score_rows, *loa_rows]
@@ -1253,6 +1303,7 @@ def statistics_payload(
         },
         "hierarchy": statistics_hierarchy(db, score_rows, month_end, user) if user and include_hierarchy else [],
         "loa_rows": loa_rows,
+        "loa_periods": loa_period_payloads,
         "by_attraction": sorted(attraction_totals.values(), key=lambda item: str(item["attraction_name"])),
     }
     if include_records:
@@ -1319,6 +1370,12 @@ def statistics_details_payload(db: Session, month: str, employee_ids: list[int])
             sick_leave_groups[employee_id],
             attendance_rows.get(employee_id),
         )
+        if loa_excludes_month(db, employee_id, month):
+            detail["details"]["recognition_score"] = 0
+            detail["details"]["attendance_score"] = 0
+            detail["details"]["deduction_score"] = 0
+            detail["details"]["total_score"] = 0
+            detail["details"]["loa_excluded"] = True
         # Keep the established detail lists while returning the identity fields
         # used by the dedicated statistics-detail page title.
         result[str(employee_id)] = {**detail["details"], **{key: detail[key] for key in ("employee_id", "employee_no", "employee_name", "role_name")}}

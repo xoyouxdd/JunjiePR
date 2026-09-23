@@ -293,6 +293,30 @@ textarea { min-height: 92px; resize: vertical; }
 .employee-selected > div { display: grid; grid-template-columns: auto auto; align-items: center; justify-content: start; gap: 5px 8px; min-width: 0; }
 .employee-selected small { grid-column: 1 / -1; }
 .employee-selected button { width: auto; flex: 0 0 auto; }
+.loa-page { max-width: 1180px; }
+.loa-workflow { max-width: none; }
+.loa-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.loa-heading h2 { margin-bottom: 6px; }
+.loa-heading p { margin: 0; }
+.loa-step { display: grid; gap: 10px; padding: 16px; border: 1px solid #dbe6f3; border-radius: 10px; background: #f8fbff; }
+.loa-state { margin: 0; padding: 13px 16px; border-radius: 10px; }
+.loa-state p { margin: 5px 0 0; }
+.loa-page .form-stack { gap: 16px; }
+.loa-page .form-sticky-actions { margin-top: 2px; }
+.loa-page .form-sticky-actions button { min-width: 180px; }
+.loa-step .grid.two > label { align-content: start; }
+.loa-step #loaEndField[hidden] { display: none !important; }
+.loa-date-locked input { background: #edf1f5; color: #64748b; border-color: #d7dee7; cursor: not-allowed; }
+.loa-record-end { display: flex; align-items: center; gap: 8px; min-width: 268px; }
+.loa-record-end input { box-sizing: border-box; width: 142px; min-height: 36px; margin: 0; }
+.loa-record-end button { min-height: 36px; white-space: nowrap; }
+@media (max-width: 760px) {
+  .loa-heading { align-items: stretch; flex-direction: column; }
+  .loa-heading .badge { align-self: flex-start; }
+  .loa-step, .loa-state { padding: 12px; }
+  .loa-record-end { min-width: 236px; }
+  .loa-record-end input { width: 128px; }
+}
 button {
   min-height: 44px;
   border: 0;

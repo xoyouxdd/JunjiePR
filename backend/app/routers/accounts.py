@@ -17,6 +17,7 @@ from app.routers._shared import (
     client_ip,
     ensure_scoped_hr_employee,
     invalidate_data_caches,
+    like_escaped_pattern,
     login_account_archive_state,
 )
 
@@ -134,13 +135,22 @@ def reset_employee_password(
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("PASSWORD_RESET")),
 ):
-    employee_no = str(payload.get("employee_no") or "").strip()
-    name = str(payload.get("name") or "").strip()
-    if not employee_no or not name:
-        raise HTTPException(400, "员工号和姓名必填")
-    employee = db.query(Employee).filter(Employee.employee_no == employee_no).first()
-    if not employee or employee.name != name:
-        raise HTTPException(400, "员工号或姓名不匹配")
+    employee_id = payload.get("employee_id")
+    if employee_id not in (None, ""):
+        try:
+            employee = db.get(Employee, int(employee_id))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "请选择有效员工") from exc
+        if not employee:
+            raise HTTPException(400, "员工不存在")
+    else:
+        employee_no = str(payload.get("employee_no") or "").strip()
+        name = str(payload.get("name") or "").strip()
+        if not employee_no or not name:
+            raise HTTPException(400, "请选择员工")
+        employee = db.query(Employee).filter(Employee.employee_no == employee_no).first()
+        if not employee or employee.name != name:
+            raise HTTPException(400, "员工号或姓名不匹配")
     target_role = role_at(db, employee.id)
     if not target_role:
         raise HTTPException(400, "该员工当前没有有效角色")
@@ -190,6 +200,42 @@ def reset_employee_password(
         "must_change_password": True,
         "sessions_revoked": True,
     }
+
+
+@router.get("/accounts/reset-targets")
+def reset_password_targets(
+    keyword: str = "",
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    user: V2User = Depends(require_permissions("PASSWORD_RESET")),
+):
+    value = str(keyword or "").strip()
+    if not value:
+        return {"items": [], "total": 0}
+    pattern = like_escaped_pattern(value)
+    candidates = (
+        db.query(Employee)
+        .join(UserAccount, UserAccount.employee_id == Employee.id)
+        .filter(or_(Employee.employee_no.like(pattern, escape="\\"), Employee.name.like(pattern, escape="\\")))
+        .order_by(Employee.name, Employee.employee_no)
+        .limit(max(1, min(int(limit or 30), 50)) * 3)
+        .all()
+    )
+    rows = []
+    for employee in candidates:
+        role = role_at(db, employee.id)
+        if not role or role.code in {"HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"}:
+            continue
+        try:
+            ensure_scoped_hr_employee(db, user, employee)
+        except HTTPException:
+            continue
+        if user.role.code == SCOPED_HR_ROLE_CODE and role.code not in CIRCLE_HR_MANAGED_ROLE_CODES:
+            continue
+        if user.role.code == "GSM" and employee.attraction_id not in managed_attraction_ids(db, user.id):
+            continue
+        rows.append({"id": employee.id, "employee_no": employee.employee_no, "name": employee.name, "role_code": role.code, "role_name": role.name, "attraction_id": employee.attraction_id, "attraction_name": employee.attraction.name if employee.attraction else "未分配景点圈", "group_name": ""})
+    return {"items": rows[:max(1, min(int(limit or 30), 50))], "total": len(rows)}
 
 
 @router.get("/accounts/name-targets")

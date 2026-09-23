@@ -720,7 +720,9 @@
 | `leave_end_date` | VARCHAR(10) | 否 | |
 | `leave_days` | NUMERIC(6,1) | 否 | |
 | `charged_days` | NUMERIC(6,1) | 否 | |
-| `proof_file_id` | INTEGER | 否 | FK → `stored_files.id` |
+| `proof_file_id` | INTEGER | 是 | FK → `stored_files.id`；月度病假事务导入无需附件 |
+| `leave_type` | VARCHAR(30) | 否 | 默认 `病假` |
+| `import_source` | VARCHAR(30) | 否 | 默认 `manual` |
 | `is_violation` | BOOLEAN | 否 | 违规病假 |
 | `violation_deduction_id` | INTEGER | 是 | FK → `deduction_records.id`，UNIQUE |
 | `note` | TEXT | 是 | |

@@ -599,6 +599,7 @@ EMPLOYEE_TARGET_PERMISSIONS = {
     "recognition": {"EMPLOYEE_ADD"},
     "deduction": {"DEDUCTION_DIRECT", "DEDUCTION_ALL"},
     "attendance": {"SICK_REGISTER"},
+    "loa": {"LOA_REGISTER"},
     "circle_transfer": {"HR_MANAGE"},
     "poc": {"POC_ISSUE"},
 }
@@ -954,7 +955,7 @@ def statement_upgrade_reviewer_options(db: Session) -> list[dict]:
 
 def sick_leave_payload(db: Session, row: SickLeaveRecord, *, employees: dict[int, Employee] | None = None, files: dict[int, StoredFile] | None = None) -> dict:
     employee = (employees or {}).get(row.employee_id) or db.get(Employee, row.employee_id)
-    proof_file = (files or {}).get(row.proof_file_id) or db.get(StoredFile, row.proof_file_id)
+    proof_file = (files or {}).get(row.proof_file_id) or (db.get(StoredFile, row.proof_file_id) if row.proof_file_id else None)
     status_names = {"active": "已生效", "void": "已作废"}
     return {
         "record_type": "sick_leave",
@@ -967,6 +968,8 @@ def sick_leave_payload(db: Session, row: SickLeaveRecord, *, employees: dict[int
         "leave_end_date": row.leave_end_date,
         "leave_days": float(row.leave_days),
         "charged_days": float(row.charged_days),
+        "leave_type": row.leave_type or "病假",
+        "import_source": row.import_source or "manual",
         "note": row.note or "",
         "submitter_id": row.submitted_by,
         "submitter_name": row.submitted_by_name,
@@ -980,9 +983,9 @@ def sick_leave_payload(db: Session, row: SickLeaveRecord, *, employees: dict[int
         "void_permission_scope": row.void_permission_scope_snapshot or "",
         "voided_from_status": row.voided_from_status or "",
         "voided_at": row.voided_at.strftime("%Y-%m-%d %H:%M:%S") if row.voided_at else "",
-        "proof_url": f"/api/files/{row.proof_file_id}",
-        "proof_is_previewable": is_previewable_image(proof_file),
-        "proof_preview_kind": preview_kind(proof_file),
+        "proof_url": f"/api/files/{row.proof_file_id}" if row.proof_file_id else "",
+        "proof_is_previewable": bool(proof_file and is_previewable_image(proof_file)),
+        "proof_preview_kind": preview_kind(proof_file) if proof_file else "",
         "is_violation": bool(row.is_violation),
         "violation_deduction_id": row.violation_deduction_id or 0,
         "available_actions": ["void"] if row.status == "active" else [],
@@ -992,7 +995,7 @@ def sick_leave_payload(db: Session, row: SickLeaveRecord, *, employees: dict[int
 def sick_leave_payloads(db: Session, rows: list[SickLeaveRecord]) -> list[dict]:
     """Serialize many sick-leave rows with batched employee/proof lookups."""
     employee_ids = {row.employee_id for row in rows}
-    file_ids = {row.proof_file_id for row in rows}
+    file_ids = {row.proof_file_id for row in rows if row.proof_file_id}
     employees = (
         {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()}
         if employee_ids

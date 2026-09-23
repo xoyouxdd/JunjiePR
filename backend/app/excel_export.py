@@ -202,13 +202,13 @@ def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role]
     finish_supervisor()
 
     if data.get("loa_rows"):
-        ws.append(["整月 LOA（未参与计分）"])
+        ws.append(["LOA 当月不参与计分"])
         loa_header_row = ws.max_row
         for cell in ws[loa_header_row]:
             cell.fill = loa_fill
             cell.font = Font(bold=True, color="666666")
         for row in sorted(data["loa_rows"], key=lambda item: (str(item.get("attraction_name") or ""), str(item.get("employee_name") or ""), str(item.get("employee_no") or ""))):
-            row_number = write_monthly_score_row(ws, row, loa_roles.get(int(row["employee_id"])), "LOA（长期病假）")
+            row_number = write_monthly_score_row(ws, row, loa_roles.get(int(row["employee_id"])), "LOA（当月不参与计分）")
             ws.row_dimensions[row_number].outlineLevel = 1
             for cell in ws[row_number]:
                 cell.fill = loa_fill
@@ -233,11 +233,34 @@ def write_monthly_score_detail_sheet(ws, rows: list[dict], loa_rows: list[dict],
     for row in rows:
         write_monthly_score_row(ws, row, export_roles.get(int(row["employee_id"])))
     for row in loa_rows:
-        write_monthly_score_row(ws, row, loa_roles.get(int(row["employee_id"])), "LOA（长期病假）")
+        write_monthly_score_row(ws, row, loa_roles.get(int(row["employee_id"])), "LOA（当月不参与计分）")
     for col in (5, 6, 7, 8):
         for cell in ws.iter_cols(min_col=col, max_col=col, min_row=2):
             cell[0].number_format = "0.00"
     style_sheet(ws, landscape=True)
+
+
+def write_loa_detail_sheet(ws, rows: list[dict], employees: dict[int, Employee], roles: dict[int, Role]) -> None:
+    """Keep the source LOA dates visible while making their exclusion obvious."""
+    ws.append(["员工号", "姓名", "Title", "景点圈", "LOA开始日期", "LOA结束日期", "备注", "计分状态"])
+    grey = PatternFill("solid", fgColor="D9D9D9")
+    for row in rows:
+        employee = employees.get(int(row["employee_id"]))
+        role = roles.get(int(row["employee_id"]))
+        ws.append(excel_row([
+            employee.employee_no if employee else "",
+            employee.name if employee else "",
+            role.code if role else "",
+            row.get("attraction_name") or "",
+            row["starts_on"],
+            row["ends_on"],
+            row.get("note") or "",
+            "当月不参与计分",
+        ]))
+        for cell in ws[ws.max_row]:
+            cell.fill = grey
+    style_sheet(ws, landscape=True)
+    apply_date_format(ws, (5, 6))
 
 
 def write_hierarchical_performance_sheet(ws, data: dict) -> None:
@@ -430,7 +453,7 @@ def build_statistics_workbook(
 ) -> tuple[Workbook, str, str]:
     month_start = date.fromisoformat(f"{month}-01")
     month_end = month_start.replace(day=monthrange(month_start.year, month_start.month)[1]).isoformat()
-    export_roles = roles_at(db, [int(row["employee_id"]) for row in data["scores"]], month_end)
+    export_roles = roles_at(db, [int(row["employee_id"]) for row in [*data["scores"], *data["loa_rows"], *data.get("loa_periods", [])]], month_end)
     recognition_counts: dict[int, int] = {}
     for row in data["recognitions"]:
         if row["status"] == "confirmed":
@@ -509,7 +532,7 @@ def build_statistics_workbook(
     export_employee_ids = sorted(
         {
             int(row["employee_id"])
-            for bucket in (data["scores"], data["loa_rows"], data["recognitions"], data["deductions"], data["sick_leaves"])
+            for bucket in (data["scores"], data["loa_rows"], data["recognitions"], data["deductions"], data["sick_leaves"], data.get("loa_periods", []))
             for row in bucket
             if row.get("employee_id") is not None
         }
@@ -530,6 +553,8 @@ def build_statistics_workbook(
     write_organization_score_sheet(ws, data, export_roles, loa_roles)
     ws_monthly_detail = wb.create_sheet("月度综合分明细")
     write_monthly_score_detail_sheet(ws_monthly_detail, ordered_scores, data["loa_rows"], export_roles, loa_roles)
+    ws_loa = wb.create_sheet("LOA明细")
+    write_loa_detail_sheet(ws_loa, data.get("loa_periods", []), export_employees, export_roles)
     ws_hierarchy = wb.create_sheet("层级绩效明细")
     write_hierarchical_performance_sheet(ws_hierarchy, data)
     write_employee_number_history_sheet(wb, db, export_employee_ids)

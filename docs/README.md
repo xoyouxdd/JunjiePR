@@ -6,6 +6,7 @@
 |---|---|
 | [architecture.md](architecture.md) | 现用系统与目录职责 |
 | [sqlite-schema.md](sqlite-schema.md) | SQLite 表、主键、外键、索引 |
+| [leave-management.md](leave-management.md) | LOA 与月度病假事务导入 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |
 | [release.md](release.md) | 发布打包 |
 | [deployment.md](deployment.md) | 生产部署：本地构建与人工授权上线 |

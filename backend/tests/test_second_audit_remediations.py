@@ -19,7 +19,7 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from app.main import app
 from app.score_queries import employee_month_scores
 from app.v2_crypto import hash_password
-from app.v2_database import SessionLocal, seed_reference_data
+from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal, seed_reference_data
 from app.v2_models import (
     AuditLog,
     DeductionLevel,
@@ -34,6 +34,9 @@ from app.v2_models import (
     UserAccount,
 )
 from app.v2_services import recognition_score_for_role
+
+# Keep legacy sick-leave idempotency coverage without restoring its production permission.
+ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")
 
 
 ROOT = Path(__file__).resolve().parents[1]

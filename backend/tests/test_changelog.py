@@ -43,7 +43,7 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    assert not any(release["current"] for release in cm)
+    assert cm[0]["current"] is True
     assert admin[0]["current"] is True
 
 

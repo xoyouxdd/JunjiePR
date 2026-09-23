@@ -19,8 +19,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
 from app.v2_models import UserAccount, UserSession  # noqa: E402
+
+# Test the retained legacy route under a test-only grant, not a production role change.
+ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:

@@ -10,6 +10,7 @@
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 目录职责与现用技术栈 |
 | [docs/sqlite-schema.md](docs/sqlite-schema.md) | SQLite 表、主键、外键、索引 |
+| [docs/leave-management.md](docs/leave-management.md) | LOA 与月度病假事务导入 |
 | [docs/getting-started.md](docs/getting-started.md) | 本地运行、测试、数据目录 |
 | [docs/release.md](docs/release.md) | 发布打包与版本号 |
 | [docs/deployment.md](docs/deployment.md) | 生产部署：本地构建与人工授权上线 |

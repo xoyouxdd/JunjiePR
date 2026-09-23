@@ -14,6 +14,12 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
+from app.v2_database import ROLE_PERMISSION_CODES  # noqa: E402
+
+# Legacy sick-leave route behavior is tested with an explicit test-only grant;
+# current production roles intentionally no longer include SICK_REGISTER.
+for role_code in ("TA_SUPERVISOR", "SUPERVISOR"):
+    ROLE_PERMISSION_CODES[role_code] = (*ROLE_PERMISSION_CODES[role_code], "SICK_REGISTER")
 
 
 def login(client: TestClient, account: str) -> None:

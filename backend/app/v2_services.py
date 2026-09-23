@@ -636,14 +636,14 @@ def loa_periods_for_month(db: Session, employee_id: int, month: str) -> list[Emp
     )
 
 
+def loa_excludes_month(db: Session, employee_id: int, month: str) -> bool:
+    """An LOA touching any calendar day excludes that whole month from scoring."""
+    return bool(loa_periods_for_month(db, employee_id, month))
+
+
 def full_month_loa(db: Session, employee_id: int, month: str) -> bool:
-    start, end = month_bounds(month)
-    return any(
-        period.starts_on[:7] < month
-        and period.starts_on <= start.isoformat()
-        and (period.ends_on is None or period.ends_on >= end.isoformat())
-        for period in loa_periods_for_month(db, employee_id, month)
-    )
+    """Compatibility alias for callers not yet renamed to the current LOA rule."""
+    return loa_excludes_month(db, employee_id, month)
 
 
 def _sick_leave_date_values(rows: list[SickLeaveRecord], month: str) -> dict[date, Decimal]:
@@ -679,22 +679,12 @@ def attendance_day_totals(
         )
     day_values = _sick_leave_date_values(sick_rows, month)
     actual_days = sum(day_values.values(), Decimal("0.0"))
-    loa_periods = loa_periods_for_month(db, employee_id, month)
-    month_start, month_finish = month_bounds(month)
-    is_full_month_loa = any(
-        period.starts_on[:7] < month
-        and period.starts_on <= month_start.isoformat()
-        and (period.ends_on is None or period.ends_on >= month_finish.isoformat())
-        for period in loa_periods
-    )
-    if not is_full_month_loa:
-        for period in loa_periods:
-            current = max(date.fromisoformat(period.starts_on), month_start)
-            finish = min(date.fromisoformat(period.ends_on) if period.ends_on else month_finish, month_finish)
-            while current <= finish:
-                if current.weekday() < 5:
-                    day_values[current] = Decimal("1.0")
-                current += timedelta(days=1)
+    # LOA is neither an inferred weekday absence nor a partial score deduction.
+    # If it touches this month, source records remain auditable elsewhere but
+    # attendance fields must not participate in any count or score.
+    is_full_month_loa = loa_excludes_month(db, employee_id, month)
+    if is_full_month_loa:
+        return Decimal("0.0"), Decimal("0.0"), True
     charged_days = min(Decimal("22.0"), sum(day_values.values(), Decimal("0.0")))
     return actual_days, charged_days, is_full_month_loa
 

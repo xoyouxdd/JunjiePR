@@ -7,6 +7,41 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.23.1",
+        "date": "2026-09-23",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "LOA登记与整月计分保护",
+                "detail": "TA GSM、GSM和景点圈HR可搜索在职员工，登记LOA进入、结束或撤销。LOA只要覆盖当月任一天，该员工整月记录保留但不参与计分；统计和导出另列LOA明细。已月结月份不可修改。",
+                "audiences": ["TA_GSM", "GSM", "HR_CIRCLE"],
+                "permissions": ["LOA_REGISTER"],
+            },
+            {
+                "summary": "月度病假事务文件导入",
+                "detail": "有权限的GSM、景点圈HR和系统管理员可预检HR导出的.xls文件，再确认覆盖匹配员工当月的旧导入病假；人工记录和LOA不被覆盖。文件上限10 MB，预检有效期20分钟；提交前会再次核对LOA变化。",
+                "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["SICK_LEAVE_IMPORT"],
+            },
+            {
+                "summary": "密码重置先搜索并选择员工",
+                "detail": "密码管理页改为按姓名或工号搜索可重置对象，选中后再确认重置；原有角色与对象范围限制保持不变。",
+                "audiences": ["GSM", "AM", "OM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["PASSWORD_RESET"],
+            },
+            {
+                "summary": "待办事项可查看具体明细",
+                "detail": "待办中心的部分事项可直接展开对应记录；备份异常、待分组员工及待复核签卡按当前账号权限展示明细。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "主管缺勤登记入口已停用",
+                "detail": "TA主管和主管的导航不再显示旧缺勤登记入口，旧病假记录继续保留查询；月度病假改由有权限的账号通过事务文件预检和导入。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.19.2",
         "date": "2026-09-19",
         "status": "candidate",

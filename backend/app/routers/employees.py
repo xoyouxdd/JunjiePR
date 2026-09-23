@@ -114,6 +114,37 @@ def employee_targets(
                 circle = db.get(Attraction, item.attraction_id) if item.attraction_id else None
                 rows.append({"id": item.id, "employee_no": item.employee_no, "name": item.name, "role_code": role.code, "role_name": role.name, "attraction_id": item.attraction_id, "attraction_name": circle.name if circle else "", "group_id": None, "group_name": ""})
         return {"items": rows[:max(1, min(limit, 50))], "total": len(rows), "limit": max(1, min(limit, 50))}
+    if usage == "loa":
+        # LOA registration deliberately permits its three authorized roles to
+        # locate every active employee.  This expands lookup only, not any
+        # other HR management scope.
+        if user.role.code not in {"TA_GSM", "GSM", "HR_CIRCLE"}:
+            raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以登记LOA")
+        if not keyword.strip():
+            return {"items": [], "total": 0, "limit": max(1, min(limit, 50)), "search_scope": "全部在职员工（请输入姓名或员工号）"}
+        value = like_escaped_pattern(keyword)
+        query = db.query(Employee).filter(
+            Employee.is_active.is_(True),
+            or_(Employee.name.like(value, escape="\\"), Employee.employee_no.like(value, escape="\\")),
+        )
+        if attraction_id is not None:
+            query = query.filter(Employee.attraction_id == attraction_id)
+        rows = []
+        for item in query.order_by(Employee.name, Employee.employee_no).limit(max(1, min(limit, 50)) * 2).all():
+            role = role_at(db, item.id)
+            circle = db.get(Attraction, item.attraction_id) if item.attraction_id else None
+            active_loa = (
+                db.query(EmployeeLOAPeriod)
+                .filter(
+                    EmployeeLOAPeriod.employee_id == item.id,
+                    EmployeeLOAPeriod.status == "active",
+                    or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= date.today().isoformat()),
+                )
+                .order_by(EmployeeLOAPeriod.starts_on.desc(), EmployeeLOAPeriod.id.desc())
+                .first()
+            )
+            rows.append({"id": item.id, "employee_no": item.employee_no, "name": item.name, "role_code": role.code if role else "", "role_name": role.name if role else "未分配角色", "attraction_id": item.attraction_id, "attraction_name": circle.name if circle else "", "group_id": None, "group_name": "", "loa_active": bool(active_loa), "loa_period_id": active_loa.id if active_loa else None, "loa_starts_on": active_loa.starts_on if active_loa else "", "loa_ends_on": active_loa.ends_on if active_loa else ""})
+        return {"items": rows[:max(1, min(limit, 50))], "total": len(rows), "limit": max(1, min(limit, 50)), "search_scope": "全部在职员工"}
     # Deduction/absence target searches are intentionally keyword-only for
     # cross-circle managers.  TA主管 retains its home-circle boundary, while
     # 主管、TA GSM、GSM may locate active CM/TR across all circles.
@@ -139,6 +170,148 @@ def employee_targets(
     )
     result["search_scope"] = "全部景点圈在职CM/TR（请输入姓名或员工号）" if global_target_search else "本景点圈在职CM/TR"
     return result
+
+
+def loa_period_payload(row: EmployeeLOAPeriod, employee: Employee | None = None) -> dict:
+    return {
+        "id": row.id,
+        "employee_id": row.employee_id,
+        "employee_no": employee.employee_no if employee else "",
+        "employee_name": employee.name if employee else "",
+        "starts_on": row.starts_on,
+        "ends_on": row.ends_on or "",
+        "note": row.note or "",
+        "status": row.status,
+        "created_by_name": row.created_by_name,
+        "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else "",
+    }
+
+
+@router.get("/loa-periods")
+def list_loa_periods(month: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
+    query = db.query(EmployeeLOAPeriod).filter(EmployeeLOAPeriod.status != "cancelled")
+    if month:
+        start = parse_iso_date(f"{month}-01", "月份")
+        finish = start.replace(day=28) + timedelta(days=4)
+        finish = finish - timedelta(days=finish.day)
+        query = query.filter(EmployeeLOAPeriod.starts_on <= finish.isoformat(), or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= start.isoformat()))
+    rows = query.order_by(EmployeeLOAPeriod.starts_on.desc(), EmployeeLOAPeriod.id.desc()).limit(200).all()
+    employees = {row.id: row for row in db.query(Employee).filter(Employee.id.in_({row.employee_id for row in rows})).all()} if rows else {}
+    return {"items": [loa_period_payload(row, employees.get(row.employee_id)) for row in rows]}
+
+
+@router.post("/loa-periods")
+def create_loa_period(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
+    if user.role.code not in {"TA_GSM", "GSM", "HR_CIRCLE"}:
+        raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以登记LOA")
+    try:
+        employee_id = int(payload.get("employee_id") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "请选择员工") from exc
+    employee = db.get(Employee, employee_id)
+    if not employee or not employee.is_active:
+        raise HTTPException(400, "请选择在职员工")
+    starts_on = parse_iso_date(str(payload.get("starts_on") or ""), "LOA进入日期")
+    ends_value = str(payload.get("ends_on") or "").strip()
+    ends_on = parse_iso_date(ends_value, "LOA结束日期") if ends_value else None
+    open_period = (
+        db.query(EmployeeLOAPeriod)
+        .filter(EmployeeLOAPeriod.employee_id == employee.id, EmployeeLOAPeriod.status == "active", EmployeeLOAPeriod.ends_on.is_(None))
+        .order_by(EmployeeLOAPeriod.starts_on.desc(), EmployeeLOAPeriod.id.desc())
+        .first()
+    )
+    if open_period:
+        if not ends_on:
+            raise HTTPException(409, "该员工已处于LOA，请填写结束日期完成登记")
+        starts_on = parse_iso_date(open_period.starts_on, "LOA进入日期")
+        if ends_on < starts_on:
+            raise HTTPException(400, "LOA结束日期不能早于进入日期")
+        for month in months_between(starts_on, ends_on):
+            ensure_month_open(db, month, employee.attraction_id, "登记LOA结束")
+        try:
+            before = loa_period_payload(open_period, employee)
+            open_period.ends_on = ends_on.isoformat()
+            open_period.ended_by = user.id
+            open_period.ended_by_name = user.name
+            open_period.ended_at = datetime.now()
+            if str(payload.get("note") or "").strip():
+                open_period.note = str(payload.get("note")).strip()
+            for month in months_between(starts_on, ends_on):
+                recalculate_attendance(db, employee, month)
+            write_audit(db, user.employee, "登记LOA结束", "employee_loa_period", open_period.id, before=before, after=loa_period_payload(open_period, employee), ip_address=client_ip(request))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        invalidate_data_caches()
+        return {"ok": True, "record": loa_period_payload(open_period, employee), "excluded_months": months_between(starts_on, ends_on), "completed": True}
+    if ends_on and ends_on < starts_on:
+        raise HTTPException(400, "LOA结束日期不能早于进入日期")
+    affected_months = months_between(starts_on, ends_on or starts_on)
+    for month in affected_months:
+        ensure_month_open(db, month, employee.attraction_id, "登记LOA")
+    overlap = db.query(EmployeeLOAPeriod).filter(
+        EmployeeLOAPeriod.employee_id == employee.id,
+        EmployeeLOAPeriod.status != "cancelled",
+        EmployeeLOAPeriod.starts_on <= (ends_on or starts_on).isoformat(),
+        or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= starts_on.isoformat()),
+    ).first()
+    if overlap:
+        raise HTTPException(409, "该员工在所选日期内已有LOA记录，请先修改或撤销原记录")
+    row = EmployeeLOAPeriod(
+        employee_id=employee.id,
+        starts_on=starts_on.isoformat(),
+        ends_on=ends_on.isoformat() if ends_on else None,
+        status="active",
+        note=str(payload.get("note") or "").strip() or None,
+        created_by=user.id,
+        created_by_name=user.name,
+    )
+    try:
+        db.add(row)
+        db.flush()
+        for month in affected_months:
+            recalculate_attendance(db, employee, month)
+        write_audit(db, user.employee, "登记LOA", "employee_loa_period", row.id, after=loa_period_payload(row, employee), ip_address=client_ip(request))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_data_caches()
+    return {"ok": True, "record": loa_period_payload(row, employee), "excluded_months": affected_months, "completed": bool(ends_on)}
+
+
+@router.delete("/loa-periods/{period_id}")
+def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
+    row = db.get(EmployeeLOAPeriod, period_id)
+    if not row or row.status == "cancelled":
+        raise HTTPException(404, "LOA记录不存在或已撤销")
+    employee = db.get(Employee, row.employee_id)
+    if not employee:
+        raise HTTPException(404, "员工不存在")
+    starts_on = parse_iso_date(row.starts_on, "LOA开始日期")
+    ends_on = parse_iso_date(row.ends_on or date.today().isoformat(), "LOA结束日期")
+    for month in months_between(starts_on, ends_on):
+        ensure_month_open(db, month, employee.attraction_id, "撤销LOA")
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(400, "请填写撤销原因")
+    try:
+        before = loa_period_payload(row, employee)
+        row.status = "cancelled"
+        row.ended_by = user.id
+        row.ended_by_name = user.name
+        row.ended_at = datetime.now()
+        row.note = f"{row.note or ''}\n撤销原因：{reason}".strip()
+        for month in months_between(starts_on, ends_on):
+            recalculate_attendance(db, employee, month)
+        write_audit(db, user.employee, "撤销LOA", "employee_loa_period", row.id, before=before, after=loa_period_payload(row, employee), reason=reason, ip_address=client_ip(request))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_data_caches()
+    return {"ok": True}
 
 
 @router.get("/hr/employees")

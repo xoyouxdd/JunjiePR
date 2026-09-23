@@ -18,6 +18,7 @@ from app.routers import (
     organization,
     recognitions,
     sick_leaves,
+    sick_leave_import,
     statistics,
 )
 
@@ -37,6 +38,7 @@ for _module in (
     organization,
     recognitions,
     sick_leaves,
+    sick_leave_import,
     statistics,
 ):
     router.include_router(_module.router)

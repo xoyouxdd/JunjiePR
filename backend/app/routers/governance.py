@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.v2_database import get_db
-from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, MonthClosure, RecognitionRecord
+from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.score_queries import month_score_employee_ids
 from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, managed_attraction_ids, role_at, write_audit
 from app.routers._shared import (
@@ -136,6 +136,36 @@ def action_center_item(item_type: str, title: str, count: int, tab: str, severit
     }
 
 
+def action_center_wait_hours(submitted_at: datetime, now: datetime) -> float:
+    return round(max(0, (now - submitted_at).total_seconds()) / 3600, 1)
+
+
+def action_center_recognition_details(db: Session, rows: list[RecognitionRecord], now: datetime) -> list[dict]:
+    reviewer_ids = {row.assigned_reviewer_id for row in rows if row.assigned_reviewer_id}
+    reviewers = {
+        employee.id: employee
+        for employee in db.query(Employee).filter(Employee.id.in_(reviewer_ids)).all()
+    } if reviewer_ids else {}
+    details = []
+    for row in rows:
+        reviewer = reviewers.get(row.assigned_reviewer_id)
+        reviewer_role = role_at(db, reviewer.id) if reviewer else None
+        details.append({
+            "id": row.id,
+            "employee_name": row.employee_name,
+            "employee_no": row.employee_no,
+            "attraction_name": row.home_attraction_name or "未设置景点圈",
+            "recognition_type": row.recognition_type_name,
+            "recognition_date": row.recognition_date,
+            "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "waiting_hours": action_center_wait_hours(row.submitted_at, now),
+            "reviewer_name": reviewer.name if reviewer else "未配置主管",
+            "reviewer_no": reviewer.employee_no if reviewer else "",
+            "reviewer_role_name": reviewer_role.name if reviewer_role else "",
+        })
+    return details
+
+
 @router.get("/action-center")
 def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     """A read-only queue built from existing workflow records and role scopes."""
@@ -241,6 +271,89 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     order = {"critical": 0, "warning": 1, "info": 2}
     items.sort(key=lambda row: (order.get(row["severity"], 9), row["title"]))
     return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month}
+
+
+@router.get("/action-center/{item_type}/details")
+def action_center_details(item_type: str, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    """Expose only the concrete records behind a visible action-center item."""
+    now = datetime.now()
+    role_code = user.role.code
+    if item_type == "backup_health":
+        if role_code != "SYSTEM_ADMIN":
+            raise HTTPException(403, "只有最高管理员可以查看备份健康明细")
+        health = backup_health_payload()
+        return {
+            "type": item_type,
+            "title": "备份健康异常明细",
+            "items": [
+                {"code": issue.get("code", "unknown"), "message": issue.get("message", "")}
+                for issue in health.get("issues", [])
+            ],
+            "checked_at_utc": health.get("checked_at_utc", ""),
+        }
+
+    if item_type == "ungrouped_employee":
+        if role_code not in {"HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"}:
+            raise HTTPException(403, "当前账号不能查看待分组员工明细")
+        allowed_attractions = scoped_hr_attraction_ids(db, user)
+        query = db.query(Employee).filter(Employee.is_active.is_(True), Employee.attraction_id.is_not(None))
+        if allowed_attractions is not None:
+            query = query.filter(Employee.attraction_id.in_(allowed_attractions))
+        attractions = {row.id: row.name for row in db.query(Attraction).all()}
+        candidates = query.order_by(Employee.name, Employee.employee_no).all()
+        prior_memberships: dict[int, GroupMembership] = {}
+        memberships = db.query(GroupMembership).filter(
+            GroupMembership.employee_id.in_([employee.id for employee in candidates])
+        ).all() if candidates else []
+        for membership in memberships:
+            existing = prior_memberships.get(membership.employee_id)
+            membership_end = membership.ends_on or membership.starts_on
+            existing_end = (existing.ends_on or existing.starts_on) if existing else ""
+            if not existing or membership_end > existing_end or (membership_end == existing_end and membership.id > existing.id):
+                prior_memberships[membership.employee_id] = membership
+        rows = []
+        for employee in candidates:
+            role = role_at(db, employee.id)
+            if not role or role.code not in FRONTLINE_CODES or current_group_for_employee(db, employee.id):
+                continue
+            previous = prior_memberships.get(employee.id)
+            since = (previous.ends_on or previous.starts_on) if previous else employee.hired_on
+            try:
+                waiting_days = max(0, (date.today() - date.fromisoformat(since)).days) if since else None
+            except ValueError:
+                waiting_days = None
+            rows.append({
+                "employee_name": employee.name,
+                "employee_no": employee.employee_no,
+                "role_name": role.name,
+                "attraction_name": attractions.get(employee.attraction_id, "未设置景点圈"),
+                "hired_on": employee.hired_on or "",
+                "unassigned_since": since or "",
+                "waiting_days": waiting_days,
+                "waiting_basis": "最后结束组员关系" if previous else "入职日期",
+            })
+        return {"type": item_type, "title": "在职CM/TR待分组明细", "items": rows}
+
+    if item_type == "recognition_review":
+        if role_code not in LEADER_CODES:
+            raise HTTPException(403, "当前账号不能查看直属签卡复核明细")
+        member_ids = direct_member_ids(db, user.id)
+        rows = db.query(RecognitionRecord).filter(
+            RecognitionRecord.employee_id.in_(member_ids) if member_ids else RecognitionRecord.id == -1,
+            RecognitionRecord.status == "pending",
+        ).order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc()).limit(500).all()
+        return {"type": item_type, "title": "待复核签卡明细", "items": action_center_recognition_details(db, rows, now)}
+
+    if item_type == "overdue_review":
+        if role_code != "SYSTEM_ADMIN":
+            raise HTTPException(403, "只有最高管理员可以查看超时签卡复核明细")
+        rows = db.query(RecognitionRecord).filter(
+            RecognitionRecord.status == "pending",
+            RecognitionRecord.submitted_at < now - timedelta(hours=48),
+        ).order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc()).limit(500).all()
+        return {"type": item_type, "title": "超过48小时未复核签卡明细", "items": action_center_recognition_details(db, rows, now)}
+
+    raise HTTPException(404, "该待办暂无可展开的异常明细")
 
 
 @router.get("/governance/appealable-records")

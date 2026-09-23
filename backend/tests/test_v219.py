@@ -20,7 +20,7 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import SessionLocal, ensure_gsm_management_scopes, ensure_highest_admin_account  # noqa: E402
+from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal, ensure_gsm_management_scopes, ensure_highest_admin_account  # noqa: E402
 from app.v2_models import (  # noqa: E402
     AttendanceMonthlyScore,
     Attraction,
@@ -45,6 +45,9 @@ from app.v2_models import (  # noqa: E402
     UserAccount,
     WorkGroup,
 )
+
+# Older sick-leave scenarios use a test-only grant; current roles do not expose this flow.
+ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")
 
 
 def login(client: TestClient, employee_no: str, password: str = "1234") -> None:
@@ -173,7 +176,7 @@ def test_void_filter_export_and_security_watermarks() -> None:
         exported = client.get("/api/statistics/export", params={"month": month, "attraction_id": circle_id, "title": "CM"})
         assert exported.status_code == 200, exported.text
         workbook = load_workbook(BytesIO(exported.content))
-        assert workbook.sheetnames == ["导出说明", "月度综合分", "月度综合分明细", "层级绩效明细", "员工号变更对照", "签卡明细", "扣分明细", "病假明细", "作废操作记录"]
+        assert workbook.sheetnames == ["导出说明", "月度综合分", "月度综合分明细", "LOA明细", "层级绩效明细", "员工号变更对照", "签卡明细", "扣分明细", "病假明细", "作废操作记录"]
         assert workbook.active.title == "层级绩效明细"
         assert "认可数据" in str(workbook["导出说明"]["A1"].value)
         export_context = {row[0].value: row[1].value for row in workbook["导出说明"].iter_rows(min_row=2)}
@@ -400,14 +403,16 @@ def test_v220_sick_loa_follow_up_and_password_permissions() -> None:
         client.post("/api/logout")
         login(client, "GSMTEST01")
         current_stats = client.get("/api/statistics", params={"month": month}).json()
-        assert any(row["employee_id"] == cm1_hr["id"] for row in current_stats["hierarchy"] if row["node_type"] == "employee")
+        assert all(row.get("employee_id") != cm1_hr["id"] for row in current_stats["hierarchy"])
+        assert any(row["employee_id"] == cm1_hr["id"] for row in current_stats["loa_rows"])
         next_stats = client.get("/api/statistics", params={"month": next_month}).json()
         assert all(row.get("employee_id") != cm1_hr["id"] for row in next_stats["hierarchy"])
         assert any(row["employee_id"] == cm1_hr["id"] for row in next_stats["loa_rows"])
         exported = client.get("/api/statistics/export", params={"month": next_month})
         workbook = load_workbook(BytesIO(exported.content))
-        status_col = [cell.value for cell in workbook["月度综合分"][1]].index("人员状态") + 1
-        assert any(row[status_col - 1].value == "LOA（长期病假）" for row in workbook["月度综合分"].iter_rows(min_row=2))
+        status_col = [cell.value for cell in workbook["月度综合分明细"][1]].index("人员状态")
+        assert any(row[status_col].value == "LOA（当月不参与计分）" for row in workbook["月度综合分明细"].iter_rows(min_row=2))
+        assert any(row[0].value == "CMTEST01" and row[7].value == "当月不参与计分" for row in workbook["LOA明细"].iter_rows(min_row=2))
         assert any(row[1].value == f"REC-{loa_audit_record_id}" for row in workbook["作废操作记录"].iter_rows(min_row=2))
         assert any(row[0].value == f"REC-{loa_audit_record_id}" for row in workbook["签卡明细"].iter_rows(min_row=2))
         assert client.post("/api/accounts/reset-password", json={"employee_no": "CMTEST02", "name": "测试CM乙"}).status_code == 200
@@ -1222,7 +1227,7 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert "const r=state.me.role_code, items=[];" in script
     assert "if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记'],['governance','申诉']);" in script
-    assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['absence','缺勤登记'],['entries','主管登记记录']);" in script
+    assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);" in script
     assert "items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','整组移交']" in script
     assert "async function renderMonthClose" in script
     assert "items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);" in script

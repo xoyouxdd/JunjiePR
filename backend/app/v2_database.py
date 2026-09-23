@@ -66,6 +66,8 @@ PERMISSION_DEFINITIONS = {
     "SELF_RECOGNITION": "本人快速登记",
     "EMPLOYEE_ADD": "为CM/TR代录加分",
     "SICK_REGISTER": "病假登记",
+    "SICK_LEAVE_IMPORT": "导入月度病假事务",
+    "LOA_REGISTER": "登记长期病假",
     "DEDUCTION_DIRECT": "所有CM/TR声明扣分",
     "DEDUCTION_ALL": "所有CM/TR全部等级扣分",
     "REVIEW_DIRECT": "直属组员复核",
@@ -81,10 +83,10 @@ PERMISSION_DEFINITIONS = {
 ROLE_PERMISSION_CODES = {
     "CM": ("SELF_RECOGNITION",),
     "TR": ("SELF_RECOGNITION",),
-    "TA_SUPERVISOR": ("EMPLOYEE_ADD", "SICK_REGISTER", "DEDUCTION_DIRECT", "REVIEW_DIRECT", "MEMBER_RECORDS"),
-    "SUPERVISOR": ("EMPLOYEE_ADD", "SICK_REGISTER", "DEDUCTION_DIRECT", "REVIEW_DIRECT", "MEMBER_RECORDS"),
-    "TA_GSM": ("EMPLOYEE_ADD", "DEDUCTION_ALL", "DATA_VIEW", "POC_ISSUE"),
-    "GSM": ("EMPLOYEE_ADD", "DEDUCTION_ALL", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE"),
+    "TA_SUPERVISOR": ("EMPLOYEE_ADD", "DEDUCTION_DIRECT", "REVIEW_DIRECT", "MEMBER_RECORDS"),
+    "SUPERVISOR": ("EMPLOYEE_ADD", "DEDUCTION_DIRECT", "REVIEW_DIRECT", "MEMBER_RECORDS"),
+    "TA_GSM": ("EMPLOYEE_ADD", "DEDUCTION_ALL", "DATA_VIEW", "POC_ISSUE", "LOA_REGISTER"),
+    "GSM": ("EMPLOYEE_ADD", "DEDUCTION_ALL", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE", "SICK_LEAVE_IMPORT", "LOA_REGISTER"),
     "AM": ("DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE"),
     "OM": ("DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET"),
     "HR_ADMIN": ("HR_MANAGE",),
@@ -93,8 +95,10 @@ ROLE_PERMISSION_CODES = {
         "DATA_EXPORT",
         "HR_MANAGE",
         "PASSWORD_RESET",
+        "SICK_LEAVE_IMPORT",
+        "LOA_REGISTER",
     ),
-    "SYSTEM_ADMIN": ("SYSTEM_ADMIN", "HR_MANAGE", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET"),
+    "SYSTEM_ADMIN": ("SYSTEM_ADMIN", "HR_MANAGE", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "SICK_LEAVE_IMPORT"),
 }
 
 # Seed only creates these when a role has no score rules at all. Later edits
@@ -167,6 +171,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-submission-payload-digest", "ensure_submission_payload_digest"),
     ("2026-09-second-audit-query-indexes", "ensure_second_audit_query_indexes"),
     ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
+    ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
 ]
 
 
@@ -475,6 +480,61 @@ def ensure_collaborative_material_columns(db) -> None:
     # declarations had no review path. Keep their score/history, but do not let them
     # become automatic sources for a newly introduced escalation chain.
     db.execute(text("UPDATE deduction_records SET legacy_upgrade_excluded=1, legacy_upgrade_note='升级工单上线前历史声明，保留原扣分，不参与后续自动升级' WHERE deduction_type_name='违规病假' AND occurred_on<'2026-08-29' AND status='active' AND upgrade_request_id IS NULL"))
+    db.commit()
+
+
+def ensure_sick_leave_import_columns(db) -> None:
+    """Make sick leave rows importable without an employee proof attachment."""
+    columns = {row[1]: row for row in db.execute(text("PRAGMA table_info(sick_leave_records)"))}
+    for name, definition in {
+        "leave_type": "VARCHAR(30) NOT NULL DEFAULT '病假'",
+        "import_source": "VARCHAR(30) NOT NULL DEFAULT 'manual'",
+    }.items():
+        if name not in columns:
+            db.execute(text(f"ALTER TABLE sick_leave_records ADD COLUMN {name} {definition}"))
+    db.execute(text("UPDATE sick_leave_records SET leave_type='病假' WHERE leave_type IS NULL OR leave_type=''"))
+    db.execute(text("UPDATE sick_leave_records SET import_source='manual' WHERE import_source IS NULL OR import_source=''"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_type ON sick_leave_records (leave_type, attendance_month, employee_id, status)"))
+    db.commit()
+
+    # SQLite cannot relax a NOT NULL constraint in place. Rebuild only when an
+    # existing database still requires proof_file_id, preserving every row.
+    proof_column = columns.get("proof_file_id")
+    if not proof_column or not proof_column[3]:
+        return
+    db.execute(text("PRAGMA foreign_keys=OFF"))
+    db.execute(text("ALTER TABLE sick_leave_records RENAME TO sick_leave_records_legacy_import"))
+    db.execute(
+        text(
+            "CREATE TABLE sick_leave_records ("
+            "id INTEGER NOT NULL PRIMARY KEY, employee_id INTEGER NOT NULL REFERENCES employees(id), "
+            "employee_no_snapshot VARCHAR(50), employee_name_snapshot VARCHAR(100), employee_role_snapshot VARCHAR(30), "
+            "attraction_id_snapshot INTEGER, attendance_month VARCHAR(7) NOT NULL, leave_start_date VARCHAR(10) NOT NULL, "
+            "leave_end_date VARCHAR(10) NOT NULL, leave_days NUMERIC(6,1) NOT NULL, charged_days NUMERIC(6,1) NOT NULL, "
+            "proof_file_id INTEGER REFERENCES stored_files(id), leave_type VARCHAR(30) NOT NULL DEFAULT '病假', "
+            "import_source VARCHAR(30) NOT NULL DEFAULT 'manual', is_violation BOOLEAN NOT NULL DEFAULT 0, "
+            "violation_deduction_id INTEGER UNIQUE REFERENCES deduction_records(id), note TEXT, status VARCHAR(20) NOT NULL DEFAULT 'active', "
+            "submitted_by INTEGER NOT NULL REFERENCES employees(id), submitted_by_name VARCHAR(100) NOT NULL, submitted_at DATETIME NOT NULL, "
+            "voided_by INTEGER REFERENCES employees(id), voided_by_name VARCHAR(100), voided_by_role_code VARCHAR(30), "
+            "voided_by_role_name VARCHAR(30), void_permission_scope_snapshot VARCHAR(255), voided_from_status VARCHAR(20), "
+            "voided_at DATETIME, void_reason TEXT)"
+        )
+    )
+    db.execute(
+        text(
+            "INSERT INTO sick_leave_records SELECT id, employee_id, employee_no_snapshot, employee_name_snapshot, employee_role_snapshot, "
+            "attraction_id_snapshot, attendance_month, leave_start_date, leave_end_date, leave_days, charged_days, proof_file_id, "
+            "COALESCE(leave_type, '病假'), COALESCE(import_source, 'manual'), is_violation, violation_deduction_id, note, status, "
+            "submitted_by, submitted_by_name, submitted_at, voided_by, voided_by_name, voided_by_role_code, voided_by_role_name, "
+            "void_permission_scope_snapshot, voided_from_status, voided_at, void_reason FROM sick_leave_records_legacy_import"
+        )
+    )
+    db.execute(text("DROP TABLE sick_leave_records_legacy_import"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_month_employee_status ON sick_leave_records (attendance_month, employee_id, status)"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_pr_ranking ON sick_leave_records (status, leave_start_date, leave_end_date, employee_id)"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_sick_leave_type ON sick_leave_records (leave_type, attendance_month, employee_id, status)"))
+    db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_sick_leave_violation_deduction ON sick_leave_records (violation_deduction_id) WHERE violation_deduction_id IS NOT NULL"))
+    db.execute(text("PRAGMA foreign_keys=ON"))
     db.commit()
 
 

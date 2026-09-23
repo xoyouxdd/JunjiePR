@@ -64,6 +64,7 @@ def test_action_center_respects_five_level_boundaries_and_operations_is_admin_on
         assert cm_actions.status_code == 200
         assert cm_actions.json()["role"] == "CM"
         assert client.get("/api/admin/operations-health").status_code == 403
+        assert client.get("/api/action-center/backup_health/details").status_code == 403
 
         client.post("/api/logout")
         login(client, "TATEST01")
@@ -91,6 +92,11 @@ def test_action_center_respects_five_level_boundaries_and_operations_is_admin_on
         admin_actions = client.get("/api/action-center")
         assert admin_actions.status_code == 200
         assert any(item["type"] == "backup_health" for item in admin_actions.json()["items"])
+        backup_detail = client.get("/api/action-center/backup_health/details")
+        assert backup_detail.status_code == 200, backup_detail.text
+        assert backup_detail.json()["items"] == [
+            {"code": "backup_stale", "message": "The latest backup is older than the allowed age."}
+        ]
         operations = client.get("/api/admin/operations-health")
         assert operations.status_code == 200
         payload = operations.json()

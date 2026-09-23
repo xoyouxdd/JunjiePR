@@ -53,6 +53,7 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
         gsm_managers = [(employee, role) for employee, role in gsm_candidates if role.code == "GSM"]
         ta_gsm_managers = [(employee, role) for employee, role in gsm_candidates if role.code == "TA_GSM"]
         management_parent = attraction_node
+        management_team_name = ""
         if len(gsm_managers) == 1:
             primary_gsm, _primary_gsm_role = gsm_managers[0]
             management_parent = f"hr-gsm-{attraction.id}-{primary_gsm.id}"
@@ -67,10 +68,19 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
                 represented.add(gsm.id)
             management_parent = f"hr-gsm-team-{attraction.id}"
             manager_names = "、".join(gsm.name for gsm, _gsm_role in gsm_managers)
-            rows.append({"node_id": management_parent, "parent_id": attraction_node, "level": 1, "node_type": "gsm_team", "name": f"主管组（由GSM共同承接：{manager_names}）"})
+            management_team_name = f"主管组（由GSM共同承接：{manager_names}）"
         else:
             management_parent = f"hr-gsm-team-{attraction.id}"
-            rows.append({"node_id": management_parent, "parent_id": attraction_node, "level": 1, "node_type": "gsm_team", "name": "主管组（未配置GSM）"})
+            management_team_name = "主管组（未配置GSM）"
+
+        # TA GSM and GSM are peers at the circle-management level. Emit the
+        # TA GSM rows before the supervisor branch so all peers stay together.
+        for gsm, _gsm_role in ta_gsm_managers:
+            gsm_node = f"hr-gsm-{attraction.id}-{gsm.id}"
+            rows.append({"node_id": gsm_node, "parent_id": attraction_node, "level": 1, "node_type": "employee", "hierarchy_role": "gsm", "employee": payloads[gsm.id]})
+            represented.add(gsm.id)
+        if management_team_name:
+            rows.append({"node_id": management_parent, "parent_id": attraction_node, "level": 1, "node_type": "gsm_team", "name": management_team_name})
 
         leaders = [employee for employee in attraction_employees if roles[employee.id] and roles[employee.id].code in LEADER_CODES]
         assigned_frontline: set[int] = set()
@@ -99,12 +109,6 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
             for employee in sorted(unassigned, key=lambda item: (item.name, item.employee_no)):
                 rows.append({"node_id": f"hr-employee-{employee.id}", "parent_id": placeholder, "level": 3, "node_type": "employee", "hierarchy_role": "frontline", "employee": payloads[employee.id]})
                 represented.add(employee.id)
-
-        # TA GSM is a peer in the GSM layer and never owns a supervisor branch.
-        for gsm, _gsm_role in ta_gsm_managers:
-            gsm_node = f"hr-gsm-{attraction.id}-{gsm.id}"
-            rows.append({"node_id": gsm_node, "parent_id": attraction_node, "level": 1, "node_type": "employee", "hierarchy_role": "gsm", "employee": payloads[gsm.id]})
-            represented.add(gsm.id)
 
     other_employees = [employee for employee in employees if employee.id not in represented]
     if other_employees:
