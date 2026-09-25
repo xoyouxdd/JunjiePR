@@ -7,6 +7,19 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.26.2",
+        "date": "2026-09-26",
+        "status": "candidate",
+        "announcement_items_from": "2026.09.25.1",
+        "items": [
+            {
+                "summary": "已覆盖病假历史默认折叠",
+                "detail": "缺勤登记、我的登记记录和月度分数明细中，已覆盖的病假集中放入可展开区域；旧记录仍可查看，不再参与病假计天。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.26.1",
         "date": "2026-09-26",
         "status": "candidate",

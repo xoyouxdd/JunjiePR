@@ -470,6 +470,17 @@ th { background: #eef3f9; font-weight: 700; white-space: nowrap; }
 .pagination { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 14px; }
 .pagination button { width: auto; }
 .void-row { color: #7b8794; background: #f4f6f8; }
+.covered-sick-disclosure { margin-top: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-raised); }
+.covered-sick-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; cursor: pointer; color: var(--text-label); font-weight: 700; list-style: none; }
+.covered-sick-disclosure > summary::-webkit-details-marker { display: none; }
+.covered-sick-disclosure > summary::after { content: '⌄'; color: var(--muted); transition: transform 150ms ease; }
+.covered-sick-disclosure[open] > summary::after { transform: rotate(180deg); }
+.covered-sick-disclosure > summary span { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; }
+.covered-sick-disclosure > summary span::before { content: '展开查看'; }
+.covered-sick-disclosure[open] > summary span::before { content: '收起'; }
+.covered-sick-disclosure[open] > summary { border-bottom: 1px solid var(--line); }
+.covered-sick-content { padding: 12px; }
+.covered-sick-content .table-wrap { margin: 0; }
 .score-positive { color: var(--ok); font-weight: 700; white-space: nowrap; }
 .score-negative { color: var(--danger); font-weight: 700; white-space: nowrap; }
 .repeat-warning { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--warn-accent); background: var(--warn-bg-soft); color: var(--warn-text-strong); line-height: 1.6; }

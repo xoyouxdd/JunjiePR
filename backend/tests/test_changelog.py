@@ -43,8 +43,15 @@ def test_previous_release_items_match_role_permissions() -> None:
 
 
 def test_home_screen_fix_announcement_is_visible_to_every_role() -> None:
-    item = next(item for item in RELEASES[0]["items"] if "快捷方式" in item["summary"])
+    previous = next(release for release in RELEASES if release["version"] == "2026.09.26.1")
+    item = next(item for item in previous["items"] if "快捷方式" in item["summary"])
     assert "快捷方式" in item["summary"]
+    assert item_visible(item, "CM", set())
+    assert item_visible(item, "SYSTEM_ADMIN", set())
+
+
+def test_current_covered_sick_history_note_is_visible_to_every_role() -> None:
+    item = next(item for item in RELEASES[0]["items"] if "已覆盖病假历史" in item["summary"])
     assert item_visible(item, "CM", set())
     assert item_visible(item, "SYSTEM_ADMIN", set())
 
