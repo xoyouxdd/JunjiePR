@@ -5,10 +5,11 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 import secrets
+import re
 from threading import Lock
 
 import xlrd
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
@@ -201,22 +202,55 @@ def _reconcile(records: list[dict], summaries: dict[tuple[str, str], Decimal]) -
     return errors
 
 
+def _transaction_months(content: bytes) -> set[str]:
+    """Use every transaction date to prove the workbook belongs to one month."""
+    book = xlrd.open_workbook(file_contents=content)
+    sheet = book.sheet_by_index(0)
+    start = _find_row(sheet, _TRANSACTION_MARKERS)
+    end = _find_row(sheet, _SUMMARY_MARKERS)
+    header = sheet.row_values(start + 2)
+    date_index = _header_index(header, "日期")
+    type_index = _header_index(header, "工资代码")
+    months: set[str] = set()
+    for index in range(start + 3, end):
+        row = sheet.row_values(index)
+        if not _cell(row, type_index):
+            continue
+        try:
+            months.add(_date_value(book, row[date_index])[:7])
+        except (ValueError, IndexError) as exc:
+            raise HTTPException(400, f"事务区第 {index + 1} 行日期无效，不能确认文件月份：{exc}") from exc
+    return months
+
+
+def _active_month_rows(db: Session, user: V2User, month: str) -> list[SickLeaveRecord]:
+    query = db.query(SickLeaveRecord).join(Employee, SickLeaveRecord.employee_id == Employee.id).filter(
+        SickLeaveRecord.attendance_month == month,
+        SickLeaveRecord.status == "active",
+    )
+    allowed = scoped_hr_attraction_ids(db, user)
+    if allowed is not None:
+        query = query.filter(Employee.attraction_id.in_(allowed))
+    return query.all()
+
+
 @router.post("/sick-leave-imports/preview")
 async def preview_sick_leave_import(
-    workbook: UploadFile = File(...), db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SICK_LEAVE_IMPORT")),
+    workbook: UploadFile = File(...), month: str = Form(...), db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SICK_LEAVE_IMPORT")),
 ):
+    if not re.fullmatch(r"\d{4}-\d{2}", month):
+        raise HTTPException(400, "请选择有效的导入月份")
+    parse_iso_date(f"{month}-01", "导入月份")
     if not (workbook.filename or "").lower().endswith(".xls"):
         raise HTTPException(400, "请上传 .xls 格式的员工事务文件")
     content = await workbook.read(_MAX_WORKBOOK_BYTES + 1)
     if len(content) > _MAX_WORKBOOK_BYTES:
         raise HTTPException(413, "员工事务文件不能超过10MB")
     records, summaries, errors = _read_workbook(content)
-    if not records:
-        errors.append("事务区未找到法定病假、全薪病假或无薪病假记录")
     errors.extend(_reconcile(records, summaries))
-    months = {row["date"][:7] for row in records}
-    if len(months) != 1:
-        errors.append("一次导入只能包含同一个自然月的病假事务")
+    months = _transaction_months(content)
+    if months != {month}:
+        errors.append("文件事务日期与所选月份不一致，或无法从空缺勤文件确认月份；不能覆盖")
     unmatched, matched, loa_protected = [], [], []
     for row in records:
         employee = db.query(Employee).filter(Employee.employee_no == row["employee_no"]).first()
@@ -246,11 +280,18 @@ async def preview_sick_leave_import(
             else:
                 matched.append({**row, "employee_id": employee.id})
     token = secrets.token_urlsafe(24)
-    _store_preview(token, {"created_at": datetime.now(), "filename": workbook.filename, "content": content, "month": next(iter(months), ""), "matched": matched, "unmatched": unmatched, "loa_protected": loa_protected, "errors": errors, "user_id": user.id})
+    blocking_unmatched = [row for row in unmatched if row["reason"] != "不在当前账号可导入的景点圈范围"]
+    if blocking_unmatched:
+        errors.append("文件中有未匹配员工；请核对后重新导入，不能将其误判为无缺勤")
+    old_rows = _active_month_rows(db, user, month)
+    file_employee_ids = {row["employee_id"] for row in matched + loa_protected}
+    removed_employee_ids = {row.employee_id for row in old_rows} - file_employee_ids
+    _store_preview(token, {"created_at": datetime.now(), "filename": workbook.filename, "content": content, "month": month, "matched": matched, "unmatched": unmatched, "loa_protected": loa_protected, "errors": errors, "user_id": user.id})
     return {
-        "token": token, "month": next(iter(months), ""), "blocking_errors": errors,
+        "token": token, "month": month, "blocking_errors": errors,
         "matched_employee_count": len({row["employee_id"] for row in matched}), "matched_record_count": len(matched),
-        "unmatched": unmatched, "loa_protected": loa_protected, "can_commit": not errors and bool(matched),
+        "replaced_record_count": len(old_rows), "absent_employee_count": len(removed_employee_ids),
+        "unmatched": unmatched, "loa_protected": loa_protected, "can_commit": not errors,
     }
 
 
@@ -277,9 +318,11 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
     preview = _get_preview(token, user.id)
     if not preview:
         raise HTTPException(400, _PREVIEW_EXPIRED_MESSAGE)
-    if preview["errors"] or not preview["matched"]:
+    if preview["errors"] or any(row["reason"] != "不在当前账号可导入的景点圈范围" for row in preview["unmatched"]):
         raise HTTPException(400, "预检未通过，不能覆盖")
     month = preview["month"]
+    if payload.get("month") != month:
+        raise HTTPException(400, "提交月份与预检月份不一致，请重新预检")
     employee_ids = sorted({row["employee_id"] for row in preview["matched"]})
     employees = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()}
     if len(employees) != len(employee_ids) or any(not employee.is_active for employee in employees.values()):
@@ -287,6 +330,9 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
     try:
         replaced_record_count = 0
         replaced_manual_count = 0
+        scope = scoped_hr_attraction_ids(db, user)
+        for attraction_id in scope if scope is not None else (None,):
+            ensure_month_open(db, month, attraction_id, "覆盖月度病假")
         loa_periods = db.query(EmployeeLOAPeriod).filter(
             EmployeeLOAPeriod.employee_id.in_(employee_ids),
             EmployeeLOAPeriod.status != "cancelled",
@@ -301,24 +347,23 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
                 for period in loa_by_employee.get(item["employee_id"], ())
             ):
                 raise HTTPException(409, "预检后LOA记录已变化，请重新上传文件预检")
-        for employee in employees.values():
+        old_rows = _active_month_rows(db, user, month)
+        affected_ids = set(employees) | {row.employee_id for row in old_rows}
+        affected_employees = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(affected_ids)).all()} if affected_ids else {}
+        for employee in affected_employees.values():
             ensure_scoped_hr_employee(db, user, employee)
             ensure_month_open(db, month, employee.attraction_id, "覆盖月度病假")
-            old_rows = db.query(SickLeaveRecord).filter(
-                SickLeaveRecord.employee_id == employee.id,
-                SickLeaveRecord.attendance_month == month,
-                SickLeaveRecord.status == "active",
-            ).all()
-            replaced_record_count += len(old_rows)
-            replaced_manual_count += sum(row.import_source != "monthly_transaction_import" for row in old_rows)
-            covered_at = datetime.now()
-            for old in old_rows:
-                old.voided_from_status = old.status
-                old.status = "covered"
-                old.voided_by = user.id
-                old.voided_by_name = user.name
-                old.voided_at = covered_at
-                old.void_reason = "以月度缺勤文件为准，原记录已覆盖"
+        replaced_record_count = len(old_rows)
+        replaced_manual_count = sum(row.import_source != "monthly_transaction_import" for row in old_rows)
+        absent_employee_count = len({row.employee_id for row in old_rows} - {row["employee_id"] for row in preview["matched"] + preview["loa_protected"]})
+        covered_at = datetime.now()
+        for old in old_rows:
+            old.voided_from_status = old.status
+            old.status = "covered"
+            old.voided_by = user.id
+            old.voided_by_name = user.name
+            old.voided_at = covered_at
+            old.void_reason = "以月度缺勤文件为准，原记录已覆盖（文件未列出者视为本月无缺勤）"
         for item in preview["matched"]:
             employee = employees[item["employee_id"]]
             role = role_at(db, employee.id)
@@ -330,16 +375,16 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
                 submitted_by=user.id, submitted_by_name=user.name, is_violation=False,
             ))
         db.flush()
-        for employee in employees.values():
+        for employee in affected_employees.values():
             recalculate_attendance(db, employee, month)
-        write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "replaced_records": replaced_record_count, "replaced_manual_records": replaced_manual_count, "unmatched": len(preview["unmatched"]), "loa_protected": len(preview["loa_protected"])})
+        write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "replaced_records": replaced_record_count, "replaced_manual_records": replaced_manual_count, "absent_employees": absent_employee_count, "unmatched": len(preview["unmatched"]), "loa_protected": len(preview["loa_protected"])})
         db.commit()
     except Exception:
         db.rollback()
         raise
     invalidate_data_caches()
     _drop_preview(token)
-    return {"ok": True, "month": month, "covered_employee_count": len(employees), "covered_record_count": len(preview["matched"]), "replaced_record_count": replaced_record_count, "replaced_manual_count": replaced_manual_count, "unmatched_count": len(preview["unmatched"]), "loa_protected_count": len(preview["loa_protected"])}
+    return {"ok": True, "month": month, "covered_employee_count": len(employees), "covered_record_count": len(preview["matched"]), "replaced_record_count": replaced_record_count, "replaced_manual_count": replaced_manual_count, "absent_employee_count": absent_employee_count, "unmatched_count": len(preview["unmatched"]), "loa_protected_count": len(preview["loa_protected"])}
 
 
 @router.get("/sick-leave-imports/{token}/unmatched-file")

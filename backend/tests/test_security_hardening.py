@@ -313,8 +313,10 @@ def test_versions_come_from_a_single_source() -> None:
 
         login_page = client.get("/login").text
         app_page = client.get("/").text
-        assert login_page.count(f"v={STATIC_CACHE_VERSION}") == 2
+        assert login_page.count(f"v={STATIC_CACHE_VERSION}") == 4
         assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 4
+        assert f'static/manifest.json?v={STATIC_CACHE_VERSION}' in login_page
+        assert f'static/images/fzpr-icon.png?v={STATIC_CACHE_VERSION}' in login_page
         assert f'static/manifest.json?v={STATIC_CACHE_VERSION}' in app_page
         assert f'static/images/fzpr-icon.png?v={STATIC_CACHE_VERSION}' in app_page
         assert "__STATIC_CACHE_VERSION__" not in login_page

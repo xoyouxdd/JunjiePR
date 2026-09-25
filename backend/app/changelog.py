@@ -7,6 +7,30 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.26.1",
+        "date": "2026-09-26",
+        "status": "candidate",
+        "announcement_items_from": "2026.09.25.1",
+        "items": [
+            {
+                "summary": "缺勤登记按所选月份整月覆盖",
+                "detail": "导入时选择月份，文件作为该月完整缺勤清单；未在文件中出现的员工旧缺勤标记为已覆盖并退出计分。月份不符或员工匹配失败时禁止提交；LOA和月结保护不变。",
+                "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["SICK_LEAVE_IMPORT"],
+            },
+            {
+                "summary": "修复手机桌面快捷方式名称和图标",
+                "detail": "登录页与系统首页统一使用“FZPR登记”名称和图标。已添加的旧快捷方式请从手机桌面移除后重新添加。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "最高管理员可处理备份异常待办",
+                "detail": "备份异常待办新增删除当前提醒和手动重新备份。删除不会清除备份文件或停用巡检；新巡检异常或24小时后将重新提醒。手动备份不会修复缺失的每日计划任务。",
+                "audiences": ["SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.25.1",
         "date": "2026-09-25",
         "status": "candidate",

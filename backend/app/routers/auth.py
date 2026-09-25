@@ -11,7 +11,7 @@ from app.v2_crypto import hash_password, new_session_token, token_hash, verify_p
 from app.v2_database import get_db
 from app.v2_models import Employee, ReleaseAnnouncementRead, UserAccount, UserSession
 from app.v2_services import current_group_for_employee, current_leader_for_employee, direct_member_ids, role_at, write_audit
-from app.changelog import visible_releases
+from app.changelog import RELEASES, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
 from app.routers._shared import client_ip, group_display_metadata_bulk
@@ -118,7 +118,18 @@ def changelog(user: V2User = Depends(current_user)):
 
 
 def current_announcement(user: V2User) -> dict | None:
-    return next((release for release in visible_releases(user.role.code, user.permissions) if release["version"] == APP_VERSION), None)
+    releases = visible_releases(user.role.code, user.permissions)
+    current = next((release for release in releases if release["version"] == APP_VERSION), None)
+    if not current:
+        return None
+    patch = next((release for release in RELEASES if release["version"] == APP_VERSION), None)
+    source_version = patch.get("announcement_items_from") if patch else None
+    if not source_version:
+        return current
+    source = next((release for release in releases if release["version"] == source_version), None)
+    if not source:
+        return None
+    return {**current, "items": source["items"], "content_version": source_version}
 
 
 @router.get("/changelog/announcement")

@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
+from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
 from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, managed_attraction_ids, role_at, write_audit
 from app.routers._shared import (
@@ -253,7 +254,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
                 items.append(action_center_item("month_close", "上月待月结景点圈", open_circles, "monthClose", "info", f"{month_to_close} 数据待核对；完成月结检查清单后即可关闭月结。"))
         if role_code == "SYSTEM_ADMIN":
             health = backup_health_payload()
-            if not health["ok"]:
+            if not health["ok"] and not backup_todo_dismissed(db, health):
                 items.append(action_center_item("backup_health", "备份健康异常", max(1, len(health["issues"])), "operations", "critical", "备份巡检报告存在异常，请立即进入系统运营核对。"))
             closed_count = db.query(MonthClosure).filter(
                 MonthClosure.closure_month == current_month,
@@ -273,6 +274,38 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month}
 
 
+@router.post("/admin/backup-health/dismiss")
+def dismiss_backup_todo(request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    if user.role.code != "SYSTEM_ADMIN":
+        raise HTTPException(403, "只有最高管理员可以清除备份待办")
+    health = backup_health_payload()
+    if health["ok"]:
+        raise HTTPException(409, "当前没有备份异常待办")
+    write_audit(db, user.employee, "清除备份待办", "backup_health", after={"fingerprint": health_fingerprint(health)}, ip_address=client_ip(request))
+    db.commit()
+    return {"ok": True, "message": "本次备份异常待办已移除；新巡检异常或24小时后会重新提醒"}
+
+
+@router.get("/admin/backup-health/manual-status")
+def get_manual_backup_status(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    if user.role.code != "SYSTEM_ADMIN":
+        raise HTTPException(403, "只有最高管理员可以查看手动备份状态")
+    return manual_backup_status(db)
+
+
+@router.post("/admin/backup-health/retry", status_code=202)
+def retry_backup(background_tasks: BackgroundTasks, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    if user.role.code != "SYSTEM_ADMIN":
+        raise HTTPException(403, "只有最高管理员可以重新备份")
+    if backup_health_payload()["ok"]:
+        raise HTTPException(409, "当前备份巡检没有异常")
+    token = claim_manual_backup(db, user.employee, client_ip(request))
+    if not token:
+        raise HTTPException(409, "手动备份正在执行或刚刚完成，请稍后重试")
+    background_tasks.add_task(run_manual_backup, user.id, client_ip(request), token)
+    return {"ok": True, "message": "手动备份已开始；此操作不会创建或修复每日计划任务"}
+
+
 @router.get("/action-center/{item_type}/details")
 def action_center_details(item_type: str, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     """Expose only the concrete records behind a visible action-center item."""
@@ -290,6 +323,7 @@ def action_center_details(item_type: str, db: Session = Depends(get_db), user: V
                 for issue in health.get("issues", [])
             ],
             "checked_at_utc": health.get("checked_at_utc", ""),
+            "manual_backup": manual_backup_status(db),
         }
 
     if item_type == "ungrouped_employee":

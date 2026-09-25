@@ -4,6 +4,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="recognition-sick-import-test-"))
 os.environ["RECOGNITION_V2_DATA_DIR"] = str(TEST_DATA_DIR)
@@ -77,7 +78,7 @@ def test_commit_rechecks_loa_added_after_preview():
             "employee_id": target["id"], "starts_on": "2099-08-20", "ends_on": "2099-08-20",
         })
         assert created.status_code == 200, created.text
-        committed = client.post("/api/sick-leave-imports/commit", json={"token": token})
+        committed = client.post("/api/sick-leave-imports/commit", json={"token": token, "month": "2099-08"})
         assert committed.status_code == 409, committed.text
         assert "重新上传文件预检" in committed.json()["detail"]
         with SessionLocal() as db:
@@ -90,7 +91,7 @@ def test_commit_rechecks_loa_added_after_preview():
         sick_leave_import._drop_preview(token)
 
 
-def test_monthly_file_covers_prior_manual_and_imported_absence_only_for_matched_employee_month():
+def test_monthly_file_covers_prior_absence_for_matched_and_absent_employees():
     month = "2099-07"
     with TestClient(app) as client:
         with SessionLocal() as db:
@@ -116,7 +117,7 @@ def test_monthly_file_covers_prior_manual_and_imported_absence_only_for_matched_
             untouched_id = old_record(untouched, "2099-07-04", "manual").id
             other_month_id = old_record(matched, "2099-06-01", "manual").id
             db.commit()
-            matched_id, submitter_id = matched.id, submitter.id
+            matched_id, absent_id, submitter_id = matched.id, untouched.id, submitter.id
 
         login = client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"})
         assert login.status_code == 200, login.text
@@ -128,14 +129,15 @@ def test_monthly_file_covers_prior_manual_and_imported_absence_only_for_matched_
                 {"employee_id": matched_id, "date": "2099-07-06", "days": Decimal("1"), "leave_type": "全薪病假"},
             ], "unmatched": [], "loa_protected": [], "errors": [], "user_id": submitter_id,
         })
-        response = client.post("/api/sick-leave-imports/commit", json={"token": token})
+        response = client.post("/api/sick-leave-imports/commit", json={"token": token, "month": month})
         assert response.status_code == 200, response.text
         assert response.json()["covered_record_count"] == 2
-        assert response.json()["replaced_record_count"] == 3
-        assert response.json()["replaced_manual_count"] == 2
+        assert response.json()["replaced_record_count"] == 4
+        assert response.json()["replaced_manual_count"] == 3
+        assert response.json()["absent_employee_count"] == 1
         history = client.get("/api/my-entries", params={"month": month, "record_type": "sick_leave", "status": "covered"})
         assert history.status_code == 200, history.text
-        assert {row["id"] for row in history.json()["items"]} == {manual_id, violation_id}
+        assert {row["id"] for row in history.json()["items"]} == {manual_id, violation_id, untouched_id}
         assert {row["status_name"] for row in history.json()["items"]} == {"已覆盖"}
         with SessionLocal() as db:
             for record_id in (manual_id, violation_id, imported_id):
@@ -143,13 +145,15 @@ def test_monthly_file_covers_prior_manual_and_imported_absence_only_for_matched_
                 assert row.status == "covered"
                 assert row.voided_from_status == "active"
                 assert row.voided_by == submitter_id
-            assert db.get(SickLeaveRecord, untouched_id).status == "active"
+            assert db.get(SickLeaveRecord, untouched_id).status == "covered"
             assert db.get(SickLeaveRecord, other_month_id).status == "active"
             active = db.query(SickLeaveRecord).filter_by(employee_id=matched_id, attendance_month=month, status="active").all()
             assert {row.leave_start_date for row in active} == {"2099-07-05", "2099-07-06"}
             assert all(row.import_source == "monthly_transaction_import" for row in active)
             attendance = db.query(AttendanceMonthlyScore).filter_by(employee_id=matched_id, attendance_month=month).one()
             assert attendance.actual_sick_days == Decimal("1.5")
+            absent_attendance = db.query(AttendanceMonthlyScore).filter_by(employee_id=absent_id, attendance_month=month).one()
+            assert absent_attendance.actual_sick_days == Decimal("0")
 
 
 def test_preview_rejects_workbooks_above_size_limit():
@@ -158,7 +162,7 @@ def test_preview_rejects_workbooks_above_size_limit():
         assert login.status_code == 200, login.text
         response = client.post("/api/sick-leave-imports/preview", files={
             "workbook": ("too-large.xls", b"x" * (sick_leave_import._MAX_WORKBOOK_BYTES + 1)),
-        })
+        }, data={"month": "2099-08"})
         assert response.status_code == 413, response.text
 
 
@@ -323,13 +327,13 @@ def test_preview_end_to_end_reports_unmatched_and_serves_marked_file(monkeypatch
     with TestClient(app) as client:
         login = client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"})
         assert login.status_code == 200, login.text
-        response = client.post("/api/sick-leave-imports/preview", files={"workbook": ("transactions.xls", b"fake-xls")})
+        response = client.post("/api/sick-leave-imports/preview", files={"workbook": ("transactions.xls", b"fake-xls")}, data={"month": "2099-08"})
         assert response.status_code == 200, response.text
         body = response.json()
         token = body["token"]
         try:
             assert body["month"] == "2099-08"
-            assert body["blocking_errors"] == []
+            assert "未匹配员工" in body["blocking_errors"][0]
             assert body["matched_record_count"] == 0
             assert body["can_commit"] is False
             assert [(row["source_id"], row["employee_no"], row["reason"]) for row in body["unmatched"]] == [
@@ -353,6 +357,80 @@ def test_preview_end_to_end_reports_unmatched_and_serves_marked_file(monkeypatch
             assert "预检未通过" in committed.json()["detail"]
         finally:
             sick_leave_import._drop_preview(token)
+
+
+def test_preview_rejects_selected_month_mismatch_without_allowing_commit(monkeypatch):
+    _install_book(monkeypatch, _workbook_rows(
+        [["TEST, 测试CM甲", "0CMTEST01", _serial(2099, 8, 20), "法定病假", 8.0]],
+        [["TEST, 测试CM甲", "0CMTEST01", "病假时间总计", 8.0]],
+    ))
+    with TestClient(app) as client:
+        assert client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"}).status_code == 200
+        response = client.post("/api/sick-leave-imports/preview", files={"workbook": ("transactions.xls", b"fake-xls")}, data={"month": "2099-07"})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["can_commit"] is False
+        assert any("月份不一致" in error for error in body["blocking_errors"])
+        sick_leave_import._drop_preview(body["token"])
+
+
+def test_empty_sick_leave_month_can_clear_old_records_when_other_transactions_prove_month(monkeypatch):
+    month = "2099-09"
+    _install_book(monkeypatch, _workbook_rows(
+        [["TEST, 测试CM甲", "00000000", _serial(2099, 9, 10), "年假", 8.0]],
+        [],
+    ))
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST01").one()
+            submitter = db.query(Employee).filter_by(employee_no="GSMTEST01").one()
+            old = SickLeaveRecord(
+                employee_id=employee.id, employee_no_snapshot=employee.employee_no,
+                employee_name_snapshot=employee.name, attendance_month=month,
+                leave_start_date="2099-09-05", leave_end_date="2099-09-05",
+                leave_days=Decimal("1"), charged_days=Decimal("1"),
+                import_source="monthly_transaction_import", status="active",
+                submitted_by=submitter.id, submitted_by_name=submitter.name,
+            )
+            db.add(old)
+            db.commit()
+            old_id, employee_id = old.id, employee.id
+        assert client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"}).status_code == 200
+        preview = client.post("/api/sick-leave-imports/preview", files={"workbook": ("transactions.xls", b"fake-xls")}, data={"month": month})
+        assert preview.status_code == 200, preview.text
+        body = preview.json()
+        assert body["can_commit"] is True
+        assert body["absent_employee_count"] >= 1
+        committed = client.post("/api/sick-leave-imports/commit", json={"token": body["token"], "month": month})
+        assert committed.status_code == 200, committed.text
+        assert committed.json()["covered_record_count"] == 0
+        with SessionLocal() as db:
+            assert db.get(SickLeaveRecord, old_id).status == "covered"
+            attendance = db.query(AttendanceMonthlyScore).filter_by(employee_id=employee_id, attendance_month=month).one()
+            assert attendance.actual_sick_days == Decimal("0")
+
+
+def test_monthly_replacement_rows_are_limited_to_circle_hr_scope():
+    month = "2099-10"
+    with TestClient(app):
+        with SessionLocal() as db:
+            own = db.query(Employee).filter_by(employee_no="HR-HEAT").one()
+            other = db.query(Employee).filter_by(employee_no="HR-DWARF").one()
+            assert own.attraction_id != other.attraction_id
+            for employee in (own, other):
+                db.add(SickLeaveRecord(
+                    employee_id=employee.id, employee_no_snapshot=employee.employee_no,
+                    employee_name_snapshot=employee.name, attendance_month=month,
+                    leave_start_date="2099-10-05", leave_end_date="2099-10-05",
+                    leave_days=Decimal("1"), charged_days=Decimal("1"),
+                    import_source="manual", status="active",
+                    submitted_by=own.id, submitted_by_name=own.name,
+                ))
+            db.flush()
+            scoped = SimpleNamespace(role=SimpleNamespace(code="HR_CIRCLE"), employee=own)
+            rows = sick_leave_import._active_month_rows(db, scoped, month)
+            assert {row.employee_id for row in rows} == {own.id}
+            db.rollback()
 
 
 def test_expired_preview_token_explains_how_to_recover():

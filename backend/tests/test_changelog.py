@@ -30,8 +30,8 @@ def test_latest_changelog_version_matches_app_version() -> None:
     assert STATIC_CACHE_VERSION == APP_VERSION
 
 
-def test_current_release_items_match_role_permissions() -> None:
-    items = RELEASES[0]["items"]
+def test_previous_release_items_match_role_permissions() -> None:
+    items = next(release["items"] for release in RELEASES if release["version"] == "2026.09.25.1")
     summaries = {item["summary"]: item for item in items}
     declaration = summaries["声明登记统计支持跨景点圈查看与导出"]
     assert item_visible(declaration, "SUPERVISOR", {"DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"})
@@ -40,6 +40,13 @@ def test_current_release_items_match_role_permissions() -> None:
     monthly = summaries["月度缺勤文件覆盖当月旧登记"]
     assert item_visible(monthly, "HR_CIRCLE", {"SICK_LEAVE_IMPORT"})
     assert item_visible(monthly, "SUPERVISOR", {"SICK_LEAVE_IMPORT"}) is False
+
+
+def test_home_screen_fix_announcement_is_visible_to_every_role() -> None:
+    item = next(item for item in RELEASES[0]["items"] if "快捷方式" in item["summary"])
+    assert "快捷方式" in item["summary"]
+    assert item_visible(item, "CM", set())
+    assert item_visible(item, "SYSTEM_ADMIN", set())
 
 
 def test_changelog_filters_by_role() -> None:
@@ -91,8 +98,11 @@ def test_release_announcement_is_role_filtered_and_read_once_per_account() -> No
         assert first.status_code == 200, first.text
         release = first.json()["release"]
         assert release["version"] == APP_VERSION
+        assert release["content_version"] == "2026.09.25.1"
         assert first.json()["read"] is False
-        assert release == next(row for row in client.get("/api/changelog").json()["releases"] if row["current"])
+        history = client.get("/api/changelog").json()["releases"]
+        assert release["items"] == next(row["items"] for row in history if row["version"] == release["content_version"])
+        assert release["items"] != next(row["items"] for row in history if row["current"])
         assert client.post("/api/changelog/announcement/read", json={"version": "wrong"}).status_code == 409
         assert client.get("/api/changelog/announcement").json()["read"] is False
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
@@ -106,6 +116,7 @@ def test_release_announcement_is_role_filtered_and_read_once_per_account() -> No
         gsm = client.get("/api/changelog/announcement").json()
         assert gsm["read"] is False
         assert gsm["release"]["version"] == APP_VERSION
+        assert gsm["release"]["items"] == next(row["items"] for row in client.get("/api/changelog").json()["releases"] if row["version"] == "2026.09.25.1")
 
 
 def test_docs_indexes_list_every_docs_file() -> None:

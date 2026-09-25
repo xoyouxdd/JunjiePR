@@ -4,6 +4,8 @@
 
 **[scripts/README.md](../scripts/README.md)**
 
+最高管理员可在「待办」展开备份健康异常，查看最近巡检问题，并选择删除本次提醒或手动重新备份。删除只隐藏当前巡检报告对应的待办，最多 24 小时；新报告异常会再次出现，不删除备份，也不停用巡检。手动备份在后台生成一份 SQLite 在线快照和 SHA-256 清单，限制并发及短时间重复操作，可在同一待办查看结果；它不会修复缺失的每日备份计划任务。网页服务账号须对配置的备份目录有写入权限，权限应只授予该目录。对应接口仅 `SYSTEM_ADMIN` 可访问：`POST /api/admin/backup-health/dismiss`、`POST /api/admin/backup-health/retry`、`GET /api/admin/backup-health/manual-status`。若任务失败，检查服务器日志、备份目录权限及磁盘空间。
+
 ## 脚本一览
 
 | 脚本 | 用途 |
