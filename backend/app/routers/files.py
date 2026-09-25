@@ -118,7 +118,7 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
         )
     deduction = db.query(DeductionRecord).filter(DeductionRecord.document_file_id == file_id).first()
     if deduction:
-        authorized = authorized or user.id in {deduction.employee_id, deduction.submitter_id} or deduction.employee_id in direct_member_ids(db, user.id) or deduction.attraction_id_snapshot in managed_attractions
+        authorized = authorized or "DECLARATION_STATS_VIEW" in user.permissions or user.id in {deduction.employee_id, deduction.submitter_id} or deduction.employee_id in direct_member_ids(db, user.id) or deduction.attraction_id_snapshot in managed_attractions
     sick_leave = db.query(SickLeaveRecord).filter(SickLeaveRecord.proof_file_id == file_id).first()
     if sick_leave:
         sick_employee = db.get(Employee, sick_leave.employee_id)

@@ -4,11 +4,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import or_
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, new_session_token, token_hash, verify_password
 from app.v2_database import get_db
-from app.v2_models import Employee, UserAccount, UserSession
+from app.v2_models import Employee, ReleaseAnnouncementRead, UserAccount, UserSession
 from app.v2_services import current_group_for_employee, current_leader_for_employee, direct_member_ids, role_at, write_audit
 from app.changelog import visible_releases
 from app.version import APP_VERSION
@@ -114,6 +115,36 @@ def changelog(user: V2User = Depends(current_user)):
         "role_name": user.role.name,
         "releases": visible_releases(user.role.code, user.permissions),
     }
+
+
+def current_announcement(user: V2User) -> dict | None:
+    return next((release for release in visible_releases(user.role.code, user.permissions) if release["version"] == APP_VERSION), None)
+
+
+@router.get("/changelog/announcement")
+def changelog_announcement(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    release = current_announcement(user)
+    if not release:
+        return {"release": None, "read": True}
+    read = db.query(ReleaseAnnouncementRead.id).filter_by(
+        account_id=user.account.id, version=APP_VERSION, role_code=user.role.code,
+    ).first() is not None
+    return {"release": release, "read": read}
+
+
+@router.post("/changelog/announcement/read")
+def mark_changelog_announcement_read(payload: dict, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    if str(payload.get("version") or "") != APP_VERSION:
+        raise HTTPException(409, "公告版本已更新，请重新登录查看")
+    if not current_announcement(user):
+        raise HTTPException(404, "当前角色没有本版本公告")
+    db.execute(
+        sqlite_insert(ReleaseAnnouncementRead)
+        .values(account_id=user.account.id, version=APP_VERSION, role_code=user.role.code)
+        .on_conflict_do_nothing(index_elements=["account_id", "version", "role_code"])
+    )
+    db.commit()
+    return {"ok": True, "version": APP_VERSION}
 
 
 @router.post("/password")

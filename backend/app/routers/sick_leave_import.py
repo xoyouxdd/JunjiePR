@@ -18,7 +18,7 @@ from app.v2_auth import V2User, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Employee, EmployeeLOAPeriod, SickLeaveRecord
 from app.v2_services import recalculate_attendance, role_at, write_audit
-from app.routers._shared import ensure_month_open, ensure_scoped_hr_employee, invalidate_data_caches, parse_iso_date
+from app.routers._shared import ensure_month_open, ensure_scoped_hr_employee, invalidate_data_caches, parse_iso_date, scoped_hr_attraction_ids, sick_leave_payloads
 
 
 router = APIRouter()
@@ -254,6 +254,23 @@ async def preview_sick_leave_import(
     }
 
 
+@router.get("/sick-leave-imports/records")
+def list_sick_leave_import_records(
+    month: str | None = None,
+    db: Session = Depends(get_db),
+    user: V2User = Depends(require_permissions("SICK_LEAVE_IMPORT")),
+):
+    query = db.query(SickLeaveRecord).filter(SickLeaveRecord.import_source == "monthly_transaction_import")
+    if month:
+        parse_iso_date(f"{month}-01", "月份")
+        query = query.filter(SickLeaveRecord.attendance_month == month)
+    allowed_attractions = scoped_hr_attraction_ids(db, user)
+    if allowed_attractions is not None:
+        query = query.filter(SickLeaveRecord.attraction_id_snapshot.in_(allowed_attractions))
+    rows = query.order_by(SickLeaveRecord.submitted_at.desc(), SickLeaveRecord.id.desc()).limit(500).all()
+    return {"items": sick_leave_payloads(db, rows)}
+
+
 @router.post("/sick-leave-imports/commit")
 def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SICK_LEAVE_IMPORT"))):
     token = str(payload.get("token") or "")
@@ -268,6 +285,8 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
     if len(employees) != len(employee_ids) or any(not employee.is_active for employee in employees.values()):
         raise HTTPException(409, "员工资料已变更，请重新预检文件")
     try:
+        replaced_record_count = 0
+        replaced_manual_count = 0
         loa_periods = db.query(EmployeeLOAPeriod).filter(
             EmployeeLOAPeriod.employee_id.in_(employee_ids),
             EmployeeLOAPeriod.status != "cancelled",
@@ -285,13 +304,21 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
         for employee in employees.values():
             ensure_scoped_hr_employee(db, user, employee)
             ensure_month_open(db, month, employee.attraction_id, "覆盖月度病假")
-            db.query(SickLeaveRecord).filter(
+            old_rows = db.query(SickLeaveRecord).filter(
                 SickLeaveRecord.employee_id == employee.id,
                 SickLeaveRecord.attendance_month == month,
                 SickLeaveRecord.status == "active",
-                SickLeaveRecord.is_violation.is_(False),
-                SickLeaveRecord.import_source == "monthly_transaction_import",
-            ).update({"status": "void", "voided_by": user.id, "voided_by_name": user.name, "voided_at": datetime.now(), "void_reason": "月度病假事务文件覆盖"}, synchronize_session=False)
+            ).all()
+            replaced_record_count += len(old_rows)
+            replaced_manual_count += sum(row.import_source != "monthly_transaction_import" for row in old_rows)
+            covered_at = datetime.now()
+            for old in old_rows:
+                old.voided_from_status = old.status
+                old.status = "covered"
+                old.voided_by = user.id
+                old.voided_by_name = user.name
+                old.voided_at = covered_at
+                old.void_reason = "以月度缺勤文件为准，原记录已覆盖"
         for item in preview["matched"]:
             employee = employees[item["employee_id"]]
             role = role_at(db, employee.id)
@@ -305,14 +332,14 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
         db.flush()
         for employee in employees.values():
             recalculate_attendance(db, employee, month)
-        write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "unmatched": len(preview["unmatched"]), "loa_protected": len(preview["loa_protected"])})
+        write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "replaced_records": replaced_record_count, "replaced_manual_records": replaced_manual_count, "unmatched": len(preview["unmatched"]), "loa_protected": len(preview["loa_protected"])})
         db.commit()
     except Exception:
         db.rollback()
         raise
     invalidate_data_caches()
     _drop_preview(token)
-    return {"ok": True, "month": month, "covered_employee_count": len(employees), "covered_record_count": len(preview["matched"]), "unmatched_count": len(preview["unmatched"]), "loa_protected_count": len(preview["loa_protected"])}
+    return {"ok": True, "month": month, "covered_employee_count": len(employees), "covered_record_count": len(preview["matched"]), "replaced_record_count": replaced_record_count, "replaced_manual_count": replaced_manual_count, "unmatched_count": len(preview["unmatched"]), "loa_protected_count": len(preview["loa_protected"])}
 
 
 @router.get("/sick-leave-imports/{token}/unmatched-file")
@@ -327,13 +354,25 @@ def download_unmatched_sick_leave_file(token: str, db: Session = Depends(get_db)
     workbook = Workbook()
     workbook.remove(workbook.active)
     red = PatternFill("solid", fgColor="FFC7CE")
-    unmatched_by_row = {item["row"]: item["reason"] for item in preview["unmatched"]}
+    not_imported = [*preview["unmatched"], *preview["loa_protected"]]
+    not_imported_by_row = {item["row"]: item["reason"] for item in not_imported}
+    not_imported_source_ids = {item["source_id"] for item in not_imported}
     for sheet_number, source_sheet in enumerate(source.sheets()):
         sheet = workbook.create_sheet(title=source_sheet.name[:31] or "Sheet")
+        summary_marker = summary_id_column = None
+        if sheet_number == 0:
+            summary_marker = _find_row(source_sheet, _SUMMARY_MARKERS)
+            summary_id_column = _header_index(source_sheet.row_values(summary_marker + 3), "ID")
         for row_index in range(source_sheet.nrows):
             values = source_sheet.row_values(row_index)
             sheet.append(values)
-            if sheet_number == 0 and row_index + 1 in unmatched_by_row:
+            summary_matches_unimported = False
+            if summary_marker is not None and summary_id_column is not None and row_index > summary_marker + 3:
+                try:
+                    summary_matches_unimported = _source_id(values[summary_id_column]) in not_imported_source_ids
+                except (IndexError, ValueError):
+                    pass
+            if sheet_number == 0 and (row_index + 1 in not_imported_by_row or summary_matches_unimported):
                 for cell in sheet[sheet.max_row]:
                     cell.fill = red
         for column in sheet.columns:
@@ -341,7 +380,7 @@ def download_unmatched_sick_leave_file(token: str, db: Session = Depends(get_db)
 
     sheet = workbook.create_sheet("未覆盖说明")
     sheet.append(["文件行号", "源文件姓名", "源文件ID", "转换后系统员工号", "日期", "病假类型", "时数", "换算天数", "未覆盖原因"])
-    for item in preview["unmatched"]:
+    for item in not_imported:
         sheet.append([item["row"], item["source_name"], item["source_id"], item["employee_no"], item["date"], item["leave_type"], float(item["hours"]), float(item["days"]), item["reason"]])
         for cell in sheet[sheet.max_row]:
             cell.fill = red

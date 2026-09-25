@@ -552,8 +552,8 @@ def pr_ranking_payload(
     page_size: int,
     attraction_id: int | None = None,
 ) -> dict:
-    if user.role.code not in GSM_CODES:
-        raise HTTPException(403, "仅TA GSM和GSM可以查看PR排名数据")
+    if user.role.code not in GSM_CODES | {"AM", "OM"}:
+        raise HTTPException(403, "仅TA GSM、GSM、AM和OM可以查看PR排名数据")
     start = parse_iso_date(start_value, "开始日期")
     end = parse_iso_date(end_value, "结束日期")
     if start > end:
@@ -829,8 +829,8 @@ def export_pr_rankings(
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
-    if user.role.code != "GSM":
-        raise HTTPException(403, "TAGSM仅支持查询PR排名，不能导出景点圈数据")
+    if user.role.code not in {"GSM", "AM", "OM"}:
+        raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
     data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id)
     wb = build_pr_rankings_workbook(db, data, category)
     watermark_workbook(wb, user.employee.employee_no)

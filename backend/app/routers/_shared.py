@@ -158,7 +158,7 @@ CIRCLE_HR_SCORE_RULE_ROLE_CODES = CIRCLE_HR_MANAGED_ROLE_CODES & RECOGNIZER_CODE
 RECOGNITION_FILTER_STATUSES = frozenset({"pending", "rejected", "confirmed"})
 
 
-ATTENDANCE_FILTER_STATUSES = frozenset({"active", "void"})
+ATTENDANCE_FILTER_STATUSES = frozenset({"active", "covered", "void"})
 
 
 DEDUCTION_FILTER_STATUSES = frozenset({"active", "void", "pending_upgrade", "pending_material", "material_processing", "material_failed"})
@@ -956,7 +956,7 @@ def statement_upgrade_reviewer_options(db: Session) -> list[dict]:
 def sick_leave_payload(db: Session, row: SickLeaveRecord, *, employees: dict[int, Employee] | None = None, files: dict[int, StoredFile] | None = None) -> dict:
     employee = (employees or {}).get(row.employee_id) or db.get(Employee, row.employee_id)
     proof_file = (files or {}).get(row.proof_file_id) or (db.get(StoredFile, row.proof_file_id) if row.proof_file_id else None)
-    status_names = {"active": "已生效", "void": "已作废"}
+    status_names = {"active": "已生效", "covered": "已覆盖", "void": "已作废"}
     return {
         "record_type": "sick_leave",
         "id": row.id,

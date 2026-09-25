@@ -36,6 +36,7 @@
 | `employee_role_assignments` | 角色任职 |
 | `user_accounts` | 登录账号 |
 | `user_sessions` | 会话 |
+| `release_announcement_reads` | 更新公告已读状态 |
 | `submission_requests` | 提交幂等 |
 | `management_scopes` | GSM/TA GSM 管理范围 |
 | `work_groups` | 工作组 |
@@ -276,6 +277,22 @@
 键：PK `id`；UNIQUE `token_hash`；FK `account_id`。
 
 列级索引：`account_id`、`token_hash`、`expires_at`。
+
+### `release_announcement_reads`
+
+每个账号、版本、角色组合只登记一次公告已读状态；账号删除时级联删除。
+
+| 字段 | 类型 | 空 | 说明 |
+|---|---|---|---|
+| `id` | INTEGER PK | 否 | |
+| `account_id` | INTEGER | 否 | FK → `user_accounts.id` ON DELETE CASCADE |
+| `version` | VARCHAR(32) | 否 | 应用版本 |
+| `role_code` | VARCHAR(30) | 否 | 阅读时的角色代码 |
+| `read_at` | DATETIME | 否 | 阅读确认时间 |
+
+键：PK `id`；UNIQUE `uq_release_announcement_read` (`account_id`, `version`, `role_code`)；FK `account_id`。
+
+列级索引：`account_id`。
 
 ### `submission_requests`
 
@@ -1042,6 +1059,7 @@
 employees.id  ← 几乎所有业务表的员工外键
 user_accounts.employee_id 1:1 employees
 user_sessions.account_id  → user_accounts
+release_announcement_reads.account_id  → user_accounts
 stored_files.id  ← recognition_attachments / sick_leave.proof / deduction.document / material_jobs.output
 recognition_records 1:N attachments, reviews；可选 1:1 monthly_quota
 deduction_records 1:N material_jobs

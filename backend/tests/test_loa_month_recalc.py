@@ -20,8 +20,9 @@ from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
 from app.v2_models import AttendanceMonthlyScore, Employee, EmployeeLOAPeriod, MonthClosure  # noqa: E402
 from app.v2_services import recalculate_attendance  # noqa: E402
 
-# AM holds the LOA permission here only to prove the role gate is independent of it.
-ROLE_PERMISSION_CODES["AM"] = (*ROLE_PERMISSION_CODES["AM"], "LOA_REGISTER")
+# AM now holds this permission by default; avoid adding a duplicate role-permission row.
+if "LOA_REGISTER" not in ROLE_PERMISSION_CODES["AM"]:
+    ROLE_PERMISSION_CODES["AM"] = (*ROLE_PERMISSION_CODES["AM"], "LOA_REGISTER")
 
 
 def login(client: TestClient, employee_no: str) -> None:
@@ -219,9 +220,8 @@ def test_cancel_loa_requires_registrar_role() -> None:
         assert no_permission.status_code == 403, no_permission.text
 
         login(client, "AMTEST01")
-        wrong_role = client.request("DELETE", f"/api/loa-periods/{period_id}", json={"reason": "越权"})
-        assert wrong_role.status_code == 403, wrong_role.text
-        assert "撤销LOA" in wrong_role.json()["detail"]
+        registrar = client.request("DELETE", f"/api/loa-periods/{period_id}", json={"reason": "登记更正"})
+        assert registrar.status_code == 200, registrar.text
 
         with SessionLocal() as db:
-            assert db.get(EmployeeLOAPeriod, period_id).status == "active"
+            assert db.get(EmployeeLOAPeriod, period_id).status == "cancelled"

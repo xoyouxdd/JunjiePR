@@ -158,6 +158,17 @@ class UserAccount(Base):
     employee = relationship("Employee")
 
 
+class ReleaseAnnouncementRead(Base):
+    __tablename__ = "release_announcement_reads"
+    __table_args__ = (UniqueConstraint("account_id", "version", "role_code", name="uq_release_announcement_read"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), index=True)
+    version: Mapped[str] = mapped_column(String(32))
+    role_code: Mapped[str] = mapped_column(String(30))
+    read_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class UserSession(Base):
     __tablename__ = "user_sessions"
 

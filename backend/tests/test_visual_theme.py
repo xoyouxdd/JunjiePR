@@ -47,7 +47,7 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert "内部资料 ·" in script
     assert "CONFIDENTIAL" not in script
     assert "installPageBindHint" in script
-    assert "本页内容绑定" in script
+    assert "${state.me.name}(${state.me.employee_no})" in script
     assert "外传可追溯" not in script
     assert "rgba(66, 78, 94, .08)" in css
     assert "#pageBindHint" in css

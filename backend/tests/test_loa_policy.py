@@ -24,6 +24,26 @@ def login(client: TestClient, employee_no: str) -> None:
     assert response.status_code == 200, response.text
 
 
+def test_am_om_have_matching_ranking_loa_and_poc_access() -> None:
+    with TestClient(app) as client:
+        permissions_by_role = {}
+        for account, role in (("AMTEST01", "AM"), ("OMTEST01", "OM")):
+            login(client, account)
+            me = client.get("/api/me").json()
+            assert me["role_code"] == role
+            permissions_by_role[role] = set(me["permissions"])
+            assert {"DATA_VIEW", "DATA_EXPORT", "POC_ISSUE", "LOA_REGISTER"} <= permissions_by_role[role]
+            assert client.get("/api/employee-targets", params={"usage": "loa", "keyword": "测试CM甲"}).status_code == 200
+            assert client.get("/api/employee-targets", params={"usage": "poc", "keyword": "测试CM甲"}).status_code == 200
+            assert client.get("/api/loa-periods").status_code == 200
+            dates = {"start_date": date.today().isoformat(), "end_date": date.today().isoformat()}
+            assert client.get("/api/pr-rankings", params=dates).status_code == 200
+            assert client.get("/api/pr-rankings/export", params=dates).status_code == 200
+            assert client.get("/api/sick-leave-imports/records").status_code == 403
+            client.post("/api/logout")
+        assert permissions_by_role["AM"] == permissions_by_role["OM"]
+
+
 def test_loa_any_touched_month_is_excluded_and_target_search_is_global() -> None:
     with TestClient(app) as client:
         login(client, "GSMTEST01")

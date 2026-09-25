@@ -21,7 +21,7 @@ from app.main import app  # noqa: E402
 from app.routers import sick_leave_import  # noqa: E402
 from app.routers.sick_leave_import import _read_workbook, _reconcile, _system_number  # noqa: E402
 from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
-from app.v2_models import SickLeaveRecord  # noqa: E402
+from app.v2_models import AttendanceMonthlyScore, Employee, SickLeaveRecord  # noqa: E402
 
 
 def test_legacy_manual_sick_registration_stays_disabled_for_production_roles():
@@ -88,6 +88,68 @@ def test_commit_rechecks_loa_added_after_preview():
                 SickLeaveRecord.import_source == "monthly_transaction_import",
             ).count() == 0
         sick_leave_import._drop_preview(token)
+
+
+def test_monthly_file_covers_prior_manual_and_imported_absence_only_for_matched_employee_month():
+    month = "2099-07"
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            matched = db.query(Employee).filter_by(employee_no="CMTEST01").one()
+            untouched = db.query(Employee).filter_by(employee_no="CMTEST02").one()
+            submitter = db.query(Employee).filter_by(employee_no="GSMTEST01").one()
+
+            def old_record(employee: Employee, day: str, source: str, *, violation: bool = False) -> SickLeaveRecord:
+                row = SickLeaveRecord(
+                    employee_id=employee.id, employee_no_snapshot=employee.employee_no,
+                    employee_name_snapshot=employee.name, attendance_month=day[:7],
+                    leave_start_date=day, leave_end_date=day, leave_days=Decimal("1"),
+                    charged_days=Decimal("1"), import_source=source, is_violation=violation,
+                    status="active", submitted_by=submitter.id, submitted_by_name=submitter.name,
+                )
+                db.add(row)
+                db.flush()
+                return row
+
+            manual_id = old_record(matched, "2099-07-01", "manual").id
+            violation_id = old_record(matched, "2099-07-02", "manual", violation=True).id
+            imported_id = old_record(matched, "2099-07-03", "monthly_transaction_import").id
+            untouched_id = old_record(untouched, "2099-07-04", "manual").id
+            other_month_id = old_record(matched, "2099-06-01", "manual").id
+            db.commit()
+            matched_id, submitter_id = matched.id, submitter.id
+
+        login = client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"})
+        assert login.status_code == 200, login.text
+        token = "file-covers-manual-review"
+        sick_leave_import._store_preview(token, {
+            "created_at": datetime.now(), "filename": "review.xls", "content": b"",
+            "month": month, "matched": [
+                {"employee_id": matched_id, "date": "2099-07-05", "days": Decimal("0.5"), "leave_type": "法定病假"},
+                {"employee_id": matched_id, "date": "2099-07-06", "days": Decimal("1"), "leave_type": "全薪病假"},
+            ], "unmatched": [], "loa_protected": [], "errors": [], "user_id": submitter_id,
+        })
+        response = client.post("/api/sick-leave-imports/commit", json={"token": token})
+        assert response.status_code == 200, response.text
+        assert response.json()["covered_record_count"] == 2
+        assert response.json()["replaced_record_count"] == 3
+        assert response.json()["replaced_manual_count"] == 2
+        history = client.get("/api/my-entries", params={"month": month, "record_type": "sick_leave", "status": "covered"})
+        assert history.status_code == 200, history.text
+        assert {row["id"] for row in history.json()["items"]} == {manual_id, violation_id}
+        assert {row["status_name"] for row in history.json()["items"]} == {"已覆盖"}
+        with SessionLocal() as db:
+            for record_id in (manual_id, violation_id, imported_id):
+                row = db.get(SickLeaveRecord, record_id)
+                assert row.status == "covered"
+                assert row.voided_from_status == "active"
+                assert row.voided_by == submitter_id
+            assert db.get(SickLeaveRecord, untouched_id).status == "active"
+            assert db.get(SickLeaveRecord, other_month_id).status == "active"
+            active = db.query(SickLeaveRecord).filter_by(employee_id=matched_id, attendance_month=month, status="active").all()
+            assert {row.leave_start_date for row in active} == {"2099-07-05", "2099-07-06"}
+            assert all(row.import_source == "monthly_transaction_import" for row in active)
+            attendance = db.query(AttendanceMonthlyScore).filter_by(employee_id=matched_id, attendance_month=month).one()
+            assert attendance.actual_sick_days == Decimal("1.5")
 
 
 def test_preview_rejects_workbooks_above_size_limit():
@@ -284,6 +346,7 @@ def test_preview_end_to_end_reports_unmatched_and_serves_marked_file(monkeypatch
             notes = list(exported["未覆盖说明"].iter_rows(min_row=2, values_only=True))
             assert [(row[0], row[2], row[3], row[8]) for row in notes] == [(5, "09999999", "9999999", "系统中不存在该员工号")]
             assert exported["员工事务"].cell(row=5, column=1).fill.fgColor.rgb.endswith("FFC7CE")
+            assert exported["员工事务"].cell(row=10, column=1).fill.fgColor.rgb.endswith("FFC7CE")
 
             committed = client.post("/api/sick-leave-imports/commit", json={"token": token})
             assert committed.status_code == 400, committed.text

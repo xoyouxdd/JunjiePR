@@ -36,7 +36,7 @@ from app.routers._shared import (
 
 router = APIRouter()
 
-LOA_REGISTRAR_ROLE_CODES = {"TA_GSM", "GSM", "HR_CIRCLE"}
+LOA_REGISTRAR_ROLE_CODES = {"TA_GSM", "GSM", "AM", "OM", "HR_CIRCLE"}
 
 
 def ensure_employee_number_change_target(db: Session, user: V2User, employee: Employee, role: Role | None = None) -> Role:
@@ -100,8 +100,8 @@ def employee_targets(
     if not (required & user.permissions):
         raise HTTPException(403, "没有对应的员工登记权限")
     if usage == "poc":
-        if user.role.code not in {"TA_GSM", "GSM", "AM"}:
-            raise HTTPException(403, "仅TA GSM、GSM、AM可以查询POC被认可员工")
+        if user.role.code not in {"TA_GSM", "GSM", "AM", "OM"}:
+            raise HTTPException(403, "仅TA GSM、GSM、AM、OM可以查询POC被认可员工")
         value = like_escaped_pattern(keyword)
         query = db.query(Employee).join(UserAccount, UserAccount.employee_id == Employee.id).filter(
             Employee.is_active.is_(True), UserAccount.enabled.is_(True),
@@ -121,7 +121,7 @@ def employee_targets(
         # locate every active employee.  This expands lookup only, not any
         # other HR management scope.
         if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
-            raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以登记LOA")
+            raise HTTPException(403, "仅TA GSM、GSM、AM、OM、景点圈HR可以登记LOA")
         if not keyword.strip():
             return {"items": [], "total": 0, "limit": max(1, min(limit, 50)), "search_scope": "全部在职员工（请输入姓名或员工号）"}
         value = like_escaped_pattern(keyword)
@@ -234,7 +234,7 @@ def list_loa_periods(month: str | None = None, db: Session = Depends(get_db), us
 @router.post("/loa-periods")
 def create_loa_period(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
     if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
-        raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以登记LOA")
+        raise HTTPException(403, "仅TA GSM、GSM、AM、OM、景点圈HR可以登记LOA")
     try:
         employee_id = int(payload.get("employee_id") or 0)
     except (TypeError, ValueError) as exc:
@@ -325,7 +325,7 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
 @router.delete("/loa-periods/{period_id}")
 def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
     if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
-        raise HTTPException(403, "仅TA GSM、GSM、景点圈HR可以撤销LOA")
+        raise HTTPException(403, "仅TA GSM、GSM、AM、OM、景点圈HR可以撤销LOA")
     row = db.get(EmployeeLOAPeriod, period_id)
     if not row or row.status == "cancelled":
         raise HTTPException(404, "LOA记录不存在或已撤销")

@@ -7,6 +7,41 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.25.1",
+        "date": "2026-09-25",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "月度缺勤文件覆盖当月旧登记",
+                "detail": "匹配员工的当月旧人工病假、违规病假及旧文件病假统一标记为已覆盖，以新文件明细重新计算全勤；LOA保护仍生效。缺勤登记页可查看月度文件记录和未导入标红明细。",
+                "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["SICK_LEAVE_IMPORT"],
+            },
+            {
+                "summary": "声明登记统计支持跨景点圈查看与导出",
+                "detail": "按月份、景点圈、等级、类型、状态及员工筛选，查看各圈汇总和逐条记录；可查看相应声明材料并导出带水印的Excel。TA主管和主管也可跨圈查看、导出。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"],
+            },
+            {
+                "summary": "AM与OM可登记LOA并查看PR排名",
+                "detail": "AM、OM可搜索全部在职员工并登记或撤销LOA；PR排名支持跨圈查询和导出。",
+                "audiences": ["AM", "OM"],
+            },
+            {
+                "summary": "OM可开具POC特别贡献认可",
+                "detail": "OM新增POC开具权限，可在专用入口查询对象并提交。",
+                "audiences": ["OM"],
+                "permissions": ["POC_ISSUE"],
+            },
+            {
+                "summary": "更新公告与移动端显示优化",
+                "detail": "每个账号首次打开新版本时显示对应角色的更新公告，阅读5秒后可确认关闭；待办明细改为页内展开，桌面与移动端显示继续优化，桌面图标更新为FZPR登记。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.23.3",
         "date": "2026-09-23",
         "status": "candidate",

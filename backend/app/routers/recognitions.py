@@ -348,8 +348,8 @@ def create_poc_recognition(
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("POC_ISSUE")),
 ):
-    if user.role.code not in {"TA_GSM", "GSM", "AM"}:
-        raise HTTPException(403, "仅TA GSM、GSM、AM可以开具POC特别贡献")
+    if user.role.code not in {"TA_GSM", "GSM", "AM", "OM"}:
+        raise HTTPException(403, "仅TA GSM、GSM、AM、OM可以开具POC特别贡献")
     request_key = normalize_request_key(idempotency_key)
     payload_digest = submission_payload_digest(
         {
@@ -687,7 +687,7 @@ def my_entries(
                 payload["available_actions"] = [*payload["available_actions"], "void"]
             items.append(payload)
     if record_type in {"all", "sick_leave"}:
-        query = db.query(SickLeaveRecord)
+        query = db.query(SickLeaveRecord).filter(SickLeaveRecord.import_source != "monthly_transaction_import")
         if scope == "supervisors":
             query = query.filter(SickLeaveRecord.submitted_by.in_(supervisor_submitter_ids) if supervisor_submitter_ids else SickLeaveRecord.id == -1)
         else:

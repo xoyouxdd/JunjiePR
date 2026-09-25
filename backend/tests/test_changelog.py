@@ -30,6 +30,18 @@ def test_latest_changelog_version_matches_app_version() -> None:
     assert STATIC_CACHE_VERSION == APP_VERSION
 
 
+def test_current_release_items_match_role_permissions() -> None:
+    items = RELEASES[0]["items"]
+    summaries = {item["summary"]: item for item in items}
+    declaration = summaries["声明登记统计支持跨景点圈查看与导出"]
+    assert item_visible(declaration, "SUPERVISOR", {"DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"})
+    assert item_visible(declaration, "SUPERVISOR", {"DECLARATION_STATS_VIEW"}) is False
+    assert item_visible(declaration, "CM", {"DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"}) is False
+    monthly = summaries["月度缺勤文件覆盖当月旧登记"]
+    assert item_visible(monthly, "HR_CIRCLE", {"SICK_LEAVE_IMPORT"})
+    assert item_visible(monthly, "SUPERVISOR", {"SICK_LEAVE_IMPORT"}) is False
+
+
 def test_changelog_filters_by_role() -> None:
     cm = visible_releases("CM", set())
     admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
@@ -70,6 +82,30 @@ def test_changelog_api_and_navigation_exist() -> None:
     assert "items.push(['changelog','更新记录']);" in source
     assert "changelog:renderChangelog" in source
     assert "async function renderChangelog" in source
+
+
+def test_release_announcement_is_role_filtered_and_read_once_per_account() -> None:
+    with TestClient(app) as client:
+        login(client, "CMTEST01")
+        first = client.get("/api/changelog/announcement")
+        assert first.status_code == 200, first.text
+        release = first.json()["release"]
+        assert release["version"] == APP_VERSION
+        assert first.json()["read"] is False
+        assert release == next(row for row in client.get("/api/changelog").json()["releases"] if row["current"])
+        assert client.post("/api/changelog/announcement/read", json={"version": "wrong"}).status_code == 409
+        assert client.get("/api/changelog/announcement").json()["read"] is False
+        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
+        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
+        assert client.get("/api/changelog/announcement").json()["read"] is True
+        client.post("/api/logout")
+        login(client, "CMTEST01")
+        assert client.get("/api/changelog/announcement").json()["read"] is True
+        client.post("/api/logout")
+        login(client, "GSMTEST01")
+        gsm = client.get("/api/changelog/announcement").json()
+        assert gsm["read"] is False
+        assert gsm["release"]["version"] == APP_VERSION
 
 
 def test_docs_indexes_list_every_docs_file() -> None:
