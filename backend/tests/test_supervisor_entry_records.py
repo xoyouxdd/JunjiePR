@@ -18,11 +18,45 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
+from app.v2_database import SessionLocal  # noqa: E402
+from app.v2_models import Employee  # noqa: E402
+from app.routers import statistics  # noqa: E402
 
 
 def login(client: TestClient, account: str) -> None:
     response = client.post("/api/login", json={"employee_no": account, "password": "1234"})
     assert response.status_code == 200, response.text
+
+
+def test_member_summary_sorts_numeric_total_descending_then_employee_number(monkeypatch) -> None:
+    with TestClient(app) as client:
+        login(client, "TATEST01")
+        with SessionLocal() as db:
+            cm = db.query(Employee).filter_by(employee_no="CMTEST01").one()
+            tr = db.query(Employee).filter_by(employee_no="TRTEST01").one()
+            cm_id, tr_id = cm.id, tr.id
+        month = date.today().strftime("%Y-%m")
+        for cm_total, tr_total, expected in (
+            (9.0, 12.5, [tr_id, cm_id]),
+            (15.5, 9.0, [cm_id, tr_id]),
+            (12.0, 12.0, [cm_id, tr_id]),
+            (-9.0, -3.0, [tr_id, cm_id]),
+        ):
+            totals = {cm_id: cm_total, tr_id: tr_total}
+            monkeypatch.setattr(statistics, "employee_month_scores", lambda db, month, ids: [
+                {"employee_id": employee_id, "total_score": totals[employee_id]}
+                for employee_id in ids
+            ])
+            response = client.get("/api/member-score-summary", params={"month": month})
+            assert response.status_code == 200, response.text
+            rows = response.json()["rows"]
+            assert [row["employee_id"] for row in rows] == expected
+            assert [row["total_score"] for row in rows] == sorted(totals.values(), reverse=True)
+            assert all("all_records" in row["details"] for row in rows)
+        filtered = client.get("/api/member-score-summary", params={"month": month, "keyword": "TRTEST01"})
+        assert filtered.status_code == 200
+        assert [row["employee_id"] for row in filtered.json()["rows"]] == [tr_id]
+        assert client.get("/api/member-score-summary", params={"month": "bad"}).status_code == 400
 
 
 def pdf_bytes() -> bytes:

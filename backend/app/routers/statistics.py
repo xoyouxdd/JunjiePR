@@ -322,6 +322,11 @@ def member_score_summary(
         row["employee_id"]: dict(row)
         for row in employee_month_scores(db, month, selected_ids)
     }
+    employees.sort(key=lambda employee: (
+        -float(scores.get(employee.id, {}).get("total_score") or 0),
+        employee.employee_no,
+        employee.id,
+    ))
     recognition_groups: dict[int, list[RecognitionRecord]] = {employee_id: [] for employee_id in selected_ids}
     deduction_groups: dict[int, list[DeductionRecord]] = {employee_id: [] for employee_id in selected_ids}
     sick_leave_groups: dict[int, list[SickLeaveRecord]] = {employee_id: [] for employee_id in selected_ids}
@@ -1428,7 +1433,7 @@ def trend_month_keys(end_month: str, count: int) -> list[str]:
 
 
 def statistics_trend_payload(db: Session, end_month: str, months: int, attraction_id: int | None, title: str | None, user: V2User) -> dict:
-    """Month-by-month totals built from statistics_payload so figures match /statistics exactly.
+    """Month-by-month scores from statistics_payload, excluding unassigned circles.
 
     Scope, organization basis (month snapshot first) and LOA exclusion all come
     from that one function; the trend never re-implements the scoring rules.
@@ -1440,10 +1445,15 @@ def statistics_trend_payload(db: Session, end_month: str, months: int, attractio
     circles: dict[object, dict] = {}
     for key in keys:
         payload = statistics_payload(db, key, attraction_id, None, title, user, include_hierarchy=False)
-        summary = payload["summary"]
+        assigned_nodes = [node for node in payload["by_attraction"] if node["attraction_id"]]
+        summary = {
+            "employee_count": sum(node["employee_count"] for node in assigned_nodes),
+            **{field: round(sum(float(node[field] or 0) for node in assigned_nodes), 2)
+               for field in TREND_SCORE_FIELDS},
+        }
         overall.append({"month": key, "employee_count": summary["employee_count"],
                         **{field: summary[field] for field in TREND_SCORE_FIELDS}})
-        for node in payload["by_attraction"]:
+        for node in assigned_nodes:
             circle = circles.setdefault(node["attraction_id"], {
                 "attraction_id": node["attraction_id"],
                 "attraction_name": node["attraction_name"],

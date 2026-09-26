@@ -7,6 +7,37 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.27.1",
+        "date": "2026-09-27",
+        "status": "candidate",
+        "announcement_items_from": "2026.09.25.1",
+        "items": [
+            {
+                "summary": "绩效登记结果反馈更明确",
+                "detail": "管理角色完成加分、声明或升级登记后，弹窗按服务器返回状态显示已生效、待审核、待补材料或处理中；加分显示实际计入分值，升级分值待审核确定。重复提交不重复弹出成功反馈，计分及权限规则不变。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "月度趋势排除未设置景点圈",
+                "detail": "月度趋势不再统计未设置景点圈的人数和分数，也不显示其曲线及图例；整体汇总仅包含已归属景点圈的数据，历史月份仍按原有月结归属规则计算。",
+                "audiences": ["all"],
+                "permissions": ["DATA_VIEW", "DATA_EXPORT"],
+            },
+            {
+                "summary": "组员记录按综合分从高到低排列",
+                "detail": "直属CM/TR月度汇总按综合分降序排列，同分按工号排序；月份切换和员工搜索后仍使用相同顺序，明细查看与计分规则不变。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR"],
+                "permissions": ["MEMBER_RECORDS"],
+            },
+            {
+                "summary": "声明材料支持直接下载与规范命名",
+                "detail": "声明登记统计保留查看材料，并新增直接下载；下载文件按事件日期、员工姓名、声明类型命名，仍保留账号水印、权限校验和下载审计。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["DECLARATION_STATS_VIEW"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.26.3",
         "date": "2026-09-26",
         "status": "candidate",

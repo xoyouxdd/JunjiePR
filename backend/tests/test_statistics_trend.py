@@ -49,7 +49,9 @@ def test_trend_totals_equal_single_month_statistics() -> None:
         for row in data["overall"]:
             single = client.get("/api/statistics", params={"month": row["month"]})
             assert single.status_code == 200, single.text
-            summary = single.json()["summary"]
+            nodes = [node for node in single.json()["by_attraction"] if node["attraction_id"]]
+            summary = {"employee_count": sum(node["employee_count"] for node in nodes),
+                       **{field: round(sum(node[field] for node in nodes), 2) for field in TREND_SCORE_FIELDS}}
             assert row["employee_count"] == summary["employee_count"], row["month"]
             for field in TREND_SCORE_FIELDS:
                 assert row[field] == summary[field], f'{row["month"]} {field}'
@@ -63,6 +65,31 @@ def test_trend_pads_every_circle_to_the_full_month_range() -> None:
         for circle in data["by_attraction"]:
             assert [point["month"] for point in circle["series"]] == data["months"]
             assert all(field in point for point in circle["series"] for field in TREND_SCORE_FIELDS)
+
+
+def test_trend_excludes_unassigned_scores_from_overall_and_series(monkeypatch) -> None:
+    from app.routers import statistics
+
+    def fake_payload(*args, **kwargs):
+        nodes = [
+            {"attraction_id": None, "attraction_name": "未设置景点圈", "employee_count": 9,
+             **{field: 900.0 for field in TREND_SCORE_FIELDS}},
+            {"attraction_id": 1, "attraction_name": "热力追踪", "employee_count": 2,
+             **{field: 12.5 for field in TREND_SCORE_FIELDS}},
+        ]
+        return {"by_attraction": nodes}
+
+    monkeypatch.setattr(statistics, "statistics_payload", fake_payload)
+    data = statistics.statistics_trend_payload(None, ANCHOR, 3, None, None, None)
+    assert [node["attraction_id"] for node in data["by_attraction"]] == [1]
+    assert all(row["employee_count"] == 2 for row in data["overall"])
+    assert all(row[field] == 12.5 for row in data["overall"] for field in TREND_SCORE_FIELDS)
+
+    monkeypatch.setattr(statistics, "statistics_payload", lambda *args, **kwargs: {"by_attraction": []})
+    empty = statistics.statistics_trend_payload(None, ANCHOR, 1, None, None, None)
+    assert empty["by_attraction"] == []
+    assert empty["overall"][0]["employee_count"] == 0
+    assert all(empty["overall"][0][field] == 0 for field in TREND_SCORE_FIELDS)
 
 
 def test_trend_span_is_capped_and_month_format_is_validated() -> None:

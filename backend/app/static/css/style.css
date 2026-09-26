@@ -490,6 +490,23 @@ th { background: #eef3f9; font-weight: 700; white-space: nowrap; }
 .modal-overlay { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 18px; background: rgba(15,23,42,.58); }
 .modal-card { width: min(520px,100%); max-height: 85vh; overflow: auto; padding: 20px; border-radius: 12px; background: var(--panel); box-shadow: 0 20px 60px rgba(15,23,42,.28); }
 .modal-card h3 { margin: 0 0 12px; }
+.modal-card.performance-feedback { position: relative; width: min(480px,100%); padding: 32px; text-align: center; }
+.performance-feedback-close { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; padding: 0; font-size: 24px; }
+.performance-feedback-icon { display: grid; place-items: center; width: 72px; height: 72px; margin: 8px auto 16px; border-radius: 50%; font-size: 38px; }
+.performance-feedback-icon.is-active { color: var(--ok); background: var(--ok-bg); }
+.performance-feedback-icon.is-pending { color: var(--warn); background: var(--warn-bg); }
+.performance-feedback h3 { margin: 18px 0 12px; color: var(--text-strong); font-size: 22px; }
+.performance-feedback-message { margin: 0 0 24px; color: var(--text-secondary); line-height: 1.8; }
+.performance-feedback-summary { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-tint); text-align: left; overflow-wrap: anywhere; }
+.performance-feedback-summary > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.performance-feedback-summary small { display: block; margin-top: 8px; color: var(--text-secondary); }
+.performance-feedback-value { color: var(--text-strong); font-weight: 700; }
+.performance-feedback .field-hint { margin: 14px 0 20px; line-height: 1.6; }
+.performance-feedback-continue { width: 100%; min-height: 44px; }
+@media (max-width: 760px) {
+  .modal-card.performance-feedback { padding: 28px 20px 24px; }
+  .performance-feedback h3 { font-size: 20px; }
+}
 .modal-message { color: var(--text-label); line-height: 1.65; }
 .modal-message p { margin: 0 0 10px; }
 .modal-input { width: 100%; margin-top: 10px; }

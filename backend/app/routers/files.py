@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import re
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -27,6 +28,13 @@ from app.routers._shared import (
 )
 
 router = APIRouter()
+
+
+def deduction_download_name(record: DeductionRecord, suffix: str) -> str:
+    """Use event snapshots without changing the stored material or its original name."""
+    parts = (record.occurred_on, record.employee_name, record.deduction_type_name)
+    safe = [re.sub(r'[<>:"/\\|?*\x00-\x1f]', '-', str(value)).strip(' .') or '未记录' for value in parts]
+    return '_'.join(safe) + suffix
 
 
 @router.get("/options")
@@ -157,6 +165,7 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
     except Exception as exc:
         raise HTTPException(500, "文件水印生成失败，请联系管理员") from exc
     context_type = "recognition" if recognition_link else "deduction" if deduction else "sick_leave" if sick_leave else "stored_file"
+    download_name = deduction_download_name(deduction, suffix) if deduction and not preview else row.original_filename
     write_audit(
         db,
         user.employee,
@@ -165,6 +174,7 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
         file_id,
         after={
             "filename": row.original_filename,
+            "download_filename": download_name,
             "watermark_account": user.employee.employee_no,
             "delivery_mode": "preview" if preview else "download",
             "preview_cache": "hit" if cache_hit else "miss" if preview else "not_used",
@@ -173,7 +183,7 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
     db.commit()
     inline_preview = preview and (media_type.startswith("image/") or media_type == "application/pdf")
     headers = {
-        "Content-Disposition": f"{'inline' if inline_preview else 'attachment'}; filename*=UTF-8''{quote(row.original_filename)}",
+        "Content-Disposition": f"{'inline' if inline_preview else 'attachment'}; filename*=UTF-8''{quote(download_name, safe='')}",
         "Cache-Control": "private, no-store",
         "X-Preview-Cache": "HIT" if cache_hit else "MISS" if preview else "BYPASS",
     }

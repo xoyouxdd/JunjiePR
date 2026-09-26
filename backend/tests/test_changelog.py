@@ -30,6 +30,14 @@ def test_latest_changelog_version_matches_app_version() -> None:
     assert STATIC_CACHE_VERSION == APP_VERSION
 
 
+def test_material_download_note_requires_declaration_view_permission() -> None:
+    release = next(release for release in RELEASES if release["version"] == APP_VERSION)
+    item = next(item for item in release["items"] if "声明材料" in item["summary"])
+    assert item_visible(item, "SUPERVISOR", {"DECLARATION_STATS_VIEW"})
+    assert not item_visible(item, "SUPERVISOR", set())
+    assert not item_visible(item, "CM", {"DECLARATION_STATS_VIEW"})
+
+
 def test_previous_release_items_match_role_permissions() -> None:
     items = next(release["items"] for release in RELEASES if release["version"] == "2026.09.25.1")
     summaries = {item["summary"]: item for item in items}
@@ -59,7 +67,7 @@ def test_current_covered_sick_history_note_is_visible_to_every_role() -> None:
 
 def test_changelog_filters_by_role() -> None:
     cm = visible_releases("CM", set())
-    admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
+    admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN", "DECLARATION_STATS_VIEW"})
     gsm = visible_releases("GSM", {"POC_ISSUE", "DATA_EXPORT"})
     cm_text = " ".join(item["summary"] for release in cm for item in release["items"])
     admin_text = " ".join(item["summary"] for release in admin for item in release["items"])
@@ -70,7 +78,9 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    assert cm[0]["current"] is True
+    # A role with no changes in this release must not receive another role's note.
+    assert cm[0]["current"] is False
+    assert all(release["version"] != APP_VERSION for release in cm)
     assert admin[0]["current"] is True
 
 
@@ -102,6 +112,10 @@ def test_changelog_api_and_navigation_exist() -> None:
 def test_release_announcement_is_role_filtered_and_read_once_per_account() -> None:
     with TestClient(app) as client:
         login(client, "CMTEST01")
+        assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
+        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 404
+        client.post("/api/logout")
+        login(client, "TATEST01")
         first = client.get("/api/changelog/announcement")
         assert first.status_code == 200, first.text
         release = first.json()["release"]
@@ -110,14 +124,14 @@ def test_release_announcement_is_role_filtered_and_read_once_per_account() -> No
         assert first.json()["read"] is False
         history = client.get("/api/changelog").json()["releases"]
         assert release["items"] == next(row["items"] for row in history if row["version"] == release["content_version"])
-        assert release["items"] != next(row["items"] for row in history if row["current"])
+        assert release["items"] != history[0]["items"]
         assert client.post("/api/changelog/announcement/read", json={"version": "wrong"}).status_code == 409
         assert client.get("/api/changelog/announcement").json()["read"] is False
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.get("/api/changelog/announcement").json()["read"] is True
         client.post("/api/logout")
-        login(client, "CMTEST01")
+        login(client, "TATEST01")
         assert client.get("/api/changelog/announcement").json()["read"] is True
         client.post("/api/logout")
         login(client, "GSMTEST01")
