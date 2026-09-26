@@ -16,6 +16,7 @@ exports/
 output/
 outputs/
 *.zip
+!docs/assets/hr-monthly-templates/20260927/原创图片素材.zip
 *.tar.gz
 *.log
 
