@@ -280,9 +280,6 @@ async def preview_sick_leave_import(
             else:
                 matched.append({**row, "employee_id": employee.id})
     token = secrets.token_urlsafe(24)
-    blocking_unmatched = [row for row in unmatched if row["reason"] != "不在当前账号可导入的景点圈范围"]
-    if blocking_unmatched:
-        errors.append("文件中有未匹配员工；请核对后重新导入，不能将其误判为无缺勤")
     old_rows = _active_month_rows(db, user, month)
     file_employee_ids = {row["employee_id"] for row in matched + loa_protected}
     removed_employee_ids = {row.employee_id for row in old_rows} - file_employee_ids
@@ -291,7 +288,8 @@ async def preview_sick_leave_import(
         "token": token, "month": month, "blocking_errors": errors,
         "matched_employee_count": len({row["employee_id"] for row in matched}), "matched_record_count": len(matched),
         "replaced_record_count": len(old_rows), "absent_employee_count": len(removed_employee_ids),
-        "unmatched": unmatched, "loa_protected": loa_protected, "can_commit": not errors,
+        "unmatched": unmatched, "skipped_unmatched_count": len(unmatched),
+        "loa_protected": loa_protected, "can_commit": not errors,
     }
 
 
@@ -318,8 +316,10 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
     preview = _get_preview(token, user.id)
     if not preview:
         raise HTTPException(400, _PREVIEW_EXPIRED_MESSAGE)
-    if preview["errors"] or any(row["reason"] != "不在当前账号可导入的景点圈范围" for row in preview["unmatched"]):
+    if preview["errors"]:
         raise HTTPException(400, "预检未通过，不能覆盖")
+    if preview["unmatched"] and payload.get("reviewed_unmatched") is not True:
+        raise HTTPException(400, "请登记人先复核未匹配员工及原因，再确认跳过")
     month = preview["month"]
     if payload.get("month") != month:
         raise HTTPException(400, "提交月份与预检月份不一致，请重新预检")
@@ -377,7 +377,7 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
         db.flush()
         for employee in affected_employees.values():
             recalculate_attendance(db, employee, month)
-        write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "replaced_records": replaced_record_count, "replaced_manual_records": replaced_manual_count, "absent_employees": absent_employee_count, "unmatched": len(preview["unmatched"]), "loa_protected": len(preview["loa_protected"])})
+        write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "replaced_records": replaced_record_count, "replaced_manual_records": replaced_manual_count, "absent_employees": absent_employee_count, "unmatched": len(preview["unmatched"]), "unmatched_reviewed_by": user.name if preview["unmatched"] else None, "unmatched_reasons": [{"row": row["row"], "employee_no": row["employee_no"], "reason": row["reason"]} for row in preview["unmatched"]], "loa_protected": len(preview["loa_protected"])})
         db.commit()
     except Exception:
         db.rollback()

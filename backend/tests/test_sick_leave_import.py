@@ -333,9 +333,10 @@ def test_preview_end_to_end_reports_unmatched_and_serves_marked_file(monkeypatch
         token = body["token"]
         try:
             assert body["month"] == "2099-08"
-            assert "未匹配员工" in body["blocking_errors"][0]
+            assert body["blocking_errors"] == []
             assert body["matched_record_count"] == 0
-            assert body["can_commit"] is False
+            assert body["skipped_unmatched_count"] == 1
+            assert body["can_commit"] is True
             assert [(row["source_id"], row["employee_no"], row["reason"]) for row in body["unmatched"]] == [
                 ("09999999", "9999999", "系统中不存在该员工号"),
             ]
@@ -352,11 +353,52 @@ def test_preview_end_to_end_reports_unmatched_and_serves_marked_file(monkeypatch
             assert exported["员工事务"].cell(row=5, column=1).fill.fgColor.rgb.endswith("FFC7CE")
             assert exported["员工事务"].cell(row=10, column=1).fill.fgColor.rgb.endswith("FFC7CE")
 
-            committed = client.post("/api/sick-leave-imports/commit", json={"token": token})
+            committed = client.post("/api/sick-leave-imports/commit", json={"token": token, "month": "2099-08"})
             assert committed.status_code == 400, committed.text
-            assert "预检未通过" in committed.json()["detail"]
+            assert "复核未匹配员工" in committed.json()["detail"]
+            committed = client.post("/api/sick-leave-imports/commit", json={"token": token, "month": "2099-08", "reviewed_unmatched": True})
+            assert committed.status_code == 200, committed.text
+            assert committed.json()["unmatched_count"] == 1
         finally:
             sick_leave_import._drop_preview(token)
+
+
+def test_name_mismatch_is_skipped_after_registrant_review_and_old_sick_leave_is_covered(monkeypatch):
+    month = "2099-11"
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST01").one()
+            submitter = db.query(Employee).filter_by(employee_no="GSMTEST01").one()
+            old = SickLeaveRecord(
+                employee_id=employee.id, employee_no_snapshot=employee.employee_no,
+                employee_name_snapshot=employee.name, attendance_month=month,
+                leave_start_date="2099-11-03", leave_end_date="2099-11-03",
+                leave_days=Decimal("1"), charged_days=Decimal("1"),
+                import_source="manual", status="active",
+                submitted_by=submitter.id, submitted_by_name=submitter.name,
+            )
+            db.add(old)
+            db.commit()
+            old_id, employee_id = old.id, employee.id
+        monkeypatch.setattr(sick_leave_import, "_read_workbook", lambda _: ([{
+            "row": 5, "source_id": "01727264", "employee_no": "CMTEST01",
+            "source_name": "WRONG, 姓名有误", "name": "姓名有误", "date": "2099-11-10",
+            "leave_type": "法定病假", "hours": Decimal("8"), "days": Decimal("1"),
+        }], {("01727264", "病假时间总计"): Decimal("8")}, []))
+        monkeypatch.setattr(sick_leave_import, "_transaction_months", lambda _: {month})
+        assert client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"}).status_code == 200
+        preview = client.post("/api/sick-leave-imports/preview", files={"workbook": ("transactions.xls", b"fake-xls")}, data={"month": month})
+        assert preview.status_code == 200, preview.text
+        body = preview.json()
+        assert body["can_commit"] is True
+        assert body["unmatched"][0]["reason"].startswith("姓名不匹配")
+        assert body["skipped_unmatched_count"] == 1
+        committed = client.post("/api/sick-leave-imports/commit", json={"token": body["token"], "month": month, "reviewed_unmatched": True})
+        assert committed.status_code == 200, committed.text
+        assert committed.json()["unmatched_count"] == 1
+        with SessionLocal() as db:
+            assert db.get(SickLeaveRecord, old_id).status == "covered"
+            assert db.query(SickLeaveRecord).filter_by(employee_id=employee_id, attendance_month=month, status="active").count() == 0
 
 
 def test_preview_rejects_selected_month_mismatch_without_allowing_commit(monkeypatch):

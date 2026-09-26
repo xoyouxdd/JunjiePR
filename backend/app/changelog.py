@@ -7,6 +7,25 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.26.3",
+        "date": "2026-09-26",
+        "status": "candidate",
+        "announcement_items_from": "2026.09.25.1",
+        "items": [
+            {
+                "summary": "缺勤导入未匹配员工可复核后跳过",
+                "detail": "预检逐行显示员工未匹配原因，登记人确认复核后可跳过这些行并继续整月覆盖；这些员工的旧缺勤仍退出计分。未导入行可下载标红文件，文件月份及对账错误仍会阻止提交。",
+                "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["SICK_LEAVE_IMPORT"],
+            },
+            {
+                "summary": "缺勤导入复核确认保护",
+                "detail": "缺勤导入的员工匹配失败须经登记人复核；文件月份、对账、LOA及月结保护保持有效，历史记录仍保留。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.26.2",
         "date": "2026-09-26",
         "status": "candidate",
