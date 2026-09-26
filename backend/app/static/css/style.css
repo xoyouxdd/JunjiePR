@@ -1729,3 +1729,12 @@ table,
 .modal-overlay.is-leaving > .image-preview-dialog { animation: layer-sink-out .14s ease-in forwards; }
 .mobile-more-drawer:not([hidden]) { animation: drawer-in .2s ease-out; }
 .mobile-more-drawer.is-leaving { animation: drawer-out .16s ease-in forwards; pointer-events: none; }
+/* HR monthly report: existing panel/filter/table language, responsive content. */
+.hr-report-sections,.hr-report-candidates{display:flex;flex-wrap:wrap;gap:12px 20px;margin:12px 0}
+.hr-report-sections label,.hr-report-candidates label{display:flex;align-items:center;gap:6px;margin:0}
+.hr-report-sections input,.hr-report-candidates input{width:auto;min-height:auto}
+.hr-report-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px;margin:16px 0}
+.hr-report-summary strong{display:block;font-size:24px;margin-top:8px}
+.hr-report-page summary{cursor:pointer;font-weight:600;padding:8px 0}
+.hr-report-page textarea{width:100%;box-sizing:border-box}
+@media(max-width:700px){.hr-report-page .statistics-filter{display:flex;flex-direction:column}.hr-report-page .statistics-filter label{width:100%}.hr-report-page .table-wrap table{min-width:0;table-layout:fixed}.hr-report-page th,.hr-report-page td{overflow-wrap:anywhere;font-size:12px;padding:8px 4px}.hr-report-candidates{flex-direction:column}.hr-report-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}

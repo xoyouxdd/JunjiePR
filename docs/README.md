@@ -8,7 +8,7 @@
 | [sqlite-schema.md](sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [leave-management.md](leave-management.md) | LOA 与月度病假事务导入 |
 | [declaration-statistics.md](declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
-| [hr-monthly-report-plan.md](hr-monthly-report-plan.md) | HR 月报设计成品与接入计划（尚未接入） |
+| [hr-monthly-report-plan.md](hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |
 | [release.md](release.md) | 发布打包 |
 | [deployment.md](deployment.md) | 生产部署：本地构建与人工授权上线 |

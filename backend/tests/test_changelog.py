@@ -31,11 +31,21 @@ def test_latest_changelog_version_matches_app_version() -> None:
 
 
 def test_material_download_note_requires_declaration_view_permission() -> None:
-    release = next(release for release in RELEASES if release["version"] == APP_VERSION)
+    release = next(release for release in RELEASES if release["version"] == "2026.09.27.1")
     item = next(item for item in release["items"] if "声明材料" in item["summary"])
     assert item_visible(item, "SUPERVISOR", {"DECLARATION_STATS_VIEW"})
     assert not item_visible(item, "SUPERVISOR", set())
     assert not item_visible(item, "CM", {"DECLARATION_STATS_VIEW"})
+
+
+def test_hr_monthly_note_matches_explicit_report_roles() -> None:
+    release = next(release for release in RELEASES if release["version"] == "2026.09.27.2")
+    item = next(item for item in release["items"] if "HR月报" in item["summary"])
+    for role in ("GSM", "AM", "OM", "SYSTEM_ADMIN"):
+        assert item_visible(item, role, {"HR_MONTHLY_REPORT"})
+        assert not item_visible(item, role, set())
+    for role in ("CM", "TR", "SUPERVISOR", "TA_GSM", "HR_ADMIN", "HR_CIRCLE"):
+        assert not item_visible(item, role, {"HR_MONTHLY_REPORT"})
 
 
 def test_previous_release_items_match_role_permissions() -> None:
@@ -67,7 +77,7 @@ def test_current_covered_sick_history_note_is_visible_to_every_role() -> None:
 
 def test_changelog_filters_by_role() -> None:
     cm = visible_releases("CM", set())
-    admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN", "DECLARATION_STATS_VIEW"})
+    admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN", "DECLARATION_STATS_VIEW", "HR_MONTHLY_REPORT"})
     gsm = visible_releases("GSM", {"POC_ISSUE", "DATA_EXPORT"})
     cm_text = " ".join(item["summary"] for release in cm for item in release["items"])
     admin_text = " ".join(item["summary"] for release in admin for item in release["items"])
@@ -115,7 +125,7 @@ def test_release_announcement_is_role_filtered_and_read_once_per_account() -> No
         assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 404
         client.post("/api/logout")
-        login(client, "TATEST01")
+        login(client, "AMTEST01")
         first = client.get("/api/changelog/announcement")
         assert first.status_code == 200, first.text
         release = first.json()["release"]
@@ -131,7 +141,7 @@ def test_release_announcement_is_role_filtered_and_read_once_per_account() -> No
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.get("/api/changelog/announcement").json()["read"] is True
         client.post("/api/logout")
-        login(client, "TATEST01")
+        login(client, "AMTEST01")
         assert client.get("/api/changelog/announcement").json()["read"] is True
         client.post("/api/logout")
         login(client, "GSMTEST01")

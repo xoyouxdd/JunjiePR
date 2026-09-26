@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.27.2",
+        "date": "2026-09-27",
+        "status": "candidate",
+        "announcement_items_from": "2026.09.25.1",
+        "items": [
+            {
+                "summary": "新增HR月报制作与PPTX导出",
+                "detail": "GSM、AM、OM和最高管理员可选择月份、任意景点圈或全部景点圈，使用森林都市、简约汇报、温暖团队三套模板制作可编辑月报。支持章节选择、优秀员工候选人工确认及活动照片；无素材章节自动跳过。统计复用月结、LOA和实际计分规则，未月结标为草稿。登记、审核和作废权限不变。",
+                "audiences": ["GSM", "AM", "OM", "SYSTEM_ADMIN"],
+                "permissions": ["HR_MONTHLY_REPORT"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.27.1",
         "date": "2026-09-27",
         "status": "candidate",

@@ -69,6 +69,7 @@ PERMISSION_DEFINITIONS = {
     "SICK_LEAVE_IMPORT": "缺勤登记",
     "DECLARATION_STATS_VIEW": "查看声明登记统计",
     "DECLARATION_STATS_EXPORT": "导出声明登记统计",
+    "HR_MONTHLY_REPORT": "制作及导出所有景点圈HR月报",
     "LOA_REGISTER": "登记长期病假",
     "DEDUCTION_DIRECT": "所有CM/TR声明扣分",
     "DEDUCTION_ALL": "所有CM/TR全部等级扣分",
@@ -104,6 +105,9 @@ ROLE_PERMISSION_CODES = {
     ),
     "SYSTEM_ADMIN": ("SYSTEM_ADMIN", "HR_MANAGE", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "SICK_LEAVE_IMPORT", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
 }
+
+for _report_role in ("GSM", "AM", "OM", "SYSTEM_ADMIN"):
+    ROLE_PERMISSION_CODES[_report_role] += ("HR_MONTHLY_REPORT",)
 
 # Seed only creates these when a role has no score rules at all. Later edits
 # go through the admin API; startup must not insert a new "today" default.
