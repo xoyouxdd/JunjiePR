@@ -1738,3 +1738,29 @@ table,
 .hr-report-page summary{cursor:pointer;font-weight:600;padding:8px 0}
 .hr-report-page textarea{width:100%;box-sizing:border-box}
 @media(max-width:700px){.hr-report-page .statistics-filter{display:flex;flex-direction:column}.hr-report-page .statistics-filter label{width:100%}.hr-report-page .table-wrap table{min-width:0;table-layout:fixed}.hr-report-page th,.hr-report-page td{overflow-wrap:anywhere;font-size:12px;padding:8px 4px}.hr-report-candidates{flex-direction:column}.hr-report-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* 顶部身份栏：品牌名在手机上用短名；身份徽章分段，手机隐藏次要段。 */
+.app-identity .brand-full,
+.app-identity .brand-short,
+#userBadge .badge-part { display: inline; margin: 0; color: inherit; font-size: inherit; }
+.app-identity .brand-short { display: none; }
+.mobile-identity-card,
+.mobile-logout { display: none; }
+@media (max-width: 760px) {
+  .app-topbar { padding: calc(8px + env(safe-area-inset-top)) 14px 8px; }
+  body.has-nav .app-topbar #logoutBtn { display: none; }
+  .app-identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px 8px; }
+  .app-identity > strong { font-size: 16px; line-height: 1.3; }
+  .app-identity .brand-full { display: none; }
+  .app-identity .brand-short { display: inline; }
+  #userBadge { justify-self: start; max-width: 100%; min-height: 22px; padding: 2px 8px; }
+  #userBadge .badge-part-optional { display: none; }
+  #pageBindHint { grid-column: 1 / -1; white-space: nowrap; }
+  .tabs-mobile > button,
+  body[data-role="组员"] .tabs-mobile > button { padding: 0 4px; }
+  .mobile-identity-card { display: block; margin-bottom: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+  .mobile-identity-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin: 0; }
+  .mobile-identity-card dt { color: var(--muted); font-size: 12px; }
+  .mobile-identity-card dd { margin: 2px 0 0; color: var(--text-strong); font-weight: 700; overflow-wrap: anywhere; }
+  .mobile-more-drawer .mobile-logout { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 48px; margin-top: 16px; color: var(--danger-text); }
+}

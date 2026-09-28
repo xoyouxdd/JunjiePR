@@ -198,6 +198,48 @@ function menuItems() {
   items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);
   return items;
 }
+// 手机底部栏按角色固定最常用的入口（不含「更多」），没有权限的项自动跳过，不足 4 个时按菜单顺序补齐。
+const MOBILE_PRIMARY_TABS={
+  CM:['actionCenter','home','register','governance'],
+  TR:['actionCenter','home','register','governance'],
+  TA_SUPERVISOR:['actionCenter','review','register','members'],
+  SUPERVISOR:['actionCenter','review','register','members'],
+  TA_GSM:['actionCenter','statistics','register','entries'],
+  GSM:['actionCenter','statistics','register','entries'],
+  AM:['actionCenter','statistics','register','prRankings'],
+  OM:['actionCenter','statistics','register','prRankings'],
+  HR_ADMIN:['actionCenter','hrEmployees','governance','circleTransfers'],
+  HR_CIRCLE:['actionCenter','hrEmployees','monthClose','governance'],
+  SYSTEM_ADMIN:['actionCenter','hrEmployees','monthClose','governance'],
+};
+const MOBILE_PRIMARY_COUNT=4;
+// 底部栏宽度有限，长名称用短名显示（无障碍标签和「更多」里仍用全名）。
+const MOBILE_SHORT_LABELS={'景点数据与导出':'景点数据','景点数据查看':'景点数据','我的登记记录':'登记记录','主管登记记录':'登记记录','PR排名数据':'PR排名','POC特别贡献':'POC贡献'};
+function mobilePrimaryIds(items){
+  const available=new Set(items.map(([id])=>id));
+  const ids=(MOBILE_PRIMARY_TABS[state.me.role_code]||['actionCenter']).filter(id=>available.has(id));
+  for(const [id] of items){ if(ids.length>=MOBILE_PRIMARY_COUNT) break; if(!ids.includes(id)&&!NAV_FOOTER_IDS.includes(id)) ids.push(id); }
+  return ids.slice(0,MOBILE_PRIMARY_COUNT);
+}
+function userIdentityParts(){
+  const me=state.me;
+  return {name:me.name,employeeNo:me.employee_no,role:me.role_name,circle:me.attraction_name||'',members:me.member_count?`${me.member_count}名组员`:''};
+}
+function renderUserBadge(){
+  const badge=document.getElementById('userBadge');
+  if(!badge) return;
+  const p=userIdentityParts();
+  // 手机上只显示「姓名 · 景点圈」（无景点圈时显示角色），完整身份在「更多」里查看。
+  // 徽章是 flex 容器，分段首尾的普通空格会被吞掉，分隔符两侧用不换行空格。
+  const sep=' · ';
+  badge.innerHTML=`<span class="badge-part">${esc(p.name)}</span><span class="badge-part${p.circle?' badge-part-optional':''}">${sep}${esc(p.role)}</span>${p.circle?`<span class="badge-part">${sep}${esc(p.circle)}</span>`:''}${p.members?`<span class="badge-part badge-part-optional">${sep}${esc(p.members)}</span>`:''}`;
+  badge.title=[p.name,p.role,p.circle,p.members].filter(Boolean).join(' · ');
+}
+function mobileIdentityCard(){
+  const p=userIdentityParts();
+  const rows=[['姓名',p.name],['工号',p.employeeNo],['角色',p.role],['景点圈',p.circle],['组员',p.members]].filter(([,v])=>v);
+  return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></section>`;
+}
 const NAV_FOOTER_IDS=['changelog','password'];
 const NAV_GROUP_DEFS=[
   {id:'work',label:'工作',ids:['home','review','register','absence','members','entries']},
@@ -313,13 +355,12 @@ function renderTabs() {
     return `<section class="nav-group${active?' is-active':''}" aria-label="${esc(group.label)}"><p class="nav-group-label">${esc(group.label)}</p>${group.items.map(item=>tabButton(item)).join('')}</section>`;
   }).join('');
   const desktopFooter=grouped.footer.length?`<div class="nav-footer">${grouped.footer.map(item=>tabButton(item)).join('')}</div>`:'';
-  const ids=[];
-  if(items.some(i=>i[0]==='actionCenter')) ids.push('actionCenter');
-  for(const item of items){ if(ids.length>=3) break; if(!ids.includes(item[0])) ids.push(item[0]); }
+  const ids=mobilePrimaryIds(items);
   const primary=ids.map(id=>items.find(i=>i[0]===id));
   const overflow=items.filter(i=>!ids.includes(i[0]));
   const overflowActive=overflow.some(([id])=>id===state.tab);
-  tabs.innerHTML=`<div class="tabs-desktop">${desktopPin}<div class="nav-scroll">${desktopGroups}</div>${desktopFooter}</div><div class="tabs-mobile ${overflow.length?'has-overflow':'no-overflow'}">${primary.map(item=>tabButton(item)).join('')}${overflow.length?`<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能" title="更多">${navIcon('more')}<span class="nav-label">更多</span></button>`:''}</div>${overflow.length?`<div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header><div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div></div></div>`:''}`;
+  const mobileTab=([id,name])=>tabButton([id,name]).replace(`<span class="nav-label">${esc(name)}</span>`,`<span class="nav-label">${esc(MOBILE_SHORT_LABELS[name]||name)}</span>`);
+  tabs.innerHTML=`<div class="tabs-desktop">${desktopPin}<div class="nav-scroll">${desktopGroups}</div>${desktopFooter}</div><div class="tabs-mobile has-overflow">${primary.map(mobileTab).join('')}<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能" title="更多">${navIcon('more')}<span class="nav-label">更多</span></button></div><div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header>${mobileIdentityCard()}${overflow.length?`<div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div>`:''}<button type="button" class="secondary mobile-logout" data-mobile-logout>退出登录</button></div></div>`;
   document.body.classList.add('has-nav');
   renderPageHeading(items);
   const drawer=tabs.querySelector('.mobile-more-drawer');
@@ -328,6 +369,7 @@ function renderTabs() {
   tabs.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;closeDrawer();renderTabs();render();});
   tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawerLayer=null;leaveLayer(drawer,()=>{drawer.hidden=true;});}});});
   tabs.querySelector('[data-close-more]')?.addEventListener('click',closeDrawer);
+  tabs.querySelector('[data-mobile-logout]')?.addEventListener('click',logout);
 }
 let renderGeneration=0;
 let viewRequestId=0;
@@ -1331,5 +1373,6 @@ async function renderHrMonthlyReport(){
   await load();
 }
 
-document.getElementById('logoutBtn').onclick=async()=>{await api('/api/logout',{method:'POST'});location.href=portalPath('/login')};
-(async()=>{try{state.me=await api('/api/me');if(state.me.must_change_password){renderPasswordChangeRequired();return;}state.options=await api('/api/options');if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';applyCircleTheme();installScreenWatermark();installPageBindHint();document.getElementById('userBadge').textContent=`${state.me.name} · ${state.me.role_name}${state.me.attraction_name?` · ${state.me.attraction_name}`:''}${state.me.member_count?` · ${state.me.member_count}名组员`:''}`;renderTabs();void refreshActionBadge();await render();void showReleaseAnnouncement().catch(error=>toast(error.message||'更新公告加载失败',true));}catch(e){if(!location.pathname.includes('/login'))location.href=portalPath('/login');}})();
+async function logout(){await api('/api/logout',{method:'POST'});location.href=portalPath('/login')}
+document.getElementById('logoutBtn').onclick=logout;
+(async()=>{try{state.me=await api('/api/me');if(state.me.must_change_password){renderPasswordChangeRequired();return;}state.options=await api('/api/options');if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';applyCircleTheme();installScreenWatermark();installPageBindHint();renderUserBadge();renderTabs();void refreshActionBadge();await render();void showReleaseAnnouncement().catch(error=>toast(error.message||'更新公告加载失败',true));}catch(e){if(!location.pathname.includes('/login'))location.href=portalPath('/login');}})();

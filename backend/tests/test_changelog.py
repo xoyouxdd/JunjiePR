@@ -88,9 +88,11 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    # A role with no changes in this release must not receive another role's note.
-    assert cm[0]["current"] is False
-    assert all(release["version"] != APP_VERSION for release in cm)
+    # 当前版本含面向全员的条目，CM 能看到；但不会看到仅限其他角色的条目。
+    assert cm[0]["current"] is True
+    assert "手机底部栏按角色放常用功能" in cm_text
+    assert "新增HR月报制作与PPTX导出" not in cm_text
+    assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
 
 
@@ -119,12 +121,39 @@ def test_changelog_api_and_navigation_exist() -> None:
     assert "async function renderChangelog" in source
 
 
-def test_release_announcement_is_role_filtered_and_read_once_per_account() -> None:
+def test_release_announcement_shows_current_items_and_is_read_once() -> None:
     with TestClient(app) as client:
+        login(client, "TRTEST01")
+        first = client.get("/api/changelog/announcement").json()
+        history = client.get("/api/changelog").json()["releases"]
+        assert first["read"] is False
+        assert first["release"]["version"] == APP_VERSION
+        assert "content_version" not in first["release"]
+        assert first["release"]["items"] == history[0]["items"]
+        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
+        assert client.get("/api/changelog/announcement").json()["read"] is True
+
+
+def test_release_announcement_is_role_filtered_and_read_once_per_account() -> None:
+    # 复用旧公告（announcement_items_from）的行为：临时给当前版本加上复用设置来验证。
+    current = RELEASES[0]
+    assert "announcement_items_from" not in current
+    current["announcement_items_from"] = "2026.09.25.1"
+    try:
+        _check_reused_announcement()
+    finally:
+        current.pop("announcement_items_from", None)
+
+
+def _check_reused_announcement() -> None:
+    with TestClient(app) as client:
+        # 复用的旧版本对该角色没有可见条目时，不弹公告，也不能标记已读。
+        RELEASES[0]["announcement_items_from"] = "2026.09.27.2"
         login(client, "CMTEST01")
         assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 404
         client.post("/api/logout")
+        RELEASES[0]["announcement_items_from"] = "2026.09.25.1"
         login(client, "AMTEST01")
         first = client.get("/api/changelog/announcement")
         assert first.status_code == 200, first.text
