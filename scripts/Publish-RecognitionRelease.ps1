@@ -13,6 +13,15 @@ $remoteRoot = 'C:/Server/zhaojunjie/recognition-card-system'
 $remoteIncoming = "$remoteRoot/.deploy-incoming"
 $sshOptions = @('-i', $key, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10')
 
+function Invoke-Transport([string]$Executable, [string[]]$Arguments, [string]$Description) {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        & $Executable @Arguments
+        if ($LASTEXITCODE -eq 0) { return }
+        if ($attempt -eq 3) { throw "$Description failed after 3 attempts" }
+        Start-Sleep -Seconds (2 * $attempt)
+    }
+}
+
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "Local Python missing: $python" }
 if (-not (Test-Path -LiteralPath $key -PathType Leaf)) { throw "Deployment SSH key missing: $key" }
 Push-Location $repo
@@ -49,24 +58,20 @@ try {
 
     $remoteScript = "$remoteIncoming/junjiepr-server-release.py"
     $remotePackage = "$remoteIncoming/$($package.Name)"
-    & scp @sshOptions (Join-Path $repo 'scripts\server_release.py') "${remote}:$remoteScript"
-    if ($LASTEXITCODE -ne 0) { throw 'Server deployment script upload failed' }
-    & scp @sshOptions $package.FullName "${remote}:$remotePackage"
-    if ($LASTEXITCODE -ne 0) { throw 'Release package upload failed' }
+    Invoke-Transport 'scp' ($sshOptions + @((Join-Path $repo 'scripts\server_release.py'), "${remote}:$remoteScript")) 'Server deployment script upload'
+    Invoke-Transport 'scp' ($sshOptions + @($package.FullName, "${remote}:$remotePackage")) 'Release package upload'
 
     $remotePython = 'C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe'
     $remoteScriptWin = 'C:\Server\zhaojunjie\recognition-card-system\.deploy-incoming\junjiepr-server-release.py'
     $remotePackageWin = "C:\Server\zhaojunjie\recognition-card-system\.deploy-incoming\$($package.Name)"
     $command = "$remotePython $remoteScriptWin $remotePackageWin $commit $sha"
-    & ssh @sshOptions $remote "$command --preflight"
-    if ($LASTEXITCODE -ne 0) { throw 'Server release preflight failed' }
+    Invoke-Transport 'ssh' ($sshOptions + @($remote, "$command --preflight")) 'Server release preflight'
     & ssh @sshOptions $remote $command
     if ($LASTEXITCODE -ne 0) { throw 'Server deployment failed; inspect rollback output' }
 
     $readback = Join-Path $env:TEMP "junjiepr-release-manifest-$([Guid]::NewGuid().ToString('N')).json"
     try {
-        & scp @sshOptions "${remote}:$remoteRoot/release-manifest.json" $readback
-        if ($LASTEXITCODE -ne 0) { throw 'Remote manifest readback failed' }
+        Invoke-Transport 'scp' ($sshOptions + @("${remote}:$remoteRoot/release-manifest.json", $readback)) 'Remote manifest readback'
         $deployed = Get-Content -LiteralPath $readback -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($deployed.git_commit -ne $commit -or $deployed.app_version -ne $version) {
             throw 'Remote manifest does not match released commit and version'
