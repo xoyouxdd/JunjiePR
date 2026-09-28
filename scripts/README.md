@@ -1,6 +1,6 @@
 # 运维与发布脚本手册
 
-本目录提供独立运维脚本，不修改业务数据模型。备份、恢复演练、健康检查和核对脚本本身不会部署应用；部署由单独的 `Deploy-RecognitionRelease.ps1` 完成，只在人工明确下达上线指令并指定经批准的提交后通过既有 SSH 通道执行。正式模式固定校验生产目录和专用备份目录；测试模式必须显式指定隔离的 `TestRoot`。
+本目录提供独立运维脚本，不修改业务数据模型。备份、恢复演练、健康检查和核对脚本本身不会部署应用；得到明确上线指令后，从干净的本地仓库运行 `Publish-RecognitionRelease.ps1`。它使用专用 SSH 密钥上传已通过全量测试的发布包，调用 `server_release.py` 完成预检、备份、替换、健康检查和回滚，并独立读回部署结果。正式模式固定校验生产目录和专用备份目录；测试模式必须显式指定隔离的 `TestRoot`。
 
 ## 文件
 
@@ -18,6 +18,9 @@
 - `Start-LocalJunjiePR.ps1`：本地开发启动脚本，使用 `backend/.venv`。本地运行说明见 [../docs/getting-started.md](../docs/getting-started.md)。
 - `seed_level_accounts.py`：初始化本地演示登录账号，仅供本地使用，不进入正式包，不要在生产运行。
 - `Deploy-RecognitionRelease.ps1`：在生产服务器上线一个已核验的发布包。必须传入经批准的完整 git commit，并逐个文件核对 `release-manifest.json` 里的 SHA-256 清单；核验通过后先做一次在线 SQLite 备份，再只替换 `app/` 与 `requirements.txt`，`data_v2/`、上传文件和 `.venv/` 保持不动。任一步失败会自动还原上一版并重启服务。它只在人工明确授权后执行，完整流程和前置检查见 [../docs/deployment.md](../docs/deployment.md)。
+- `Publish-RecognitionRelease.ps1`：本机一键发布入口，固定连接当前生产服务器，从干净提交跑测试、打包、上传、预检、部署和独立读回。专用私钥存于当前用户 `.ssh`，不在仓库。
+- `server_release.py`：当前生产目录布局的服务器端部署事务，由本机入口上传并调用；只接受 `.deploy-incoming` 中且哈希、提交号、清单均匹配的包。
+- `Deploy-RecognitionRelease.ps1`：保留在正式包中的 PowerShell 部署合同；当前生产目录布局使用上面的 Python 部署事务。它只在人工明确授权后执行，完整流程见 [../docs/deployment.md](../docs/deployment.md)。
 
 最高管理员在「待办」展开备份异常后，可删除**当前巡检报告**对应的待办提示（最多隐藏24小时，新报告异常会重新出现），或发起一次后台手动 SQLite 备份。手动备份使用应用配置的备份目录，复用数据库在线备份、`quick_check` 和 SHA-256 清单口径；不清理旧备份，也不创建缺失的每日计划任务。进行中的任务不可重复启动，成功后10分钟内也不可重复触发；超过2小时仍显示运行的任务可重新尝试。执行结果可在同一待办明细查看，失败时须检查服务器日志、备份目录权限和磁盘空间。网页服务账号需对备份目录有写入权限；此权限应限定在该目录。
 

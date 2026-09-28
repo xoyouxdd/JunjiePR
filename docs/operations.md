@@ -21,7 +21,9 @@
 | `audit_score_rules.py` | 只读列出角色分值规则，不改数据 |
 | `Reset-NeverLoggedInInitialPasswords.py` | 恢复从未登录账号的初始密码，默认 dry-run |
 | `build_release.py` | 源码发布包，见 [release.md](release.md) |
-| `Deploy-RecognitionRelease.ps1` | 人工授权后上线已核验的发布包，见 [deployment.md](deployment.md) |
+| `Publish-RecognitionRelease.ps1` | 人工授权后在本机完成测试、打包、上传、部署和读回，见 [deployment.md](deployment.md) |
+| `server_release.py` | 当前生产服务器上的部署事务与失败回滚，由本机发布入口调用 |
+| `Deploy-RecognitionRelease.ps1` | 正式包保留的 PowerShell 部署合同 |
 
 ## 范围说明
 
