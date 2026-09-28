@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 import os
 from pathlib import Path
+from threading import Lock
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -23,6 +24,7 @@ engine = create_engine(
     future=True,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+_init_db_lock = Lock()
 
 
 @event.listens_for(engine, "connect")
@@ -140,6 +142,13 @@ LEGACY_CIRCLE_BY_VENUE = {
 
 
 def init_db() -> None:
+    # Multiple lifespan starts can overlap in one process (for example, two
+    # concurrent TestClient instances). Schema and view setup must be serial.
+    with _init_db_lock:
+        _init_db_unlocked()
+
+
+def _init_db_unlocked() -> None:
     ensure_directories()
     from app import v2_models  # noqa: F401
 
