@@ -7,6 +7,28 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.28.1",
+        "date": "2026-09-28",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "手机底部栏按角色放常用功能",
+                "detail": "手机底部栏改为待办加三个本角色最常用的入口，例如主管为复核、绩效登记、组员记录，GSM为景点数据、绩效登记、登记记录，AM为景点数据、POC特别贡献、PR排名，HR为员工管理与治理复核等；其余功能仍在「更多」中。电脑端导航和各功能权限不变。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "手机顶部栏更紧凑",
+                "detail": "手机顶部只显示系统简称和「姓名 · 景点圈」，完整的工号、角色、组员人数移到「更多」顶部查看；「退出登录」移到「更多」底部，避免误触。截图追溯用的姓名工号时间行保持显示。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "桌面图标体积缩小",
+                "detail": "添加到手机桌面使用的应用图标由约1.2MB压缩到约100KB，并补充192与512两种尺寸，首次打开和添加到桌面更快，图标外观不变。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.27.2",
         "date": "2026-09-27",
         "status": "candidate",

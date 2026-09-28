@@ -9,8 +9,14 @@
   "description": "FZPR登记：认可签卡绩效登记与查询系统。",
   "icons": [
     {
+      "src": "images/fzpr-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
       "src": "images/fzpr-icon.png",
-      "sizes": "1536x1536",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     }
