@@ -7,6 +7,19 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.09.29.1",
+        "date": "2026-09-29",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "修复含已删除账号员工的HR月报预览",
+                "detail": "修复景点圈或全部景点圈含已删除账号员工时，HR月报预览因日期字段序列化失败而返回500的问题。预览与导出沿用现有统计、月结和权限规则，不恢复已删除账号，也不改变登记及审核逻辑。",
+                "audiences": ["GSM", "AM", "OM", "SYSTEM_ADMIN"],
+                "permissions": ["HR_MONTHLY_REPORT"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.28.1",
         "date": "2026-09-28",
         "status": "candidate",

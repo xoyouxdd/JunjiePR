@@ -88,8 +88,8 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    # 当前版本含面向全员的条目，CM 能看到；但不会看到仅限其他角色的条目。
-    assert cm[0]["current"] is True
+    # 月报修复仅面向具备月报权限的角色，普通员工不显示当前版本。
+    assert cm[0]["current"] is False
     assert "手机底部栏按角色放常用功能" in cm_text
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
@@ -124,6 +124,10 @@ def test_changelog_api_and_navigation_exist() -> None:
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
     with TestClient(app) as client:
         login(client, "TRTEST01")
+        assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
+        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 404
+        client.post("/api/logout")
+        login(client, "OMTEST01")
         first = client.get("/api/changelog/announcement").json()
         history = client.get("/api/changelog").json()["releases"]
         assert first["read"] is False
@@ -132,6 +136,14 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         assert first["release"]["items"] == history[0]["items"]
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.get("/api/changelog/announcement").json()["read"] is True
+
+
+def test_current_monthly_report_fix_requires_role_and_permission() -> None:
+    item = RELEASES[0]["items"][0]
+    for role in ("GSM", "AM", "OM", "SYSTEM_ADMIN"):
+        assert item_visible(item, role, {"HR_MONTHLY_REPORT"})
+        assert not item_visible(item, role, set())
+    assert not item_visible(item, "CM", {"HR_MONTHLY_REPORT"})
 
 
 def test_release_announcement_is_role_filtered_and_read_once_per_account() -> None:
