@@ -6,6 +6,7 @@ from threading import BoundedSemaphore
 import warnings
 
 from fastapi import APIRouter, Depends, Form, File, UploadFile, HTTPException
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from fastapi.routing import APIRoute
 from starlette.concurrency import run_in_threadpool
@@ -64,7 +65,10 @@ class ReportOptions(BaseModel):
 
 
 def digest(data):
-    return hashlib.sha256(json.dumps({k: v for k, v in data.items() if k != "generated_at"}, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    # Report data can include date/datetime values from production SQLite rows.
+    # Match FastAPI's response encoding before creating the preview/export fingerprint.
+    normalized = jsonable_encoder({k: v for k, v in data.items() if k != "generated_at"})
+    return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @router.get("/hr-monthly-reports/options")

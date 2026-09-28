@@ -6,6 +6,7 @@ from io import BytesIO
 import json
 import zipfile
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 os.environ["RECOGNITION_V2_DATA_DIR"] = tempfile.mkdtemp(prefix="hr-report-test-")
 os.environ["RECOGNITION_ENABLE_TEST_ACCOUNTS"] = "1"
@@ -18,6 +19,7 @@ from app.hr_monthly_pptx import NS, ROOT
 from app.hr_monthly_report import REPORT_ROLES
 from app.v2_database import ROLE_PERMISSION_CODES
 from app.hr_monthly_pptx import build_pptx
+from app.routers.hr_monthly_reports import digest
 
 
 def login(client, name="GSMTEST01", password="1234"):
@@ -27,6 +29,18 @@ def login(client, name="GSMTEST01", password="1234"):
 
 def test_permission_mapping_explicit():
     assert {r for r, p in ROLE_PERMISSION_CODES.items() if "HR_MONTHLY_REPORT" in p} == REPORT_ROLES
+
+
+def test_preview_digest_encodes_production_datetime_values():
+    report = {
+        "generated_at": "volatile-preview-time",
+        "summary": {"month_closed_at": datetime(2026, 9, 30, 8, 45, 12), "employee_count": 46},
+    }
+    encoded_report = {
+        "generated_at": "different-preview-time",
+        "summary": {"month_closed_at": "2026-09-30T08:45:12", "employee_count": 46},
+    }
+    assert digest(report) == digest(encoded_report)
 
 
 def test_preview_and_export_all_templates():
