@@ -168,6 +168,12 @@ input, select, textarea {
 .recognizer-person { width: 100%; min-height: 40px; padding: 8px 12px 8px 18px; border: 0; border-radius: 5px; background: white; color: var(--text); text-align: left; font: inherit; }
 .recognizer-person:hover, .recognizer-person:focus, .recognizer-person[aria-selected="true"] { background: var(--info-bg); color: var(--primary-dark); outline: 2px solid rgba(18,103,216,.15); outline-offset: -2px; }
 .recognizer-empty { padding: 10px 12px; color: var(--muted); font-size: 13px; font-weight: 400; }
+.deduction-type-picker { min-width: 0; }
+.deduction-type-picker .recognizer-menu { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; max-height: min(360px, 50vh); }
+.deduction-type-picker .recognizer-trigger > [data-deduction-type-value] { min-width: 0; overflow-wrap: anywhere; }
+.deduction-type-picker .recognizer-trigger-icon { flex-shrink: 0; margin-left: 8px; }
+.deduction-type-picker .recognizer-person { padding-left: 10px; overflow-wrap: anywhere; }
+.deduction-type-picker .deduction-upgrade-note { font-size: .8em; font-weight: 400; color: #000; }
 input[readonly] { background: var(--readonly-bg); color: var(--readonly-text); }
 /* Checkboxes sit inline with their text instead of inheriting the full-width field box. */
 input[type="checkbox"], input[type="radio"] { flex: 0 0 auto; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; accent-color: var(--primary); }
@@ -369,6 +375,7 @@ button:disabled { cursor: not-allowed; opacity: .65; }
 .password-rule-box li.is-met { color: var(--ok); }
 .password-rule-box li.is-met span { background: var(--ok-bg); color: var(--ok); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.sick-import-page [role="tablist"] { margin-bottom: 16px; }
 .notice {
   border: 1px solid var(--warn-border);
   background: var(--warn-bg-soft);

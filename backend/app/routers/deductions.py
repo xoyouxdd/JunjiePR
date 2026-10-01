@@ -15,6 +15,7 @@ from app.v2_models import Attraction, DeductionLevel, DeductionFollowUp, Deducti
 from app.v2_services import LEADER_CODES, current_group_for_employee, remove_upload_file, role_at, write_audit
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
 from app.routers._shared import (
+    add_calendar_months,
     DEDUCTION_LEVEL_ORDER,
     MATERIAL_COLLABORATOR_CODES,
     NEXT_DEDUCTION_LEVEL,
@@ -40,6 +41,7 @@ from app.routers._shared import (
     search_employee_targets,
     statement_upgrade_candidate,
     statement_upgrade_reviewer_options,
+    upgrade_type_codes,
     submission_payload_digest,
     subtract_calendar_months,
     void_operator_snapshot,
@@ -96,15 +98,18 @@ def attendance_repeat_context(db: Session, employee_id: int, deduction_type: Ded
         return {"has_repeat": False, "blocked": False, "requires_confirmation": False, "previous_records": []}
     event_date = parse_iso_date(occurred_on, "事件日期")
     window_start = subtract_calendar_months(event_date, 3).isoformat()
+    window_end = add_calendar_months(event_date, 3).isoformat()
     rows = (
         db.query(DeductionRecord)
+        .join(DeductionType, DeductionType.id == DeductionRecord.deduction_type_id)
         .filter(
             DeductionRecord.employee_id == employee_id,
-            DeductionRecord.deduction_type_id == deduction_type.id,
+            DeductionType.code.in_(upgrade_type_codes(deduction_type.code)),
             DeductionRecord.status == "active",
+            or_(DeductionRecord.upgrade_role.is_(None), DeductionRecord.upgrade_role.notin_({"source_first", "source_second"})),
             DeductionRecord.legacy_upgrade_excluded.is_(False),
             DeductionRecord.occurred_on >= window_start,
-            DeductionRecord.occurred_on <= occurred_on,
+            DeductionRecord.occurred_on <= window_end,
         )
         .order_by(DeductionRecord.occurred_on.desc(), DeductionRecord.id.desc())
         .all()
@@ -115,6 +120,7 @@ def attendance_repeat_context(db: Session, employee_id: int, deduction_type: Ded
             "blocked": False,
             "requires_confirmation": False,
             "window_start": window_start,
+            "window_end": window_end,
             "previous_records": [],
         }
     highest = max(rows, key=lambda row: DEDUCTION_LEVEL_ORDER.get(db.get(DeductionLevel, row.deduction_level_id).code, 0))
@@ -142,6 +148,7 @@ def attendance_repeat_context(db: Session, employee_id: int, deduction_type: Ded
         "blocked": direct_only,
         "requires_confirmation": not direct_only,
         "window_start": window_start,
+        "window_end": window_end,
         "message": message,
         "minimum_level_id": minimum_level.id,
         "minimum_level_code": minimum_level.code,

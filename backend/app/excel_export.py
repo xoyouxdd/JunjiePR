@@ -304,7 +304,7 @@ def write_hierarchical_performance_sheet(ws, data: dict) -> None:
     for row in data.get("deductions", []):
         upgrade_role = row.get("upgrade_role") or ""
         upgrade_state = row.get("upgrade_state") or ""
-        add_record(row["employee_id"], {"date": row["occurred_on"], "type": "扣分", "object": f"{row['deduction_type']} · {row['deduction_level']}", "detail": row["description"], "add": 0, "attendance": 0, "deduction": -abs(float(row["points"])) if row["status"] == "active" else 0, "status": row["status_name"], "duplicate": False, "duplicate_note": "", "upgrade_role": upgrade_role, "upgrade_state": upgrade_state, "upgrade_request_id": row.get("upgrade_request_id") or 0})
+        add_record(row["employee_id"], {"date": row["occurred_on"], "type": "扣分", "object": f"{row['deduction_type']} · {row['deduction_level']}", "detail": row["description"], "add": 0, "attendance": 0, "deduction": -abs(float(row["actual_points"])) if row["status"] == "active" else 0, "status": row["status_name"], "duplicate": False, "duplicate_note": "", "upgrade_role": upgrade_role, "upgrade_state": upgrade_state, "upgrade_request_id": row.get("upgrade_request_id") or 0})
     for row in data.get("sick_leaves", []):
         add_record(row["employee_id"], {"date": f"{row['leave_start_date']} 至 {row['leave_end_date']}", "type": "缺勤", "object": f"{float(row['leave_days']):.1f}天", "detail": row.get("note") or "无备注", "add": 0, "attendance": 0, "deduction": 0, "status": row["status_name"], "duplicate": False, "duplicate_note": ""})
     for row in data.get("scores", []):
@@ -582,7 +582,7 @@ def build_statistics_workbook(
     for row in data["deductions"]:
         record_no = f"DED-{row['id']}"
         upgrade_no = f"UPG-{int(row['upgrade_request_id']):06d}" if row.get("upgrade_request_id") else ""
-        ws3.append(excel_row([record_no, row["occurred_on"], row["current_employee_no"], row["employee_name"], row["deduction_type"], row["deduction_level"], row["points"], row["submitter_name"], row["status_name"], row["description"], upgrade_no, row.get("upgrade_role") or "", row.get("upgrade_state_name") or "", row["voided_by_name"], row["voided_at"], row["void_reason"], row["export_employee_no"], row["current_employee_no"], row["employee_number_status"]]))
+        ws3.append(excel_row([record_no, row["occurred_on"], row["current_employee_no"], row["employee_name"], row["deduction_type"], row["deduction_level"], row["actual_points"], row["submitter_name"], row["status_name"], row["description"], upgrade_no, row.get("upgrade_role") or "", row.get("upgrade_state_name") or "", row["voided_by_name"], row["voided_at"], row["void_reason"], row["export_employee_no"], row["current_employee_no"], row["employee_number_status"]]))
         detail_locations[record_no] = (ws3.title, ws3.max_row)
     style_sheet(ws3, landscape=True)
     add_banded_table(ws3, ws3.dimensions, "DeductionDetails")

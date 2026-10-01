@@ -6,7 +6,7 @@
 |---|---|
 | [architecture.md](architecture.md) | 现用系统与目录职责 |
 | [sqlite-schema.md](sqlite-schema.md) | SQLite 表、主键、外键、索引 |
-| [leave-management.md](leave-management.md) | LOA 与月度病假事务导入 |
+| [leave-management.md](leave-management.md) | LOA、月度病假事务导入与单人备用登记 |
 | [declaration-statistics.md](declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
 | [hr-monthly-report-plan.md](hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |

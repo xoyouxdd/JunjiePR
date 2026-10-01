@@ -7,6 +7,30 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.02.1",
+        "date": "2026-10-02",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "缺勤登记增加单人备用病假入口",
+                "detail": "GSM、景点圈HR和系统管理员可搜索全部景点圈的在职员工，登记无需病假证明的单人病假；须校验日期、LOA、月结与重复登记。备用记录按现有全勤规则计分，后续导入该月完整文件时仍会被覆盖；文件导入的原有权限范围不变。",
+                "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["SICK_LEAVE_IMPORT"],
+            },
+            {
+                "summary": "月度病假文件预检支持灵活表头",
+                "detail": "预检可识别工作簿中的报表工作表、空行和重排列；重复或缺失表头、月份不符及对账差异会提示工作表和行号。多份完整报表仍会拒绝，确认后的整月覆盖规则不变。",
+                "audiences": ["GSM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["SICK_LEAVE_IMPORT"],
+            },
+            {
+                "summary": "声明升级按考勤类别匹配并修正实际扣分",
+                "detail": "早打卡与迟打卡为一组，30分钟内迟到与早退为一组，组内按三个月窗口查找升级历史；已批准升级的第二条原声明作为证据保留但不重复扣分。月度分数、PR排名、记录明细和导出统一显示实际计分。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.09.29.1",
         "date": "2026-09-29",
         "status": "candidate",

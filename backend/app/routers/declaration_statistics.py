@@ -25,7 +25,7 @@ router = APIRouter()
 
 STATUS_LABELS = {"active": "已生效", "pending_material": "待补材料", "material_processing": "待补材料", "material_failed": "待补材料", "pending_upgrade": "审核中", "void": "已作废"}
 MATERIAL_LABELS = {"ready": "材料已就绪", "missing": "待补材料", "processing": "材料处理中", "failed": "材料处理失败"}
-UPGRADE_LABELS = {"pending": "审核中", "material_processing": "材料处理中", "source_first": "原声明", "source_second": "升级来源", "result": "升级结果", "rejected": "审核不通过", "eligible": "可升级"}
+UPGRADE_LABELS = {"pending": "审核中", "material_processing": "材料处理中", "source_first": "已升级（原声明）", "source_second": "升级来源（不计分）", "result": "升级结果", "rejected": "审核不通过", "eligible": "可升级"}
 
 
 def checked_month(month: str) -> str:

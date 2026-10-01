@@ -76,6 +76,13 @@ def browser_family(user_agent: str) -> str:
 @app.exception_handler(RequestValidationError)
 async def validation_error_response(request: Request, exc: RequestValidationError):
     supported_paths = {
+        "/api/sick-leave-imports/single": {
+            "code": "SICK_LEAVE_VALIDATION_ERROR",
+            "messages": {**SICK_LEAVE_VALIDATION_MESSAGES, "leave_type": "病假类型未成功提交，请重新选择后提交。"},
+            "audit_action": "单人备用病假校验失败",
+            "entity_type": "sick_leave_submission",
+            "fallback": "提交内容不完整，请检查单人病假表单后重试。",
+        },
         "/api/sick-leaves": {
             "code": "SICK_LEAVE_VALIDATION_ERROR",
             "messages": SICK_LEAVE_VALIDATION_MESSAGES,

@@ -212,13 +212,13 @@ def test_scoped_month_score_query_matches_the_legacy_view_business_rules() -> No
             "CREATE TABLE employees (id INTEGER PRIMARY KEY, employee_no TEXT, name TEXT)",
             "CREATE TABLE recognition_records (employee_id INTEGER, recognition_month TEXT, recognition_date TEXT, status TEXT, fraction NUMERIC, credited_fraction NUMERIC)",
             "CREATE TABLE attendance_monthly_scores (employee_id INTEGER, attendance_month TEXT, eligible INTEGER, final_score NUMERIC)",
-            "CREATE TABLE deduction_records (employee_id INTEGER, deduction_month TEXT, status TEXT, points NUMERIC)",
+            "CREATE TABLE deduction_records (employee_id INTEGER, deduction_month TEXT, status TEXT, points NUMERIC, upgrade_role TEXT)",
         ):
             connection.execute(text(statement))
         connection.execute(text("INSERT INTO employees VALUES (1,'0000001','甲'),(2,'0000002','乙')"))
         connection.execute(text("INSERT INTO recognition_records VALUES (1,'2026-09','2026-09-02','confirmed',9,1.25),(1,'2026-09','2026-09-03','rejected',5,5),(2,'2026-08','2026-08-20','confirmed',2,0)"))
         connection.execute(text("INSERT INTO attendance_monthly_scores VALUES (1,'2026-09',1,12),(2,'2026-09',0,12)"))
-        connection.execute(text("INSERT INTO deduction_records VALUES (1,'2026-09','active',0.5),(1,'2026-09','void',8),(2,'2026-09','active',1)"))
+        connection.execute(text("INSERT INTO deduction_records VALUES (1,'2026-09','active',0.5,NULL),(1,'2026-09','void',8,NULL),(1,'2026-09','active',1,'source_second'),(2,'2026-09','active',1,NULL)"))
     with Session(engine) as session:
         rows = {row["employee_id"]: row for row in employee_month_scores(session, "2026-09", [1, 2])}
 

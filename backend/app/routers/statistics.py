@@ -188,7 +188,7 @@ def member_score_detail_payload(
             }
         )
     for row in deduction_rows:
-        included = row["status"] == "active"
+        included = row["status"] == "active" and row.get("upgrade_role") != "source_second"
         all_records.append(
             {
                 "record_type": "deduction",
@@ -201,8 +201,8 @@ def member_score_detail_payload(
                 "status": row["status"],
                 "status_name": row["status_name"],
                 "reason": row["void_reason"],
-                "score": -row["points"],
-                "score_text": f"-{row['points']:.2f}",
+                "score": -row["points"] if included else 0,
+                "score_text": f"-{row['points']:.2f}" if included else "0.00",
                 "included": included,
                 "included_name": "是" if included else "否",
                 "attachment_url": row["document_url"],
@@ -622,7 +622,7 @@ def pr_ranking_payload(
         subtype_name = subtype.name if subtype else "全部扣分类型"
         rows = db.query(DeductionRecord.employee_id, func.count(DeductionRecord.id), func.sum(DeductionRecord.points), func.max(DeductionRecord.occurred_on)).filter(
             DeductionRecord.employee_id.in_(employee_ids) if employee_ids else DeductionRecord.employee_id == -1,
-            DeductionRecord.status == "active", DeductionRecord.occurred_on >= start_value, DeductionRecord.occurred_on <= end_value,
+            DeductionRecord.status == "active", or_(DeductionRecord.upgrade_role.is_(None), DeductionRecord.upgrade_role != "source_second"), DeductionRecord.occurred_on >= start_value, DeductionRecord.occurred_on <= end_value,
         )
         if subtype:
             rows = rows.filter(DeductionRecord.deduction_type_id == subtype.id)
@@ -711,6 +711,7 @@ def pr_ranking_payload(
             .filter(
                 DeductionRecord.employee_id.in_(employee_ids) if employee_ids else DeductionRecord.employee_id == -1,
                 DeductionRecord.status == "active",
+                or_(DeductionRecord.upgrade_role.is_(None), DeductionRecord.upgrade_role != "source_second"),
                 DeductionRecord.occurred_on >= start_value,
                 DeductionRecord.occurred_on <= end_value,
             )

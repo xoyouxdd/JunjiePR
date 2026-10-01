@@ -234,6 +234,112 @@ def _install_book(monkeypatch, rows: list[list]) -> None:
     monkeypatch.setattr(sick_leave_import.xlrd, "open_workbook", lambda *args, **kwargs: book)
 
 
+@pytest.mark.parametrize("transaction_gap,summary_gap", [(0, 0), (1, 1), (5, 4)])
+def test_layout_accepts_variable_blank_rows_and_reordered_columns(monkeypatch, transaction_gap, summary_gap):
+    rows = [
+        ["事务 ："], *([[]] * transaction_gap),
+        ["时\n数", "员工：", "工资 代码", "日期", "ID:"],
+        [8, "ZHANG, 张三", "法定病假", "2099-08-20", "01727264"],
+        ["总 数:"], *([[]] * summary_gap),
+        ["ID", "时数", "员工", "工资代码"],
+        ["01727264", 8, "ZHANG, 张三", "病假时间总计"],
+    ]
+    _install_book(monkeypatch, rows)
+    records, summaries, errors = _read_workbook(b"ignored")
+    assert not errors and _reconcile(records, summaries) == []
+    assert records[0]["row"] == transaction_gap + 3
+    assert sick_leave_import._transaction_months(b"ignored") == {"2099-08"}
+
+
+def test_layout_selects_report_after_cover_sheet_and_marks_correct_sheet(monkeypatch):
+    report = _FakeSheet(_workbook_rows(
+        [["NOBODY, 查无此人", "09999999", "2099-08-20", "法定病假", 8]],
+        [["NOBODY, 查无此人", "09999999", "病假时间总计", 8]],
+    ), "缺勤报表")
+    # The same row number on a cover sheet must not be highlighted.
+    cover = _FakeSheet([["说明"] for _ in range(report.nrows)], "封面")
+    book = SimpleNamespace(datemode=0, sheets=lambda: [cover, report])
+    monkeypatch.setattr(sick_leave_import.xlrd, "open_workbook", lambda *args, **kwargs: book)
+    with TestClient(app) as client:
+        assert client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"}).status_code == 200
+        response = client.post("/api/sick-leave-imports/preview", files={"workbook": ("report.xls", b"fake")}, data={"month": "2099-08"})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["can_commit"] and body["unmatched"][0]["sheet_name"] == "缺勤报表"
+        token = body["token"]
+        try:
+            exported = client.get(f"/api/sick-leave-imports/{token}/unmatched-file")
+            assert exported.status_code == 200, exported.text
+            workbook = load_workbook(BytesIO(exported.content))
+            row = body["unmatched"][0]["row"]
+            assert workbook["缺勤报表"].cell(row, 1).fill.fgColor.rgb == "00FFC7CE"
+            assert workbook["封面"].cell(row, 1).fill.fgColor.rgb != "00FFC7CE"
+        finally:
+            sick_leave_import._drop_preview(token)
+
+
+def test_layout_rejects_multiple_complete_worksheets(monkeypatch):
+    rows = _workbook_rows([], [])
+    book = SimpleNamespace(datemode=0, sheets=lambda: [_FakeSheet(rows, "报表甲"), _FakeSheet(rows, "报表乙")])
+    monkeypatch.setattr(sick_leave_import.xlrd, "open_workbook", lambda *args, **kwargs: book)
+    with pytest.raises(HTTPException) as error:
+        _read_workbook(b"ignored")
+    assert error.value.status_code == 400
+    assert all(part in error.value.detail for part in ("多个工作表", "报表甲", "报表乙", "第 4、8 行"))
+
+
+@pytest.mark.parametrize("rows,expected", [
+    ([["事务:"], ["员工", "ID", "日期", "时数"], ["总数:"], ["员工", "ID", "工资代码", "时数"]], ["第 2 行", "缺少列", "工资代码"]),
+    ([["事务:"], ["员工", "ID", "日期", "工资代码", "时数", "ID"], ["总数:"], ["员工", "ID", "工资代码", "时数"]], ["第 2 行", "重复列", "ID"]),
+    ([["事务:"], ["员工", "ID", "日期", "工资代码", "时数"], ["员工", "ID", "日期", "工资代码", "时数"], ["总数:"], ["员工", "ID", "工资代码", "时数"]], ["第 2、3 行", "多个表头"]),
+    ([["事务:"], ["事务:"], ["总数:"]], ["第 1、2 行", "多个", "事务"]),
+    ([["总数:"], ["事务:"]], ["第 2、1 行", "之前"]),
+    ([["事务:"], ["总数:"]], ["第 1 行", "未找到完整表头"]),
+])
+def test_layout_failures_include_sheet_row_and_reason(monkeypatch, rows, expected):
+    _install_book(monkeypatch, rows)
+    with pytest.raises(HTTPException) as error:
+        _read_workbook(b"ignored")
+    assert error.value.status_code == 400
+    assert "员工事务" in error.value.detail
+    assert all(part in error.value.detail for part in expected)
+
+
+def test_preview_returns_readable_location_error_without_creating_token(monkeypatch):
+    _install_book(monkeypatch, [["事务:"], ["员工", "ID"], ["总数:"]])
+    with TestClient(app) as client:
+        assert client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"}).status_code == 200
+        response = client.post("/api/sick-leave-imports/preview", files={"workbook": ("bad.xls", b"fake")}, data={"month": "2099-08"})
+        assert response.status_code == 400
+        assert "第 2 行" in response.json()["detail"] and "缺少列" in response.json()["detail"]
+        assert "token" not in response.json()
+
+
+def test_reconciliation_error_points_to_summary_row(monkeypatch):
+    rows = _workbook_rows(
+        [["ZHANG, 张三", "01727264", "2099-08-20", "法定病假", 8]],
+        [["ZHANG, 张三", "01727264", "病假时间总计", 4]],
+    )
+    _install_book(monkeypatch, rows)
+    records, summaries, errors = _read_workbook(b"ignored")
+    assert not errors
+    mismatch = _reconcile(records, summaries)
+    assert len(mismatch) == 1
+    assert f"总数区第 {len(rows)} 行" in mismatch[0]
+    assert "员工事务" in mismatch[0]
+
+
+def test_header_beyond_scan_range_is_not_guessed(monkeypatch):
+    rows = [["事务:"], *([[]] * sick_leave_import._HEADER_SCAN_ROWS),
+            ["员工", "ID", "日期", "工资代码", "时数"],
+            ["总数:"], ["员工", "ID", "工资代码", "时数"]]
+    _install_book(monkeypatch, rows)
+    with pytest.raises(HTTPException) as error:
+        _read_workbook(b"ignored")
+    assert "第 2 至 21 行" in error.value.detail
+    assert "未找到完整表头" in error.value.detail
+
+
 def test_read_workbook_normalizes_text_and_numeric_ids(monkeypatch):
     _install_book(monkeypatch, _workbook_rows(
         [

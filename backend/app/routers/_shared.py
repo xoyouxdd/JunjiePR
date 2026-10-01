@@ -82,6 +82,22 @@ ATTENDANCE_DEDUCTION_CODES = {
 REPEAT_CONTROLLED_DEDUCTION_CODES = ATTENDANCE_DEDUCTION_CODES | {"SICK_LEAVE_VIOLATION"}
 
 
+ATTENDANCE_UPGRADE_GROUPS = (
+    frozenset({"ATT_EARLY_CLOCK", "ATT_LATE_CLOCK"}),
+    frozenset({"ATT_LATE_WITHIN_30", "ATT_EARLY_LEAVE_WITHIN_30"}),
+)
+
+
+def upgrade_type_codes(code: str) -> frozenset[str]:
+    """Match repeat/upgrade history within the agreed attendance category."""
+    return next((group for group in ATTENDANCE_UPGRADE_GROUPS if code in group), frozenset({code}))
+
+
+def deduction_counts_for_score(row: DeductionRecord) -> bool:
+    """The second statement is evidence for an upgrade, not another deduction."""
+    return row.status == "active" and row.upgrade_role != "source_second"
+
+
 DIRECT_HIDDEN_DEDUCTION_CODES = {"ATT_LATE_OVER_30", "ATT_EARLY_LEAVE_OVER_30"}
 
 
@@ -803,7 +819,7 @@ def recognition_payload(row: RecognitionRecord) -> dict:
 
 def deduction_payload(row: DeductionRecord) -> dict:
     status_names = {"active": "已扣分", "void": "已作废", "pending_upgrade": "待升级审核", "pending_material": "待补充材料（未扣分）", "material_processing": "材料生成中", "material_failed": "材料生成失败"}
-    upgrade_state_names = {"pending": "待升级审核", "source_first": "已参与升级", "source_second": "已用于升级，不计分", "result": "升级结果", "rejected": "审核不通过"}
+    upgrade_state_names = {"pending": "待升级审核", "source_first": "已升级（原声明）", "source_second": "已用于升级，不计分", "result": "升级结果", "rejected": "审核不通过"}
     return {
         "record_type": "deduction",
         "id": row.id,
@@ -813,7 +829,7 @@ def deduction_payload(row: DeductionRecord) -> dict:
         "deduction_type": row.deduction_type_name,
         "deduction_level": row.deduction_level_name,
         "points": float(row.points),
-        "actual_points": float(row.points),
+        "actual_points": float(row.points) if deduction_counts_for_score(row) else 0.0,
         "occurred_on": row.occurred_on,
         "description": row.description,
         "submitter_id": row.submitter_id,
@@ -915,22 +931,26 @@ UPGRADE_REVIEWER_CODES = {"GSM", "TA_GSM"}
 
 
 def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id: int, occurred_on: str) -> DeductionRecord | None:
-    """Return the oldest still-eligible same-type statement in the 3-month window."""
+    """Return a registered unused statement within three months either side of the event."""
     statement = db.query(DeductionLevel).filter_by(code="STATEMENT", active=True).first()
-    if not statement:
+    deduction_type = db.get(DeductionType, deduction_type_id)
+    if not statement or not deduction_type:
         return None
-    window_start = subtract_calendar_months(parse_iso_date(occurred_on, "事件日期"), 3).isoformat()
+    event_date = parse_iso_date(occurred_on, "事件日期")
+    window_start = subtract_calendar_months(event_date, 3).isoformat()
+    window_end = add_calendar_months(event_date, 3).isoformat()
     return (
         db.query(DeductionRecord)
+        .join(DeductionType, DeductionType.id == DeductionRecord.deduction_type_id)
         .filter(
             DeductionRecord.employee_id == employee_id,
-            DeductionRecord.deduction_type_id == deduction_type_id,
+            DeductionType.code.in_(upgrade_type_codes(deduction_type.code)),
             DeductionRecord.deduction_level_id == statement.id,
             DeductionRecord.status == "active",
             DeductionRecord.legacy_upgrade_excluded.is_(False),
             or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"),
             DeductionRecord.occurred_on >= window_start,
-            DeductionRecord.occurred_on <= occurred_on,
+            DeductionRecord.occurred_on <= window_end,
         )
         .order_by(DeductionRecord.occurred_on.asc(), DeductionRecord.id.asc())
         .first()

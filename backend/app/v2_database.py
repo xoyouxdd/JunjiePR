@@ -1305,7 +1305,7 @@ def create_score_view(db) -> None:
                 FROM attendance_monthly_scores
             ), deduction_totals AS (
                 SELECT employee_id, deduction_month AS score_month,
-                       ROUND(SUM(CASE WHEN status = 'active' THEN points ELSE 0 END), 2) AS deduction_score
+                       ROUND(SUM(CASE WHEN status = 'active' AND (upgrade_role IS NULL OR upgrade_role != 'source_second') THEN points ELSE 0 END), 2) AS deduction_score
                 FROM deduction_records GROUP BY employee_id, deduction_month
             )
             SELECT e.id AS employee_id, e.employee_no, e.name AS employee_name, m.score_month,

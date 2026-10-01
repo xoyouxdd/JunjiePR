@@ -54,7 +54,7 @@ def employee_month_scores(db: Session, month: str, employee_ids: Iterable[int]) 
             WHERE attendance_month=:month{employee_filter}
         ), deduction_totals AS (
             SELECT employee_id,
-                   ROUND(SUM(CASE WHEN status='active' THEN points ELSE 0 END), 2) AS deduction_score
+                   ROUND(SUM(CASE WHEN status='active' AND (upgrade_role IS NULL OR upgrade_role!='source_second') THEN points ELSE 0 END), 2) AS deduction_score
             FROM deduction_records
             WHERE deduction_month=:month{employee_filter}
             GROUP BY employee_id

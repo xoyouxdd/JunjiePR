@@ -687,7 +687,7 @@ def my_entries(
                 payload["available_actions"] = [*payload["available_actions"], "void"]
             items.append(payload)
     if record_type in {"all", "sick_leave"}:
-        query = db.query(SickLeaveRecord).filter(SickLeaveRecord.import_source != "monthly_transaction_import")
+        query = db.query(SickLeaveRecord).filter(SickLeaveRecord.import_source.notin_({"monthly_transaction_import", "single_backup"}))
         if scope == "supervisors":
             query = query.filter(SickLeaveRecord.submitted_by.in_(supervisor_submitter_ids) if supervisor_submitter_ids else SickLeaveRecord.id == -1)
         else:
@@ -726,7 +726,7 @@ def my_entries(
     total = len(items)
     start = (page - 1) * page_size
     page_items = items[start:start + page_size]
-    active_deductions = sum(row["points"] for row in items if row["record_type"] == "deduction" and row["status"] == "active")
+    active_deductions = sum(row["actual_points"] for row in items if row["record_type"] == "deduction")
     recognition_score = sum(row.get("credited_fraction", row["fraction"]) for row in items if row["record_type"] == "recognition" and row["status"] == "confirmed")
     active_sick_days = sum(row["leave_days"] for row in items if row["record_type"] == "sick_leave" and row["status"] == "active")
     charged_sick_days = sum(row["charged_days"] for row in items if row["record_type"] == "sick_leave" and row["status"] == "active")
