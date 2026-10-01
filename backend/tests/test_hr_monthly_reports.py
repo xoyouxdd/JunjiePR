@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import date
 import os
 from pathlib import Path
 import tempfile
@@ -19,6 +20,9 @@ from app.hr_monthly_pptx import NS, ROOT
 from app.hr_monthly_report import REPORT_ROLES
 from app.v2_database import ROLE_PERMISSION_CODES
 from app.hr_monthly_pptx import build_pptx
+
+
+REPORT_TEST_MONTH = date.today().strftime("%Y-%m")
 from app.routers.hr_monthly_reports import digest
 
 
@@ -107,7 +111,7 @@ def test_native_charts_tables_pagination_and_photos(tmp_path):
     from app.routers.hr_monthly_reports import prepare_photo
     with TestClient(app) as client:
         login(client)
-        data = client.get("/api/hr-monthly-reports/preview?month=2026-09").json()["report"]
+        data = client.get(f"/api/hr-monthly-reports/preview?month={REPORT_TEST_MONTH}").json()["report"]
     data["deductions"] = [{"attraction_name": data["circles"][0]["name"], "category": "CM", "type": "安全", "count": 11}]
     data["recognitions"] = [{"attraction_name": data["circles"][0]["name"], "category": "TR", "type": "服务", "count": 29}]
     data["trend"] = [{"month": "2026-07", "rate": 150}, {"month": "2026-08", "rate": None}, {"month": "2026-09", "rate": 240}]
@@ -149,6 +153,7 @@ def test_history_loa_credited_scores_and_read_only():
     from app.v2_database import SessionLocal
     from app.v2_models import Employee, Attraction, RecognitionRecord, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, AttendanceMonthlyScore, GroupMembership
     from app.hr_monthly_report import report_data
+    month = REPORT_TEST_MONTH
     with TestClient(app):
         with SessionLocal() as db:
             employee = db.query(Employee).filter_by(employee_no="CMTEST01").one()
@@ -156,21 +161,21 @@ def test_history_loa_credited_scores_and_read_only():
             circles = db.query(Attraction).filter(Attraction.employee_circle.is_(True)).order_by(Attraction.id).all()
             original, historical = circles[:2]
             member = db.query(GroupMembership).filter_by(employee_id=employee.id).first()
-            db.add(EmployeeMonthOrganizationSnapshot(employee_id=employee.id, score_month="2026-09", attraction_id=historical.id, attraction_name=historical.name, group_id=member.group_id, group_name="封存小组", leader_name="历史组长"))
-            db.add(RecognitionRecord(employee_id=employee.id, employee_no=employee.employee_no, employee_name=employee.name, employee_role_snapshot="CM", home_attraction_id=original.id, occurred_attraction_id=original.id, recognition_date="2026-09-12", recognition_month="2026-09", recognition_type_id=1, recognition_type_name="安全", content="测试", recognizer_employee_id=actor.id, recognizer_name=actor.name, recognizer_role_snapshot="GSM", operator_employee_id=actor.id, operator_name=actor.name, source="manager", fraction=7, credited_fraction=2, status="confirmed"))
+            db.add(EmployeeMonthOrganizationSnapshot(employee_id=employee.id, score_month=month, attraction_id=historical.id, attraction_name=historical.name, group_id=member.group_id, group_name="封存小组", leader_name="历史组长"))
+            db.add(RecognitionRecord(employee_id=employee.id, employee_no=employee.employee_no, employee_name=employee.name, employee_role_snapshot="CM", home_attraction_id=original.id, occurred_attraction_id=original.id, recognition_date=f"{month}-12", recognition_month=month, recognition_type_id=1, recognition_type_name="安全", content="测试", recognizer_employee_id=actor.id, recognizer_name=actor.name, recognizer_role_snapshot="GSM", operator_employee_id=actor.id, operator_name=actor.name, source="manager", fraction=7, credited_fraction=2, status="confirmed"))
             db.commit()
             attendance_before = db.query(AttendanceMonthlyScore).count()
-            report = report_data(db, "2026-09", historical.id)
+            report = report_data(db, month, historical.id)
             assert report["summary"]["recognition_score"] == 2  # Not raw seven points.
             assert any(r["name"] == "封存小组" for r in report["groups"])
             assert report["summary"]["recognition_count"] == 0  # Event snapshot remains original circle.
-            assert report_data(db, "2026-09", original.id)["summary"]["recognition_count"] == 1
+            assert report_data(db, month, original.id)["summary"]["recognition_count"] == 1
             assert db.query(AttendanceMonthlyScore).count() == attendance_before
-            db.add(EmployeeLOAPeriod(employee_id=employee.id, starts_on="2026-09-05", ends_on=None, created_by=actor.id, created_by_name=actor.name))
+            db.add(EmployeeLOAPeriod(employee_id=employee.id, starts_on=f"{month}-05", ends_on=None, created_by=actor.id, created_by_name=actor.name))
             db.commit()
-            report = report_data(db, "2026-09", historical.id)
+            report = report_data(db, month, historical.id)
             assert report["summary"]["recognition_score"] == 0
             assert report["loa_count"] == 1
             assert not any(r["employee_id"] == employee.id for group in report["rankings"] for r in group["rows"])
-            assert report_data(db, "2026-09", original.id)["summary"]["recognition_count"] == 1
+            assert report_data(db, month, original.id)["summary"]["recognition_count"] == 1
             assert db.query(AttendanceMonthlyScore).count() == attendance_before
