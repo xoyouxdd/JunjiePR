@@ -24,7 +24,7 @@ from app.excel_export_utils import (
     write_merged_title,
 )
 from app.v2_models import Attraction, Employee, EmployeeNumberHistory, Role
-from app.v2_services import roles_at
+from app.v2_services import base_roles_at
 
 
 def ordered_statistics_score_rows(data: dict) -> list[dict]:
@@ -458,7 +458,7 @@ def build_statistics_workbook(
 ) -> tuple[Workbook, str, str]:
     month_start = date.fromisoformat(f"{month}-01")
     month_end = month_start.replace(day=monthrange(month_start.year, month_start.month)[1]).isoformat()
-    export_roles = roles_at(db, [int(row["employee_id"]) for row in [*data["scores"], *data["loa_rows"], *data.get("loa_periods", [])]], month_end)
+    export_roles = base_roles_at(db, [int(row["employee_id"]) for row in [*data["scores"], *data["loa_rows"], *data.get("loa_periods", [])]], month_end)
     recognition_counts: dict[int, int] = {}
     for row in data["recognitions"]:
         if row["status"] == "confirmed":
@@ -532,7 +532,7 @@ def build_statistics_workbook(
     )
     configure_sheet(ws0, freeze="A2", landscape=False)
     loa_role_ids = [int(row["employee_id"]) for row in data["loa_rows"]]
-    loa_roles = roles_at(db, loa_role_ids, month_end) if loa_role_ids else {}
+    loa_roles = base_roles_at(db, loa_role_ids, month_end) if loa_role_ids else {}
     ordered_scores = ordered_statistics_score_rows(data)
     export_employee_ids = sorted(
         {

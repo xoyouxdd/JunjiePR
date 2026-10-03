@@ -654,13 +654,15 @@ RELEASES: list[dict] = [
 ]
 
 
-def item_visible(item: dict, role_code: str, permissions: set[str]) -> bool:
+def item_visible(item: dict, role_code: str | set[str], permissions: set[str]) -> bool:
+    """`role_code` may be a set: base identity plus acting duties all count."""
     audiences = item.get("audiences") or ["all"]
     needed = set(item.get("permissions") or [])
-    return ("all" in audiences or role_code in audiences) and needed.issubset(permissions)
+    codes = {role_code} if isinstance(role_code, str) else set(role_code)
+    return ("all" in audiences or bool(codes.intersection(audiences))) and needed.issubset(permissions)
 
 
-def visible_releases(role_code: str, permissions: set[str]) -> list[dict]:
+def visible_releases(role_code: str | set[str], permissions: set[str]) -> list[dict]:
     releases = []
     for release in RELEASES:
         items = [

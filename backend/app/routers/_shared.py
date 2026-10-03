@@ -14,7 +14,7 @@ from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionLevel, DeductionFollowUp, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, GroupLeaderAssignment, MonthClosure, RecognitionRecord, Role, SickLeaveRecord, StoredFile, SubmissionRequest, SystemAlert, UserAccount, WorkGroup
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, active_group_leaders_bulk, groups_led_by, managed_attraction_ids, role_at
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, active_group_leaders_bulk, base_role_at, groups_led_by, managed_attraction_ids, role_at
 from app.v2_models import EmployeeLOAPeriod, GroupMembership
 from app.v2_services import roles_at
 
@@ -225,6 +225,8 @@ def ensure_operational_target_scope(user: V2User, employee: Employee) -> None:
     Search UI is only a convenience: TA主管 is confined to its own circle;
     主管、TA GSM、GSM may support active frontline staff across circles.
     """
+    if employee.id == user.id:
+        raise HTTPException(403, "不能对本人登记")
     if user.role.code == "TA_SUPERVISOR" and employee.attraction_id != user.employee.attraction_id:
         raise HTTPException(403, "TA主管仅可登记本景点圈CM/TR")
     if user.role.code not in {"TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "HR_CIRCLE", "SYSTEM_ADMIN"}:
@@ -728,7 +730,7 @@ def search_employee_targets(
 
 def ensure_enabled_frontline_target(db: Session, employee_id: int, action_name: str) -> tuple[Employee, Role]:
     target = db.get(Employee, employee_id)
-    target_role = role_at(db, employee_id) if target else None
+    target_role = base_role_at(db, employee_id) if target else None
     account_enabled = bool(
         target
         and db.query(UserAccount.id)

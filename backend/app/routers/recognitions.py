@@ -12,7 +12,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionMonthlyQuota, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
 from app.recognition_encouragement import encouragement_options
-from app.v2_services import FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, current_leader_for_employee, direct_member_ids, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
+from app.v2_services import FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, base_role_at, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
 from app.routers._shared import (
     ATTENDANCE_FILTER_STATUSES,
     DEDICATED_RECOGNITION_TYPE_CODES,
@@ -47,7 +47,7 @@ router = APIRouter()
 
 def ensure_enabled_poc_target(db: Session, employee_id: int) -> tuple[Employee, Role]:
     target = db.get(Employee, employee_id)
-    target_role = role_at(db, employee_id) if target else None
+    target_role = base_role_at(db, employee_id) if target else None
     account_enabled = bool(target and db.query(UserAccount.id).filter(UserAccount.employee_id == target.id, UserAccount.enabled.is_(True)).first())
     if not target or not target.is_active or not account_enabled or not target_role or target_role.code not in (FRONTLINE_CODES | LEADER_CODES):
         raise HTTPException(400, "POC仅可认可在职、账号启用的CM/TR、TA主管或主管")
@@ -153,7 +153,7 @@ async def create_recognition(
     target_id = int(employee_id or user.id)
     target, target_role = ensure_enabled_frontline_target(db, target_id, "加分")
     ensure_scoped_hr_employee(db, user, target)
-    is_self = target.id == user.id and user.role.code in FRONTLINE_CODES
+    is_self = target.id == user.id and user.base_role.code in FRONTLINE_CODES
     if not is_self and "EMPLOYEE_ADD" not in user.permissions:
         raise HTTPException(403, "没有员工加分权限")
     attraction = db.get(Attraction, int(occurred_attraction_id or 0))
@@ -189,14 +189,19 @@ async def create_recognition(
             raise HTTPException(400, "请选择有效认可人") from exc
         recognizer = db.get(Employee, recognizer_id)
         recognizer_role = recognizer_role_for_date(db, recognizer.id, recognition_date) if recognizer else None
-        if not recognizer or not recognizer.is_active or not recognizer_role or recognizer_role.code not in RECOGNIZER_CODES:
+        if not recognizer or not employed_on(recognizer, min(recognition_date, date.today().isoformat())) or not recognizer_role or recognizer_role.code not in RECOGNIZER_CODES:
             raise HTTPException(400, "请选择有效认可人")
         allowed_ids = {row["id"] for row in recognizer_options(db, target_circle.id, recognition_date)}
         if recognizer.id not in allowed_ids:
             raise HTTPException(400, "认可人必须是TALEAD/LEAD或TAGSM及以上的非HR在职人员")
+        if recognizer.id == target.id:
+            raise HTTPException(400, "认可人不能是被加分员工本人")
         recognizer_name = recognizer.name
         recognizer_role_name = recognizer_role.name
         fraction = recognition_score_for_role(db, recognizer_role.id, recognition_date)
+    target_duty_code = duty_code_at(db, target.id, recognition_date)
+    if not is_self and not special_rule and target_duty_code == "TA_SUPERVISOR" and user.role.code in LEADER_CODES:
+        raise HTTPException(403, "该员工认可日期处于代理TA主管期间，主管和TA主管不能为其代录加分")
     quota_code = recognition_type.code if special_rule and special_rule["monthly_limit"] else None
     active_same_day_rows = (
         db.query(RecognitionRecord)
@@ -272,6 +277,11 @@ async def create_recognition(
         operator_name=user.name,
         operator_role_snapshot=user.role.name,
         operator_role_code_snapshot=user.role.code,
+        operator_base_role_code_snapshot=user.base_role.code,
+        recognizer_base_role_code_snapshot=(
+            (base_role_at(db, recognizer.id, recognition_date) or recognizer_role).code if recognizer_role else None
+        ),
+        employee_acting_duty_code=target_duty_code,
         source="self" if is_self else "manager",
         fraction=fraction,
         status="pending" if is_self else "confirmed",
@@ -377,6 +387,8 @@ def create_poc_recognition(
     if not reason or len(reason) > 100:
         raise HTTPException(400, "特别贡献原因必填且不能超过100字")
     target, target_role = ensure_enabled_poc_target(db, int(employee_id))
+    if target.id == user.id:
+        raise HTTPException(403, "不能为本人开具POC特别贡献")
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.employee_circle:
         raise HTTPException(400, "被认可员工未配置有效景点圈")
@@ -395,6 +407,8 @@ def create_poc_recognition(
         recognizer_employee_id=user.id, recognizer_name=user.name, recognizer_role_snapshot=user.role.name,
         recognizer_role_code_snapshot=user.role.code, operator_employee_id=user.id, operator_name=user.name,
         operator_role_snapshot=user.role.name, operator_role_code_snapshot=user.role.code, source="manager",
+        operator_base_role_code_snapshot=user.base_role.code, recognizer_base_role_code_snapshot=user.base_role.code,
+        employee_acting_duty_code=duty_code_at(db, target.id, recognition_date),
         fraction=amount, credited_fraction=amount, monthly_cap_status="not_applicable", status="confirmed",
         poc_period_type=poc_period_type, poc_period_key=period_key, poc_reason=reason,
     )
@@ -570,6 +584,8 @@ def review_recognition(record_id: int, payload: dict, request: Request, db: Sess
             after_status=after,
             reviewer_id=user.id,
             reviewer_name=user.name,
+            reviewer_role_code=user.role.code,
+            reviewer_base_role_code=user.base_role.code,
             note=row.review_note,
         )
     )

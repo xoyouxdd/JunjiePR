@@ -12,13 +12,14 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
-from app.v2_database import FILE_DIR
+from app.v2_database import FILE_DIR, synchronize_gsm_management_scope
 from app.v2_models import (
     Attraction,
     AttendanceMonthlyScore,
     AttendanceRule,
     AuditLog,
     Employee,
+    EmployeeActingDuty,
     EmployeeLOAPeriod,
     EmployeeRoleAssignment,
     GroupLeaderAssignment,
@@ -55,8 +56,105 @@ SCORE_UNIT = Decimal("0.01")
 HALF_DAY_DEDUCTION = Decimal("0.25")
 
 
+# Acting duties layer on a base identity and never replace it.  role_at returns
+# the role actually in use (the highest-ranked active duty, else the base
+# identity); base_role_at returns the base identity, which alone decides the
+# scoring category and group membership.
+DUTY_ROLE_CODES = {"TA_SUPERVISOR", "TA_GSM"}
+DUTY_BASE_CODES = {"TA_SUPERVISOR": FRONTLINE_CODES, "TA_GSM": {"SUPERVISOR"}}
+SCORING_CATEGORY_BY_CODE = {"CM": "frontline", "TR": "frontline", "SUPERVISOR": "supervisor"}
+
+
+def _date_value(on_date: str | date | None) -> str:
+    return on_date.isoformat() if isinstance(on_date, date) else (on_date or date.today().isoformat())
+
+
+def scoring_category(role: Role | None) -> str | None:
+    return SCORING_CATEGORY_BY_CODE.get(role.code) if role else None
+
+
+def duties_at(db: Session, employee_id: int, on_date: str | date | None = None) -> list[Role]:
+    value = _date_value(on_date)
+    rows = (
+        db.query(EmployeeActingDuty)
+        .filter(
+            EmployeeActingDuty.employee_id == employee_id,
+            EmployeeActingDuty.status != "cancelled",
+            EmployeeActingDuty.starts_on <= value,
+            or_(EmployeeActingDuty.ends_on.is_(None), EmployeeActingDuty.ends_on >= value),
+        )
+        .all()
+    )
+    return sorted({row.role for row in rows}, key=lambda role: (-role.rank, role.code))
+
+
+def duties_at_bulk(db: Session, employee_ids: list[int] | set[int], on_date: str | date | None = None) -> dict[int, list[Role]]:
+    ids = list(dict.fromkeys(int(employee_id) for employee_id in employee_ids))
+    if not ids:
+        return {}
+    value = _date_value(on_date)
+    rows = (
+        db.query(EmployeeActingDuty)
+        .filter(
+            EmployeeActingDuty.employee_id.in_(ids),
+            EmployeeActingDuty.status != "cancelled",
+            EmployeeActingDuty.starts_on <= value,
+            or_(EmployeeActingDuty.ends_on.is_(None), EmployeeActingDuty.ends_on >= value),
+        )
+        .all()
+    )
+    grouped: dict[int, set[Role]] = {employee_id: set() for employee_id in ids}
+    for row in rows:
+        grouped[row.employee_id].add(row.role)
+    return {employee_id: sorted(roles, key=lambda role: (-role.rank, role.code)) for employee_id, roles in grouped.items()}
+
+
+def duty_code_at(db: Session, employee_id: int, on_date: str | date | None = None) -> str | None:
+    duties = duties_at(db, employee_id, on_date)
+    return duties[0].code if duties else None
+
+
 def role_at(db: Session, employee_id: int, on_date: str | date | None = None) -> Role | None:
-    value = on_date.isoformat() if isinstance(on_date, date) else (on_date or date.today().isoformat())
+    duties = duties_at(db, employee_id, on_date)
+    if duties:
+        return duties[0]
+    return base_role_at(db, employee_id, on_date)
+
+
+def roles_at(db: Session, employee_ids: list[int] | set[int], on_date: str | date | None = None) -> dict[int, Role | None]:
+    """Resolve many employees' roles in use without one query per employee."""
+    base = base_roles_at(db, employee_ids, on_date)
+    duties = duties_at_bulk(db, list(base), on_date)
+    return {employee_id: (duties.get(employee_id) or [role])[0] for employee_id, role in base.items()}
+
+
+def can_lead_on(db: Session, employee_id: int, on_date: str | date | None = None) -> bool:
+    """A base supervisor (also while acting as TA GSM) or an acting TA主管."""
+    return any(role and role.code in LEADER_CODES for role in (role_at(db, employee_id, on_date), base_role_at(db, employee_id, on_date)))
+
+
+def identity_labels(db: Session, employee_ids: list[int] | set[int], on_date: str | date | None = None) -> dict[int, str]:
+    """Display names such as "CM · 代理TA主管" for many employees at once."""
+    base = base_roles_at(db, employee_ids, on_date)
+    duties = duties_at_bulk(db, list(base), on_date)
+    labels: dict[int, str] = {}
+    for employee_id, role in base.items():
+        duty = (duties.get(employee_id) or [None])[0]
+        if not role:
+            labels[employee_id] = duty.name if duty else "未配置"
+        elif duty and duty.code != role.code:
+            labels[employee_id] = f"{role.name} · 代理{duty.name}"
+        else:
+            labels[employee_id] = role.name
+    return labels
+
+
+def identity_label(db: Session, employee_id: int, on_date: str | date | None = None) -> str:
+    return identity_labels(db, [employee_id], on_date).get(employee_id, "未配置")
+
+
+def base_role_at(db: Session, employee_id: int, on_date: str | date | None = None) -> Role | None:
+    value = _date_value(on_date)
     assignment = (
         db.query(EmployeeRoleAssignment)
         .filter(
@@ -85,12 +183,12 @@ def role_at(db: Session, employee_id: int, on_date: str | date | None = None) ->
     return None
 
 
-def roles_at(db: Session, employee_ids: list[int] | set[int], on_date: str | date | None = None) -> dict[int, Role | None]:
-    """Resolve many employees' effective roles without issuing one query per employee."""
+def base_roles_at(db: Session, employee_ids: list[int] | set[int], on_date: str | date | None = None) -> dict[int, Role | None]:
+    """Resolve many employees' base identities without issuing one query per employee."""
     ids = list(dict.fromkeys(int(employee_id) for employee_id in employee_ids))
     if not ids:
         return {}
-    value = on_date.isoformat() if isinstance(on_date, date) else (on_date or date.today().isoformat())
+    value = _date_value(on_date)
     assignments = (
         db.query(EmployeeRoleAssignment)
         .filter(
@@ -310,6 +408,8 @@ def direct_member_ids(db: Session, leader_id: int) -> set[int]:
     if not group_ids:
         return set()
     today = date.today().isoformat()
+    # A leader never reviews or manages their own records, even if a data
+    # error placed them inside a group they lead.
     return {
         employee_id
         for (employee_id,) in db.query(GroupMembership.employee_id)
@@ -320,7 +420,7 @@ def direct_member_ids(db: Session, leader_id: int) -> set[int]:
             or_(GroupMembership.ends_on.is_(None), GroupMembership.ends_on >= today),
         )
         .all()
-    }
+    } - {leader_id}
 
 
 def current_group_for_employee(db: Session, employee_id: int) -> WorkGroup | None:
@@ -347,7 +447,7 @@ def current_leader_for_employee(db: Session, employee_id: int) -> Employee | Non
 
 def active_frontline_employees(db: Session) -> list[Employee]:
     rows = db.query(Employee).filter(Employee.is_active.is_(True)).order_by(Employee.name.asc()).all()
-    return [employee for employee in rows if (role_at(db, employee.id) and role_at(db, employee.id).code in FRONTLINE_CODES)]
+    return [employee for employee in rows if (role := base_role_at(db, employee.id)) and role.code in FRONTLINE_CODES]
 
 
 def managed_attraction_ids(db: Session, employee_id: int, on_date: str | None = None) -> set[int]:
@@ -373,18 +473,46 @@ def recognizer_role_for_date(db: Session, employee_id: int, on_date: str | date 
     eligibility_date = on_date.isoformat() if isinstance(on_date, date) else str(on_date or date.today().isoformat())
     if eligibility_date < RECOGNIZER_ELIGIBILITY_START:
         return None
-    current_role = role_at(db, employee_id)
-    return current_role if current_role and current_role.code in RECOGNIZER_CODES else None
+    # The score follows the recognizer's role on the recognition date (today's
+    # role for a future date, whose role is not known yet).
+    role_date = min(eligibility_date, date.today().isoformat())
+    role_on_date = role_at(db, employee_id, role_date) or earliest_roles(db, [employee_id]).get(employee_id)
+    return role_on_date if role_on_date and role_on_date.code in RECOGNIZER_CODES else None
+
+
+def earliest_roles(db: Session, employee_ids: list[int] | set[int]) -> dict[int, Role]:
+    """First recorded role, used for dates before an imported role history begins."""
+    ids = list(dict.fromkeys(int(employee_id) for employee_id in employee_ids))
+    if not ids:
+        return {}
+    first: dict[int, EmployeeRoleAssignment] = {}
+    for row in (
+        db.query(EmployeeRoleAssignment)
+        .filter(EmployeeRoleAssignment.employee_id.in_(ids), EmployeeRoleAssignment.status != "cancelled")
+        .order_by(EmployeeRoleAssignment.employee_id, EmployeeRoleAssignment.starts_on, EmployeeRoleAssignment.id)
+        .all()
+    ):
+        first.setdefault(row.employee_id, row)
+    return {employee_id: row.role for employee_id, row in first.items()}
 
 
 def recognizer_options(db: Session, attraction_id: int, on_date: str | date | None = None) -> list[dict]:
     eligibility_date = on_date.isoformat() if isinstance(on_date, date) else (str(on_date or date.today().isoformat()))
     if eligibility_date < RECOGNIZER_ELIGIBILITY_START:
         return []
-    employees = db.query(Employee).filter(Employee.is_active.is_(True)).order_by(Employee.name.asc()).all()
+    # Anyone employed on the recognition date may be chosen, so a back-dated
+    # entry can still name a recognizer who has since left.
+    role_date = min(eligibility_date, date.today().isoformat())
+    employees = [
+        employee
+        for employee in db.query(Employee).order_by(Employee.name.asc()).all()
+        if employed_on(employee, role_date)
+    ]
     # Batch role/circle/score resolution keeps this endpoint at a handful of
     # queries regardless of roster size instead of several per employee.
-    roles = roles_at(db, [employee.id for employee in employees])
+    roles = roles_at(db, [employee.id for employee in employees], role_date)
+    missing = [employee_id for employee_id, role in roles.items() if role is None]
+    roles.update(earliest_roles(db, missing))
     circles = {
         circle.id: circle
         for circle in db.query(Attraction).filter(Attraction.employee_circle.is_(True), Attraction.active.is_(True)).all()
@@ -616,6 +744,13 @@ def employee_active_on(employee: Employee, on_date: str) -> bool:
     return employee.is_active
 
 
+def employed_on(employee: Employee, on_date: str) -> bool:
+    """Whether the employee had not yet left on a (possibly past) date."""
+    if employee.terminated_on:
+        return employee.terminated_on > on_date
+    return employee.is_active
+
+
 def month_bounds(month: str) -> tuple[date, date]:
     start = date.fromisoformat(f"{month}-01")
     return start, start.replace(day=monthrange(start.year, start.month)[1])
@@ -700,7 +835,7 @@ def sick_leave_score_deduction(charged_days: Decimal, daily_deduction: Decimal) 
 
 def recalculate_attendance(db: Session, employee: Employee, month: str) -> AttendanceMonthlyScore:
     end_date = month_end(month)
-    end_role = role_at(db, employee.id, end_date)
+    end_role = base_role_at(db, employee.id, end_date)
     eligible = bool(end_role and end_role.code in FRONTLINE_CODES and employee_active_on(employee, end_date))
     rule = (
         db.query(AttendanceRule)
@@ -803,7 +938,7 @@ def ensure_month_attendance(
 
     end_date = month_end(month)
     missing_ids = [employee.id for employee in missing]
-    end_roles = roles_at(db, missing_ids, end_date)
+    end_roles = base_roles_at(db, missing_ids, end_date)
     rule = (
         db.query(AttendanceRule)
         .filter(AttendanceRule.active.is_(True), AttendanceRule.effective_date <= end_date)
@@ -958,10 +1093,26 @@ def process_role_expirations(db: Session) -> None:
                             reason="临时角色到期自动恢复",
                         )
                     )
+    for duty in db.query(EmployeeActingDuty).filter(EmployeeActingDuty.status == "active", EmployeeActingDuty.ends_on.isnot(None)).all():
+        end = date.fromisoformat(duty.ends_on)
+        days = (end - today).days
+        if days in (30, 7, 1):
+            create_alert(
+                db,
+                "acting_duty_expiring",
+                f"{duty.id}:{days}",
+                f"{duty.employee.name}的代理{duty.role.name}将在{days}天后结束",
+                employee_id=duty.employee_id,
+                due_date=duty.ends_on,
+            )
+        if end < today:
+            duty.status = "ended"
+            db.flush()
+            current = role_at(db, duty.employee_id, today_text)
+            synchronize_gsm_management_scope(db, duty.employee, current.code if current else None, today_text)
     db.flush()
     for leader_assignment in db.query(GroupLeaderAssignment).filter(GroupLeaderAssignment.status == "active").all():
-        role = role_at(db, leader_assignment.leader_employee_id, today_text)
-        if role and role.code in LEADER_CODES:
+        if can_lead_on(db, leader_assignment.leader_employee_id, today_text):
             continue
         leader_assignment.status = "ended"
         leader_assignment.ends_on = today_text

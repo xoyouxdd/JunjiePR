@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_crypto import default_initial_password, hash_password
 from app.v2_database import get_db, synchronize_gsm_management_scope
-from app.v2_models import Attraction, AttendanceMonthlyScore, Employee, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupLeaderAssignment, GroupMembership, RecognitionRecord, Role, SystemAlert, UserAccount, UserSession, WorkGroup
-from app.v2_services import FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_memberships, groups_led_by, recalculate_attendance, role_at, write_audit
+from app.v2_models import Attraction, AttendanceMonthlyScore, Employee, EmployeeActingDuty, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupLeaderAssignment, GroupMembership, RecognitionRecord, Role, SystemAlert, UserAccount, UserSession, WorkGroup
+from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_memberships, base_role_at, can_lead_on, groups_led_by, recalculate_attendance, role_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.routers._shared import (
@@ -242,6 +242,8 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
     employee = db.get(Employee, employee_id)
     if not employee or not employee.is_active:
         raise HTTPException(400, "请选择在职员工")
+    if employee.id == user.id:
+        raise HTTPException(403, "不能为本人登记LOA")
     starts_on = parse_iso_date(str(payload.get("starts_on") or ""), "LOA进入日期")
     ends_value = str(payload.get("ends_on") or "").strip()
     ends_on = parse_iso_date(ends_value, "LOA结束日期") if ends_value else None
@@ -332,6 +334,8 @@ def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Sessi
     employee = db.get(Employee, row.employee_id)
     if not employee:
         raise HTTPException(404, "员工不存在")
+    if employee.id == user.id:
+        raise HTTPException(403, "不能撤销本人的LOA")
     starts_on = parse_iso_date(row.starts_on, "LOA开始日期")
     ends_on = parse_iso_date(row.ends_on, "LOA结束日期") if row.ends_on else None
     # Cancelling restores every month the period excluded.
@@ -699,6 +703,7 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
         raise HTTPException(404, "员工不存在")
     ensure_scoped_hr_employee(db, user, employee)
     existing_role = role_at(db, employee.id)
+    existing_base_role = base_role_at(db, employee.id)
     if existing_role and existing_role.code not in CIRCLE_HR_MANAGED_ROLE_CODES and "SYSTEM_ADMIN" not in user.permissions:
         raise HTTPException(403, "景点圈HR只能编辑LEAD及以下员工")
     before = employee_payload(db, employee)
@@ -735,7 +740,7 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
             .first()
         )
         if requested_employment_status == "loa":
-            if not existing_role or existing_role.code not in FRONTLINE_CODES:
+            if not existing_base_role or existing_base_role.code not in FRONTLINE_CODES:
                 raise HTTPException(400, "仅可将CM/TR演职人员设置为LOA")
             starts_on = str(payload.get("loa_start_date") or date.today().isoformat())
             parse_iso_date(starts_on, "LOA开始日期")
@@ -802,14 +807,49 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
     new_role_code = str(payload.get("role_code") or "")
     current_role = existing_role
     resulting_role = current_role
+    resulting_base_role = existing_base_role
+    today_value = date.today().isoformat()
+    active_duty = (
+        db.query(EmployeeActingDuty)
+        .filter(
+            EmployeeActingDuty.employee_id == employee.id,
+            EmployeeActingDuty.status == "active",
+            EmployeeActingDuty.starts_on <= today_value,
+            or_(EmployeeActingDuty.ends_on.is_(None), EmployeeActingDuty.ends_on >= today_value),
+        )
+        .order_by(EmployeeActingDuty.starts_on.desc(), EmployeeActingDuty.id.desc())
+        .first()
+    )
+    duty_ends_on = str(payload.get("role_ends_on") or "").strip() or None
+    if duty_ends_on:
+        parse_iso_date(duty_ends_on, "代理职务结束日期")
+        if duty_ends_on < today_value:
+            raise HTTPException(400, "代理职务结束日期不能早于今天")
+    if (
+        new_role_code in DUTY_ROLE_CODES
+        and active_duty
+        and active_duty.role.code == new_role_code
+        and duty_ends_on != active_duty.ends_on
+    ):
+        # Same duty, new term end: only the window changes.
+        before_end = active_duty.ends_on
+        active_duty.ends_on = duty_ends_on
+        write_audit(db, user.employee, "调整代理职务期限", "acting_duty", active_duty.id, before={"ends_on": before_end}, after={"ends_on": duty_ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
     if new_role_code and current_role and new_role_code != current_role.code:
         attendance_state_changed = True
         new_role = db.query(Role).filter(Role.code == new_role_code).first()
         if not new_role:
             raise HTTPException(400, "角色不存在")
         ensure_hr_role_allowed(user, new_role.code)
+        is_duty_change = new_role.code in DUTY_ROLE_CODES
+        if is_duty_change and (not existing_base_role or existing_base_role.code not in DUTY_BASE_CODES[new_role.code]):
+            allowed_names = "CM/TR" if new_role.code == "TA_SUPERVISOR" else "主管"
+            raise HTTPException(400, f"代理{new_role.name}的本职必须是{allowed_names}，请先调整本职身份")
+        # A duty keeps the base identity; choosing a base role ends any duty.
+        next_base_code = existing_base_role.code if is_duty_change else new_role.code
+        will_lead = next_base_code in LEADER_CODES or new_role.code == "TA_SUPERVISOR"
         led_groups = groups_led_by(db, employee.id)
-        if new_role.code not in LEADER_CODES and led_groups:
+        if not will_lead and led_groups:
             member_ids = {
                 membership.employee_id
                 for group in led_groups
@@ -848,34 +888,57 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     reason=f"组长角色由{current_role.name}变更为{new_role.name}",
                     ip_address=client_ip(request),
                 )
-        current_assignment = (
-            db.query(EmployeeRoleAssignment)
-            .filter(EmployeeRoleAssignment.employee_id == employee.id, EmployeeRoleAssignment.status == "active")
-            .order_by(EmployeeRoleAssignment.starts_on.desc())
-            .first()
-        )
-        if current_assignment:
-            current_assignment.ends_on = date.today().isoformat()
-            current_assignment.status = "expired"
-        ends_on = str(payload.get("role_ends_on") or "").strip() or None
-        return_role = db.query(Role).filter(Role.code == str(payload.get("return_role_code") or "")).first() if ends_on else None
-        if ends_on:
-            if not return_role:
-                raise HTTPException(400, "临时角色必须选择有效的到期恢复角色")
-            ensure_hr_role_allowed(user, return_role.code, "到期恢复角色")
-        db.add(
-            EmployeeRoleAssignment(
+        if active_duty:
+            # A duty started today leaves no history worth keeping.
+            if active_duty.starts_on >= today_value:
+                active_duty.status = "cancelled"
+            else:
+                active_duty.status = "ended"
+                active_duty.ends_on = (date.today() - timedelta(days=1)).isoformat()
+            write_audit(db, user.employee, "结束代理职务", "acting_duty", active_duty.id, after={"role": active_duty.role.name, "status": active_duty.status, "ends_on": active_duty.ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
+        if is_duty_change:
+            duty = EmployeeActingDuty(
                 employee_id=employee.id,
                 role_id=new_role.id,
-                starts_on=date.today().isoformat(),
-                ends_on=ends_on,
-                assignment_type="temporary" if ends_on else "permanent",
-                return_role_id=return_role.id if return_role else None,
+                starts_on=today_value,
+                ends_on=duty_ends_on,
                 status="active",
-                reason=str(payload.get("reason") or "HR变更角色"),
+                reason=str(payload.get("reason") or "HR设置代理职务"),
                 created_by=user.id,
             )
-        )
+            db.add(duty)
+            db.flush()
+            write_audit(db, user.employee, "设置代理职务", "acting_duty", duty.id, after={"role": new_role.name, "base_role": existing_base_role.name, "starts_on": today_value, "ends_on": duty_ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
+        elif not existing_base_role or new_role.code != existing_base_role.code:
+            current_assignment = (
+                db.query(EmployeeRoleAssignment)
+                .filter(EmployeeRoleAssignment.employee_id == employee.id, EmployeeRoleAssignment.status == "active")
+                .order_by(EmployeeRoleAssignment.starts_on.desc())
+                .first()
+            )
+            if current_assignment:
+                current_assignment.ends_on = today_value
+                current_assignment.status = "expired"
+            ends_on = duty_ends_on
+            return_role = db.query(Role).filter(Role.code == str(payload.get("return_role_code") or "")).first() if ends_on else None
+            if ends_on:
+                if not return_role:
+                    raise HTTPException(400, "临时角色必须选择有效的到期恢复角色")
+                ensure_hr_role_allowed(user, return_role.code, "到期恢复角色")
+            db.add(
+                EmployeeRoleAssignment(
+                    employee_id=employee.id,
+                    role_id=new_role.id,
+                    starts_on=today_value,
+                    ends_on=ends_on,
+                    assignment_type="temporary" if ends_on else "permanent",
+                    return_role_id=return_role.id if return_role else None,
+                    status="active",
+                    reason=str(payload.get("reason") or "HR变更角色"),
+                    created_by=user.id,
+                )
+            )
+            resulting_base_role = new_role
         resulting_role = new_role
 
     synchronize_gsm_management_scope(db, employee, resulting_role.code if resulting_role else None)
@@ -895,7 +958,15 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
             .order_by(GroupMembership.starts_on.desc(), GroupMembership.id.desc())
             .first()
         )
-        if not resulting_role or resulting_role.code not in FRONTLINE_CODES:
+        keeps_membership_unchanged = (
+            resulting_role is not None
+            and resulting_role.code in DUTY_ROLE_CODES
+            and not (requested_leader_id or requested_group_id)
+        )
+        if keeps_membership_unchanged:
+            # Taking up an acting duty never moves the employee out of their group.
+            pass
+        elif not resulting_base_role or resulting_base_role.code not in FRONTLINE_CODES:
             if requested_leader_id or requested_group_id:
                 raise HTTPException(400, "只有CM/TR可以设置组长")
             if current_membership:
@@ -919,9 +990,10 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                 if candidate_groups:
                     target_group = candidate_groups[0]
             if target_leader:
-                target_role = role_at(db, target_leader.id)
-                if not target_leader.is_active or not target_role or target_role.code not in LEADER_CODES:
+                if not target_leader.is_active or not can_lead_on(db, target_leader.id):
                     raise HTTPException(400, "新组长必须是在职TA主管或主管")
+                if target_leader.id == employee.id or (target_group and target_group.id in {group.id for group in groups_led_by(db, employee.id)}):
+                    raise HTTPException(400, "员工不能成为自己所带小组的组员")
                 if target_leader.attraction_id != employee.attraction_id:
                     raise HTTPException(400, "新组长必须与员工属于同一景点圈")
                 if not target_group:
@@ -936,7 +1008,7 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
             # latest viable historic group in the selected circle when that
             # choice is unambiguous.  We never guess between two historical
             # groups: HR must select the intended LEAD in that case.
-            if not target_group and not requested_leader_id and new_role_code and current_role and current_role.code in LEADER_CODES:
+            if not target_group and not requested_leader_id and new_role_code and existing_base_role and existing_base_role.code in LEADER_CODES:
                 candidates: list[tuple[GroupMembership, WorkGroup, Employee]] = []
                 history = db.query(GroupMembership).filter(
                     GroupMembership.employee_id == employee.id,
@@ -950,8 +1022,7 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     group = db.get(WorkGroup, historic.group_id)
                     assignment = active_group_leader(db, group.id) if group and group.status == "active" and group.attraction_id == employee.attraction_id else None
                     leader = assignment.leader if assignment else None
-                    leader_role = role_at(db, leader.id) if leader else None
-                    if leader and leader.is_active and leader_role and leader_role.code in LEADER_CODES:
+                    if leader and leader.id != employee.id and leader.is_active and can_lead_on(db, leader.id):
                         candidates.append((historic, group, leader))
                 if len(candidates) == 1:
                     _, target_group, target_leader = candidates[0]

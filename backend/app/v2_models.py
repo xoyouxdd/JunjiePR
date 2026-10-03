@@ -132,6 +132,34 @@ class EmployeeRoleAssignment(Base):
     return_role = relationship("Role", foreign_keys=[return_role_id])
 
 
+class EmployeeActingDuty(Base):
+    """An acting duty (TA主管/TA GSM) layered on top of the base identity.
+
+    The base identity in employee_role_assignments keeps deciding the scoring
+    category and group membership; a duty only adds the acting role's
+    permissions for its date window.
+    """
+
+    __tablename__ = "employee_acting_duties"
+    __table_args__ = (
+        CheckConstraint("ends_on IS NULL OR ends_on >= starts_on", name="ck_acting_duty_dates"),
+        Index("ix_acting_duty_lookup", "employee_id", "status", "starts_on", "ends_on"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
+    starts_on: Mapped[str] = mapped_column(String(10), index=True)
+    ends_on: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    employee = relationship("Employee", foreign_keys=[employee_id])
+    role = relationship("Role", foreign_keys=[role_id])
+
+
 class UserAccount(Base):
     __tablename__ = "user_accounts"
 
@@ -370,6 +398,11 @@ class RecognitionRecord(Base):
     operator_name: Mapped[str] = mapped_column(String(100))
     operator_role_snapshot: Mapped[str | None] = mapped_column(String(30), nullable=True)
     operator_role_code_snapshot: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # *_role_code_snapshot keeps the role actually used (a duty when acting);
+    # these keep the base identity and the target's duty on recognition_date.
+    operator_base_role_code_snapshot: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    recognizer_base_role_code_snapshot: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    employee_acting_duty_code: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
     source: Mapped[str] = mapped_column(String(20), index=True)
     # fraction is the original score frozen at registration.  credited_fraction
     # is the score actually included in monthly performance after any cap.
@@ -451,6 +484,8 @@ class RecognitionReview(Base):
     after_status: Mapped[str] = mapped_column(String(20))
     reviewer_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
     reviewer_name: Mapped[str] = mapped_column(String(100))
+    reviewer_role_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    reviewer_base_role_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -572,6 +607,10 @@ class EmployeeMonthOrganizationSnapshot(Base):
     group_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     leader_employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     leader_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    base_role_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    scoring_category: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    acting_duty_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    acting_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -674,6 +713,9 @@ class DeductionRecord(Base):
     submitter_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     submitter_name: Mapped[str] = mapped_column(String(100))
     submitter_role_snapshot: Mapped[str] = mapped_column(String(30))
+    submitter_role_code_snapshot: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    submitter_base_role_code_snapshot: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    employee_acting_duty_code: Mapped[str | None] = mapped_column(String(30), nullable=True)
     permission_scope_snapshot: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     # A photo submission is persisted immediately, but only becomes active
@@ -820,6 +862,8 @@ class AuditLog(Base):
     after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Employee circle the audited object belongs to; NULL means global-only.
+    attraction_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 

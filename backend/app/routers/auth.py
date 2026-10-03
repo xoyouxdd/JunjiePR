@@ -29,6 +29,11 @@ def user_payload(db: Session, user: V2User) -> dict:
         "name": user.name,
         "role_code": user.role.code,
         "role_name": user.role.name,
+        "base_role_code": user.base_role.code,
+        "base_role_name": user.base_role.name,
+        "duty_role_codes": [role.code for role in user.duty_roles],
+        "role_codes": sorted(user.role_codes),
+        "role_label": user.display_role_name,
         "attraction_id": user.employee.attraction_id,
         "attraction_name": user.employee.attraction.name if user.employee.attraction else "",
         "leader_name": leader.name if leader else ("待接管" if group and group.status == "pending_takeover" else "未分配"),
@@ -113,12 +118,12 @@ def changelog(user: V2User = Depends(current_user)):
         "app_version": APP_VERSION,
         "role_code": user.role.code,
         "role_name": user.role.name,
-        "releases": visible_releases(user.role.code, user.permissions),
+        "releases": visible_releases(user.role_codes, user.permissions),
     }
 
 
 def current_announcement(user: V2User) -> dict | None:
-    releases = visible_releases(user.role.code, user.permissions)
+    releases = visible_releases(user.role_codes, user.permissions)
     current = next((release for release in releases if release["version"] == APP_VERSION), None)
     if not current:
         return None

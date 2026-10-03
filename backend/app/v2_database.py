@@ -189,6 +189,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-second-audit-query-indexes", "ensure_second_audit_query_indexes"),
     ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
     ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
+    ("2026-10-acting-duties", "ensure_acting_duty_columns_and_migrate"),
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
 ]
 
@@ -829,6 +830,203 @@ def ensure_governance_case_indexes(db) -> None:
     db.commit()
 
 
+ACTING_DUTY_BASE_CODES = {"TA_SUPERVISOR": {"CM", "TR"}, "TA_GSM": {"SUPERVISOR"}}
+
+
+def ensure_acting_duty_columns_and_migrate(db) -> None:
+    required_columns = {
+        "recognition_records": {
+            "operator_base_role_code_snapshot": "VARCHAR(30)",
+            "recognizer_base_role_code_snapshot": "VARCHAR(30)",
+            "employee_acting_duty_code": "VARCHAR(30)",
+        },
+        "recognition_reviews": {
+            "reviewer_role_code": "VARCHAR(30)",
+            "reviewer_base_role_code": "VARCHAR(30)",
+        },
+        "deduction_records": {
+            "submitter_role_code_snapshot": "VARCHAR(30)",
+            "submitter_base_role_code_snapshot": "VARCHAR(30)",
+            "employee_acting_duty_code": "VARCHAR(30)",
+        },
+        "employee_month_organization_snapshots": {
+            "base_role_code": "VARCHAR(30)",
+            "scoring_category": "VARCHAR(20)",
+            "acting_duty_code": "VARCHAR(30)",
+            "acting_days": "INTEGER",
+        },
+        "audit_logs": {"attraction_id": "INTEGER"},
+    }
+    for table_name, columns in required_columns.items():
+        existing = {row[1] for row in db.execute(text(f"PRAGMA table_info({table_name})"))}
+        for name, definition in columns.items():
+            if name not in existing:
+                db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_recognition_records_employee_acting_duty_code ON recognition_records (employee_acting_duty_code)"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_audit_logs_attraction_id ON audit_logs (attraction_id)"))
+    db.commit()
+    migrate_legacy_duty_assignments(db)
+
+
+def migrate_legacy_duty_assignments(db) -> list[dict]:
+    """Split legacy TA主管/TA GSM role rows into base identity + acting duty.
+
+    A row is converted only when its base identity is certain (its return role,
+    else the identity held right before it).  A current TA主管 also rejoins the
+    group they belonged to before the duty when that group is unambiguous.
+    Everything uncertain is left untouched and listed as an HR alert.
+    """
+    from app.v2_models import (
+        Employee,
+        EmployeeActingDuty,
+        EmployeeRoleAssignment,
+        GroupLeaderAssignment,
+        GroupMembership,
+        Role,
+        WorkGroup,
+    )
+    from app.v2_services import create_alert
+
+    roles = {role.code: role for role in db.query(Role).all()}
+    duty_role_ids = {roles[code].id: code for code in ACTING_DUTY_BASE_CODES if code in roles}
+    if not duty_role_ids:
+        return []
+    today = date.today().isoformat()
+    unresolved: list[dict] = []
+    legacy_rows = (
+        db.query(EmployeeRoleAssignment)
+        .filter(EmployeeRoleAssignment.role_id.in_(duty_role_ids), EmployeeRoleAssignment.status != "cancelled")
+        .order_by(EmployeeRoleAssignment.employee_id, EmployeeRoleAssignment.starts_on, EmployeeRoleAssignment.id)
+        .all()
+    )
+    for row in legacy_rows:
+        duty_code = duty_role_ids[row.role_id]
+        allowed = ACTING_DUTY_BASE_CODES[duty_code]
+        base = row.return_role if row.return_role and row.return_role.code in allowed else None
+        if base is None:
+            previous = (
+                db.query(EmployeeRoleAssignment)
+                .filter(
+                    EmployeeRoleAssignment.employee_id == row.employee_id,
+                    EmployeeRoleAssignment.id != row.id,
+                    EmployeeRoleAssignment.status != "cancelled",
+                    EmployeeRoleAssignment.starts_on <= row.starts_on,
+                    EmployeeRoleAssignment.role_id.notin_(duty_role_ids),
+                )
+                .order_by(EmployeeRoleAssignment.starts_on.desc(), EmployeeRoleAssignment.id.desc())
+                .first()
+            )
+            base = previous.role if previous and previous.role.code in allowed else None
+        if base is None:
+            unresolved.append({"employee_id": row.employee_id, "reason": f"无法确定代理{roles[duty_code].name}前的本职身份"})
+            continue
+        db.add(
+            EmployeeActingDuty(
+                employee_id=row.employee_id,
+                role_id=row.role_id,
+                starts_on=row.starts_on,
+                ends_on=row.ends_on,
+                status="ended" if row.ends_on and row.ends_on < today else "active",
+                reason=f"由旧角色记录#{row.id}迁移：{row.reason or ''}".strip(),
+                created_by=row.created_by,
+            )
+        )
+        row.role_id = base.id
+        row.return_role_id = None
+        row.ends_on = None
+        row.assignment_type = "permanent"
+        row.reason = f"{row.reason or ''}（代理职务已拆分，本职{base.name}）".strip()
+    db.flush()
+
+    # Rejoin the pre-duty group for current TA主管 who lost their membership.
+    current_duties = (
+        db.query(EmployeeActingDuty)
+        .filter(
+            EmployeeActingDuty.role_id == roles["TA_SUPERVISOR"].id,
+            EmployeeActingDuty.status == "active",
+            EmployeeActingDuty.starts_on <= today,
+            (EmployeeActingDuty.ends_on.is_(None)) | (EmployeeActingDuty.ends_on >= today),
+        )
+        .all()
+        if "TA_SUPERVISOR" in roles
+        else []
+    )
+    for duty in current_duties:
+        employee = db.get(Employee, duty.employee_id)
+        if not employee or not employee.is_active:
+            continue
+        has_current = (
+            db.query(GroupMembership.id)
+            .filter(
+                GroupMembership.employee_id == employee.id,
+                GroupMembership.status == "active",
+                GroupMembership.starts_on <= today,
+                (GroupMembership.ends_on.is_(None)) | (GroupMembership.ends_on >= today),
+            )
+            .first()
+        )
+        if has_current:
+            continue
+        led_group_ids = {
+            group_id
+            for (group_id,) in db.query(GroupLeaderAssignment.group_id).filter(
+                GroupLeaderAssignment.leader_employee_id == employee.id,
+                GroupLeaderAssignment.status == "active",
+            )
+        }
+        previous = (
+            db.query(GroupMembership)
+            .filter(GroupMembership.employee_id == employee.id, GroupMembership.status == "ended", GroupMembership.ends_on.isnot(None))
+            .order_by(GroupMembership.ends_on.desc(), GroupMembership.id.desc())
+            .all()
+        )
+        latest = [item for item in previous if item.ends_on == previous[0].ends_on] if previous else []
+        candidate_ids = {item.group_id for item in latest}
+        group = db.get(WorkGroup, next(iter(candidate_ids))) if len(candidate_ids) == 1 else None
+        leader = (
+            db.query(GroupLeaderAssignment)
+            .filter(
+                GroupLeaderAssignment.group_id == group.id,
+                GroupLeaderAssignment.status == "active",
+                GroupLeaderAssignment.starts_on <= today,
+                (GroupLeaderAssignment.ends_on.is_(None)) | (GroupLeaderAssignment.ends_on >= today),
+            )
+            .first()
+            if group
+            else None
+        )
+        if (
+            not group
+            or group.status != "active"
+            or group.attraction_id != employee.attraction_id
+            or group.id in led_group_ids
+            or not leader
+            or leader.leader_employee_id == employee.id
+        ):
+            unresolved.append({"employee_id": employee.id, "reason": "代理TA主管期间无法确定应恢复的原小组"})
+            continue
+        db.add(
+            GroupMembership(
+                group_id=group.id,
+                employee_id=employee.id,
+                starts_on=today,
+                status="active",
+                reason="代理职务迁移：恢复原小组",
+            )
+        )
+    for item in unresolved:
+        employee = db.get(Employee, item["employee_id"])
+        create_alert(
+            db,
+            "acting_duty_migration",
+            f"{item['employee_id']}:{item['reason']}",
+            f"{employee.name if employee else item['employee_id']}：{item['reason']}，请HR核对后手动设置",
+            employee_id=item["employee_id"],
+        )
+    db.commit()
+    return unresolved
+
+
 def legacy_attendance_cleanup_preview(db) -> dict:
     """Describe leftover ATTENDANCE catalog rows without deleting them."""
     from app.v2_models import AuditLog, DeductionRecord, DeductionType, StoredFile
@@ -1024,6 +1222,7 @@ def seed_test_accounts(db) -> None:
     from app.v2_models import (
         Attraction,
         Employee,
+        EmployeeActingDuty,
         EmployeeRoleAssignment,
         GroupLeaderAssignment,
         GroupMembership,
@@ -1041,7 +1240,7 @@ def seed_test_accounts(db) -> None:
     roles = {role.code: role for role in db.query(Role).all()}
     employees = {}
 
-    def add_employee(employee_no, name, role_code, attraction, password=None, *, temp_end=None, return_role=None):
+    def add_employee(employee_no, name, role_code, attraction, password=None, *, temp_end=None, return_role=None, duty=None, duty_end=None):
         employee = Employee(
             employee_no=employee_no,
             name=name,
@@ -1063,6 +1262,17 @@ def seed_test_accounts(db) -> None:
                 reason="V2测试账号初始化",
             )
         )
+        if duty:
+            db.add(
+                EmployeeActingDuty(
+                    employee_id=employee.id,
+                    role_id=roles[duty].id,
+                    starts_on=today.isoformat(),
+                    ends_on=duty_end,
+                    status="active",
+                    reason="V2测试账号初始化",
+                )
+            )
         db.add(
             UserAccount(
                 employee_id=employee.id,
@@ -1081,13 +1291,13 @@ def seed_test_accounts(db) -> None:
     add_employee(
         "TATEST01",
         "测试TA主管",
-        "TA_SUPERVISOR",
+        "CM",
         attraction_a,
-        temp_end=(today + timedelta(days=90)).isoformat(),
-        return_role="CM",
+        duty="TA_SUPERVISOR",
+        duty_end=(today + timedelta(days=90)).isoformat(),
     )
     add_employee("SUPTEST01", "测试主管", "SUPERVISOR", attraction_a)
-    add_employee("TAGSMTEST01", "测试TA GSM", "TA_GSM", attraction_a)
+    add_employee("TAGSMTEST01", "测试TA GSM", "SUPERVISOR", attraction_a, duty="TA_GSM")
     add_employee("GSMTEST01", "测试GSM", "GSM", attraction_a)
     add_employee("AMTEST01", "测试AM", "AM", attraction_a)
     add_employee("OMTEST01", "测试OM", "OM", None)
@@ -1105,6 +1315,8 @@ def seed_test_accounts(db) -> None:
             GroupMembership(group_id=group_ta.id, employee_id=employees["CMTEST01"].id, starts_on=today.isoformat(), status="active"),
             GroupMembership(group_id=group_ta.id, employee_id=employees["TRTEST01"].id, starts_on=today.isoformat(), status="active"),
             GroupMembership(group_id=group_supervisor.id, employee_id=employees["CMTEST02"].id, starts_on=today.isoformat(), status="active"),
+            # An acting TA主管 stays a member of their own original group.
+            GroupMembership(group_id=group_supervisor.id, employee_id=employees["TATEST01"].id, starts_on=today.isoformat(), status="active"),
         ]
     )
     for employee_no in ("TAGSMTEST01", "GSMTEST01", "AMTEST01", "OMTEST01"):

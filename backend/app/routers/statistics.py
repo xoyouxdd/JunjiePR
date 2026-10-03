@@ -16,7 +16,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, DeductionRecord, DeductionType, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, ManagementScope, RecognitionRecord, RecognitionType, Role, SickLeaveRecord, WorkGroup
 from app.score_queries import employee_month_scores
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, direct_member_ids, ensure_month_attendance, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export_utils import content_disposition
 from app.excel_export import build_pr_rankings_workbook, build_statistics_workbook
@@ -46,7 +46,7 @@ router = APIRouter()
 @router.get("/dashboard")
 def dashboard(month: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     month = month or date.today().strftime("%Y-%m")
-    if user.role.code not in FRONTLINE_CODES:
+    if user.base_role.code not in FRONTLINE_CODES:
         return {"month": month, "role": user.role.name}
     recalculate_attendance(db, user.employee, month)
     db.commit()
@@ -279,7 +279,7 @@ def member_score_detail_payload(
         "employee_id": employee.id,
         "employee_no": employee.employee_no,
         "employee_name": employee.name,
-        "role_name": (role_at(db, employee.id).name if role_at(db, employee.id) else "未配置"),
+        "role_name": identity_label(db, employee.id),
         "recognition_score": float(score.get("recognition_score") or 0),
         "deduction_score": float(score.get("deduction_score") or 0),
         "attendance_score": float(score.get("attendance_score") or 0),
@@ -375,7 +375,7 @@ def member_score_summary(
     }
 
 
-def ranking_employees(db: Session, attraction_id: int | None, on_date: str, role_codes: set[str]) -> tuple[list[Employee], dict[int, Role]]:
+def ranking_employees(db: Session, attraction_id: int | None, on_date: str, role_codes: set[str], *, acting: bool = False) -> tuple[list[Employee], dict[int, Role]]:
     circle_ids = [
         row.id
         for row in db.query(Attraction.id)
@@ -387,7 +387,9 @@ def ranking_employees(db: Session, attraction_id: int | None, on_date: str, role
     if attraction_id is not None:
         query = query.filter(Employee.attraction_id == attraction_id)
     candidates = query.order_by(Employee.name, Employee.employee_no).all()
-    role_map = roles_at(db, [employee.id for employee in candidates], on_date)
+    # Score rankings follow the base identity on the range end date; the
+    # issuing ranking follows the role in use (an acting TA主管 issues as one).
+    role_map = (roles_at if acting else base_roles_at)(db, [employee.id for employee in candidates], on_date)
     selected = [employee for employee in candidates if role_map.get(employee.id) and role_map[employee.id].code in role_codes]
     return selected, role_map
 
@@ -590,7 +592,7 @@ def pr_ranking_payload(
     keyword_value = keyword.strip().lower()
     end_iso = end.isoformat()
     role_codes = LEADER_CODES if category == "leader" else FRONTLINE_CODES
-    employees, role_map = ranking_employees(db, attraction_id, end_iso, role_codes)
+    employees, role_map = ranking_employees(db, attraction_id, end_iso, role_codes, acting=category == "leader")
     if keyword_value:
         employees = [
             employee for employee in employees
@@ -861,7 +863,7 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
     if not employee_ids:
         return []
     employees = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()}
-    employee_roles = roles_at(db, employee_ids, month_end)
+    employee_roles = base_roles_at(db, employee_ids, month_end)
 
     memberships = (
         db.query(GroupMembership)
@@ -897,7 +899,7 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
         leader_assignment_by_group.setdefault(assignment.group_id, assignment)
     leader_ids = {assignment.leader_employee_id for assignment in leader_assignment_by_group.values()}
     leaders = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(leader_ids)).all()} if leader_ids else {}
-    leader_roles = roles_at(db, leader_ids, month_end)
+    leader_labels = identity_labels(db, leader_ids, month_end)
 
     attraction_ids = {score.get("attraction_id") for score in score_rows if score.get("attraction_id") is not None}
     attraction_rows = db.query(Attraction).filter(Attraction.id.in_(attraction_ids)).all() if attraction_ids else []
@@ -966,13 +968,12 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
         group = groups.get(membership.group_id) if membership else None
         leader_assignment = leader_assignment_by_group.get(group.id) if group else None
         leader = leaders.get(leader_assignment.leader_employee_id) if leader_assignment else None
-        leader_role = leader_roles.get(leader.id) if leader else None
         leader_key = f"employee-{leader.id}" if leader else (f"group-{group.id}" if group else "ungrouped")
         leader_node = manager_node["leaders"].setdefault(
             leader_key,
             {
                 "name": leader.name if leader else "未配置主管",
-                "role_name": leader_role.name if leader_role else "",
+                "role_name": leader_labels.get(leader.id, "") if leader else "",
                 "employees": [],
             },
         )
@@ -1129,7 +1130,7 @@ def statistics_payload(
         candidate_query = candidate_query.filter(or_(Employee.employee_no.like(keyword_value), Employee.name.like(keyword_value)))
     candidate_rows = candidate_query.all()
     if selected_title and candidate_rows:
-        candidate_roles = roles_at(db, [row[0].id for row in candidate_rows], month_end)
+        candidate_roles = base_roles_at(db, [row[0].id for row in candidate_rows], month_end)
         candidate_rows = [
             row for row in candidate_rows
             if candidate_roles.get(row[0].id) and candidate_roles[row[0].id].code == selected_title
@@ -1245,7 +1246,7 @@ def statistics_payload(
             employee.id: employee
             for employee in db.query(Employee).filter(Employee.id.in_(record_employee_ids)).all()
         } if record_employee_ids else {}
-        historical_roles = roles_at(db, record_employee_ids, month_end) if record_employee_ids else {}
+        historical_roles = base_roles_at(db, record_employee_ids, month_end) if record_employee_ids else {}
         keyword_value = (keyword or "").strip().casefold()
 
         def record_is_visible(row) -> bool:

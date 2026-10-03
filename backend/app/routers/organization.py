@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.v2_auth import V2User, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, GroupLeaderAssignment, GroupMembership, GroupTransfer, GroupTransferMember, RecognitionRecord, Role, SickLeaveRecord, SystemAlert, WorkGroup
-from app.v2_services import FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_leaders_bulk, active_group_memberships, active_group_memberships_bulk, current_group_for_employee, current_leader_for_employee, groups_led_by, groups_led_by_bulk, gsm_candidates_for_attractions_bulk, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import FRONTLINE_CODES, LEADER_CODES, base_role_at, base_roles_at, can_lead_on, identity_labels, active_group_leader, active_group_leaders_bulk, active_group_memberships, active_group_memberships_bulk, current_group_for_employee, current_leader_for_employee, groups_led_by, groups_led_by_bulk, gsm_candidates_for_attractions_bulk, recalculate_attendance, role_at, roles_at, write_audit
 from app.routers._shared import (
     client_ip,
     employee_payloads,
@@ -40,6 +40,9 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
     employees = employee_query.order_by(Employee.name, Employee.employee_no).all()
     payloads = employee_payloads(db, employees, today_value)
     roles = roles_at(db, [employee.id for employee in employees], today_value)
+    # An acting TA主管 shows both as a leader and as a member of their own
+    # group; a TA GSM keeps leading the group of their base supervisor role.
+    base_roles = base_roles_at(db, [employee.id for employee in employees], today_value)
     rows = []
     represented: set[int] = set()
 
@@ -82,7 +85,10 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
         if management_team_name:
             rows.append({"node_id": management_parent, "parent_id": attraction_node, "level": 1, "node_type": "gsm_team", "name": management_team_name})
 
-        leaders = [employee for employee in attraction_employees if roles[employee.id] and roles[employee.id].code in LEADER_CODES]
+        leaders = [
+            employee for employee in attraction_employees
+            if any(role and role.code in LEADER_CODES for role in (roles[employee.id], base_roles[employee.id]))
+        ]
         assigned_frontline: set[int] = set()
         for leader in sorted(leaders, key=lambda employee: (employee.name, employee.employee_no)):
             leader_node = f"hr-leader-{leader.id}"
@@ -91,8 +97,8 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
             leader_members = [
                 member for member in attraction_employees
                 if payloads[member.id]["leader_id"] == leader.id
-                and roles.get(member.id)
-                and roles[member.id].code in FRONTLINE_CODES
+                and base_roles.get(member.id)
+                and base_roles[member.id].code in FRONTLINE_CODES
             ]
             for member in sorted(leader_members, key=lambda employee: (employee.name, employee.employee_no)):
                 rows.append({"node_id": f"hr-employee-{member.id}", "parent_id": leader_node, "level": 3, "node_type": "employee", "hierarchy_role": "frontline", "employee": payloads[member.id]})
@@ -101,7 +107,7 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
 
         unassigned = [
             employee for employee in attraction_employees
-            if roles[employee.id] and roles[employee.id].code in FRONTLINE_CODES and employee.id not in assigned_frontline
+            if base_roles[employee.id] and base_roles[employee.id].code in FRONTLINE_CODES and employee.id not in assigned_frontline
         ]
         if unassigned:
             placeholder = f"hr-unassigned-{attraction.id}"
@@ -154,7 +160,7 @@ def batch_assign_unclassified_leaders(
         seen_employee_ids.add(employee_id)
 
         employee = db.get(Employee, employee_id)
-        employee_role = role_at(db, employee_id) if employee else None
+        employee_role = base_role_at(db, employee_id) if employee else None
         if not employee:
             raise HTTPException(404, f"第{index}项员工不存在")
         ensure_scoped_hr_employee(db, user, employee)
@@ -181,9 +187,10 @@ def batch_assign_unclassified_leaders(
             raise HTTPException(409, f"{employee.name}已分配组长，请刷新页面后重试")
 
         leader = db.get(Employee, leader_id)
-        leader_role = role_at(db, leader_id) if leader else None
-        if not leader or not leader.is_active or not leader_role or leader_role.code not in LEADER_CODES:
+        if not leader or not leader.is_active or not can_lead_on(db, leader_id):
             raise HTTPException(400, f"{employee.name}选择的组长不是在职TA主管或主管")
+        if leader.id == employee.id:
+            raise HTTPException(400, f"{employee.name}不能成为自己所带小组的组员")
         if leader.attraction_id != employee.attraction_id:
             raise HTTPException(400, f"{employee.name}与所选组长不属于同一景点圈")
 
@@ -386,7 +393,7 @@ def circle_transfers(db: Session = Depends(get_db), user: V2User = Depends(requi
 @router.post("/hr/circle-transfers")
 def create_circle_transfer(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
     employee = db.get(Employee, int(payload.get("employee_id") or 0))
-    employee_role = role_at(db, employee.id) if employee else None
+    employee_role = base_role_at(db, employee.id) if employee else None
     if not employee or not employee.is_active or not employee_role or employee_role.code not in FRONTLINE_CODES:
         raise HTTPException(400, "只能为在职CM/TR发起景点圈调动")
     ensure_scoped_hr_employee(db, user, employee)
@@ -553,9 +560,10 @@ def review_circle_transfer(transfer_id: int, payload: dict, request: Request, db
     if action != "accept":
         raise HTTPException(400, "审批动作无效")
     target_leader = db.get(Employee, int(payload.get("target_leader_id") or 0))
-    target_role = role_at(db, target_leader.id) if target_leader else None
-    if not target_leader or not target_leader.is_active or target_leader.attraction_id != row.target_attraction_id or not target_role or target_role.code not in LEADER_CODES:
+    if not target_leader or not target_leader.is_active or target_leader.attraction_id != row.target_attraction_id or not can_lead_on(db, target_leader.id):
         raise HTTPException(400, "请选择目标景点圈内在职TA主管或主管")
+    if target_leader.id == row.employee_id:
+        raise HTTPException(400, "员工不能成为自己所带小组的组员")
     target_group_id = int(payload.get("target_group_id") or 0)
     target_group = db.get(WorkGroup, target_group_id) if target_group_id else None
     if target_group:
@@ -651,14 +659,18 @@ def leader_options(db: Session = Depends(get_db), user: V2User = Depends(require
         employee_query = employee_query.filter(Employee.attraction_id.in_(allowed_attractions))
     employees = employee_query.order_by(Employee.name).all()
     roles = roles_at(db, [employee.id for employee in employees])
-    leaders = [employee for employee in employees if (roles.get(employee.id) or None) and roles[employee.id].code in LEADER_CODES]
+    base_roles = base_roles_at(db, [employee.id for employee in employees])
+    labels = identity_labels(db, [employee.id for employee in employees])
+    leaders = [
+        employee for employee in employees
+        if any(role and role.code in LEADER_CODES for role in (roles.get(employee.id), base_roles.get(employee.id)))
+    ]
     led_groups = groups_led_by_bulk(db, [leader.id for leader in leaders])
     group_display = group_display_metadata_bulk(db, {group.id for rows in led_groups.values() for group in rows})
     gsm_by_attraction = gsm_candidates_for_attractions_bulk(db, {leader.attraction_id for leader in leaders if leader.attraction_id})
     attraction_names = {attraction.id: attraction.name for attraction in db.query(Attraction).all()}
     result = []
     for employee in leaders:
-        role = roles[employee.id]
         groups = [group for group in led_groups.get(employee.id, []) if group.attraction_id == employee.attraction_id]
         if not groups:
             groups = [None]
@@ -670,7 +682,7 @@ def leader_options(db: Session = Depends(get_db), user: V2User = Depends(require
                     "id": employee.id,
                     "name": employee.name,
                     "employee_no": employee.employee_no,
-                    "role_name": role.name,
+                    "role_name": labels.get(employee.id, ""),
                     "attraction_id": employee.attraction_id,
                     "attraction_name": attraction_names.get(employee.attraction_id, "") if employee.attraction_id else "",
                     "group_id": group.id if group else None,
@@ -692,8 +704,7 @@ def transfer_group(group_id: int, payload: dict, request: Request, db: Session =
     if int(payload.get("revision") or 0) != group.revision:
         raise HTTPException(409, "工作组已被其他操作修改，请刷新后重试")
     new_leader = db.get(Employee, int(payload.get("new_leader_id") or 0))
-    new_role = role_at(db, new_leader.id) if new_leader else None
-    if not new_leader or not new_leader.is_active or not new_role or new_role.code not in LEADER_CODES:
+    if not new_leader or not new_leader.is_active or not can_lead_on(db, new_leader.id):
         raise HTTPException(400, "新组长必须是在职TA主管或主管")
     if new_leader.attraction_id != group.attraction_id:
         raise HTTPException(400, "新组长必须与工作组属于同一景点圈")
@@ -707,6 +718,8 @@ def transfer_group(group_id: int, payload: dict, request: Request, db: Session =
     if old_assignment and old_assignment.leader_employee_id == new_leader.id:
         raise HTTPException(400, "新旧组长不能相同")
     members = active_group_memberships(db, group.id)
+    if any(member.employee_id == new_leader.id for member in members):
+        raise HTTPException(400, "新组长是该组组员，不能成为自己所带小组的组长")
     pending_count = db.query(RecognitionRecord).filter(
         RecognitionRecord.employee_id.in_([member.employee_id for member in members]) if members else RecognitionRecord.id == -1,
         RecognitionRecord.status == "pending",

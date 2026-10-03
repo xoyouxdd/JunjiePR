@@ -10,7 +10,7 @@ from app.routers.statistics import statistics_payload, trend_month_keys
 from app.routers.declaration_statistics import declaration_payload, checked_month
 from app.routers._shared import month_closure_scope
 from app.v2_models import Attraction, RecognitionRecord, DeductionRecord, EmployeeMonthOrganizationSnapshot, GroupMembership, WorkGroup, Role
-from app.v2_services import roles_at
+from app.v2_services import base_roles_at
 
 REPORT_ROLES = frozenset({"GSM", "AM", "OM", "SYSTEM_ADMIN"})
 TEMPLATES = {"forest": "森林都市", "minimal": "简约汇报", "warm": "温暖团队"}
@@ -35,7 +35,7 @@ def report_data(db, month, attraction_id=None, *, with_trend=True):
     # This service has its own authorization. No bypass of existing API guards.
     stats = statistics_payload(db, month, attraction_id, user=None, include_records=True, include_hierarchy=False)
     scores = [dict(r) for r in stats["scores"] if r["attraction_id"] in ids]
-    roles = roles_at(db, [r["employee_id"] for r in scores], end)
+    roles = base_roles_at(db, [r["employee_id"] for r in scores], end)
     for r in scores:
         r["category"] = roles[r["employee_id"]].code if roles.get(r["employee_id"]) else "OTHER"
     recs = db.query(RecognitionRecord).filter(RecognitionRecord.recognition_month == month, RecognitionRecord.home_attraction_id.in_(ids), RecognitionRecord.status == "confirmed").all()

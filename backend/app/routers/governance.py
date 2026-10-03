@@ -12,7 +12,7 @@ from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, managed_attraction_ids, role_at, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, managed_attraction_ids, base_role_at, role_at, write_audit
 from app.routers._shared import (
     MATERIAL_COLLABORATOR_CODES,
     MONTH_CLOSE_EFFECTIVE_DATE,
@@ -236,7 +236,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
             employee_query = employee_query.filter(Employee.attraction_id.in_(allowed_attractions))
         ungrouped = 0
         for employee in employee_query.all():
-            role = role_at(db, employee.id)
+            role = base_role_at(db, employee.id)
             if role and role.code in FRONTLINE_CODES and not current_group_for_employee(db, employee.id):
                 ungrouped += 1
         if ungrouped:
@@ -347,7 +347,7 @@ def action_center_details(item_type: str, db: Session = Depends(get_db), user: V
                 prior_memberships[membership.employee_id] = membership
         rows = []
         for employee in candidates:
-            role = role_at(db, employee.id)
+            role = base_role_at(db, employee.id)
             if not role or role.code not in FRONTLINE_CODES or current_group_for_employee(db, employee.id):
                 continue
             previous = prior_memberships.get(employee.id)
