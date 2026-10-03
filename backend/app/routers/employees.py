@@ -861,7 +861,61 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
         before_end = active_duty.ends_on
         active_duty.ends_on = duty_ends_on
         write_audit(db, user.employee, "调整代理职务期限", "acting_duty", active_duty.id, before={"ends_on": before_end}, after={"ends_on": duty_ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
-    if new_role_code and current_role and new_role_code != current_role.code:
+    # A legacy TA主管/TA GSM row whose base identity could not be inferred by
+    # the migration: choosing the real base (CM/TR, or 主管 for TA GSM) records
+    # base + continuing duty from today, keeping led groups and members.
+    legacy_duty_role = existing_base_role if existing_base_role and existing_base_role.code in DUTY_ROLE_CODES else None
+    resolves_legacy = bool(legacy_duty_role and new_role_code in DUTY_BASE_CODES[legacy_duty_role.code])
+    if resolves_legacy:
+        attendance_state_changed = True
+        new_role = db.query(Role).filter(Role.code == new_role_code).first()
+        ensure_hr_role_allowed(user, new_role.code)
+        legacy_assignment = (
+            db.query(EmployeeRoleAssignment)
+            .filter(
+                EmployeeRoleAssignment.employee_id == employee.id,
+                EmployeeRoleAssignment.role_id == legacy_duty_role.id,
+                EmployeeRoleAssignment.status != "cancelled",
+                EmployeeRoleAssignment.starts_on <= today_value,
+                or_(EmployeeRoleAssignment.ends_on.is_(None), EmployeeRoleAssignment.ends_on >= today_value),
+            )
+            .order_by(EmployeeRoleAssignment.starts_on.desc(), EmployeeRoleAssignment.id.desc())
+            .first()
+        )
+        legacy_end = legacy_assignment.ends_on if legacy_assignment else None
+        if legacy_assignment:
+            if legacy_assignment.starts_on >= today_value:
+                legacy_assignment.status = "cancelled"
+            else:
+                legacy_assignment.ends_on = (date.today() - timedelta(days=1)).isoformat()
+                legacy_assignment.status = "expired"
+            legacy_assignment.return_role_id = None
+        db.add(
+            EmployeeRoleAssignment(
+                employee_id=employee.id,
+                role_id=new_role.id,
+                starts_on=today_value,
+                assignment_type="permanent",
+                status="active",
+                reason=str(payload.get("reason") or "HR确认旧代理记录的本职"),
+                created_by=user.id,
+            )
+        )
+        duty = EmployeeActingDuty(
+            employee_id=employee.id,
+            role_id=legacy_duty_role.id,
+            starts_on=today_value,
+            ends_on=duty_ends_on or (legacy_end if legacy_end and legacy_end >= today_value else None),
+            status="active",
+            reason="HR确认本职后延续原代理职务",
+            created_by=user.id,
+        )
+        db.add(duty)
+        db.flush()
+        write_audit(db, user.employee, "确认旧代理记录的本职", "acting_duty", duty.id, before={"role": legacy_duty_role.name}, after={"base_role": new_role.name, "duty": legacy_duty_role.name, "ends_on": duty.ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
+        resulting_role = legacy_duty_role
+        resulting_base_role = new_role
+    if not resolves_legacy and new_role_code and current_role and new_role_code != current_role.code:
         attendance_state_changed = True
         new_role = db.query(Role).filter(Role.code == new_role_code).first()
         if not new_role:

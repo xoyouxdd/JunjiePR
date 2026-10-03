@@ -914,7 +914,7 @@ def migrate_legacy_duty_assignments(db) -> list[dict]:
     """Split legacy TA主管/TA GSM role rows into base identity + acting duty.
 
     A row is converted only when its base identity is certain (its return role,
-    else the identity held right before it).  A current TA主管 also rejoins the
+    else the identity held right before it, else the first one after it).  A current TA主管 also rejoins the
     group they belonged to before the duty when that group is unambiguous.
     Everything uncertain is left untouched and listed as an HR alert.
     """
@@ -959,6 +959,22 @@ def migrate_legacy_duty_assignments(db) -> list[dict]:
                 .first()
             )
             base = previous.role if previous and previous.role.code in allowed else None
+        if base is None:
+            # Rows imported on go-live day have no earlier identity; the base
+            # identity the employee returned to afterwards is the best evidence.
+            following = (
+                db.query(EmployeeRoleAssignment)
+                .filter(
+                    EmployeeRoleAssignment.employee_id == row.employee_id,
+                    EmployeeRoleAssignment.id != row.id,
+                    EmployeeRoleAssignment.status != "cancelled",
+                    EmployeeRoleAssignment.starts_on >= row.starts_on,
+                    EmployeeRoleAssignment.role_id.notin_(duty_role_ids),
+                )
+                .order_by(EmployeeRoleAssignment.starts_on.asc(), EmployeeRoleAssignment.id.asc())
+                .first()
+            )
+            base = following.role if following and following.role.code in allowed else None
         if base is None:
             unresolved.append({"employee_id": row.employee_id, "reason": f"无法确定代理{roles[duty_code].name}前的本职身份"})
             continue

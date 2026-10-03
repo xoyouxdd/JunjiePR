@@ -166,6 +166,61 @@ def test_legacy_ta_role_rows_are_split_and_rejoin_the_previous_group() -> None:
             assert db.query(SystemAlert).filter_by(alert_type="acting_duty_migration", employee_id=unknown.id).count() == 1
 
 
+def test_import_day_duty_rows_use_the_base_role_returned_to_afterwards() -> None:
+    today = date.today()
+    with TestClient(app):
+        with SessionLocal() as db:
+            roles = {role.code: role for role in db.query(Role).all()}
+            circle_id = db.query(Employee).filter_by(employee_no="CMTEST01").one().attraction_id
+            imported = Employee(employee_no="IMPORTTA01", name="导入日TA", attraction_id=circle_id, is_active=True)
+            db.add(imported)
+            db.flush()
+            go_live = (today - timedelta(days=50)).isoformat()
+            back_to_tr = (today - timedelta(days=46)).isoformat()
+            db.add_all(
+                [
+                    EmployeeRoleAssignment(employee_id=imported.id, role_id=roles["TA_SUPERVISOR"].id, starts_on=go_live, ends_on=back_to_tr, status="expired"),
+                    EmployeeRoleAssignment(employee_id=imported.id, role_id=roles["TR"].id, starts_on=back_to_tr, status="active"),
+                ]
+            )
+            db.commit()
+            unresolved = migrate_legacy_duty_assignments(db)
+            assert imported.id not in {item["employee_id"] for item in unresolved}
+            assert base_role_at(db, imported.id, go_live).code == "TR"
+            assert role_at(db, imported.id, go_live).code == "TA_SUPERVISOR"
+            assert role_at(db, imported.id).code == "TR"
+
+
+def test_hr_confirms_base_of_unresolved_legacy_ta_and_keeps_the_group() -> None:
+    today = date.today()
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            roles = {role.code: role for role in db.query(Role).all()}
+            circle_id = db.query(Employee).filter_by(employee_no="CMTEST01").one().attraction_id
+            legacy = Employee(employee_no="LEGACYTA03", name="旧TA未定本职", attraction_id=circle_id, is_active=True)
+            member = db.query(Employee).filter_by(employee_no="TRTEST01").one()
+            db.add(legacy)
+            db.flush()
+            db.add(EmployeeRoleAssignment(employee_id=legacy.id, role_id=roles["TA_SUPERVISOR"].id, starts_on=(today - timedelta(days=30)).isoformat(), status="active"))
+            group = WorkGroup(name="旧TA工作组", attraction_id=circle_id, status="active")
+            db.add(group)
+            db.flush()
+            db.add(GroupLeaderAssignment(group_id=group.id, leader_employee_id=legacy.id, starts_on=(today - timedelta(days=30)).isoformat(), status="active"))
+            db.query(GroupMembership).filter_by(employee_id=member.id, status="active").update({GroupMembership.status: "ended", GroupMembership.ends_on: today.isoformat()})
+            db.add(GroupMembership(group_id=group.id, employee_id=member.id, starts_on=today.isoformat(), status="active"))
+            db.commit()
+            legacy_id, group_id = legacy.id, group.id
+
+        login(client, "HR01", "HR123")
+        confirmed = client.put(f"/api/hr/employees/{legacy_id}", json={"role_code": "TR", "reason": "HR确认本职"})
+        assert confirmed.status_code == 200, confirmed.text
+        with SessionLocal() as db:
+            assert base_role_at(db, legacy_id).code == "TR"
+            assert role_at(db, legacy_id).code == "TA_SUPERVISOR"
+            assert db.query(GroupLeaderAssignment).filter_by(group_id=group_id, leader_employee_id=legacy_id, status="active").count() == 1
+            assert db.get(WorkGroup, group_id).status == "active"
+
+
 def test_hr_sets_and_ends_a_duty_without_moving_the_group() -> None:
     with TestClient(app) as client:
         login(client, "HR01", "HR123")

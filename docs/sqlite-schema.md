@@ -238,7 +238,7 @@
 
 复合索引：`ix_role_assignments_current_lookup` (`employee_id`, `status`, `starts_on`, `ends_on`, `id`)。
 
-本表只记录本职身份（CM、TR、主管、GSM 等）。2026-10 迁移把旧的 TA主管 / TA GSM 角色记录拆成“本职 + 代理职务”；无法确定本职的旧记录保持原样，并生成 `acting_duty_migration` 告警交 HR 处理。
+本表只记录本职身份（CM、TR、主管、GSM 等）。2026-10 迁移把旧的 TA主管 / TA GSM 角色记录拆成“本职 + 代理职务”（本职依次取到期恢复角色、代理前角色、代理后回到的角色）；无法确定本职的旧记录保持原样，并生成 `acting_duty_migration` 告警，由 HR 在员工管理中选择真实本职后转为本职 + 代理职务。
 
 ### `employee_acting_duties`
 
