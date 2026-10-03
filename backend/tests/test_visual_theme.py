@@ -93,7 +93,7 @@ def test_desktop_sidebar_keeps_mobile_bottom_nav() -> None:
     assert "bottom: 0" in css[css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") : css.index(".tabs,\n  body[data-role=\"组员\"] .tabs") + 220]
     icon_block = script[script.index("function navIcon(id)") : script.index("function groupedMenu")]
     for key in (
-        "home", "actionCenter", "register", "governance", "review", "members",
+        "home", "actionCenter", "register", "supervisorReview", "review", "members",
         "absence", "entries", "statistics", "prRankings", "hrEmployees", "monthClose",
         "circleHrAccounts", "hrGroups", "circleTransfers", "logs", "hrScores",
         "operations", "changelog", "password", "more",

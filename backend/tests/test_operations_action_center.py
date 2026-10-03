@@ -213,8 +213,9 @@ def test_action_center_and_operations_views_are_present_in_the_app_shell() -> No
     assert "if(has('PASSWORD_RESET'))return renderAccountReset();" in script
     assert "renderOperations" in script
     assert "/api/admin/operations-health" in script
-    assert "renderGovernance" in script
-    assert "/api/governance/appeals" in script
+    # Online appeals were retired in favour of an offline channel.
+    assert "renderGovernance" not in script
+    assert "/api/governance/appeals" not in script
 
 
 def test_statistics_detail_response_keeps_employee_identity_for_title() -> None:

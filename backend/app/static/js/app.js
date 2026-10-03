@@ -181,13 +181,13 @@ function requireEmployeeSelection(form){const target=form.querySelector('[name=e
 function isActingFrontline(){return ['CM','TR','SUPERVISOR'].includes(state.me?.base_role_code)&&!['CM','TR'].includes(state.me?.role_code);}
 function menuItems() {
   const r=state.me.role_code, items=[];
-  if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记'],['governance','申诉']);
+  if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记']);
   else if (['TA_SUPERVISOR','SUPERVISOR'].includes(r)) items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);
   else if (['TA_GSM','GSM'].includes(r)) {items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看'],['prRankings','PR排名数据'],['register','绩效登记'],['entries','我的登记记录']);}
   else if (['AM','OM'].includes(r)) {items.push(['statistics','景点数据与导出'],['prRankings','PR排名数据'],['register',has('TA_GSM_SCORE')?'绩效登记':'POC特别贡献']);}
-  else if (r==='SYSTEM_ADMIN') items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','整组移交'],['circleTransfers','跨圈调动'],['governance','治理复核'],['logs','审计日志'],['hrScores','分值设置']);
-  else if (r==='HR_CIRCLE') {items.push(['hrEmployees','员工管理'],['monthClose','月结'],['hrGroups','整组移交'],['circleTransfers','跨圈调动'],['governance','治理复核'],['hrScores','分值设置']);}
-  else if (r==='HR_ADMIN') {items.push(['hrEmployees','员工管理'],['hrGroups','整组移交'],['circleTransfers','跨圈调动'],['governance','治理复核'],['hrScores','分值设置']);}
+  else if (r==='SYSTEM_ADMIN') items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','整组移交'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);
+  else if (r==='HR_CIRCLE') {items.push(['hrEmployees','员工管理'],['monthClose','月结'],['hrGroups','整组移交'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
+  else if (r==='HR_ADMIN') {items.push(['hrEmployees','员工管理'],['hrGroups','整组移交'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
   else if (has('DATA_VIEW')) items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(has('REVIEW_SUPERVISOR'))items.splice(Math.min(items.length,1),0,['supervisorReview','主管复核']);
@@ -204,8 +204,8 @@ function menuItems() {
 }
 // 手机底部栏按角色固定最常用的入口（不含「更多」），没有权限的项自动跳过，不足 4 个时按菜单顺序补齐。
 const MOBILE_PRIMARY_TABS={
-  CM:['actionCenter','home','register','governance'],
-  TR:['actionCenter','home','register','governance'],
+  CM:['actionCenter','home','register','password'],
+  TR:['actionCenter','home','register','password'],
   TA_SUPERVISOR:['actionCenter','review','register','members'],
   ACTING_FRONTLINE:['actionCenter','review','register','home'],
   SUPERVISOR:['actionCenter','review','register','home'],
@@ -213,9 +213,9 @@ const MOBILE_PRIMARY_TABS={
   GSM:['actionCenter','statistics','register','entries'],
   AM:['actionCenter','statistics','register','prRankings'],
   OM:['actionCenter','statistics','register','prRankings'],
-  HR_ADMIN:['actionCenter','hrEmployees','governance','circleTransfers'],
-  HR_CIRCLE:['actionCenter','hrEmployees','monthClose','governance'],
-  SYSTEM_ADMIN:['actionCenter','hrEmployees','monthClose','governance'],
+  HR_ADMIN:['actionCenter','hrEmployees','logs','circleTransfers'],
+  HR_CIRCLE:['actionCenter','hrEmployees','monthClose','logs'],
+  SYSTEM_ADMIN:['actionCenter','hrEmployees','monthClose','logs'],
 };
 const MOBILE_PRIMARY_COUNT=4;
 // 底部栏宽度有限，长名称用短名显示（无障碍标签和「更多」里仍用全名）。
@@ -251,7 +251,7 @@ const NAV_GROUP_DEFS=[
   {id:'data',label:'数据',ids:['statistics','prRankings','declarationStatistics','sickLeaveImport','hrMonthlyReport']},
   {id:'people',label:'人事',ids:['hrEmployees','circleHrAccounts','hrGroups','circleTransfers','loa']},
   {id:'close',label:'结算',ids:['monthClose','hrScores']},
-  {id:'govern',label:'治理',ids:['governance','logs']},
+  {id:'govern',label:'治理',ids:['logs']},
   {id:'system',label:'系统',ids:['operations']},
 ];
 function navIcon(id){
@@ -259,7 +259,6 @@ function navIcon(id){
     home:'<path d="M4 11 12 4l8 7"/><path d="M6 10.5V20h4.5v-6h3V20H18v-9.5"/>',
     actionCenter:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8M8 14h5"/>',
     register:'<circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/>',
-    governance:'<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z"/>',
     review:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12.5 10.5 15l5.5-6"/>',
     supervisorReview:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12.5 10.5 15l5.5-6"/>',
     members:'<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.4"/><path d="M3.6 19c.6-3.2 2.8-5 5.4-5s4.8 1.8 5.4 5M14.2 14.4c2 .3 3.7 1.8 4.2 4.6"/>',
@@ -414,7 +413,7 @@ async function render(){
   renderAbortController=controller;
   app.innerHTML='<section class="empty skeleton" aria-busy="true">正在加载…</section>';
   try {
-    const views={home:renderHome,actionCenter:renderActionCenter,operations:renderOperations,governance:renderGovernance,register:renderRegister,absence:renderAbsence,entries:renderEntries,review:()=>{reviewApiBase='/api/reviews';return renderReview();},supervisorReview:()=>{reviewApiBase='/api/supervisor-reviews';return renderReview();},upgradeReview:renderUpgradeReview,members:renderMembers,statistics:renderStatistics,statisticsDetail:renderStatisticsDetail,declarationStatistics:renderDeclarationStatistics,prRankings:renderPrRankings,password:renderPasswordPage,accountReset:renderAccountReset,circleHrAccounts:renderCircleHrAccounts,hrEmployees:renderHrEmployees,monthClose:renderMonthClose,circleTransfers:renderCircleTransfers,hrGroups:renderHrGroups,hrScores:renderHrScores,logs:renderLogs,changelog:renderChangelog,sickLeaveImport:renderSickLeaveImport,loa:renderLoa};
+    const views={home:renderHome,actionCenter:renderActionCenter,operations:renderOperations,register:renderRegister,absence:renderAbsence,entries:renderEntries,review:()=>{reviewApiBase='/api/reviews';return renderReview();},supervisorReview:()=>{reviewApiBase='/api/supervisor-reviews';return renderReview();},upgradeReview:renderUpgradeReview,members:renderMembers,statistics:renderStatistics,statisticsDetail:renderStatisticsDetail,declarationStatistics:renderDeclarationStatistics,prRankings:renderPrRankings,password:renderPasswordPage,accountReset:renderAccountReset,circleHrAccounts:renderCircleHrAccounts,hrEmployees:renderHrEmployees,monthClose:renderMonthClose,circleTransfers:renderCircleTransfers,hrGroups:renderHrGroups,hrScores:renderHrScores,logs:renderLogs,changelog:renderChangelog,sickLeaveImport:renderSickLeaveImport,loa:renderLoa};
     views.hrMonthlyReport=renderHrMonthlyReport;
     await (views[state.tab] || renderHome)();
     if(generation!==renderGeneration) return;
@@ -458,34 +457,6 @@ async function renderActionCenter(){
   if(isUpgradeReviewer)bindUpgradeReviewActions(app,renderActionCenter);
 }
 
-function governanceCaseMarkup(row, canReview){
-  const isOpen=row.status==='open';
-  const typeName=row.case_type==='month_correction'?'月结更正账本':'记录申诉';
-  const stateMarkup=`<span class="badge ${isOpen?'warn':'ok'}">${esc(row.status_name)}</span>`;
-  const details=`<div class="governance-case-meta"><span>${esc(typeName)}</span><span>提交人：${esc(row.submitted_by_name)}</span><span>提交时间：${esc(row.submitted_at)}</span>${isOpen?`<span>处理时限：${esc(row.due_at)}</span>`:`<span>处理人：${esc(row.resolved_by_name||'系统')}</span>`}</div>`;
-  const resolution=row.decision?`<div class="governance-result"><strong>${esc(row.decision_name)}</strong><p>${esc(row.resolution||'')}</p></div>`:'';
-  const controls=canReview&&row.can_resolve?`<form class="governance-resolution" data-governance-case="${Number(row.id)}"><label>处理结论<select name="decision" required><option value="uphold">维持原记录</option><option value="correction_required">需要按受控流程更正</option></select></label><label>处理说明<textarea name="resolution" minlength="5" maxlength="500" required placeholder="5至500字，说明复核依据"></textarea></label><button class="primary" type="submit">提交复核</button></form>`:'';
-  return `<article class="governance-case ${isOpen?'is-open':''}"><div class="governance-case-heading"><strong>${esc(row.record_type||'治理事项')} #${Number(row.record_id||row.id)}</strong>${stateMarkup}</div>${details}<p class="governance-reason">${esc(row.reason)}</p>${resolution}${controls}</article>`;
-}
-
-async function renderGovernance(){
-  const request=beginViewRequest();
-  const frontline=['CM','TR'].includes(state.me.role_code);
-  if(frontline){
-    const [caseData,appealable]=await Promise.all([api('/api/governance/cases'),api('/api/governance/appealable-records')]);
-    if(!request.isCurrent())return;
-    const items=appealable.items||[],cases=caseData.items||[];
-    if(!request.write(`<div class="section-gap"><section class="panel"><h2>记录申诉</h2><p class="field-hint">仅可申诉本人被拒绝、撤回的认可记录或有效扣分记录。处理结论不会直接修改原始记录，实质更正仍须走既有受控流程。</p><form id="appealForm" class="form-stack"><label>选择记录<select name="record_key" required><option value="">请选择</option>${items.map(row=>`<option value="${esc(row.record_type)}:${Number(row.record_id)}">${esc(row.label)}</option>`).join('')}</select></label><label>申诉说明<textarea name="reason" minlength="5" maxlength="500" required placeholder="请说明需要复核的事实与依据"></textarea></label><button class="primary" type="submit" ${items.length?'':'disabled'}>提交申诉</button></form>${items.length?'':'<p class="field-hint">当前没有可申诉记录</p>'}</section><section class="panel"><h2>我的申诉</h2><div class="governance-case-list">${cases.map(row=>governanceCaseMarkup(row,false)).join('')||'<p class="empty">暂无申诉记录</p>'}</div></section></div>`))return;
-    const form=document.getElementById('appealForm');
-    form.onsubmit=async event=>{event.preventDefault();const [record_type,record_id]=String(form.elements.record_key.value||'').split(':');if(!record_type||!record_id)return;const button=form.querySelector('button[type=submit]');button.disabled=true;try{await api('/api/governance/appeals',json('POST',{record_type,record_id:Number(record_id),reason:form.elements.reason.value.trim()}));toast('申诉已提交，请在本页查看处理结果');renderGovernance()}catch(error){toast(error.message,true);button.disabled=false;}};
-    return;
-  }
-  const caseData=await api('/api/governance/cases'),cases=caseData.items||[];
-  if(!request.isCurrent())return;
-  if(!request.write(`<div class="section-gap"><section class="panel"><h2>治理复核</h2><p class="field-hint">复核人不得是原登记、复核、作废操作人或申诉提交人。结论不直接变更原始记录；需要更正时，仍通过月结、作废等既有受控流程和审计完成。</p><div class="governance-case-list">${cases.map(row=>governanceCaseMarkup(row,Boolean(caseData.can_review))).join('')||'<p class="empty">当前范围没有治理事项</p>'}</div></section></div>`))return;
-  app.querySelectorAll('[data-governance-case]').forEach(form=>form.onsubmit=async event=>{event.preventDefault();const button=form.querySelector('button[type=submit]');button.disabled=true;try{await api(`/api/governance/cases/${Number(form.dataset.governanceCase)}/resolve`,json('POST',{decision:form.elements.decision.value,resolution:form.elements.resolution.value.trim()}));toast('复核结论已保存，申请人可在申诉页查看');renderGovernance()}catch(error){toast(error.message,true);button.disabled=false;}});
-}
-
 function operationsBackupHtml(backup){
   const latest=backup.latest_backup||{},issues=backup.issues||[],alert=backup.alert||{},task=backup.task||{};
   return `<section class="panel operations-backup ${backup.ok?'is-ok':'is-alert'}"><div class="operations-heading"><div><h2>备份健康</h2><p>最近检查：${esc(backup.checked_at_utc||'暂无健康报告')}</p></div><span class="badge ${backup.ok?'ok':'danger'}">${esc(backup.status||'未知')}</span></div><div class="operations-metrics"><div><span>备份任务</span><strong>${task.exists&&task.enabled?esc(task.state||'已启用'):'未就绪'}</strong></div><div><span>最近备份</span><strong>${esc(latest.created_at_utc||'暂无')}</strong></div><div><span>备份时效</span><strong>${latest.age_hours===undefined||latest.age_hours===null?'暂无':`${esc(latest.age_hours)}小时`}</strong></div><div><span>完整性</span><strong>${latest.quick_check==='ok'&&latest.sha256_verified?'已核验':'待核验'}</strong></div></div><p class="field-hint">外部通知：${alert.configured?'已配置':'未配置'}${alert.attempted?`；最近投递${alert.delivered?'成功':'失败'}`:''}</p>${issues.length?`<ul class="operations-issues">${issues.map(issue=>`<li><strong>${esc(issue.code)}</strong>${issue.message?`：${esc(issue.message)}`:''}</li>`).join('')}</ul>`:''}</section>`;
@@ -495,7 +466,7 @@ async function renderOperations(){
   const request=beginViewRequest();
   const data=await api('/api/admin/operations-health'),closures=data.month_closures||[],governance=data.governance||{};
   if(!request.isCurrent())return;
-  if(!request.write(`<div class="section-gap">${operationsBackupHtml(data.backup||{})}<section class="panel"><div class="operations-heading"><div><h2>运营概览</h2><p>${esc(data.month)} 当前状态</p></div></div><div class="operations-metrics"><div><span>未处理系统告警</span><strong>${Number(data.open_system_alerts||0)}</strong></div><div><span>待确认跨圈调动</span><strong>${Number(data.pending_circle_transfers||0)}</strong></div><div><span>已关闭月结</span><strong>${closures.filter(row=>row.is_closed).length} / ${closures.length}</strong></div></div><div class="operations-closures">${closures.map(row=>`<div><strong>${esc(row.attraction_name)}</strong><span class="badge ${row.is_closed?'ok':'warn'}">${row.is_closed?'已月结':'未月结'}</span><small>${row.is_closed?`关闭人：${esc(row.closed_by_name||'系统')}`:'等待核对'}</small></div>`).join('')||'<span class="field-hint">暂无景点圈月结信息</span>'}</div></section><section class="panel"><div class="operations-heading"><div><h2>治理与留存复核</h2><p>仅显示聚合数量，不展示人员或附件内容。</p></div></div><div class="operations-metrics"><div><span>待处理治理事项</span><strong>${Number(governance.open_cases||0)}</strong></div><div><span>超时申诉</span><strong>${Number(governance.overdue_cases||0)}</strong></div><div><span>超过48小时待复核</span><strong>${Number(governance.overdue_recognition_reviews||0)}</strong></div><div><span>附件留存待复核</span><strong>${Number(governance.retention_review_files||0)}</strong></div></div></section></div>`))return;
+  if(!request.write(`<div class="section-gap">${operationsBackupHtml(data.backup||{})}<section class="panel"><div class="operations-heading"><div><h2>运营概览</h2><p>${esc(data.month)} 当前状态</p></div></div><div class="operations-metrics"><div><span>未处理系统告警</span><strong>${Number(data.open_system_alerts||0)}</strong></div><div><span>待确认跨圈调动</span><strong>${Number(data.pending_circle_transfers||0)}</strong></div><div><span>已关闭月结</span><strong>${closures.filter(row=>row.is_closed).length} / ${closures.length}</strong></div></div><div class="operations-closures">${closures.map(row=>`<div><strong>${esc(row.attraction_name)}</strong><span class="badge ${row.is_closed?'ok':'warn'}">${row.is_closed?'已月结':'未月结'}</span><small>${row.is_closed?`关闭人：${esc(row.closed_by_name||'系统')}`:'等待核对'}</small></div>`).join('')||'<span class="field-hint">暂无景点圈月结信息</span>'}</div></section><section class="panel"><div class="operations-heading"><div><h2>治理与留存复核</h2><p>仅显示聚合数量，不展示人员或附件内容。</p></div></div><div class="operations-metrics"><div><span>超过48小时待复核</span><strong>${Number(governance.overdue_recognition_reviews||0)}</strong></div><div><span>附件留存待复核</span><strong>${Number(governance.retention_review_files||0)}</strong></div></div></section></div>`))return;
 }
 
 async function renderChangelog(){

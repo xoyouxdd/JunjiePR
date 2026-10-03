@@ -554,11 +554,10 @@ class MonthClosure(Base):
 
 
 class GovernanceCase(Base):
-    """A traceable appeal or month-close correction request.
+    """Month-close correction record written when a closed month is reopened.
 
-    Cases deliberately do not mutate score records themselves.  Any approved
-    correction remains subject to the existing void/reopen write gates, while
-    this table preserves the independent review decision and its rationale.
+    Online appeals were retired (an offline channel handles them) and their
+    rows removed; the table keeps the reopen ledger for the database record.
     """
 
     __tablename__ = "governance_cases"

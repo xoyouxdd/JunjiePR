@@ -193,6 +193,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
     ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
     ("2026-10-acting-duties", "ensure_acting_duty_columns_and_migrate"),
+    ("2026-10-audit-scope-and-appeal-removal", "backfill_audit_scope_and_remove_appeals"),
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
 ]
 
@@ -869,6 +870,44 @@ def ensure_acting_duty_columns_and_migrate(db) -> None:
     db.execute(text("CREATE INDEX IF NOT EXISTS ix_audit_logs_attraction_id ON audit_logs (attraction_id)"))
     db.commit()
     migrate_legacy_duty_assignments(db)
+
+
+def backfill_audit_scope_and_remove_appeals(db) -> None:
+    """Give old audit rows their employee circle; drop the retired online appeals.
+
+    Online appeals were replaced by an offline channel.  The governance_cases
+    table stays for month-close correction records; only appeal rows go.  The
+    audit trail of past appeals is kept.
+    """
+    employee_circle = "(SELECT attraction_id FROM employees e WHERE CAST(e.id AS TEXT) = audit_logs.entity_id)"
+    via_employee = lambda table: (  # noqa: E731
+        f"(SELECT e.attraction_id FROM {table} t JOIN employees e ON e.id = t.employee_id "
+        "WHERE CAST(t.id AS TEXT) = audit_logs.entity_id)"
+    )
+    sources = {
+        "recognition": "(SELECT home_attraction_id FROM recognition_records t WHERE CAST(t.id AS TEXT) = audit_logs.entity_id)",
+        "deduction": "(SELECT attraction_id_snapshot FROM deduction_records t WHERE CAST(t.id AS TEXT) = audit_logs.entity_id)",
+        "sick_leave": "(SELECT attraction_id_snapshot FROM sick_leave_records t WHERE CAST(t.id AS TEXT) = audit_logs.entity_id)",
+        "employee": employee_circle,
+        "employee_group": employee_circle,
+        "employee_loa": employee_circle,
+        "employee_login_archive": employee_circle,
+        "employee_number_change": employee_circle,
+        "user_account": via_employee("user_accounts"),
+        "employee_loa_period": via_employee("employee_loa_periods"),
+        "deduction_upgrade": via_employee("deduction_upgrade_requests"),
+        "deduction_follow_up": via_employee("deduction_follow_ups"),
+        "work_group": "(SELECT attraction_id FROM work_groups t WHERE CAST(t.id AS TEXT) = audit_logs.entity_id)",
+        "month_close": "(SELECT attraction_id FROM month_closures t WHERE CAST(t.id AS TEXT) = audit_logs.entity_id)",
+        "circle_transfer": "(SELECT source_attraction_id FROM circle_transfer_requests t WHERE CAST(t.id AS TEXT) = audit_logs.entity_id)",
+    }
+    for entity_type, source in sources.items():
+        db.execute(
+            text(f"UPDATE audit_logs SET attraction_id = {source} WHERE entity_type = :entity_type AND attraction_id IS NULL"),
+            {"entity_type": entity_type},
+        )
+    db.execute(text("DELETE FROM governance_cases WHERE case_type = 'appeal'"))
+    db.commit()
 
 
 def migrate_legacy_duty_assignments(db) -> list[dict]:

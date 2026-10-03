@@ -1271,7 +1271,7 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
 
     script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert "const r=state.me.role_code, items=[];" in script
-    assert "if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记'],['governance','申诉']);" in script
+    assert "if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记']);" in script
     assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);" in script
     assert "items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','整组移交']" in script
     assert "async function renderMonthClose" in script

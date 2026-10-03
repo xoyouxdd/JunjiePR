@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from decimal import Decimal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -44,54 +43,6 @@ def ensure_month_close_scope(db: Session, user: V2User, attraction_id: int | Non
     if user.role.code != "SYSTEM_ADMIN" and attraction.id not in managed_attraction_ids(db, user.id):
         raise HTTPException(403, "只能关闭自己管理范围内的景点圈")
     return attraction
-
-
-def governance_case_payload(row: GovernanceCase, *, can_resolve: bool = False) -> dict:
-    status_names = {"open": "待处理", "resolved": "已处理", "withdrawn": "已撤回"}
-    decision_names = {"uphold": "维持原记录", "correction_required": "需要按受控流程更正", "month_reopened": "已重开月结"}
-    return {
-        "id": row.id,
-        "case_type": row.case_type,
-        "record_type": row.record_type or "",
-        "record_id": row.record_id or 0,
-        "attraction_id": row.attraction_id or 0,
-        "score_month": row.score_month or "",
-        "reason": row.reason,
-        "status": row.status,
-        "status_name": status_names.get(row.status, row.status),
-        "decision": row.decision or "",
-        "decision_name": decision_names.get(row.decision, row.decision or ""),
-        "resolution": row.resolution or "",
-        "submitted_by_name": row.submitted_by_name,
-        "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
-        "due_at": row.due_at.strftime("%Y-%m-%d %H:%M:%S"),
-        "resolved_by_name": row.resolved_by_name or "",
-        "resolved_at": row.resolved_at.strftime("%Y-%m-%d %H:%M:%S") if row.resolved_at else "",
-        "can_resolve": can_resolve and row.status == "open",
-    }
-
-
-def governance_scope_allows_case(db: Session, user: V2User, row: GovernanceCase) -> bool:
-    if user.role.code in {"SYSTEM_ADMIN", "HR_ADMIN"}:
-        return True
-    allowed = scoped_hr_attraction_ids(db, user)
-    return allowed is not None and row.attraction_id in allowed
-
-
-def appeal_record_for_employee(db: Session, employee_id: int, record_type: str, record_id: int):
-    if record_type == "recognition":
-        row = db.get(RecognitionRecord, record_id)
-        eligible = row and row.employee_id == employee_id and row.status in {"rejected", "void"}
-        if not eligible:
-            return None
-        return row, row.home_attraction_id, row.recognition_month, {row.operator_employee_id, row.reviewed_by, row.voided_by}
-    if record_type == "deduction":
-        row = db.get(DeductionRecord, record_id)
-        eligible = row and row.employee_id == employee_id and row.status == "active"
-        if not eligible:
-            return None
-        return row, row.attraction_id_snapshot, row.deduction_month, {row.submitter_id, row.voided_by}
-    return None
 
 
 def capture_month_organization_snapshots(db: Session, month: str, attraction_id: int | None) -> int:
@@ -182,15 +133,6 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     current_month = date.today().strftime("%Y-%m")
     month_to_close = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
 
-    if role_code in FRONTLINE_CODES:
-        open_appeals = db.query(GovernanceCase).filter(
-            GovernanceCase.case_type == "appeal",
-            GovernanceCase.submitted_by == user.id,
-            GovernanceCase.status == "open",
-        ).count()
-        if open_appeals:
-            items.append(action_center_item("appeal", "我的申诉待处理", open_appeals, "governance", "warning", "申诉不会改变原记录，请在申诉页查看处理结果。"))
-
     if "REVIEW_SUPERVISOR" in user.permissions:
         from app.routers.recognitions import supervisor_review_query
 
@@ -234,13 +176,6 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
             items.append(action_center_item("deduction_follow_up", "范围内重复违规待处理", pending_follow_ups, "entries", "warning", "管理范围内存在尚未形成闭环的重复违规。"))
 
     if role_code in {"HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"}:
-        governance_cases = [
-            row for row in db.query(GovernanceCase).filter(GovernanceCase.status == "open").all()
-            if governance_scope_allows_case(db, user, row)
-        ]
-        if governance_cases:
-            overdue = sum(row.due_at < datetime.now() for row in governance_cases)
-            items.append(action_center_item("governance_case", "申诉与更正待处理", len(governance_cases), "governance", "critical" if overdue else "warning", "处理人不得是原登记、复核或作废操作人；超时事项应优先处理。"))
         open_alerts = [row for row in visible_system_alerts(db, user) if row.status == "open"]
         if open_alerts:
             items.append(action_center_item("system_alert", "系统告警待处理", len(open_alerts), "hrEmployees", "critical", "员工、工作组或规则存在需要核对的告警。"))
@@ -402,116 +337,6 @@ def action_center_details(item_type: str, db: Session = Depends(get_db), user: V
         return {"type": item_type, "title": "超过48小时未复核签卡明细", "items": action_center_recognition_details(db, rows, now)}
 
     raise HTTPException(404, "该待办暂无可展开的异常明细")
-
-
-@router.get("/governance/appealable-records")
-def appealable_records(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    if user.role.code not in FRONTLINE_CODES:
-        raise HTTPException(403, "仅CM/TR可提交本人记录申诉")
-    records: list[dict] = []
-    for row in db.query(RecognitionRecord).filter(
-        RecognitionRecord.employee_id == user.id,
-        RecognitionRecord.status.in_(("rejected", "void")),
-    ).order_by(RecognitionRecord.submitted_at.desc()).limit(100).all():
-        records.append({"record_type": "recognition", "record_id": row.id, "label": f"认可 · {row.recognition_date} · {row.recognition_type_name} · {row.status}"})
-    for row in db.query(DeductionRecord).filter(
-        DeductionRecord.employee_id == user.id,
-        DeductionRecord.status == "active",
-    ).order_by(DeductionRecord.submitted_at.desc()).limit(100).all():
-        records.append({"record_type": "deduction", "record_id": row.id, "label": f"扣分 · {row.occurred_on} · {row.deduction_type_name} · -{Decimal(row.points):.2f}分"})
-    return {"items": records}
-
-
-@router.post("/governance/appeals")
-def submit_appeal(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    if user.role.code not in FRONTLINE_CODES:
-        raise HTTPException(403, "仅CM/TR可提交本人记录申诉")
-    record_type = str(payload.get("record_type") or "").strip()
-    try:
-        record_id = int(payload.get("record_id"))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(400, "请选择需要申诉的记录") from exc
-    reason = str(payload.get("reason") or "").strip()
-    if len(reason) < 5 or len(reason) > 500:
-        raise HTTPException(400, "申诉说明需为5至500字")
-    subject = appeal_record_for_employee(db, user.id, record_type, record_id)
-    if not subject:
-        raise HTTPException(404, "该记录不存在、当前不可申诉或不属于本人")
-    _record, attraction_id, score_month, _conflicts = subject
-    existing = db.query(GovernanceCase).filter(
-        GovernanceCase.case_type == "appeal",
-        GovernanceCase.record_type == record_type,
-        GovernanceCase.record_id == record_id,
-        GovernanceCase.status == "open",
-    ).first()
-    if existing:
-        raise HTTPException(409, "该记录已有待处理申诉")
-    row = GovernanceCase(
-        case_type="appeal",
-        record_type=record_type,
-        record_id=record_id,
-        attraction_id=attraction_id,
-        score_month=score_month,
-        subject_employee_id=user.id,
-        submitted_by=user.id,
-        submitted_by_name=user.name,
-        reason=reason,
-        due_at=datetime.now() + timedelta(hours=72),
-    )
-    db.add(row)
-    db.flush()
-    write_audit(db, user.employee, "提交记录申诉", "governance_case", row.id, after={"record_type": record_type, "record_id": record_id, "score_month": score_month}, reason=reason, ip_address=client_ip(request))
-    db.commit()
-    return {"ok": True, "case": governance_case_payload(row)}
-
-
-@router.get("/governance/cases")
-def governance_cases(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    if user.role.code in FRONTLINE_CODES:
-        rows = db.query(GovernanceCase).filter(GovernanceCase.submitted_by == user.id).order_by(GovernanceCase.submitted_at.desc()).limit(100).all()
-        return {"items": [governance_case_payload(row) for row in rows], "can_review": False}
-    if user.role.code not in {"HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"}:
-        raise HTTPException(403, "当前角色没有治理复核权限")
-    rows = [
-        row for row in db.query(GovernanceCase).order_by(GovernanceCase.status.asc(), GovernanceCase.due_at.asc(), GovernanceCase.id.desc()).limit(500).all()
-        if governance_scope_allows_case(db, user, row)
-    ]
-    return {"items": [governance_case_payload(row, can_resolve=True) for row in rows], "can_review": True}
-
-
-@router.post("/governance/cases/{case_id}/resolve")
-def resolve_governance_case(case_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    if user.role.code not in {"HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"}:
-        raise HTTPException(403, "当前角色没有治理复核权限")
-    row = db.get(GovernanceCase, case_id)
-    if not row or not governance_scope_allows_case(db, user, row):
-        raise HTTPException(404, "未找到可处理的治理事项")
-    if row.status != "open":
-        raise HTTPException(409, "该事项已处理")
-    decision = str(payload.get("decision") or "").strip()
-    if decision not in {"uphold", "correction_required"}:
-        raise HTTPException(400, "请选择维持原记录或需要更正")
-    resolution = str(payload.get("resolution") or "").strip()
-    if len(resolution) < 5 or len(resolution) > 500:
-        raise HTTPException(400, "处理说明需为5至500字")
-    conflicts: set[int | None] = {row.submitted_by}
-    if row.case_type == "appeal":
-        subject = appeal_record_for_employee(db, row.subject_employee_id or -1, row.record_type or "", row.record_id or 0)
-        if not subject:
-            raise HTTPException(409, "原记录状态已变化，请由最高管理员在审计日志中复核")
-        _record, _attraction_id, _score_month, record_conflicts = subject
-        conflicts.update(record_conflicts)
-    if user.id in conflicts:
-        raise HTTPException(409, "处理人不得是申诉提交人、原登记人、原复核人或原作废人")
-    row.status = "resolved"
-    row.decision = decision
-    row.resolution = resolution
-    row.resolved_by = user.id
-    row.resolved_by_name = user.name
-    row.resolved_at = datetime.now()
-    write_audit(db, user.employee, "处理治理事项", "governance_case", row.id, before={"status": "open"}, after={"status": row.status, "decision": decision}, reason=resolution, ip_address=client_ip(request))
-    db.commit()
-    return {"ok": True, "case": governance_case_payload(row)}
 
 
 @router.get("/month-closes/{month}")
