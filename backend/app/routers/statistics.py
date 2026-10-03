@@ -600,21 +600,23 @@ def pr_ranking_payload(
     leader_names = ranking_leader_names(db, employee_ids, end_iso) if category != "leader" else {}
     aggregates: dict[int, dict] = {employee_id: {} for employee_id in employee_ids}
     subtype_name = ""
+    uncapped_ranking = False
 
     if category == "recognition":
         subtype = db.get(RecognitionType, subtype_id) if subtype_id else None
         if subtype_id and (not subtype or not subtype.active):
             raise HTTPException(400, "请选择有效的认可类型")
         subtype_name = subtype.name if subtype else "全部加分类别"
-        rows = db.query(RecognitionRecord.employee_id, func.count(RecognitionRecord.id), text("SUM(CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END)"), func.max(RecognitionRecord.recognition_date)).filter(
+        uncapped_ranking = bool(subtype and subtype.code in {"SAFETY", "COURTESY", "EFFICIENCY", "SHOW", "INCLUSION"})
+        rows = db.query(RecognitionRecord.employee_id, func.count(RecognitionRecord.id), text("SUM(CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END)"), func.max(RecognitionRecord.recognition_date), func.sum(RecognitionRecord.fraction)).filter(
             RecognitionRecord.employee_id.in_(employee_ids) if employee_ids else RecognitionRecord.employee_id == -1,
             RecognitionRecord.status == "confirmed", RecognitionRecord.recognition_date >= start_value, RecognitionRecord.recognition_date <= end_value,
         )
         if subtype:
             rows = rows.filter(RecognitionRecord.recognition_type_id == subtype.id)
         rows = rows.group_by(RecognitionRecord.employee_id).all()
-        for employee_id, count, score, recent_date in rows:
-            aggregates[employee_id] = {"count": int(count or 0), "score": float(score or 0), "recent_date": recent_date or ""}
+        for employee_id, count, score, recent_date, uncapped_score in rows:
+            aggregates[employee_id] = {"count": int(count or 0), "score": float(score or 0), "recent_date": recent_date or "", "uncapped_score": float(uncapped_score or 0)}
     elif category == "deduction":
         subtype = db.get(DeductionType, subtype_id) if subtype_id else None
         if subtype_id and (not subtype or not subtype.active):
@@ -751,6 +753,7 @@ def pr_ranking_payload(
                 "role_name": role.name if role else "未配置",
                 "leader_name": leader_names.get(employee.id, "") if category != "leader" else "",
                 "count": int(data.get("count", 0)),
+                "uncapped_score": round(float(data.get("uncapped_score", 0)), 2),
                 "score": round(float(data.get("score", 0)), 2),
                 "recent_date": str(data.get("recent_date") or ""),
                 "leave_days": round(float(data.get("leave_days", 0)), 1),
@@ -768,6 +771,8 @@ def pr_ranking_payload(
         result_rows.sort(key=lambda row: (-row["count"], -row["score"], row["employee_no"]))
     elif sort_by == "count":
         result_rows.sort(key=lambda row: (-row["count"], -row["score"], row["employee_no"]))
+    elif uncapped_ranking:
+        result_rows.sort(key=lambda row: (-row["uncapped_score"], -row["count"], row["employee_no"]))
     else:
         result_rows.sort(key=lambda row: (-row["score"], -row["count"], row["employee_no"]))
     for index, row in enumerate(result_rows, start=1):
@@ -778,6 +783,7 @@ def pr_ranking_payload(
         "category": category,
         "subtype_id": subtype_id,
         "subtype_name": subtype_name,
+        "uncapped_ranking": uncapped_ranking,
         "sort_by": sort_by,
         "start_date": start_value,
         "end_date": end_value,

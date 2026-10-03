@@ -425,6 +425,11 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
         ws.append(headers)
         for row in data["rows"]:
             ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["leader_name"], data["subtype_name"], row["count"], row["score"], row["recent_date"]]))
+    if data.get("uncapped_ranking"):
+        ws.cell(1, 11, "未封顶分数（累计分值排名依据）")
+        for index, row in enumerate(data["rows"], start=2):
+            ws.cell(index, 11, row["uncapped_score"])
+        apply_score_format(ws, (11,))
     style_sheet(ws, landscape=True)
     add_banded_table(ws, ws.dimensions, "PrRankingData")
     if category == "overall":

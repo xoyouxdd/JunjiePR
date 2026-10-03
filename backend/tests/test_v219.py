@@ -493,6 +493,50 @@ def test_four_role_groups_and_statistics_reads_are_business_read_only() -> None:
         assert client.get("/api/hr/employees").status_code == 200
 
 
+def test_pr_recognition_uncapped_ranking_and_export() -> None:
+    day = date.today().isoformat()
+    with TestClient(app) as client:
+        login(client, "GSMTEST01")
+        with SessionLocal() as db:
+            employees = db.query(Employee).filter(Employee.employee_no.in_(["CMTEST01", "TRTEST01"])).order_by(Employee.employee_no).all()
+            assert len(employees) == 2
+            signer = db.query(Employee).filter_by(employee_no="SUPTEST01").one()
+            types = db.query(RecognitionType).filter(RecognitionType.code.in_(["SAFETY", "COURTESY", "EFFICIENCY", "SHOW", "INCLUSION", "OTHER"])).all()
+            type_ids = {t.code: t.id for t in types}
+            employee_ids = [e.id for e in employees]
+            for t in types:
+                for employee, raw, credited in [(employees[0], "9", "1"), (employees[1], "6", "5")]:
+                    for status in ["confirmed", "pending", "void"]:
+                        db.add(RecognitionRecord(employee_id=employee.id, employee_no=employee.employee_no, employee_name=employee.name, employee_role_snapshot="CM", home_attraction_id=employee.attraction_id, home_attraction_name="测试景点", occurred_attraction_id=employee.attraction_id, recognition_date=day, recognition_month=day[:7], recognition_type_id=t.id, recognition_type_name=t.name, content="未封顶排名测试", recognizer_employee_id=signer.id, recognizer_name=signer.name, recognizer_role_snapshot="主管", operator_employee_id=signer.id, operator_name=signer.name, source="manager", fraction=Decimal(raw), credited_fraction=Decimal(credited), status=status))
+            db.commit()
+        params = {"category": "recognition", "start_date": day, "end_date": day}
+        for code, type_id in type_ids.items():
+            query = {**params, "subtype_id": type_id}
+            response = client.get("/api/pr-rankings", params=query)
+            assert response.status_code == 200, response.text
+            data = response.json()
+            rows = [r for r in data["rows"] if r["employee_id"] in employee_ids]
+            selected = code != "OTHER"
+            assert data["uncapped_ranking"] is selected
+            assert [r["employee_id"] for r in rows] == (employee_ids if selected else employee_ids[::-1])
+            assert all(r["count"] == 1 for r in rows)
+            assert {r["employee_id"]: r["score"] for r in rows} == dict(zip(employee_ids, [1, 5]))
+            assert {r["employee_id"]: r["uncapped_score"] for r in rows} == dict(zip(employee_ids, [9, 6]))
+            exported = client.get("/api/pr-rankings/export", params=query)
+            assert exported.status_code == 200
+            sheet = load_workbook(BytesIO(exported.content)).worksheets[0]
+            if selected:
+                assert sheet.cell(1, 11).value.startswith("未封顶分数")
+                matching = [row for row in sheet.iter_rows(min_row=2, values_only=True) if row[1] in {"CMTEST01", "TRTEST01"}]
+                assert [r[10] for r in matching] == [9, 6]
+            else:
+                assert sheet.cell(1, 11).value is None
+        assert client.get("/api/pr-rankings", params=params).json()["uncapped_ranking"] is False
+        with SessionLocal() as db:
+            db.query(RecognitionRecord).filter(RecognitionRecord.content == "未封顶排名测试").delete(synchronize_session=False)
+            db.commit()
+
+
 def test_pr_leader_ranking_counts_each_confirmed_record_once_per_supervisor() -> None:
     """Self-submitted and manager-entered recognitions both credit their supervisor."""
     today_value = date.today().isoformat()
