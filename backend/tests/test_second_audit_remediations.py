@@ -62,7 +62,7 @@ def test_manager_recognition_can_submit_without_a_self_evidence_control() -> Non
 
     assert "function recognitionSubmissionData(form,imageRequired=true)" in script
     assert "if(imageRequired&&!file)" in script
-    assert "recognitionSubmissionData(e.target,has('SELF_RECOGNITION')&&!has('EMPLOYEE_ADD'))" in script
+    assert "recognitionSubmissionData(e.target,selfMode)" in script
 
 
 def test_hr_batch_save_button_has_a_stable_template_contract() -> None:

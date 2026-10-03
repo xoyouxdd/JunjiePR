@@ -14,8 +14,8 @@ from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionLevel, DeductionFollowUp, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, GroupLeaderAssignment, MonthClosure, RecognitionRecord, Role, SickLeaveRecord, StoredFile, SubmissionRequest, SystemAlert, UserAccount, WorkGroup
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, active_group_leaders_bulk, base_role_at, groups_led_by, managed_attraction_ids, role_at
-from app.v2_models import EmployeeLOAPeriod, GroupMembership
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, active_group_leaders_bulk, base_role_at, base_roles_at, duties_at_bulk, groups_led_by, identity_labels, managed_attraction_ids, role_at
+from app.v2_models import EmployeeActingDuty, EmployeeLOAPeriod, GroupMembership
 from app.v2_services import roles_at
 
 
@@ -1097,6 +1097,18 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
     value = on_date or date.today().isoformat()
     employee_ids = [employee.id for employee in employees]
     role_map = roles_at(db, employee_ids, value)
+    base_role_map = base_roles_at(db, employee_ids, value)
+    duty_map = duties_at_bulk(db, employee_ids, value)
+    duty_ends = {
+        row.employee_id: row.ends_on or ""
+        for row in db.query(EmployeeActingDuty).filter(
+            EmployeeActingDuty.employee_id.in_(employee_ids),
+            EmployeeActingDuty.status != "cancelled",
+            EmployeeActingDuty.starts_on <= value,
+            or_(EmployeeActingDuty.ends_on.is_(None), EmployeeActingDuty.ends_on >= value),
+        )
+    }
+    labels = identity_labels(db, employee_ids, value)
     accounts = {
         account.employee_id: account
         for account in db.query(UserAccount).filter(UserAccount.employee_id.in_(employee_ids)).all()
@@ -1177,6 +1189,10 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
         "name": employee.name,
         "role_code": role.code if role else "",
         "role_name": role.name if role else "未配置",
+        "base_role_code": base_role_map[employee.id].code if base_role_map.get(employee.id) else "",
+        "duty_role_code": duty_map[employee.id][0].code if duty_map.get(employee.id) else "",
+        "duty_ends_on": duty_ends.get(employee.id, ""),
+        "role_label": labels.get(employee.id, "未配置"),
         "attraction_id": employee.attraction_id,
         "attraction_name": attraction.name if attraction else "",
         "group_id": group.id if group else None,

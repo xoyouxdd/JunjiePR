@@ -1280,7 +1280,7 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     assert '<h2>账号姓名修改</h2>' in script
     assert 'id="passwordBtn"' not in script
     assert "function recognizerGroups(rows)" in script
-    assert "recognitionSubmissionData(e.target,has('SELF_RECOGNITION')&&!has('EMPLOYEE_ADD'))" in script
+    assert "recognitionSubmissionData(e.target,selfMode)" in script
     assert 'id="hrBatchLeaderSave"' in script
     assert "const canEdit=state.me.role_code==='SYSTEM_ADMIN'" in script
     assert "label:'热力追踪主管'" in script
