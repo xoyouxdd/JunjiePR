@@ -7,6 +7,43 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.04.1",
+        "date": "2026-10-04",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "代理TA主管期间保留CM/TR身份",
+                "detail": "CM/TR代理TA主管时仍是原小组组员：可在「绩效登记」切换本人登记，由原组长复核；新增「我的成绩」入口，分数与全勤照常按CM/TR计算。代理期间主管和TA主管不能为其代录加分，可以扣分。身份显示为「CM · 代理TA主管」。",
+                "audiences": ["CM", "TR", "TA_SUPERVISOR", "SUPERVISOR"],
+            },
+            {
+                "summary": "主管绩效：本人登记、全勤与主管复核",
+                "detail": "主管可本人登记认可，认可人只能选TA GSM及以上，由任一正式GSM、AM或OM复核；代理TA GSM期间认可人只能选AM，并只由AM复核。主管自2026年10月起计全勤分，规则与CM相同，可在「我的成绩」查看。",
+                "audiences": ["SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"],
+            },
+            {
+                "summary": "GSM、TA GSM可为主管加分扣分",
+                "detail": "「绩效登记」可切换「登记CM/TR / 登记主管」，为主管加分或登记全部等级扣分；代理TA GSM的主管只能由AM加分和扣分。新增「主管复核」入口及待办提醒。",
+                "audiences": ["TA_GSM", "GSM", "AM", "OM"],
+            },
+            {
+                "summary": "景点数据、趋势、导出与PR排名增加主管页面",
+                "detail": "景点数据Title可选「主管」，按景点圈 → GSM → 主管展示，趋势同步；月度导出增加两张主管工作表。PR排名可选排名人群「主管（主管绩效排行）」，原组长排行更名为「主管发放排行」，按记录当时身份统计。默认CM/TR页面只统计CM/TR；代理期间的得分以「含 TA 主管期间」备注列出。",
+                "audiences": ["TA_GSM", "GSM", "AM", "OM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "线上申诉取消，改走线下渠道",
+                "detail": "「申诉」入口已移除，如对记录有异议请通过线下渠道反映。手机底部栏原申诉位置改为「修改密码」。",
+                "audiences": ["CM", "TR"],
+            },
+            {
+                "summary": "HR可查看审计日志，代理职务单独设置",
+                "detail": "景点圈HR可查看本圈的审计日志摘要，HR管理员可查看全部；「治理复核」入口已移除，重开月结等操作请在审计日志中查看。员工管理中选TA主管/TA GSM即为本职叠加代理职务并可填结束日期，选回本职即结束代理，不再移出原小组。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.02.1",
         "date": "2026-10-02",
         "status": "candidate",

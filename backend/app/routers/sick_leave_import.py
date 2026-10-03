@@ -418,6 +418,8 @@ def create_single_sick_leave(
     rest_day_confirmed: bool = Form(False), idempotency_key: str | None = Form(None),
     db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SICK_LEAVE_IMPORT")),
 ):
+    if int(employee_id) == user.id:
+        raise HTTPException(403, "不能为本人登记病假")
     start = parse_iso_date(leave_start_date, "病假开始日期")
     end = parse_iso_date(leave_end_date, "病假结束日期")
     if end < start or start.strftime("%Y-%m") != end.strftime("%Y-%m"):

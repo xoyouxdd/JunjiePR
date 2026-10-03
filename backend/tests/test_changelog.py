@@ -127,7 +127,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         login(client, "TRTEST01")
         frontline = client.get("/api/changelog/announcement").json()
         assert frontline["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in frontline["release"]["items"]] == ["声明升级按考勤类别匹配并修正实际扣分"]
+        assert [item["summary"] for item in frontline["release"]["items"]] == ["代理TA主管期间保留CM/TR身份", "线上申诉取消，改走线下渠道"]
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         client.post("/api/logout")
         login(client, "OMTEST01")
@@ -149,8 +149,17 @@ def test_current_monthly_report_fix_requires_role_and_permission() -> None:
     assert not item_visible(item, "CM", {"HR_MONTHLY_REPORT"})
 
 
+def test_acting_duty_notes_follow_base_and_duty_roles() -> None:
+    items = {item["summary"]: item for item in RELEASES[0]["items"]}
+    # A CM acting as TA主管 sees notes for either identity.
+    assert item_visible(items["代理TA主管期间保留CM/TR身份"], {"CM", "TA_SUPERVISOR"}, set())
+    assert item_visible(items["GSM、TA GSM可为主管加分扣分"], {"SUPERVISOR", "TA_GSM"}, set())
+    assert not item_visible(items["线上申诉取消，改走线下渠道"], "GSM", set())
+
+
 def test_current_sick_leave_notes_require_import_permission() -> None:
-    for item in RELEASES[0]["items"][:2]:
+    sick_leave_release = next(release for release in RELEASES if release["version"] == "2026.10.02.1")
+    for item in sick_leave_release["items"][:2]:
         for role in ("GSM", "HR_CIRCLE", "SYSTEM_ADMIN"):
             assert item_visible(item, role, {"SICK_LEAVE_IMPORT"})
             assert not item_visible(item, role, set())

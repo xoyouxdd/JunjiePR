@@ -10,6 +10,7 @@
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | 目录职责与现用技术栈 |
 | [docs/sqlite-schema.md](docs/sqlite-schema.md) | SQLite 表、主键、外键、索引 |
+| [docs/identity-and-supervisor.md](docs/identity-and-supervisor.md) | 本职与代理职务、主管绩效登记复核及统计口径 |
 | [docs/leave-management.md](docs/leave-management.md) | LOA、月度病假事务导入与单人备用登记 |
 | [docs/declaration-statistics.md](docs/declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
 | [docs/hr-monthly-report-plan.md](docs/hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |

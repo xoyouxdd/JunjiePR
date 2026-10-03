@@ -33,7 +33,8 @@
 | `employees` | 员工主档 |
 | `employee_number_history` | 工号变更轨迹 |
 | `employee_loa_periods` | LOA |
-| `employee_role_assignments` | 角色任职 |
+| `employee_role_assignments` | 本职身份任职 |
+| `employee_acting_duties` | 代理职务（TA主管 / TA GSM） |
 | `user_accounts` | 登录账号 |
 | `user_sessions` | 会话 |
 | `release_announcement_reads` | 更新公告已读状态 |
@@ -54,7 +55,7 @@
 | `stored_files` | 附件元数据 |
 | `attendance_rules` | 全勤规则 |
 | `month_closures` | 月结开关 |
-| `governance_cases` | 申诉 / 月结更正工单 |
+| `governance_cases` | 月结更正记录（线上申诉已取消） |
 | `employee_month_organization_snapshots` | 月结组织快照 |
 | `sick_leave_records` | 缺勤 |
 | `attendance_monthly_scores` | 月度全勤分 |
@@ -236,6 +237,32 @@
 列级索引：`employee_id`、`role_id`、`starts_on`、`ends_on`、`status`。
 
 复合索引：`ix_role_assignments_current_lookup` (`employee_id`, `status`, `starts_on`, `ends_on`, `id`)。
+
+本表只记录本职身份（CM、TR、主管、GSM 等）。2026-10 迁移把旧的 TA主管 / TA GSM 角色记录拆成“本职 + 代理职务”；无法确定本职的旧记录保持原样，并生成 `acting_duty_migration` 告警交 HR 处理。
+
+### `employee_acting_duties`
+
+叠加在本职之上的代理职务，只增加权限，不改变计分类别和组员关系。
+
+| 字段 | 类型 | 空 | 说明 |
+|---|---|---|---|
+| `id` | INTEGER PK | 否 | |
+| `employee_id` | INTEGER | 否 | FK → `employees.id` ON DELETE CASCADE |
+| `role_id` | INTEGER | 否 | FK → `roles.id`（`TA_SUPERVISOR` 或 `TA_GSM`） |
+| `starts_on` | VARCHAR(10) | 否 | |
+| `ends_on` | VARCHAR(10) | 是 | 空表示未定结束日期 |
+| `status` | VARCHAR(20) | 否 | `active` / `ended` / `cancelled` |
+| `reason` | TEXT | 是 | |
+| `created_by` | INTEGER | 是 | FK → `employees.id` |
+| `created_at` | DATETIME | 否 | |
+
+键：PK `id`；FK `employee_id`、`role_id`、`created_by`。
+
+检查：`ck_acting_duty_dates`（`ends_on IS NULL OR ends_on >= starts_on`）。
+
+列级索引：`employee_id`、`role_id`、`starts_on`、`ends_on`、`status`。
+
+复合索引：`ix_acting_duty_lookup` (`employee_id`, `status`, `starts_on`, `ends_on`)。
 
 ### `user_accounts`
 
@@ -507,7 +534,10 @@
 | `operator_employee_id` | INTEGER | 否 | FK → `employees.id` 代录/提交人 |
 | `operator_name` | VARCHAR(100) | 否 | |
 | `operator_role_snapshot` | VARCHAR(30) | 是 | |
-| `operator_role_code_snapshot` | VARCHAR(30) | 是 | |
+| `operator_role_code_snapshot` | VARCHAR(30) | 是 | 当时实际使用的职务（代理时为代理职务） |
+| `operator_base_role_code_snapshot` | VARCHAR(30) | 是 | 登记人本职 |
+| `recognizer_base_role_code_snapshot` | VARCHAR(30) | 是 | 认可人本职 |
+| `employee_acting_duty_code` | VARCHAR(30) | 是 | 被认可人在认可日期的代理职务 |
 | `source` | VARCHAR(20) | 否 | |
 | `fraction` | NUMERIC(10,2) | 否 | 原始分 |
 | `credited_fraction` | NUMERIC(10,2) | 否 | 实际计入 |
@@ -540,7 +570,7 @@
 
 键：PK `id`；FK 员工、景点、类型如上。无业务 UNIQUE（同日重复靠确认与索引查找）。
 
-列级索引：`employee_id`、`employee_no`、`employee_name`、`home_attraction_id`、`occurred_attraction_id`、`recognition_date`、`recognition_month`、`recognition_type_id`、`recognizer_employee_id`、`operator_employee_id`、`source`、`monthly_cap_status`、`status`、`same_day_duplicate_group`、`assigned_reviewer_id`、`submitted_at`。
+列级索引：`employee_id`、`employee_no`、`employee_name`、`home_attraction_id`、`occurred_attraction_id`、`recognition_date`、`recognition_month`、`recognition_type_id`、`recognizer_employee_id`、`operator_employee_id`、`employee_acting_duty_code`、`source`、`monthly_cap_status`、`status`、`same_day_duplicate_group`、`assigned_reviewer_id`、`submitted_at`。
 
 复合索引：
 
@@ -597,6 +627,8 @@
 | `after_status` | VARCHAR(20) | 否 | |
 | `reviewer_id` | INTEGER | 否 | FK → `employees.id` |
 | `reviewer_name` | VARCHAR(100) | 否 | |
+| `reviewer_role_code` | VARCHAR(30) | 是 | 复核时实际使用的职务 |
+| `reviewer_base_role_code` | VARCHAR(30) | 是 | 复核人本职 |
 | `note` | TEXT | 是 | |
 | `created_at` | DATETIME | 否 | |
 
@@ -667,7 +699,7 @@
 
 ### `governance_cases`
 
-工单本身不改分数；获准后仍走既有作废/重开闸门。
+现在只保存重开月结时写入的 `month_correction` 记录（写入即为已处理），页面不再展示，重开月结在审计日志中查看。线上申诉已取消，2026-10 迁移删除了 `case_type='appeal'` 的旧记录，相关审计日志保留。
 
 | 字段 | 类型 | 空 | 说明 |
 |---|---|---|---|
@@ -714,6 +746,10 @@
 | `group_name` | VARCHAR(100) | 是 | |
 | `leader_employee_id` | INTEGER | 是 | FK → `employees.id` |
 | `leader_name` | VARCHAR(100) | 是 | |
+| `base_role_code` | VARCHAR(30) | 是 | 月底本职，决定该月计分类别 |
+| `scoring_category` | VARCHAR(20) | 是 | `frontline` / `supervisor` |
+| `acting_duty_code` | VARCHAR(30) | 是 | 当月主要代理职务 |
+| `acting_days` | INTEGER | 是 | 当月代理天数 |
 | `captured_at` | DATETIME | 否 | |
 
 键：PK `id`；UNIQUE `uq_employee_month_organization_snapshot` (`employee_id`, `score_month`)。
@@ -830,6 +866,9 @@
 | `submitter_id` | INTEGER | 否 | FK → `employees.id` |
 | `submitter_name` | VARCHAR(100) | 否 | |
 | `submitter_role_snapshot` | VARCHAR(30) | 否 | |
+| `submitter_role_code_snapshot` | VARCHAR(30) | 是 | 登记时实际使用的职务 |
+| `submitter_base_role_code_snapshot` | VARCHAR(30) | 是 | 登记人本职 |
+| `employee_acting_duty_code` | VARCHAR(30) | 是 | 被扣分人在事件日期的代理职务 |
 | `permission_scope_snapshot` | VARCHAR(100) | 否 | |
 | `status` | VARCHAR(20) | 否 | 默认 `active` |
 | `material_status` | VARCHAR(30) | 否 | 默认 `ready` |
@@ -995,9 +1034,12 @@
 | `after_json` | TEXT | 是 | |
 | `reason` | TEXT | 是 | |
 | `ip_address` | VARCHAR(100) | 是 | |
+| `attraction_id` | INTEGER | 是 | 被操作对象所属员工景点圈；空表示仅全局可见（导出、设置等） |
 | `created_at` | DATETIME | 否 | |
 
-键：PK `id`；FK `operator_id`。列级索引：`action`、`entity_type`、`created_at`。
+键：PK `id`；FK `operator_id`。列级索引：`action`、`entity_type`、`attraction_id`、`created_at`。
+
+`attraction_id` 由 `write_audit` 按 `entity_type` 自动推算（认可、扣分、病假取记录上的景点圈；员工、账号、LOA、代理职务取员工所在圈；工作组、月结取其景点圈；跨圈调动取调出圈，调入圈 HR 由查询条件补充）。历史日志在 2026-10 迁移中按同一规则回填。`GET /api/admin/logs` 只返回摘要：最高管理员和 HR 管理员看全部，景点圈 HR 只看本圈。
 
 复合索引：`ix_audit_operator_action_recent` (`operator_id`, `action`, `created_at DESC`, `id DESC`)；用于每个操作人最近导出记录。
 

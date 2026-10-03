@@ -9,6 +9,7 @@
 - 页面：`backend/app/static/` 原生 HTML/JS/CSS，由 `backend/app/main.py` 直接提供。配色集中在 `style.css` 的 `:root` 变量，语义色成对命名（如 `--btn-secondary-bg` / `--btn-secondary-text`、`--readonly-bg` / `--readonly-text`）；状态色只从 danger / warn / ok / info 四组变量里取（各组有 `-text`、`-bg`、`-border` 等档位）。新增样式优先复用变量，不要再写硬编码色值。确认弹窗统一用 `confirmModal` / `noticeModal`，不用浏览器原生 `confirm` / `alert`；弹层关闭走 `bindDialogLayer`，由它负责 `.is-leaving` 退场动画。断点只用三档：≤760px 为手机（底部栏为待办加 `MOBILE_PRIMARY_TABS` 按角色指定的常用入口，其余进「更多」；「更多」顶部显示完整身份、底部为退出登录，顶部栏只显示系统简称和「姓名 · 景点圈」），761–1199px 为带短标签的图标栏，≥1200px 为完整的左侧分组导航（待办置顶，更新记录/密码在底部）。内容区最宽 1440px；761–1279px 下多列筛选表单自动换行
 - Excel 写表：`backend/app/excel_export.py`（路由只负责取数、水印、审计、返回）
 - 月度分数读查询：`backend/app/score_queries.py`（先限定月份和员工范围，再聚合；旧视图保留兼容）
+- 身份：本职身份与代理职务分开存储。`role_at` 返回当天实际使用的职务，`base_role_at` 返回本职；计分、组员关系、全勤和排名人群按本职，权限取两者并集。规则见 [identity-and-supervisor.md](identity-and-supervisor.md)
 
 版本来源：`backend/app/version.py`（`年.月.日.当天第几版`，以文件为准）。用户在导航「更新记录」看到的内容来自 `backend/app/changelog.py`，按角色过滤。
 
