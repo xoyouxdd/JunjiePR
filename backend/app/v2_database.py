@@ -54,7 +54,7 @@ ROLE_DEFINITIONS = (
     ("CM", "CM", 10, False, True),
     ("TR", "TR", 10, False, True),
     ("TA_SUPERVISOR", "TA主管", 20, True, False),
-    ("SUPERVISOR", "主管", 20, True, False),
+    ("SUPERVISOR", "主管", 20, True, True),
     ("TA_GSM", "TA GSM", 30, False, False),
     ("GSM", "GSM", 30, False, False),
     ("AM", "AM", 40, False, False),

@@ -34,7 +34,9 @@ def report_data(db, month, attraction_id=None, *, with_trend=True):
     end = f"{month}-{monthrange(int(month[:4]), int(month[5:]))[1]:02d}"
     # This service has its own authorization. No bypass of existing API guards.
     stats = statistics_payload(db, month, attraction_id, user=None, include_records=True, include_hierarchy=False)
-    scores = [dict(r) for r in stats["scores"] if r["attraction_id"] in ids]
+    # The statistics page splits CM/TR and supervisors; the report covers both.
+    supervisor_stats = statistics_payload(db, month, attraction_id, None, "SUPERVISOR", user=None, include_records=True, include_hierarchy=False)
+    scores = [dict(r) for r in [*stats["scores"], *supervisor_stats["scores"]] if r["attraction_id"] in ids]
     roles = base_roles_at(db, [r["employee_id"] for r in scores], end)
     for r in scores:
         r["category"] = roles[r["employee_id"]].code if roles.get(r["employee_id"]) else "OTHER"
@@ -89,7 +91,7 @@ def report_data(db, month, attraction_id=None, *, with_trend=True):
     candidates = [{**r, "recommendation": "月度PR排名候选"} for ranking in rankings for r in ranking["rows"][:3]]
     count = len(recs)
     population = len(scores)
-    data = {"month": month, "attraction_id": attraction_id, "scope_name": names.get(attraction_id, "全部景点圈"), "generated_at": datetime.now().isoformat(timespec="seconds"), "draft": not all(r["closed"] for r in circle_rows), "organization_basis": stats["organization_basis"], "summary": {**stats["summary"], "employee_count": population, "recognition_count": count, "deduction_count": len(deductions), "recognition_rate": round(count / population * 100, 2) if population else None}, "circles": circle_rows, "recognitions": classification(recs, "recognition"), "deductions": classification(deduction_objects, "deduction"), "deduction_statuses": dict(Counter(r["business_status"] for r in deduction_rows)), "issuers": issuer_rows, "groups": group_rows, "rankings": rankings, "candidates": candidates, "loa_count": len([r for r in stats["loa_rows"] if r["attraction_id"] in ids]), "warnings": ["未月结标为草稿；无封存快照的员工使用当前归属。", "分类图为有效记录次数，不代表实际计分。", "认可率=确认认可数÷非LOA统计人数×100%，可超过100%。", "发放排名按签卡人归属，不重复累计代录人。"]}
+    data = {"month": month, "attraction_id": attraction_id, "scope_name": names.get(attraction_id, "全部景点圈"), "generated_at": datetime.now().isoformat(timespec="seconds"), "draft": not all(r["closed"] for r in circle_rows), "organization_basis": stats["organization_basis"], "summary": {**stats["summary"], "employee_count": population, "recognition_count": count, "deduction_count": len(deductions), "recognition_rate": round(count / population * 100, 2) if population else None}, "circles": circle_rows, "recognitions": classification(recs, "recognition"), "deductions": classification(deduction_objects, "deduction"), "deduction_statuses": dict(Counter(r["business_status"] for r in deduction_rows)), "issuers": issuer_rows, "groups": group_rows, "rankings": rankings, "candidates": candidates, "loa_count": len([r for r in [*stats["loa_rows"], *supervisor_stats["loa_rows"]] if r["attraction_id"] in ids]), "warnings": ["未月结标为草稿；无封存快照的员工使用当前归属。", "分类图为有效记录次数，不代表实际计分。", "认可率=确认认可数÷非LOA统计人数×100%，可超过100%。", "发放排名按签卡人归属，不重复累计代录人。"]}
     # Restrict score totals to real employee circles, as with the trend endpoint.
     for field in ("recognition_score", "attendance_score", "deduction_score", "total_score"):
         data["summary"][field] = round(sum(r[field] for r in scores), 2)

@@ -12,7 +12,7 @@ from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, managed_attraction_ids, base_role_at, role_at, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
 from app.routers._shared import (
     MATERIAL_COLLABORATOR_CODES,
     MONTH_CLOSE_EFFECTIVE_DATE,
@@ -100,6 +100,7 @@ def capture_month_organization_snapshots(db: Session, month: str, attraction_id:
     if not employee_ids:
         return 0
     employees = db.query(Employee).filter(Employee.id.in_(employee_ids)).all()
+    month_last_day = month_end(month)
     captured = 0
     for employee in employees:
         if attraction_id is not None and employee.attraction_id != attraction_id:
@@ -110,6 +111,8 @@ def capture_month_organization_snapshots(db: Session, month: str, attraction_id:
         attraction = db.get(Attraction, employee.attraction_id) if employee.attraction_id else None
         group = current_group_for_employee(db, employee.id)
         leader = current_leader_for_employee(db, employee.id)
+        base_role = base_role_at(db, employee.id, month_last_day)
+        duty_code, duty_days = acting_duty_summary(db, employee.id, month)
         db.add(
             EmployeeMonthOrganizationSnapshot(
                 employee_id=employee.id,
@@ -120,6 +123,10 @@ def capture_month_organization_snapshots(db: Session, month: str, attraction_id:
                 group_name=group.name if group else "未分组",
                 leader_employee_id=leader.id if leader else None,
                 leader_name=leader.name if leader else "未配置主管",
+                base_role_code=base_role.code if base_role else None,
+                scoring_category=scoring_category(base_role),
+                acting_duty_code=duty_code,
+                acting_days=duty_days,
             )
         )
         captured += 1

@@ -16,10 +16,10 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, DeductionRecord, DeductionType, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, ManagementScope, RecognitionRecord, RecognitionType, Role, SickLeaveRecord, WorkGroup
 from app.score_queries import employee_month_scores
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export_utils import content_disposition
-from app.excel_export import build_pr_rankings_workbook, build_statistics_workbook
+from app.excel_export import append_supervisor_score_sheets, build_pr_rankings_workbook, build_statistics_workbook
 from app.routers._shared import (
     ATTENDANCE_FILTER_STATUSES,
     DEDUCTION_FILTER_STATUSES,
@@ -46,7 +46,7 @@ router = APIRouter()
 @router.get("/dashboard")
 def dashboard(month: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     month = month or date.today().strftime("%Y-%m")
-    if user.base_role.code not in FRONTLINE_CODES:
+    if user.base_role.code not in SCORED_BASE_CODES:
         return {"month": month, "role": user.role.name}
     recalculate_attendance(db, user.employee, month)
     db.commit()
@@ -558,9 +558,12 @@ def pr_ranking_payload(
     page: int,
     page_size: int,
     attraction_id: int | None = None,
+    population: str = "frontline",
 ) -> dict:
     if user.role.code not in GSM_CODES | {"AM", "OM"}:
         raise HTTPException(403, "仅TA GSM、GSM、AM和OM可以查看PR排名数据")
+    if population not in {"frontline", "supervisor"}:
+        raise HTTPException(400, "排名人群无效")
     start = parse_iso_date(start_value, "开始日期")
     end = parse_iso_date(end_value, "结束日期")
     if start > end:
@@ -591,7 +594,8 @@ def pr_ranking_payload(
         return gsm_recognizer_ranking_payload(db, start_value, end_value, subtype_id, keyword, page, page_size, attraction)
     keyword_value = keyword.strip().lower()
     end_iso = end.isoformat()
-    role_codes = LEADER_CODES if category == "leader" else FRONTLINE_CODES
+    # Score rankings rank one population: CM/TR, or supervisors (主管绩效排行).
+    role_codes = LEADER_CODES if category == "leader" else ({"SUPERVISOR"} if population == "supervisor" else FRONTLINE_CODES)
     employees, role_map = ranking_employees(db, attraction_id, end_iso, role_codes, acting=category == "leader")
     if keyword_value:
         employees = [
@@ -753,7 +757,8 @@ def pr_ranking_payload(
                 "employee_no": employee.employee_no,
                 "employee_name": employee.name,
                 "role_name": role.name if role else "未配置",
-                "leader_name": leader_names.get(employee.id, "") if category != "leader" else "",
+                # Supervisors have no group leader of their own.
+                "leader_name": "" if category == "leader" else ("—" if population == "supervisor" else leader_names.get(employee.id, "")),
                 "count": int(data.get("count", 0)),
                 "uncapped_score": round(float(data.get("uncapped_score", 0)), 2),
                 "score": round(float(data.get("score", 0)), 2),
@@ -783,6 +788,7 @@ def pr_ranking_payload(
     offset = (page - 1) * page_size
     return {
         "category": category,
+        "population": population if category != "leader" else "frontline",
         "subtype_id": subtype_id,
         "subtype_name": subtype_name,
         "uncapped_ranking": uncapped_ranking,
@@ -810,19 +816,20 @@ def pr_rankings(
     attraction_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
+    population: str = "frontline",
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
     page = max(1, page)
     page_size = min(max(10, page_size), 100)
-    cache_key = (user.id, start_date, end_date, category, subtype_id, sort_by, keyword.strip(), page, page_size, attraction_id)
+    cache_key = (user.id, start_date, end_date, category, subtype_id, sort_by, keyword.strip(), page, page_size, attraction_id, population)
     with _pr_ranking_cache_lock:
         now = monotonic()
         cached = _pr_ranking_response_cache.get(cache_key)
         if cached and cached[0] > now:
             content = cached[1]
         else:
-            payload = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, page, page_size, attraction_id)
+            payload = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, page, page_size, attraction_id, population)
             content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             _pr_ranking_response_cache[cache_key] = (now + PR_RANKING_CACHE_SECONDS, content)
             if len(_pr_ranking_response_cache) > 256:
@@ -840,12 +847,13 @@ def export_pr_rankings(
     sort_by: str = "score",
     keyword: str = "",
     attraction_id: int | None = None,
+    population: str = "frontline",
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
     if user.role.code not in {"GSM", "AM", "OM"}:
         raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
-    data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id)
+    data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id, population)
     wb = build_pr_rankings_workbook(db, data, category)
     watermark_workbook(wb, user.employee.employee_no)
     output = BytesIO()
@@ -858,12 +866,15 @@ def export_pr_rankings(
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": content_disposition(ascii_filename, display_filename)})
 
 
-def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, user: V2User) -> list[dict]:
+def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, user: V2User, *, supervisor_page: bool = False) -> list[dict]:
+    """Circle → GSM → group leader → CM/TR; the supervisor page lists the
+    circle's supervisors together under its GSM instead of by group."""
     employee_ids = [int(score["employee_id"]) for score in score_rows]
     if not employee_ids:
         return []
     employees = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()}
     employee_roles = base_roles_at(db, employee_ids, month_end)
+    employee_labels = identity_labels(db, employee_ids, month_end)
 
     memberships = (
         db.query(GroupMembership)
@@ -940,10 +951,10 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
         if not employee:
             continue
         role = employee_roles.get(employee.id)
-        # The team branch represents only scored frontline employees. GSM/TA GSM
-        # are rendered once as circle-level management nodes, never as an
-        # unassigned employee beneath a supervisor placeholder.
-        if not role or role.code not in FRONTLINE_CODES:
+        # The team branch represents only scored employees of the page's
+        # category. GSM/TA GSM are rendered once as circle-level management
+        # nodes, never as an unassigned employee beneath a supervisor placeholder.
+        if not role or role.code not in ({"SUPERVISOR"} if supervisor_page else FRONTLINE_CODES):
             continue
         attraction_key = score.get("attraction_id")
         attraction_node = attractions.setdefault(
@@ -967,23 +978,25 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
         membership = membership_by_employee.get(employee.id)
         group = groups.get(membership.group_id) if membership else None
         leader_assignment = leader_assignment_by_group.get(group.id) if group else None
-        leader = leaders.get(leader_assignment.leader_employee_id) if leader_assignment else None
-        leader_key = f"employee-{leader.id}" if leader else (f"group-{group.id}" if group else "ungrouped")
-        leader_node = manager_node["leaders"].setdefault(
-            leader_key,
-            {
+        leader = leaders.get(leader_assignment.leader_employee_id) if leader_assignment and not supervisor_page else None
+        if supervisor_page:
+            leader_key = "supervisors"
+            leader_defaults = {"name": "主管", "role_name": "", "employees": []}
+        else:
+            leader_key = f"employee-{leader.id}" if leader else (f"group-{group.id}" if group else "ungrouped")
+            leader_defaults = {
                 "name": leader.name if leader else "未配置主管",
                 "role_name": leader_labels.get(leader.id, "") if leader else "",
                 "employees": [],
-            },
-        )
+            }
+        leader_node = manager_node["leaders"].setdefault(leader_key, leader_defaults)
         leader_node["employees"].append(
             {
                 "employee_id": employee.id,
                 "employee_no": employee.employee_no,
                 "employee_name": employee.name,
                 "role_code": role.code if role else "",
-                "role_name": role.name if role else "",
+                "role_name": employee_labels.get(employee.id) or (role.name if role else ""),
                 "recognition_score": float(score["recognition_score"] or 0),
                 "deduction_score": float(score["deduction_score"] or 0),
                 "attendance_score": float(score["attendance_score"] or 0),
@@ -1102,8 +1115,9 @@ def statistics_payload(
         raise HTTPException(400, "月份格式应为YYYY-MM") from exc
     month_end = month_start.replace(day=monthrange(month_start.year, month_start.month)[1]).isoformat()
     selected_title = (title or "").strip().upper()
-    if selected_title and selected_title not in FRONTLINE_CODES:
-        raise HTTPException(400, "Title只能选择CM或TR")
+    if selected_title and selected_title not in SCORED_BASE_CODES:
+        raise HTTPException(400, "Title只能选择CM、TR或主管")
+    supervisor_page = selected_title == "SUPERVISOR"
     allowed_attractions = scoped_hr_attraction_ids(db, user) if user else None
     if allowed_attractions is not None:
         if attraction_id is None:
@@ -1129,12 +1143,20 @@ def statistics_payload(
         keyword_value = f"%{keyword.strip()}%"
         candidate_query = candidate_query.filter(or_(Employee.employee_no.like(keyword_value), Employee.name.like(keyword_value)))
     candidate_rows = candidate_query.all()
-    if selected_title and candidate_rows:
+    if candidate_rows:
+        # A month belongs to one scoring category: the base identity at month
+        # end (frozen in the close snapshot once the month is closed).
         candidate_roles = base_roles_at(db, [row[0].id for row in candidate_rows], month_end)
-        candidate_rows = [
-            row for row in candidate_rows
-            if candidate_roles.get(row[0].id) and candidate_roles[row[0].id].code == selected_title
-        ]
+
+        def month_category_code(row) -> str:
+            snapshot = row[1]
+            if snapshot is not None and snapshot.base_role_code:
+                return snapshot.base_role_code
+            role = candidate_roles.get(row[0].id)
+            return role.code if role else ""
+
+        wanted = {selected_title} if selected_title else FRONTLINE_CODES
+        candidate_rows = [row for row in candidate_rows if month_category_code(row) in wanted]
     candidate_ids = [row[0].id for row in candidate_rows]
 
     # Attendance remains materialized for compatibility, but only for employees
@@ -1314,7 +1336,7 @@ def statistics_payload(
             "deduction_score": round(sum(float(row["deduction_score"] or 0) for row in score_rows), 2),
             "total_score": round(sum(float(row["total_score"] or 0) for row in score_rows), 2),
         },
-        "hierarchy": statistics_hierarchy(db, score_rows, month_end, user) if user and include_hierarchy else [],
+        "hierarchy": statistics_hierarchy(db, score_rows, month_end, user, supervisor_page=supervisor_page) if user and include_hierarchy else [],
         "loa_rows": loa_rows,
         "loa_periods": loa_period_payloads,
         "by_attraction": sorted(attraction_totals.values(), key=lambda item: str(item["attraction_name"])),
@@ -1604,6 +1626,9 @@ def export_statistics(month: str, attraction_id: int | None = None, keyword: str
         exporter_role_name=user.role.name,
         exporter_role_code=user.role.code,
     )
+    if data["title"] != "SUPERVISOR" and not (keyword or "").strip():
+        supervisor_data = statistics_payload(db, month, attraction_id, None, "SUPERVISOR", user, include_records=True)
+        append_supervisor_score_sheets(wb, db, supervisor_data, month)
     watermark_workbook(wb, user.employee.employee_no)
     output = BytesIO()
     wb.save(output)

@@ -227,6 +227,17 @@ def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role]
         cell.fill = header_fill
 
 
+def append_supervisor_score_sheets(wb: Workbook, db: Session, data: dict, month: str) -> None:
+    """Supervisor performance sits in its own sheets of the same monthly export."""
+    month_start = date.fromisoformat(f"{month}-01")
+    month_end = month_start.replace(day=monthrange(month_start.year, month_start.month)[1]).isoformat()
+    ids = [int(row["employee_id"]) for row in [*data["scores"], *data["loa_rows"]]]
+    roles = base_roles_at(db, ids, month_end) if ids else {}
+    write_organization_score_sheet(wb.create_sheet("主管月度综合分"), data, roles, roles)
+    ordered = sorted(data["scores"], key=lambda row: (-float(row.get("total_score") or 0), str(row.get("employee_no") or "")))
+    write_monthly_score_detail_sheet(wb.create_sheet("主管月度综合分明细"), ordered, data["loa_rows"], roles, roles)
+
+
 def write_monthly_score_detail_sheet(ws, rows: list[dict], loa_rows: list[dict], export_roles: dict[int, Role], loa_roles: dict[int, Role]) -> None:
     """Keep the previous flat, filterable worksheet for editing and ad-hoc searches."""
     ws.append(["员工号", "姓名", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态"])

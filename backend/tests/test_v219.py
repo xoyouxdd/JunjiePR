@@ -176,7 +176,7 @@ def test_void_filter_export_and_security_watermarks() -> None:
         exported = client.get("/api/statistics/export", params={"month": month, "attraction_id": circle_id, "title": "CM"})
         assert exported.status_code == 200, exported.text
         workbook = load_workbook(BytesIO(exported.content))
-        assert workbook.sheetnames == ["导出说明", "月度综合分", "月度综合分明细", "LOA明细", "层级绩效明细", "员工号变更对照", "签卡明细", "扣分明细", "病假明细", "作废操作记录"]
+        assert workbook.sheetnames == ["导出说明", "月度综合分", "月度综合分明细", "LOA明细", "层级绩效明细", "员工号变更对照", "签卡明细", "扣分明细", "病假明细", "作废操作记录", "主管月度综合分", "主管月度综合分明细"]
         assert workbook.active.title == "层级绩效明细"
         assert "认可数据" in str(workbook["导出说明"]["A1"].value)
         export_context = {row[0].value: row[1].value for row in workbook["导出说明"].iter_rows(min_row=2)}

@@ -64,6 +64,17 @@ DUTY_ROLE_CODES = {"TA_SUPERVISOR", "TA_GSM"}
 DUTY_BASE_CODES = {"TA_SUPERVISOR": FRONTLINE_CODES, "TA_GSM": {"SUPERVISOR"}}
 SCORING_CATEGORY_BY_CODE = {"CM": "frontline", "TR": "frontline", "SUPERVISOR": "supervisor"}
 SCORED_BASE_CODES = set(SCORING_CATEGORY_BY_CODE)
+# Supervisor performance (own scores and attendance) starts with this month;
+# earlier months, including closed ones, keep their original totals.
+SUPERVISOR_SCORING_START_MONTH = "2026-10"
+
+
+def attendance_scored_role(role: Role | None, month: str) -> bool:
+    if not role:
+        return False
+    if role.code in FRONTLINE_CODES:
+        return True
+    return role.code == "SUPERVISOR" and month >= SUPERVISOR_SCORING_START_MONTH
 
 
 def _date_value(on_date: str | date | None) -> str:
@@ -108,6 +119,34 @@ def duties_at_bulk(db: Session, employee_ids: list[int] | set[int], on_date: str
     for row in rows:
         grouped[row.employee_id].add(row.role)
     return {employee_id: sorted(roles, key=lambda role: (-role.rank, role.code)) for employee_id, roles in grouped.items()}
+
+
+def acting_duty_periods(db: Session, employee_id: int, start: str, end: str) -> list[tuple[str, str, str, str]]:
+    """(duty code, duty name, from, to) for duty days inside [start, end]."""
+    rows = (
+        db.query(EmployeeActingDuty)
+        .filter(
+            EmployeeActingDuty.employee_id == employee_id,
+            EmployeeActingDuty.status != "cancelled",
+            EmployeeActingDuty.starts_on <= end,
+            or_(EmployeeActingDuty.ends_on.is_(None), EmployeeActingDuty.ends_on >= start),
+        )
+        .order_by(EmployeeActingDuty.starts_on, EmployeeActingDuty.id)
+        .all()
+    )
+    return [(row.role.code, row.role.name, max(row.starts_on, start), min(row.ends_on or end, end)) for row in rows]
+
+
+def acting_duty_summary(db: Session, employee_id: int, month: str) -> tuple[str | None, int]:
+    """The month's main duty code and its number of acting days."""
+    first, last = f"{month}-01", month_end(month)
+    days_by_code: dict[str, int] = {}
+    for code, _name, start, end in acting_duty_periods(db, employee_id, first, last):
+        days_by_code[code] = days_by_code.get(code, 0) + (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+    if not days_by_code:
+        return None, 0
+    code = max(days_by_code, key=lambda key: days_by_code[key])
+    return code, min(sum(days_by_code.values()), int(last[-2:]))
 
 
 def duty_code_at(db: Session, employee_id: int, on_date: str | date | None = None) -> str | None:
@@ -837,7 +876,7 @@ def sick_leave_score_deduction(charged_days: Decimal, daily_deduction: Decimal) 
 def recalculate_attendance(db: Session, employee: Employee, month: str) -> AttendanceMonthlyScore:
     end_date = month_end(month)
     end_role = base_role_at(db, employee.id, end_date)
-    eligible = bool(end_role and end_role.code in FRONTLINE_CODES and employee_active_on(employee, end_date))
+    eligible = bool(attendance_scored_role(end_role, month) and employee_active_on(employee, end_date))
     rule = (
         db.query(AttendanceRule)
         .filter(AttendanceRule.active.is_(True), AttendanceRule.effective_date <= end_date)
@@ -968,7 +1007,7 @@ def ensure_month_attendance(
     pending_rows: list[dict] = []
     for employee in missing:
         end_role = end_roles.get(employee.id)
-        if not end_role or end_role.code not in FRONTLINE_CODES:
+        if not attendance_scored_role(end_role, month):
             continue
         employee_actual_days, employee_charged_days, is_full_month_loa = attendance_day_totals(
             db,
