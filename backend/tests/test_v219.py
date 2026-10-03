@@ -196,7 +196,7 @@ def test_void_filter_export_and_security_watermarks() -> None:
         assert supervisor_export_row[8].value == "小组汇总"
         assert workbook["月度综合分"].row_dimensions[supervisor_export_row[0].row].collapsed is True
         detail_headers = [cell.value for cell in workbook["月度综合分明细"][1]]
-        assert detail_headers == ["员工号", "姓名", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态"]
+        assert detail_headers == ["员工号", "姓名", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态", "备注"]
         assert workbook["月度综合分明细"].auto_filter.ref
         assert "当月已确认认可次数" in [cell.value for cell in workbook["签卡明细"][1]]
         assert "记录编号" in [cell.value for cell in workbook["签卡明细"][1]]
@@ -530,7 +530,8 @@ def test_pr_recognition_uncapped_ranking_and_export() -> None:
                 matching = [row for row in sheet.iter_rows(min_row=2, values_only=True) if row[1] in {"CMTEST01", "TRTEST01"}]
                 assert [r[10] for r in matching] == [9, 6]
             else:
-                assert sheet.cell(1, 11).value is None
+                # Column 11 may hold the acting-duty 备注 instead.
+                assert not str(sheet.cell(1, 11).value or "").startswith("未封顶分数")
         assert client.get("/api/pr-rankings", params=params).json()["uncapped_ranking"] is False
         with SessionLocal() as db:
             db.query(RecognitionRecord).filter(RecognitionRecord.content == "未封顶排名测试").delete(synchronize_session=False)

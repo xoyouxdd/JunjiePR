@@ -16,7 +16,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, DeductionRecord, DeductionType, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, ManagementScope, RecognitionRecord, RecognitionType, Role, SickLeaveRecord, WorkGroup
 from app.score_queries import employee_month_scores
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH, acting_period_notes, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export_utils import content_disposition
 from app.excel_export import append_supervisor_score_sheets, build_pr_rankings_workbook, build_statistics_workbook
@@ -358,18 +358,23 @@ def member_score_summary(
         .all()
     }
     empty_score = {"recognition_score": 0, "deduction_score": 0, "attendance_score": 0, "total_score": 0}
+    month_start, month_last = f"{month}-01", f"{month}-{monthrange(int(month[:4]), int(month[5:]))[1]:02d}"
+    notes = acting_period_notes(db, selected_ids, month_start, month_last)
     return {
         "month": month,
         "rows": [
-            member_score_detail_payload(
-                db,
-                employee,
-                scores.get(employee.id, empty_score),
-                recognition_groups[employee.id],
-                deduction_groups[employee.id],
-                sick_leave_groups[employee.id],
-                attendance_rows.get(employee.id),
-            )
+            {
+                **member_score_detail_payload(
+                    db,
+                    employee,
+                    scores.get(employee.id, empty_score),
+                    recognition_groups[employee.id],
+                    deduction_groups[employee.id],
+                    sick_leave_groups[employee.id],
+                    attendance_rows.get(employee.id),
+                ),
+                "acting_note": notes.get(employee.id, ""),
+            }
             for employee in employees
         ],
     }
@@ -679,6 +684,7 @@ def pr_ranking_payload(
         if subtype_id and (not subtype or not subtype.active):
             raise HTTPException(400, "请选择有效认可类型")
         subtype_name = subtype.name if subtype else "全部加分类别"
+        excluded_issuers: set[int] = set()
         query = db.query(RecognitionRecord).filter(
             *([RecognitionRecord.home_attraction_id == attraction_id] if attraction_id is not None else []),
             RecognitionRecord.status == "confirmed",
@@ -687,12 +693,43 @@ def pr_ranking_payload(
         )
         if subtype:
             query = query.filter(RecognitionRecord.recognition_type_id == subtype.id)
+        historical_role_cache: dict[tuple[int, str], Role | None] = {}
+
+        def acted_as_leader(employee_id: int, snapshot_code: str | None, on_date: str) -> bool:
+            # Records keep the role actually used; older rows resolve it by date.
+            if snapshot_code is None:
+                key = (employee_id, on_date)
+                if key not in historical_role_cache:
+                    historical_role_cache[key] = role_at(db, employee_id, on_date)
+                snapshot_code = historical_role_cache[key].code if historical_role_cache[key] else None
+            return snapshot_code in LEADER_CODES
+
         for row in query.all():
             # One confirmed record is one independent scoring event. Attribute it to
-            # participating current supervisors, while deduplicating only within it.
-            for employee_id in {row.recognizer_employee_id, row.operator_employee_id}:
+            # the supervisors who issued it in that role, deduplicating only within
+            # it. A leader's own self-submitted record is not an issued recognition,
+            # and a former TA主管 keeps the records issued during the duty.
+            participants: set[int] = set()
+            if acted_as_leader(row.recognizer_employee_id, row.recognizer_role_code_snapshot, row.recognition_date):
+                participants.add(row.recognizer_employee_id)
+            if row.source != "self" and acted_as_leader(row.operator_employee_id, row.operator_role_code_snapshot, row.recognition_date):
+                participants.add(row.operator_employee_id)
+            participants.discard(row.employee_id)
+            for employee_id in participants:
                 if employee_id not in aggregates:
-                    continue
+                    if employee_id in excluded_issuers:
+                        continue
+                    issuer = db.get(Employee, employee_id)
+                    if (
+                        not issuer
+                        or (attraction_id is not None and issuer.attraction_id != attraction_id)
+                        or (keyword_value and keyword_value not in issuer.name.lower() and keyword_value not in issuer.employee_no.lower())
+                    ):
+                        excluded_issuers.add(employee_id)
+                        continue
+                    employees.append(issuer)
+                    role_map[employee_id] = role_at(db, employee_id, row.recognition_date)
+                    aggregates[employee_id] = {}
                 data = aggregates[employee_id]
                 data["count"] = int(data.get("count", 0)) + 1
                 data["score"] = float(data.get("score", 0)) + float(effective_recognition_credit(row))
@@ -748,6 +785,11 @@ def pr_ranking_payload(
             }
 
     result_rows = []
+    ranked_ids = [employee.id for employee in employees]
+    # Score rankings show the identity on the range end date and note any
+    # acting-duty window; the issuing ranking keeps the role used when issuing.
+    ranking_labels = identity_labels(db, ranked_ids, end_iso) if category != "leader" else {}
+    acting_notes = acting_period_notes(db, ranked_ids, start_value, end_value) if category != "leader" else {}
     for employee in employees:
         data = aggregates.get(employee.id, {})
         role = role_map.get(employee.id)
@@ -756,7 +798,8 @@ def pr_ranking_payload(
                 "employee_id": employee.id,
                 "employee_no": employee.employee_no,
                 "employee_name": employee.name,
-                "role_name": role.name if role else "未配置",
+                "role_name": ranking_labels.get(employee.id) or (role.name if role else "未配置"),
+                "acting_note": acting_notes.get(employee.id, ""),
                 # Supervisors have no group leader of their own.
                 "leader_name": "" if category == "leader" else ("—" if population == "supervisor" else leader_names.get(employee.id, "")),
                 "count": int(data.get("count", 0)),
@@ -997,6 +1040,7 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
                 "employee_name": employee.name,
                 "role_code": role.code if role else "",
                 "role_name": employee_labels.get(employee.id) or (role.name if role else ""),
+                "acting_note": score.get("acting_note", ""),
                 "recognition_score": float(score["recognition_score"] or 0),
                 "deduction_score": float(score["deduction_score"] or 0),
                 "attendance_score": float(score["attendance_score"] or 0),
@@ -1198,6 +1242,9 @@ def statistics_payload(
                 }
             )
         score_rows.sort(key=lambda row: (-float(row["total_score"] or 0), str(row["employee_no"])))
+        month_notes = acting_period_notes(db, [int(row["employee_id"]) for row in score_rows], month_start.isoformat(), month_end)
+        for row in score_rows:
+            row["acting_note"] = month_notes.get(int(row["employee_id"]), "")
     finally:
         if statistics_savepoint.is_active:
             statistics_savepoint.rollback()
@@ -1392,6 +1439,7 @@ def statistics_details_payload(db: Session, month: str, employee_ids: list[int])
         .all()
     }
     empty_score = {"recognition_score": 0, "deduction_score": 0, "attendance_score": 0, "total_score": 0}
+    notes = acting_period_notes(db, employee_ids, f"{month}-01", f"{month}-{monthrange(int(month[:4]), int(month[5:]))[1]:02d}")
     result: dict[str, dict] = {}
     for employee_id in employee_ids:
         if employee_id not in employees:
@@ -1413,13 +1461,17 @@ def statistics_details_payload(db: Session, month: str, employee_ids: list[int])
             detail["details"]["loa_excluded"] = True
         # Keep the established detail lists while returning the identity fields
         # used by the dedicated statistics-detail page title.
-        result[str(employee_id)] = {**detail["details"], **{key: detail[key] for key in ("employee_id", "employee_no", "employee_name", "role_name")}}
+        result[str(employee_id)] = {
+            **detail["details"],
+            **{key: detail[key] for key in ("employee_id", "employee_no", "employee_name", "role_name")},
+            "acting_note": notes.get(employee_id, ""),
+        }
     return result
 
 
 @router.get("/statistics")
 def statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_VIEW", "DATA_EXPORT"))):
-    cache_key = (user.id, user.role.code, month, attraction_id, (keyword or "").strip(), (title or "").strip().upper())
+    cache_key = (user.id, tuple(sorted(user.role_codes)), month, attraction_id, (keyword or "").strip(), (title or "").strip().upper())
     with _statistics_cache_lock:
         now = monotonic()
         cached = _statistics_response_cache.get(cache_key)
@@ -1513,7 +1565,7 @@ def statistics_trend_payload(db: Session, end_month: str, months: int, attractio
 
 @router.get("/statistics/trend")
 def statistics_trend(month: str, months: int = TREND_DEFAULT_MONTHS, attraction_id: int | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_VIEW", "DATA_EXPORT"))):
-    cache_key = ("trend", user.id, user.role.code, month, months, attraction_id, (title or "").strip().upper())
+    cache_key = ("trend", user.id, tuple(sorted(user.role_codes)), month, months, attraction_id, (title or "").strip().upper())
     with _statistics_cache_lock:
         now = monotonic()
         cached = _statistics_response_cache.get(cache_key)

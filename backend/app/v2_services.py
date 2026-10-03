@@ -137,6 +137,53 @@ def acting_duty_periods(db: Session, employee_id: int, start: str, end: str) -> 
     return [(row.role.code, row.role.name, max(row.starts_on, start), min(row.ends_on or end, end)) for row in rows]
 
 
+ACTING_NOTE_NAMES = {"TA_SUPERVISOR": "TA 主管", "TA_GSM": "TA GSM"}
+
+
+def acting_period_notes(db: Session, employee_ids: list[int] | set[int], start: str, end: str) -> dict[int, str]:
+    """e.g. "含 TA 主管期间（10-01 至 10-31）得分 3.50" for employees acting within [start, end].
+
+    Recognition counts by recognition date (credited score after the monthly
+    cap), deductions by event date; attendance is monthly and is not split.
+    """
+    ids = list(dict.fromkeys(int(employee_id) for employee_id in employee_ids))
+    if not ids:
+        return {}
+    duty_rows = (
+        db.query(EmployeeActingDuty)
+        .filter(
+            EmployeeActingDuty.employee_id.in_(ids),
+            EmployeeActingDuty.status != "cancelled",
+            EmployeeActingDuty.starts_on <= end,
+            or_(EmployeeActingDuty.ends_on.is_(None), EmployeeActingDuty.ends_on >= start),
+        )
+        .order_by(EmployeeActingDuty.employee_id, EmployeeActingDuty.starts_on, EmployeeActingDuty.id)
+        .all()
+    )
+    notes: dict[int, list[str]] = {}
+    for duty in duty_rows:
+        period_start, period_end = max(duty.starts_on, start), min(duty.ends_on or end, end)
+        credited = db.execute(
+            text(
+                "SELECT COALESCE(SUM(CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END), 0) "
+                "FROM recognition_records WHERE employee_id=:employee_id AND status='confirmed' "
+                "AND recognition_date>=:start AND recognition_date<=:end"
+            ),
+            {"employee_id": duty.employee_id, "start": period_start, "end": period_end},
+        ).scalar() or 0
+        deducted = db.execute(
+            text(
+                "SELECT COALESCE(SUM(points), 0) FROM deduction_records WHERE employee_id=:employee_id AND status='active' "
+                "AND (upgrade_role IS NULL OR upgrade_role!='source_second') AND occurred_on>=:start AND occurred_on<=:end"
+            ),
+            {"employee_id": duty.employee_id, "start": period_start, "end": period_end},
+        ).scalar() or 0
+        score = (Decimal(str(credited)) - Decimal(str(deducted))).quantize(SCORE_UNIT)
+        name = ACTING_NOTE_NAMES.get(duty.role.code, duty.role.name)
+        notes.setdefault(duty.employee_id, []).append(f"含 {name}期间（{period_start[5:]} 至 {period_end[5:]}）得分 {score:.2f}")
+    return {employee_id: "；".join(items) for employee_id, items in notes.items()}
+
+
 def acting_duty_summary(db: Session, employee_id: int, month: str) -> tuple[str | None, int]:
     """The month's main duty code and its number of acting days."""
     first, last = f"{month}-01", month_end(month)

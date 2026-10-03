@@ -1061,7 +1061,7 @@ function statisticsHierarchyRows(rows,emptyMessage='当前条件下暂无数据'
       const expanded=row.node_type!=='supervisor';
       return `<tr class="statistics-org-row ${row.node_type==='supervisor'?'statistics-score-row statistics-supervisor-row':''}" data-stats-node="${esc(row.node_id)}" data-stats-parent="${esc(row.parent_id)}" data-level="${row.level}"><th><button type="button" class="statistics-tree-toggle" data-stats-toggle="${esc(row.node_id)}" aria-expanded="${expanded}"><span class="statistics-tree-arrow">${expanded?'⌄':'›'}</span><strong>${esc(row.name)}</strong><small>${esc(meta)}</small></button></th>${scores}</tr>`;
     }
-    return `<tr class="statistics-score-row statistics-employee-row" data-stats-node="${esc(row.node_id)}" data-stats-parent="${esc(row.parent_id)}" data-level="3"><th><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name||row.role_code)}</small></th><td>${scoreButton(row,'recognitions','+'+fmt(row.recognition_score),'score-positive')}</td><td>${scoreButton(row,'deductions',fmtDeduction(row.deduction_score),'score-negative')}</td><td>${scoreButton(row,'attendance',fmt(row.attendance_score))}</td><td>${scoreButton(row,'all',fmt(row.total_score),'member-total-link')}</td><td></td></tr>`;
+    return `<tr class="statistics-score-row statistics-employee-row" data-stats-node="${esc(row.node_id)}" data-stats-parent="${esc(row.parent_id)}" data-level="3"><th><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name||row.role_code)}</small>${actingNoteMarkup(row)}</th><td>${scoreButton(row,'recognitions','+'+fmt(row.recognition_score),'score-positive')}</td><td>${scoreButton(row,'deductions',fmtDeduction(row.deduction_score),'score-negative')}</td><td>${scoreButton(row,'attendance',fmt(row.attendance_score))}</td><td>${scoreButton(row,'all',fmt(row.total_score),'member-total-link')}</td><td></td></tr>`;
   }).join('');
 }
 
@@ -1236,7 +1236,8 @@ async function renderDeclarationStatistics(){
 
 const prCategoryNames={overall:'综合分',recognition:'加分类型',deduction:'扣分类型',absence:'缺勤',leader:'主管发放排行',gsm_leader:'GSM/TA GSM认可次数'};
 function prRankBadge(rank){return `<span class="pr-rank-badge ${rank<=3?`top-${rank}`:''}">${rank}</span>`;}
-function prEmployeeCell(row,label='员工'){return `<strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name||label)}</small>`;}
+function prEmployeeCell(row,label='员工'){return `<strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name||label)}</small>${actingNoteMarkup(row)}`;}
+function actingNoteMarkup(row){return row.acting_note?`<small class="field-hint acting-note">${esc(row.acting_note)}</small>`:'';}
 function prRecognitionCount(row,data){return `${esc(row.count)}${data.uncapped_ranking&&Number(row.score)>=5?` <small>（未封顶${fmt(row.uncapped_score)}分）</small>`:''}`;}
 function prRankingCards(data){
   const field=(label,value,className='')=>`<div><dt>${label}</dt><dd class="${className}">${value}</dd></div>`;

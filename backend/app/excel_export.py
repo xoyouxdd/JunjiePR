@@ -109,13 +109,14 @@ def write_monthly_score_row(ws, row: dict, role, status: str = "在职") -> int:
         row.get("total_score") if participating else "",
         status,
         row.get("employee_number_status", "当前工号"),
+        row.get("acting_note") or "",
     ]))
     return ws.max_row
 
 
 def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role], loa_roles: dict[int, Role]) -> None:
     """Write the monthly score view as a collapsible Excel organization tree."""
-    ws.append(["组织 / 员工", "员工号", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态"])
+    ws.append(["组织 / 员工", "员工号", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态", "备注"])
     header_fill = PatternFill("solid", fgColor="D9EAF7")
     attraction_fill = PatternFill("solid", fgColor="EAF3FE")
     gsm_fill = PatternFill("solid", fgColor="F0F5FA")
@@ -240,7 +241,7 @@ def append_supervisor_score_sheets(wb: Workbook, db: Session, data: dict, month:
 
 def write_monthly_score_detail_sheet(ws, rows: list[dict], loa_rows: list[dict], export_roles: dict[int, Role], loa_roles: dict[int, Role]) -> None:
     """Keep the previous flat, filterable worksheet for editing and ad-hoc searches."""
-    ws.append(["员工号", "姓名", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态"])
+    ws.append(["员工号", "姓名", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态", "备注"])
     for row in rows:
         write_monthly_score_row(ws, row, export_roles.get(int(row["employee_id"])))
     for row in loa_rows:
@@ -441,6 +442,12 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
         for index, row in enumerate(data["rows"], start=2):
             ws.cell(index, 11, row["uncapped_score"])
         apply_score_format(ws, (11,))
+    if any(row.get("acting_note") for row in data["rows"]):
+        # Acting-duty windows inside the ranking range, e.g. 含 TA 主管期间得分.
+        note_column = ws.max_column + 1
+        ws.cell(1, note_column, "备注")
+        for index, row in enumerate(data["rows"], start=2):
+            ws.cell(index, note_column, row.get("acting_note") or "")
     style_sheet(ws, landscape=True)
     add_banded_table(ws, ws.dimensions, "PrRankingData")
     if category == "overall":
