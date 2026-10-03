@@ -12,7 +12,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionMonthlyQuota, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
 from app.recognition_encouragement import encouragement_options
-from app.v2_services import FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, base_role_at, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
+from app.v2_services import FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, SENIOR_RECOGNIZER_CODES, base_role_at, scoring_category, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
 from app.routers._shared import (
     ATTENDANCE_FILTER_STATUSES,
     DEDICATED_RECOGNITION_TYPE_CODES,
@@ -27,7 +27,9 @@ from app.routers._shared import (
     deduction_follow_up_payload,
     deduction_payload,
     ensure_enabled_frontline_target,
+    ensure_enabled_scored_target,
     ensure_month_open,
+    ensure_supervisor_target_allowed,
     ensure_scoped_hr_attraction,
     ensure_scoped_hr_employee,
     existing_submission,
@@ -151,11 +153,16 @@ async def create_recognition(
     if not content or len(content) > 20:
         raise HTTPException(400, "认可内容必填且不能超过20字")
     target_id = int(employee_id or user.id)
-    target, target_role = ensure_enabled_frontline_target(db, target_id, "加分")
+    target, target_role = ensure_enabled_scored_target(db, target_id, "加分")
     ensure_scoped_hr_employee(db, user, target)
-    is_self = target.id == user.id and user.base_role.code in FRONTLINE_CODES
-    if not is_self and "EMPLOYEE_ADD" not in user.permissions:
-        raise HTTPException(403, "没有员工加分权限")
+    target_category = scoring_category(target_role)
+    target_duty_code = duty_code_at(db, target.id, recognition_date)
+    is_self = target.id == user.id
+    if not is_self:
+        if target_category == "supervisor":
+            ensure_supervisor_target_allowed(db, user, target, recognition_date, "加分")
+        elif "EMPLOYEE_ADD" not in user.permissions:
+            raise HTTPException(403, "没有员工加分权限")
     attraction = db.get(Attraction, int(occurred_attraction_id or 0))
     if not attraction or not attraction.active or not attraction.recognition_venue:
         raise HTTPException(400, "请选择有效认可发生景点")
@@ -196,10 +203,14 @@ async def create_recognition(
             raise HTTPException(400, "认可人必须是TALEAD/LEAD或TAGSM及以上的非HR在职人员")
         if recognizer.id == target.id:
             raise HTTPException(400, "认可人不能是被加分员工本人")
+        if target_category == "supervisor":
+            # Supervisors are recognized by TA GSM and above; an acting TA GSM only by AM.
+            allowed_codes = {"AM"} if target_duty_code == "TA_GSM" else SENIOR_RECOGNIZER_CODES
+            if recognizer_role.code not in allowed_codes:
+                raise HTTPException(400, "代理TA GSM期间的认可人只能是AM" if target_duty_code == "TA_GSM" else "主管的认可人必须是TA GSM、GSM、AM或OM")
         recognizer_name = recognizer.name
         recognizer_role_name = recognizer_role.name
         fraction = recognition_score_for_role(db, recognizer_role.id, recognition_date)
-    target_duty_code = duty_code_at(db, target.id, recognition_date)
     if not is_self and not special_rule and target_duty_code == "TA_SUPERVISOR" and user.role.code in LEADER_CODES:
         raise HTTPException(403, "该员工认可日期处于代理TA主管期间，主管和TA主管不能为其代录加分")
     quota_code = recognition_type.code if special_rule and special_rule["monthly_limit"] else None
@@ -514,11 +525,65 @@ def reviews(
     }
 
 
+def supervisor_review_query(db: Session, user: V2User):
+    """Self-submitted supervisor records: any formal GSM/AM/OM across circles;
+    records made while acting as TA GSM go to AM only."""
+    if "REVIEW_SUPERVISOR" not in user.permissions:
+        raise HTTPException(403, "仅正式GSM、AM、OM可以复核主管签卡")
+    query = db.query(RecognitionRecord).filter(
+        RecognitionRecord.source == "self",
+        RecognitionRecord.employee_role_code_snapshot == "SUPERVISOR",
+        RecognitionRecord.employee_id != user.id,
+    )
+    if not user.has_role("AM"):
+        query = query.filter(or_(RecognitionRecord.employee_acting_duty_code.is_(None), RecognitionRecord.employee_acting_duty_code != "TA_GSM"))
+    return query
+
+
+@router.get("/supervisor-reviews")
+def supervisor_reviews(
+    view: Literal["queue", "history"] = "queue",
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    user: V2User = Depends(current_user),
+):
+    query = supervisor_review_query(db, user)
+    if view == "history":
+        query = query.filter(RecognitionRecord.status.in_(("confirmed", "rejected"))).order_by(RecognitionRecord.submitted_at.desc(), RecognitionRecord.id.desc())
+    else:
+        query = query.filter(RecognitionRecord.status == "pending").order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc())
+    total = query.count()
+    rows = query.offset(offset).limit(limit).all()
+    return {
+        "view": view,
+        "items": [recognition_payload(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(rows) < total,
+    }
+
+
+@router.post("/supervisor-reviews/{record_id}")
+def review_supervisor_recognition(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    row = supervisor_review_query(db, user).filter(RecognitionRecord.id == record_id).first()
+    if not row:
+        raise HTTPException(404, "主管签卡不存在或不在复核范围内")
+    return apply_recognition_review(db, row, payload, request, user)
+
+
 @router.post("/reviews/{record_id}")
 def review_recognition(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("REVIEW_DIRECT"))):
     row = db.get(RecognitionRecord, record_id)
     if not row or row.employee_id not in direct_member_ids(db, user.id):
         raise HTTPException(404, "直属组员签卡不存在")
+    return apply_recognition_review(db, row, payload, request, user)
+
+
+def apply_recognition_review(db: Session, row: RecognitionRecord, payload: dict, request: Request, user: V2User) -> dict:
+    if row.employee_id == user.id:
+        raise HTTPException(403, "不能复核本人的签卡")
     employee = db.get(Employee, row.employee_id)
     ensure_month_open(db, row.recognition_month, row.home_attraction_id or (employee.attraction_id if employee else None), "复核签卡")
     action = str(payload.get("action") or "")

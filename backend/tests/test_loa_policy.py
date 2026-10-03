@@ -41,7 +41,8 @@ def test_am_om_have_matching_ranking_loa_and_poc_access() -> None:
             assert client.get("/api/pr-rankings/export", params=dates).status_code == 200
             assert client.get("/api/sick-leave-imports/records").status_code == 403
             client.post("/api/logout")
-        assert permissions_by_role["AM"] == permissions_by_role["OM"]
+        # AM alone credits, deducts and reviews a supervisor acting as TA GSM.
+        assert permissions_by_role["AM"] - {"TA_GSM_SCORE"} == permissions_by_role["OM"]
 
 
 def test_loa_any_touched_month_is_excluded_and_target_search_is_global() -> None:

@@ -14,7 +14,7 @@ from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionLevel, DeductionFollowUp, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, GroupLeaderAssignment, MonthClosure, RecognitionRecord, Role, SickLeaveRecord, StoredFile, SubmissionRequest, SystemAlert, UserAccount, WorkGroup
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, active_group_leaders_bulk, base_role_at, base_roles_at, duties_at_bulk, groups_led_by, identity_labels, managed_attraction_ids, role_at
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, SCORED_BASE_CODES, active_group_leaders_bulk, base_role_at, base_roles_at, duties_at_bulk, duty_code_at, groups_led_by, identity_labels, managed_attraction_ids, role_at
 from app.v2_models import EmployeeActingDuty, EmployeeLOAPeriod, GroupMembership
 from app.v2_services import roles_at
 
@@ -636,8 +636,12 @@ def search_employee_targets(
     keyword: str = "",
     attraction_id: int | None = None,
     limit: int = 30,
+    role_codes: tuple[str, ...] = ("CM", "TR"),
 ) -> dict:
-    """Return active, enabled CM/TR targets in one bounded SQLite query."""
+    """Return active, enabled targets of the given base roles in one bounded SQLite query."""
+    if not role_codes or not set(role_codes) <= SCORED_BASE_CODES:
+        raise ValueError("unsupported target role codes")
+    role_filter = ", ".join(f"'{code}'" for code in role_codes)
     today_value = date.today().isoformat()
     normalized = str(keyword or "").strip()
     escaped = normalized.replace("!", "!!").replace("%", "!%").replace("_", "!_")
@@ -651,7 +655,7 @@ def search_employee_targets(
     }
     rows = db.execute(
         text(
-            """
+            f"""
             WITH ranked_roles AS (
                 SELECT era.employee_id, era.role_id,
                        ROW_NUMBER() OVER (
@@ -680,7 +684,7 @@ def search_employee_targets(
                    COUNT(*) OVER() AS total_count
             FROM employees e
             JOIN ranked_roles rr ON rr.employee_id = e.id AND rr.row_number = 1
-            JOIN roles r ON r.id = rr.role_id AND r.active = 1 AND r.code IN ('CM', 'TR')
+            JOIN roles r ON r.id = rr.role_id AND r.active = 1 AND r.code IN ({role_filter})
             JOIN user_accounts ua ON ua.employee_id = e.id AND ua.enabled = 1
             LEFT JOIN attractions a ON a.id = e.attraction_id
             LEFT JOIN ranked_memberships rm ON rm.employee_id = e.id AND rm.row_number = 1
@@ -726,6 +730,37 @@ def search_employee_targets(
         "total": total,
         "limit": params["limit"],
     }
+
+
+def ensure_enabled_scored_target(db: Session, employee_id: int, action_name: str) -> tuple[Employee, Role]:
+    """A scored employee: base CM/TR, or base 主管 (including one acting as TA GSM)."""
+    target = db.get(Employee, employee_id)
+    target_role = base_role_at(db, employee_id) if target else None
+    account_enabled = bool(
+        target
+        and db.query(UserAccount.id)
+        .filter(UserAccount.employee_id == target.id, UserAccount.enabled.is_(True))
+        .first()
+    )
+    if not target or not target.is_active or not account_enabled or not target_role or target_role.code not in SCORED_BASE_CODES:
+        raise HTTPException(400, f"只能为在职、账号启用的CM/TR或主管登记{action_name}")
+    return target, target_role
+
+
+# Who may credit or deduct a supervisor: formal GSM and acting TA GSM; a
+# supervisor acting as TA GSM is handled by AM only.
+SUPERVISOR_SCORER_CODES = {"GSM", "TA_GSM"}
+
+
+def ensure_supervisor_target_allowed(db: Session, user: V2User, target: Employee, on_date: str, action_name: str) -> None:
+    if target.id == user.id:
+        raise HTTPException(403, "不能对本人登记")
+    if duty_code_at(db, target.id, on_date) == "TA_GSM":
+        if not user.has_role("AM"):
+            raise HTTPException(403, f"代理TA GSM期间的主管只能由AM{action_name}")
+        return
+    if user.role.code not in SUPERVISOR_SCORER_CODES:
+        raise HTTPException(403, f"只有正式GSM和TA GSM可以为主管{action_name}")
 
 
 def ensure_enabled_frontline_target(db: Session, employee_id: int, action_name: str) -> tuple[Employee, Role]:

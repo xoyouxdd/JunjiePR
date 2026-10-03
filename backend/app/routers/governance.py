@@ -184,6 +184,13 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
         if open_appeals:
             items.append(action_center_item("appeal", "我的申诉待处理", open_appeals, "governance", "warning", "申诉不会改变原记录，请在申诉页查看处理结果。"))
 
+    if "REVIEW_SUPERVISOR" in user.permissions:
+        from app.routers.recognitions import supervisor_review_query
+
+        pending_supervisor = supervisor_review_query(db, user).filter(RecognitionRecord.status == "pending").count()
+        if pending_supervisor:
+            items.append(action_center_item("supervisor_review", "主管待复核签卡", pending_supervisor, "supervisorReview", "warning", "主管本人提交的签卡，任一正式GSM、AM或OM复核即可。"))
+
     if role_code in LEADER_CODES:
         member_ids = direct_member_ids(db, user.id)
         pending_reviews = db.query(RecognitionRecord).filter(

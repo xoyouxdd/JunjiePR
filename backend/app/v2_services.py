@@ -63,6 +63,7 @@ HALF_DAY_DEDUCTION = Decimal("0.25")
 DUTY_ROLE_CODES = {"TA_SUPERVISOR", "TA_GSM"}
 DUTY_BASE_CODES = {"TA_SUPERVISOR": FRONTLINE_CODES, "TA_GSM": {"SUPERVISOR"}}
 SCORING_CATEGORY_BY_CODE = {"CM": "frontline", "TR": "frontline", "SUPERVISOR": "supervisor"}
+SCORED_BASE_CODES = set(SCORING_CATEGORY_BY_CODE)
 
 
 def _date_value(on_date: str | date | None) -> str:

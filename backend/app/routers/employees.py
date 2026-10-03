@@ -14,7 +14,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_crypto import default_initial_password, hash_password
 from app.v2_database import get_db, synchronize_gsm_management_scope
 from app.v2_models import Attraction, AttendanceMonthlyScore, Employee, EmployeeActingDuty, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupLeaderAssignment, GroupMembership, RecognitionRecord, Role, SystemAlert, UserAccount, UserSession, WorkGroup
-from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_memberships, base_role_at, can_lead_on, groups_led_by, recalculate_attendance, role_at, write_audit
+from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_memberships, base_role_at, can_lead_on, duties_at_bulk, groups_led_by, recalculate_attendance, role_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.routers._shared import (
@@ -85,6 +85,29 @@ def frontline_employees(db: Session = Depends(get_db), user: V2User = Depends(cu
     return search_employee_targets(db, attraction_id=attraction_id, limit=500)["items"]
 
 
+def supervisor_targets(db: Session, user: V2User, usage: str, keyword: str, attraction_id: int | None, limit: int) -> dict:
+    """Supervisors that this account may credit or deduct (see ensure_supervisor_target_allowed)."""
+    if usage not in {"recognition", "deduction"}:
+        raise HTTPException(400, "员工查询用途无效")
+    may_score_supervisors = "SUPERVISOR_SCORE" in user.permissions and user.role.code in {"GSM", "TA_GSM"}
+    may_score_ta_gsm = "TA_GSM_SCORE" in user.permissions
+    if not (may_score_supervisors or may_score_ta_gsm):
+        raise HTTPException(403, "没有为主管登记的权限")
+    if not keyword.strip():
+        return {"items": [], "total": 0, "limit": max(1, min(limit, 50)), "search_scope": "全部景点圈在职主管（请输入姓名或员工号）"}
+    result = search_employee_targets(db, keyword=keyword, attraction_id=attraction_id, limit=200, role_codes=("SUPERVISOR",))
+    duties = duties_at_bulk(db, [row["id"] for row in result["items"]])
+    items = []
+    for row in result["items"]:
+        duty = (duties.get(row["id"]) or [None])[0]
+        acting_ta_gsm = bool(duty and duty.code == "TA_GSM")
+        if row["id"] == user.id or (acting_ta_gsm and not may_score_ta_gsm) or (not acting_ta_gsm and not may_score_supervisors):
+            continue
+        items.append({**row, "duty_role_code": duty.code if duty else "", "role_name": f"主管 · 代理{duty.name}" if duty else row["role_name"], "scoring_category": "supervisor"})
+    shown = items[: max(1, min(limit, 50))]
+    return {"items": shown, "total": len(items), "limit": max(1, min(limit, 50)), "search_scope": "代理TA GSM的主管" if may_score_ta_gsm and not may_score_supervisors else "全部景点圈在职主管"}
+
+
 @router.get("/employee-targets")
 def employee_targets(
     usage: str,
@@ -93,7 +116,10 @@ def employee_targets(
     limit: int = 30,
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
+    scope: str = "frontline",
 ):
+    if scope == "supervisor":
+        return supervisor_targets(db, user, usage, keyword, attraction_id, limit)
     required = EMPLOYEE_TARGET_PERMISSIONS.get(usage)
     if not required:
         raise HTTPException(400, "员工查询用途无效")

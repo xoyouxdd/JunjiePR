@@ -11,8 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
-from app.v2_models import Attraction, DeductionLevel, DeductionFollowUp, DeductionMaterialJob, DeductionUpgradeRequest, DeductionUpgradeTransfer, DeductionRecord, DeductionType, Employee, StoredFile, UserAccount
-from app.v2_services import LEADER_CODES, current_group_for_employee, remove_upload_file, role_at, write_audit
+from app.v2_models import Attraction, DeductionLevel, DeductionFollowUp, DeductionMaterialJob, DeductionUpgradeRequest, DeductionUpgradeTransfer, DeductionRecord, DeductionType, Employee, Role, StoredFile, UserAccount
+from app.v2_services import LEADER_CODES, current_group_for_employee, duty_code_at, remove_upload_file, role_at, scoring_category, write_audit
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
 from app.routers._shared import (
     add_calendar_months,
@@ -27,8 +27,10 @@ from app.routers._shared import (
     direct_only_deduction_user,
     ensure_deduction_type_allowed,
     ensure_enabled_frontline_target,
+    ensure_enabled_scored_target,
     ensure_month_open,
     ensure_operational_target_scope,
+    ensure_supervisor_target_allowed,
     ensure_scoped_hr_employee,
     existing_submission,
     invalidate_data_caches,
@@ -187,6 +189,21 @@ def deduction_upgrade_payload(db: Session, row: DeductionUpgradeRequest, *, incl
     return payload
 
 
+def resolve_deduction_target(db: Session, user: V2User, employee_id: int, occurred_on: str) -> tuple[Employee, Role, str]:
+    """Validate the deduction target and return it with the permission scope label."""
+    target, target_role = ensure_enabled_scored_target(db, employee_id, "扣分")
+    ensure_scoped_hr_employee(db, user, target)
+    if scoring_category(target_role) == "supervisor":
+        ensure_supervisor_target_allowed(db, user, target, occurred_on, "扣分")
+        return target, target_role, "代理TA GSM的主管（全部等级）" if user.has_role("AM") else "主管（全部等级）"
+    ensure_operational_target_scope(user, target)
+    if "DEDUCTION_ALL" in user.permissions:
+        return target, target_role, "所有CM/TR"
+    if "DEDUCTION_DIRECT" in user.permissions:
+        return target, target_role, "所有CM/TR（仅声明）"
+    raise HTTPException(403, "没有扣分权限")
+
+
 @router.get("/deduction-targets")
 def deduction_targets(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     if not ({"DEDUCTION_ALL", "DEDUCTION_DIRECT"} & user.permissions):
@@ -205,19 +222,11 @@ def check_attendance_repeat(
     user: V2User = Depends(current_user),
 ):
     parse_iso_date(occurred_on, "事件日期")
-    target, target_role = ensure_enabled_frontline_target(db, employee_id, "扣分")
-    ensure_scoped_hr_employee(db, user, target)
-    ensure_operational_target_scope(user, target)
+    target, target_role, _scope = resolve_deduction_target(db, user, employee_id, occurred_on)
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.active or not target_circle.employee_circle:
         raise HTTPException(400, "被扣分员工未配置有效景点圈")
     ensure_month_open(db, occurred_on[:7], target_circle.id, "生成重复处分跟进")
-    if "DEDUCTION_ALL" in user.permissions:
-        pass
-    elif "DEDUCTION_DIRECT" in user.permissions:
-        pass
-    else:
-        raise HTTPException(403, "没有扣分权限")
     deduction_type = db.get(DeductionType, deduction_type_id)
     if not deduction_type or not deduction_type.active:
         raise HTTPException(400, "扣分类型无效")
@@ -261,19 +270,11 @@ async def create_deduction(
     if duplicate_row:
         return {"ok": True, "record": deduction_payload(duplicate_row), "duplicate": True}
     parse_iso_date(occurred_on, "事件日期")
-    target, target_role = ensure_enabled_frontline_target(db, employee_id, "扣分")
-    ensure_scoped_hr_employee(db, user, target)
-    ensure_operational_target_scope(user, target)
+    target, target_role, scope = resolve_deduction_target(db, user, employee_id, occurred_on)
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.active or not target_circle.employee_circle:
         raise HTTPException(400, "被扣分员工未配置有效景点圈")
     ensure_month_open(db, occurred_on[:7], target_circle.id, "新增扣分")
-    if "DEDUCTION_ALL" in user.permissions:
-        scope = "所有CM/TR"
-    elif "DEDUCTION_DIRECT" in user.permissions:
-        scope = "所有CM/TR（仅声明）"
-    else:
-        raise HTTPException(403, "没有扣分权限")
     level = db.get(DeductionLevel, deduction_level_id)
     deduction_type = db.get(DeductionType, deduction_type_id)
     if not level or not level.active or not deduction_type or not deduction_type.active:
@@ -361,6 +362,9 @@ async def create_deduction(
             submitter_id=user.id,
             submitter_name=user.name,
             submitter_role_snapshot=user.role.name,
+            submitter_role_code_snapshot=user.role.code,
+            submitter_base_role_code_snapshot=user.base_role.code,
+            employee_acting_duty_code=duty_code_at(db, target.id, occurred_on),
             permission_scope_snapshot=scope,
             status="material_processing" if (photo_mode or needs_pdf_processing) else ("active" if pdf_mode else "pending_material"),
             material_status="processing" if (photo_mode or needs_pdf_processing) else ("ready" if pdf_mode else "missing"),
