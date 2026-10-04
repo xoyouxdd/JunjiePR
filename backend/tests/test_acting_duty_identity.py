@@ -221,6 +221,39 @@ def test_hr_confirms_base_of_unresolved_legacy_ta_and_keeps_the_group() -> None:
             assert db.get(WorkGroup, group_id).status == "active"
 
 
+def test_hr_confirms_legacy_base_and_assigns_the_original_leader_in_one_save() -> None:
+    today = date.today()
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            roles = {role.code: role for role in db.query(Role).all()}
+            circle_id = db.query(Employee).filter_by(employee_no="CMTEST01").one().attraction_id
+            legacy_gsm = Employee(employee_no="LEGACYGSM1", name="旧TA GSM", attraction_id=circle_id, is_active=True)
+            legacy_ta = Employee(employee_no="LEGACYTA04", name="旧TA无组", attraction_id=circle_id, is_active=True)
+            db.add_all([legacy_gsm, legacy_ta])
+            db.flush()
+            started = (today - timedelta(days=30)).isoformat()
+            db.add_all(
+                [
+                    EmployeeRoleAssignment(employee_id=legacy_gsm.id, role_id=roles["TA_GSM"].id, starts_on=started, status="active"),
+                    EmployeeRoleAssignment(employee_id=legacy_ta.id, role_id=roles["TA_SUPERVISOR"].id, starts_on=started, status="active"),
+                ]
+            )
+            db.commit()
+            gsm_id, ta_id = legacy_gsm.id, legacy_ta.id
+
+        login(client, "HR01", "HR123")
+        # A legacy TA GSM cannot lead a group until HR confirms the base 主管.
+        too_early = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "leader_id": gsm_id, "reason": "确认本职"})
+        assert too_early.status_code == 400, too_early.text
+        assert client.put(f"/api/hr/employees/{gsm_id}", json={"role_code": "SUPERVISOR", "reason": "确认本职"}).status_code == 200
+        assigned = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "leader_id": gsm_id, "reason": "确认本职并归组"})
+        assert assigned.status_code == 200, assigned.text
+        with SessionLocal() as db:
+            assert role_at(db, gsm_id).code == "TA_GSM" and base_role_at(db, gsm_id).code == "SUPERVISOR"
+            assert role_at(db, ta_id).code == "TA_SUPERVISOR" and base_role_at(db, ta_id).code == "TR"
+            assert current_leader_for_employee(db, ta_id).id == gsm_id
+
+
 def test_hr_sets_and_ends_a_duty_without_moving_the_group() -> None:
     with TestClient(app) as client:
         login(client, "HR01", "HR123")
