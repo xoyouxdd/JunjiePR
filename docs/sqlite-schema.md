@@ -371,6 +371,8 @@
 
 ### `group_leader_assignments`
 
+`leader_type`：`formal`（原组长，本职主管及以上）或 `acting`（代理组长），VARCHAR(20)，默认 `formal`，有列级索引。2026-10 迁移按当时本职标注现有在任组长。规则见 [identity-and-supervisor.md](identity-and-supervisor.md)。
+
 | 字段 | 类型 | 空 | 说明 |
 |---|---|---|---|
 | `id` | INTEGER PK | 否 | |

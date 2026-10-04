@@ -14,7 +14,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_crypto import default_initial_password, hash_password
 from app.v2_database import get_db, synchronize_gsm_management_scope
 from app.v2_models import Attraction, AttendanceMonthlyScore, Employee, EmployeeActingDuty, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupLeaderAssignment, GroupMembership, RecognitionRecord, Role, SystemAlert, UserAccount, UserSession, WorkGroup
-from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_memberships, base_role_at, can_lead_on, duties_at_bulk, groups_led_by, recalculate_attendance, role_at, write_audit
+from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_leader, active_group_memberships, base_role_at, can_lead_on, current_leader_for_employee, duties_at_bulk, formal_leader_eligible, group_leader_of_type, groups_assigned_to, groups_led_by, leader_type_for, recalculate_attendance, role_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.routers._shared import (
@@ -815,12 +815,12 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     reason=str(payload.get("reason") or ""),
                     ip_address=client_ip(request),
                 )
-            if requested_employment_status == "terminated" and groups_led_by(db, employee.id):
+            if requested_employment_status == "terminated" and groups_assigned_to(db, employee.id):
                 raise HTTPException(400, "该员工仍在带组，请先整组移交")
             employee.is_active = requested_employment_status == "active"
             employee.terminated_on = None if employee.is_active else date.today().isoformat()
     elif "is_active" in payload:
-        if not bool(payload["is_active"]) and groups_led_by(db, employee.id):
+        if not bool(payload["is_active"]) and groups_assigned_to(db, employee.id):
             raise HTTPException(400, "该员工仍在带组，请先整组移交")
         employee.is_active = bool(payload["is_active"])
         employee.terminated_on = None if employee.is_active else date.today().isoformat()
@@ -928,7 +928,17 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
         # A duty keeps the base identity; choosing a base role ends any duty.
         next_base_code = existing_base_role.code if is_duty_change else new_role.code
         will_lead = next_base_code in LEADER_CODES or new_role.code == "TA_SUPERVISOR"
-        led_groups = groups_led_by(db, employee.id)
+        if not will_lead:
+            # Ending an acting duty hands each group back to its formal leader.
+            for group in groups_assigned_to(db, employee.id):
+                acting = group_leader_of_type(db, group.id, "acting")
+                if acting and acting.leader_employee_id == employee.id and group_leader_of_type(db, group.id, "formal"):
+                    acting.status = "ended"
+                    acting.ends_on = max(acting.starts_on, today_value)
+                    group.revision += 1
+                    write_audit(db, user.employee, "结束代理组长", "work_group", group.id, before={"代理组长": employee.name}, reason="代理职务结束", ip_address=client_ip(request))
+            db.flush()
+        led_groups = groups_assigned_to(db, employee.id)
         if not will_lead and led_groups:
             member_ids = {
                 membership.employee_id
@@ -1069,10 +1079,19 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     raise HTTPException(409, "该组长有多个工作组，请选择具体工作组")
                 if candidate_groups:
                     target_group = candidate_groups[0]
-            if target_leader:
-                if not target_leader.is_active or not can_lead_on(db, target_leader.id):
+            # An acting leader may belong to the group they act for; their own
+            # records are then reviewed by its formal leader (原组长).
+            acting_in_target = False
+            if target_group:
+                acting = group_leader_of_type(db, target_group.id, "acting")
+                if acting and acting.leader_employee_id == employee.id:
+                    if not group_leader_of_type(db, target_group.id, "formal"):
+                        raise HTTPException(400, "该组没有原组长，代理组长不能加入自己代理的小组")
+                    acting_in_target = True
+            if target_leader and not acting_in_target:
+                if not target_leader.is_active or not (can_lead_on(db, target_leader.id) or formal_leader_eligible(db, target_leader.id)):
                     raise HTTPException(400, "新组长必须是在职TA主管或主管")
-                if target_leader.id == employee.id or (target_group and target_group.id in {group.id for group in groups_led_by(db, employee.id)}):
+                if target_leader.id == employee.id or (target_group and target_group.id in {group.id for group in groups_assigned_to(db, employee.id)}):
                     raise HTTPException(400, "员工不能成为自己所带小组的组员")
                 if target_leader.attraction_id != employee.attraction_id:
                     raise HTTPException(400, "新组长必须与员工属于同一景点圈")
@@ -1080,8 +1099,8 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     target_group = WorkGroup(name=f"{target_leader.name}工作组", attraction_id=employee.attraction_id, status="active")
                     db.add(target_group)
                     db.flush()
-                    db.add(GroupLeaderAssignment(group_id=target_group.id, leader_employee_id=target_leader.id, starts_on=date.today().isoformat(), status="active"))
-            elif requested_group_id:
+                    db.add(GroupLeaderAssignment(group_id=target_group.id, leader_employee_id=target_leader.id, starts_on=date.today().isoformat(), status="active", leader_type=leader_type_for(db, target_leader.id)))
+            elif requested_group_id and not acting_in_target:
                 raise HTTPException(400, "所选工作组当前没有有效组长")
 
             # Returning a former TA主管/主管 to CM/TR should restore the
@@ -1120,7 +1139,9 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     current_membership.ends_on = date.today().isoformat()
                 if target_group:
                     db.add(GroupMembership(group_id=target_group.id, employee_id=employee.id, starts_on=date.today().isoformat(), status="active", reason=str(payload.get("reason") or "HR调整组长")))
-                    pending_query.update({RecognitionRecord.assigned_reviewer_id: target_leader.id}, synchronize_session=False)
+                    db.flush()
+                    reviewer = current_leader_for_employee(db, employee.id)
+                    pending_query.update({RecognitionRecord.assigned_reviewer_id: reviewer.id if reviewer else None}, synchronize_session=False)
                 write_audit(
                     db,
                     user.employee,

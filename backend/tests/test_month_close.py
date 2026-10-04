@@ -297,13 +297,23 @@ def test_closed_circle_blocks_record_mutations() -> None:
 def test_group_display_uses_new_leader_but_keeps_previous_leader_for_transition() -> None:
     with TestClient(app) as client:
         restore_test_accounts()
+        with SessionLocal() as db:
+            if not db.query(Employee).filter_by(employee_no="SUPTEST02").first():
+                heat = db.query(Employee).filter_by(employee_no="SUPTEST01").one().attraction_id
+                second = Employee(employee_no="SUPTEST02", name="测试主管乙", attraction_id=heat, is_active=True)
+                db.add(second)
+                db.flush()
+                supervisor_role = db.query(Role).filter_by(code="SUPERVISOR").one()
+                db.add(EmployeeRoleAssignment(employee_id=second.id, role_id=supervisor_role.id, starts_on=date.today().isoformat(), status="active"))
+                db.commit()
         login(client, "HR-HEAT")
         groups = client.get("/api/hr/groups").json()
         leaders = client.get("/api/hr/leader-options").json()
-        group = next(row for row in groups if row["leader_id"])
+        # Formal leader to formal leader: the new 原组长 replaces the old one.
+        group = next(row for row in groups if row["leader_id"] and row["formal_leader_name"] and not row["acting_leader_name"])
         candidate = next(
             row for row in leaders
-            if row["attraction_id"] == group["attraction_id"] and row["id"] != group["leader_id"]
+            if row["attraction_id"] == group["attraction_id"] and row["id"] != group["leader_id"] and row["role_name"].startswith("主管")
         )
         moved = client.post(
             f"/api/hr/groups/{group['id']}/transfer",

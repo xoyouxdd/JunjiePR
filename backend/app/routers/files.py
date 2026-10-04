@@ -120,17 +120,17 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
             recognition
             and (
                 user.id in {recognition.employee_id, recognition.operator_employee_id, recognition.assigned_reviewer_id, recognition.reviewed_by}
-                or recognition.employee_id in direct_member_ids(db, user.id)
+                or recognition.employee_id in direct_member_ids(db, user.id, include_overseen=True)
                 or recognition.home_attraction_id in managed_attractions
             )
         )
     deduction = db.query(DeductionRecord).filter(DeductionRecord.document_file_id == file_id).first()
     if deduction:
-        authorized = authorized or "DECLARATION_STATS_VIEW" in user.permissions or user.id in {deduction.employee_id, deduction.submitter_id} or deduction.employee_id in direct_member_ids(db, user.id) or deduction.attraction_id_snapshot in managed_attractions
+        authorized = authorized or "DECLARATION_STATS_VIEW" in user.permissions or user.id in {deduction.employee_id, deduction.submitter_id} or deduction.employee_id in direct_member_ids(db, user.id, include_overseen=True) or deduction.attraction_id_snapshot in managed_attractions
     sick_leave = db.query(SickLeaveRecord).filter(SickLeaveRecord.proof_file_id == file_id).first()
     if sick_leave:
         sick_employee = db.get(Employee, sick_leave.employee_id)
-        authorized = authorized or user.id in {sick_leave.employee_id, sick_leave.submitted_by} or sick_leave.employee_id in direct_member_ids(db, user.id) or bool((sick_leave.attraction_id_snapshot or (sick_employee.attraction_id if sick_employee else None)) in managed_attractions)
+        authorized = authorized or user.id in {sick_leave.employee_id, sick_leave.submitted_by} or sick_leave.employee_id in direct_member_ids(db, user.id, include_overseen=True) or bool((sick_leave.attraction_id_snapshot or (sick_employee.attraction_id if sick_employee else None)) in managed_attractions)
     if not authorized:
         raise HTTPException(403, "没有权限查看该文件")
     path = (FILE_DIR / row.storage_key).resolve()

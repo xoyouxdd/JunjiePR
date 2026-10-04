@@ -23,6 +23,13 @@ def user_payload(db: Session, user: V2User) -> dict:
     leader = current_leader_for_employee(db, user.id)
     group = current_group_for_employee(db, user.id)
     display = group_display_metadata_bulk(db, [group.id]).get(group.id, {}) if group else {}
+    formal_name, acting_name = display.get("formal_leader_name", ""), display.get("acting_leader_name", "")
+    if formal_name and acting_name and acting_name != user.name:
+        leader_label = f"{formal_name}（代理：{acting_name}）"
+    elif leader:
+        leader_label = leader.name
+    else:
+        leader_label = "待接管" if group and group.status == "pending_takeover" else "未分配"
     return {
         "id": user.id,
         "employee_no": user.employee.employee_no,
@@ -36,7 +43,7 @@ def user_payload(db: Session, user: V2User) -> dict:
         "role_label": user.display_role_name,
         "attraction_id": user.employee.attraction_id,
         "attraction_name": user.employee.attraction.name if user.employee.attraction else "",
-        "leader_name": leader.name if leader else ("待接管" if group and group.status == "pending_takeover" else "未分配"),
+        "leader_name": leader_label,
         "group_name": display.get("name", group.name if group else ""),
         "previous_group_leader_name": display.get("previous_leader_name", ""),
         "previous_group_leader_until": display.get("previous_leader_until", ""),

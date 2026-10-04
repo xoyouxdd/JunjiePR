@@ -14,7 +14,7 @@ from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionLevel, DeductionFollowUp, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, GroupLeaderAssignment, MonthClosure, RecognitionRecord, Role, SickLeaveRecord, StoredFile, SubmissionRequest, SystemAlert, UserAccount, WorkGroup
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, SCORED_BASE_CODES, active_group_leaders_bulk, base_role_at, base_roles_at, duties_at_bulk, duty_code_at, groups_led_by, identity_labels, managed_attraction_ids, role_at
+from app.v2_services import ACTING_LEADER_FIRST, FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, SCORED_BASE_CODES, active_group_leaders_bulk, base_role_at, base_roles_at, duties_at_bulk, duty_code_at, groups_led_by, identity_labels, managed_attraction_ids, role_at
 from app.v2_models import EmployeeActingDuty, EmployeeLOAPeriod, GroupMembership
 from app.v2_services import roles_at
 
@@ -591,11 +591,27 @@ def group_display_metadata_bulk(db: Session, group_ids: list[int] | set[int], on
         row.id: row for row in db.query(Employee).filter(Employee.id.in_(leader_ids)).all()
     } if leader_ids else {}
     enabled = as_of >= date.fromisoformat(GROUP_DISPLAY_EFFECTIVE_DATE)
+    typed_leaders: dict[tuple[int, str], Employee] = {}
+    for assignment, leader in (
+        db.query(GroupLeaderAssignment, Employee)
+        .join(Employee, Employee.id == GroupLeaderAssignment.leader_employee_id)
+        .filter(
+            GroupLeaderAssignment.group_id.in_(ids),
+            GroupLeaderAssignment.status == "active",
+            GroupLeaderAssignment.starts_on <= value,
+            or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= value),
+        )
+        .order_by(GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
+    ):
+        typed_leaders.setdefault((assignment.group_id, assignment.leader_type), leader)
     result: dict[int, dict] = {}
     for group_id in ids:
         group = groups.get(group_id)
+        formal_leader = typed_leaders.get((group_id, "formal"))
+        acting_leader = typed_leaders.get((group_id, "acting"))
         current_assignment = active.get(group_id)
-        current = employees.get(current_assignment.leader_employee_id) if current_assignment else None
+        # A group is named after its 原组长 while an acting leader runs it.
+        current = formal_leader or (employees.get(current_assignment.leader_employee_id) if current_assignment else None)
         previous_assignment = latest_ended.get(group_id) if enabled else None
         previous = employees.get(previous_assignment.leader_employee_id) if previous_assignment else None
         previous_until = ""
@@ -609,6 +625,8 @@ def group_display_metadata_bulk(db: Session, group_ids: list[int] | set[int], on
             "leader_name": current.name if current else "",
             "previous_leader_name": previous.name if previous else "",
             "previous_leader_until": previous_until if previous else "",
+            "formal_leader_name": formal_leader.name if formal_leader else "",
+            "acting_leader_name": acting_leader.name if acting_leader else "",
         }
     return result
 
@@ -1194,7 +1212,7 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
             GroupLeaderAssignment.starts_on <= value,
             or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= value),
         )
-        .order_by(GroupLeaderAssignment.group_id, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
+        .order_by(GroupLeaderAssignment.group_id, ACTING_LEADER_FIRST, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
         .all()
     ) if group_ids else []
     leader_assignment_by_group: dict[int, GroupLeaderAssignment] = {}
@@ -1236,6 +1254,8 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
         "previous_group_leader_until": display.get("previous_leader_until", ""),
         "leader_id": leader.id if leader else None,
         "leader_name": leader.name if leader else "",
+        "formal_leader_name": display.get("formal_leader_name", ""),
+        "acting_leader_name": display.get("acting_leader_name", ""),
         "is_active": employee.is_active,
         "employment_status": "loa" if employee.is_active and loa_period else "active" if employee.is_active else "terminated",
         "loa_start_date": loa_period.starts_on if loa_period else "",

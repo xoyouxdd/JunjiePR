@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.v2_auth import V2User, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, GroupLeaderAssignment, GroupMembership, GroupTransfer, GroupTransferMember, RecognitionRecord, Role, SickLeaveRecord, SystemAlert, WorkGroup
-from app.v2_services import FRONTLINE_CODES, LEADER_CODES, base_role_at, base_roles_at, can_lead_on, identity_labels, active_group_leader, active_group_leaders_bulk, active_group_memberships, active_group_memberships_bulk, current_group_for_employee, current_leader_for_employee, groups_led_by, groups_led_by_bulk, gsm_candidates_for_attractions_bulk, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import FRONTLINE_CODES, LEADER_CODES, base_role_at, base_roles_at, can_lead_on, formal_leader_eligible, group_leader_of_type, identity_labels, leader_type_for, active_group_leader, active_group_leaders_bulk, active_group_memberships, active_group_memberships_bulk, current_group_for_employee, current_leader_for_employee, groups_led_by, groups_led_by_bulk, gsm_candidates_for_attractions_bulk, recalculate_attendance, role_at, roles_at, write_audit
 from app.routers._shared import (
     client_ip,
     employee_payloads,
@@ -240,6 +240,7 @@ def batch_assign_unclassified_leaders(
                             leader_employee_id=leader.id,
                             starts_on=today_value,
                             status="active",
+                            leader_type=leader_type_for(db, leader.id),
                         )
                     )
                     created_groups[leader.id] = target_group
@@ -576,7 +577,7 @@ def review_circle_transfer(transfer_id: int, payload: dict, request: Request, db
         target_group = WorkGroup(name=f"{target_leader.name}工作组", attraction_id=row.target_attraction_id, status="active")
         db.add(target_group)
         db.flush()
-        db.add(GroupLeaderAssignment(group_id=target_group.id, leader_employee_id=target_leader.id, starts_on=date.today().isoformat(), status="active"))
+        db.add(GroupLeaderAssignment(group_id=target_group.id, leader_employee_id=target_leader.id, starts_on=date.today().isoformat(), status="active", leader_type=leader_type_for(db, target_leader.id)))
     row.review_note = note or None
     migrated_counts = complete_circle_transfer(db, row, target_leader, target_group, user, request)
     db.commit()
@@ -636,6 +637,8 @@ def hr_groups(db: Session = Depends(get_db), user: V2User = Depends(require_perm
                 "revision": group.revision,
                 "leader_id": leader_assignment.leader_employee_id if leader_assignment else None,
                 "leader_name": leader.name if leader else "待接管",
+                "formal_leader_name": display.get("formal_leader_name", ""),
+                "acting_leader_name": display.get("acting_leader_name", ""),
                 "member_count": len(members),
                 "members": [
                     {
@@ -704,8 +707,13 @@ def transfer_group(group_id: int, payload: dict, request: Request, db: Session =
     if int(payload.get("revision") or 0) != group.revision:
         raise HTTPException(409, "工作组已被其他操作修改，请刷新后重试")
     new_leader = db.get(Employee, int(payload.get("new_leader_id") or 0))
-    if not new_leader or not new_leader.is_active or not can_lead_on(db, new_leader.id):
-        raise HTTPException(400, "新组长必须是在职TA主管或主管")
+    if not new_leader or not new_leader.is_active:
+        raise HTTPException(400, "新组长必须是在职员工")
+    # A base 主管 or above becomes the formal leader (原组长); an acting TA主管
+    # becomes the acting leader (代理组长).  Members never move.
+    leader_type = leader_type_for(db, new_leader.id)
+    if leader_type == "acting" and not can_lead_on(db, new_leader.id):
+        raise HTTPException(400, "新组长必须是在职代理TA主管，或本职为主管及以上")
     if new_leader.attraction_id != group.attraction_id:
         raise HTTPException(400, "新组长必须与工作组属于同一景点圈")
     effective_date = str(payload.get("effective_date") or date.today().isoformat())
@@ -714,12 +722,12 @@ def transfer_group(group_id: int, payload: dict, request: Request, db: Session =
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "移交原因必填")
-    old_assignment = active_group_leader(db, group.id)
+    old_assignment = group_leader_of_type(db, group.id, leader_type)
     if old_assignment and old_assignment.leader_employee_id == new_leader.id:
         raise HTTPException(400, "新旧组长不能相同")
     members = active_group_memberships(db, group.id)
-    if any(member.employee_id == new_leader.id for member in members):
-        raise HTTPException(400, "新组长是该组组员，不能成为自己所带小组的组长")
+    if leader_type == "formal" and any(member.employee_id == new_leader.id for member in members):
+        raise HTTPException(400, "新组长是该组组员，不能成为该组的原组长")
     pending_count = db.query(RecognitionRecord).filter(
         RecognitionRecord.employee_id.in_([member.employee_id for member in members]) if members else RecognitionRecord.id == -1,
         RecognitionRecord.status == "pending",
@@ -740,16 +748,53 @@ def transfer_group(group_id: int, payload: dict, request: Request, db: Session =
     if old_assignment:
         old_assignment.status = "ended"
         old_assignment.ends_on = effective_date
-    db.add(GroupLeaderAssignment(group_id=group.id, leader_employee_id=new_leader.id, starts_on=effective_date, status="active", transfer_id=transfer.id))
+    db.add(GroupLeaderAssignment(group_id=group.id, leader_employee_id=new_leader.id, starts_on=effective_date, status="active", leader_type=leader_type, transfer_id=transfer.id))
     for member in members:
         db.add(GroupTransferMember(transfer_id=transfer.id, employee_id=member.employee_id, employee_no=member.employee.employee_no, employee_name=member.employee.name))
-    member_ids = [member.employee_id for member in members]
-    if member_ids:
-        db.query(RecognitionRecord).filter(RecognitionRecord.employee_id.in_(member_ids), RecognitionRecord.status == "pending").update({RecognitionRecord.assigned_reviewer_id: new_leader.id}, synchronize_session=False)
+    db.flush()
+    sync_pending_reviewers(db, group.id)
     group.status = "active"
     group.revision += 1
     db.query(SystemAlert).filter(SystemAlert.group_id == group.id, SystemAlert.status == "open").update({SystemAlert.status: "handled", SystemAlert.handled_by: user.id, SystemAlert.handled_at: datetime.now()}, synchronize_session=False)
-    write_audit(db, user.employee, "整组移交", "work_group", group.id, before={"leader": old_assignment.leader.name if old_assignment else "待接管"}, after={"leader": new_leader.name, "member_count": len(members)}, reason=reason, ip_address=client_ip(request))
+    label = "原组长" if leader_type == "formal" else "代理组长"
+    write_audit(db, user.employee, f"整组移交（{label}）", "work_group", group.id, before={label: old_assignment.leader.name if old_assignment else "无"}, after={label: new_leader.name, "member_count": len(members)}, reason=reason, ip_address=client_ip(request))
     db.commit()
     invalidate_data_caches()
-    return {"ok": True, "transfer_id": transfer.id}
+    return {"ok": True, "transfer_id": transfer.id, "leader_type": leader_type}
+
+
+@router.post("/hr/groups/{group_id}/end-acting")
+def end_acting_leader(group_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    """End the acting leader; the group returns to its formal leader."""
+    group = db.get(WorkGroup, group_id)
+    if not group:
+        raise HTTPException(404, "工作组不存在")
+    ensure_scoped_hr_attraction(db, user, group.attraction_id)
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(400, "结束代理原因必填")
+    acting = group_leader_of_type(db, group.id, "acting")
+    if not acting:
+        raise HTTPException(409, "该组当前没有代理组长")
+    if not group_leader_of_type(db, group.id, "formal"):
+        raise HTTPException(400, "该组没有原组长，请先设置原组长再结束代理")
+    acting.status = "ended"
+    acting.ends_on = max(acting.starts_on, date.today().isoformat())
+    db.flush()
+    sync_pending_reviewers(db, group.id)
+    group.revision += 1
+    write_audit(db, user.employee, "结束代理组长", "work_group", group.id, before={"代理组长": acting.leader.name}, reason=reason, ip_address=client_ip(request))
+    db.commit()
+    invalidate_data_caches()
+    return {"ok": True}
+
+
+def sync_pending_reviewers(db: Session, group_id: int) -> None:
+    """Point the group's pending self-submitted records at their current reviewer."""
+    for member in active_group_memberships(db, group_id):
+        reviewer = current_leader_for_employee(db, member.employee_id)
+        db.query(RecognitionRecord).filter(
+            RecognitionRecord.employee_id == member.employee_id,
+            RecognitionRecord.status == "pending",
+            RecognitionRecord.source == "self",
+        ).update({RecognitionRecord.assigned_reviewer_id: reviewer.id if reviewer else None}, synchronize_session=False)

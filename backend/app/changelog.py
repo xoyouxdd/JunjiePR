@@ -7,6 +7,28 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.05.1",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "小组区分原组长和代理组长",
+                "detail": "一个小组可同时有原组长（本职为主管及以上）和代理组长（代理TA主管）。有代理组长时，组员的认可由代理组长复核，原组长可在「组员记录」查看组员记录和分数；代理组长本人的认可由其所在小组的组长复核，若他在自己代理的小组内，则由该组原组长复核。组长显示为「原组长（代理：代理组长）」，景点数据统计树的小组也按此显示。",
+                "audiences": ["CM", "TR", "TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"],
+            },
+            {
+                "summary": "整组移交可设置原组长或代理组长",
+                "detail": "在「整组移交」选择本职为主管及以上的人即设为原组长，选择代理TA主管即设为代理组长，组员不变；新增「结束代理组长」，结束后组回到原组长名下。只有代理组长的小组可直接设置原组长。代理职务结束时，其代理的小组自动交回原组长。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "旧TA记录确认本职更直观",
+                "detail": "员工管理中「无法确定本职」的旧TA记录会提示需要选择的本职，组长选择框直接显示；选好本职和组长后保存即可，代理职务保留。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.04.1",
         "date": "2026-10-04",
         "status": "candidate",

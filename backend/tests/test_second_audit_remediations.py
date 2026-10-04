@@ -433,7 +433,7 @@ def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
     assert "allowClose:()=>!submitting" in script
     assert "aria-label=\"撤回签卡\"" in script
     assert "confirmModal('撤回签卡'" in script
-    assert "confirmModal('确认整组移交'" in script
+    assert "confirmModal('确认设置组长'" in script
     assert "待复核记录" in script
     assert "function readApiBody(res)" in script
     assert "function beginViewRequest()" in script

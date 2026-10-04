@@ -194,6 +194,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
     ("2026-10-acting-duties", "ensure_acting_duty_columns_and_migrate"),
     ("2026-10-audit-scope-and-appeal-removal", "backfill_audit_scope_and_remove_appeals"),
+    ("2026-10-group-leader-types", "ensure_group_leader_types"),
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
 ]
 
@@ -872,6 +873,24 @@ def ensure_acting_duty_columns_and_migrate(db) -> None:
     migrate_legacy_duty_assignments(db)
 
 
+def ensure_group_leader_types(db) -> None:
+    """Label current group leaders: a base 主管 or above is the formal leader
+    (原组长); anyone else running a group (an acting TA主管) is its acting leader."""
+    from app.v2_models import GroupLeaderAssignment
+    from app.v2_services import formal_leader_eligible
+
+    existing = {row[1] for row in db.execute(text("PRAGMA table_info(group_leader_assignments)"))}
+    if "leader_type" not in existing:
+        db.execute(text("ALTER TABLE group_leader_assignments ADD COLUMN leader_type VARCHAR(20) NOT NULL DEFAULT 'formal'"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_group_leader_assignments_leader_type ON group_leader_assignments (leader_type)"))
+    db.commit()
+    today = date.today().isoformat()
+    for row in db.query(GroupLeaderAssignment).filter(GroupLeaderAssignment.status == "active").all():
+        if not formal_leader_eligible(db, row.leader_employee_id, today):
+            row.leader_type = "acting"
+    db.commit()
+
+
 def backfill_audit_scope_and_remove_appeals(db) -> None:
     """Give old audit rows their employee circle; drop the retired online appeals.
 
@@ -1368,7 +1387,7 @@ def seed_test_accounts(db) -> None:
     db.flush()
     db.add_all(
         [
-            GroupLeaderAssignment(group_id=group_ta.id, leader_employee_id=employees["TATEST01"].id, starts_on=today.isoformat(), status="active"),
+            GroupLeaderAssignment(group_id=group_ta.id, leader_employee_id=employees["TATEST01"].id, starts_on=today.isoformat(), status="active", leader_type="acting"),
             GroupLeaderAssignment(group_id=group_supervisor.id, leader_employee_id=employees["SUPTEST01"].id, starts_on=today.isoformat(), status="active"),
             GroupMembership(group_id=group_ta.id, employee_id=employees["CMTEST01"].id, starts_on=today.isoformat(), status="active"),
             GroupMembership(group_id=group_ta.id, employee_id=employees["TRTEST01"].id, starts_on=today.isoformat(), status="active"),

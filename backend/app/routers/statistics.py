@@ -16,7 +16,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, DeductionRecord, DeductionType, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, ManagementScope, RecognitionRecord, RecognitionType, Role, SickLeaveRecord, WorkGroup
 from app.score_queries import employee_month_scores
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH, acting_period_notes, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import ACTING_LEADER_FIRST, group_leader_names, FRONTLINE_CODES, GSM_CODES, LEADER_CODES, SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH, acting_period_notes, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export_utils import content_disposition
 from app.excel_export import append_supervisor_score_sheets, build_pr_rankings_workbook, build_statistics_workbook
@@ -96,7 +96,7 @@ def member_records(
 ):
     if record_type not in {"all", "recognition", "deduction", "sick_leave"}:
         raise HTTPException(400, "记录类型无效")
-    member_ids = direct_member_ids(db, user.id)
+    member_ids = direct_member_ids(db, user.id, include_overseen=True)
     empty_condition = RecognitionRecord.id == -1
     result: list[dict] = []
     if record_type in {"all", "recognition"}:
@@ -306,7 +306,7 @@ def member_score_summary(
         date.fromisoformat(f"{month}-01")
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, "月份格式应为YYYY-MM") from exc
-    member_ids = direct_member_ids(db, user.id)
+    member_ids = direct_member_ids(db, user.id, include_overseen=True)
     employee_query = db.query(Employee).filter(Employee.id.in_(member_ids) if member_ids else Employee.id == -1)
     if keyword and keyword.strip():
         value = f"%{keyword.strip()}%"
@@ -425,7 +425,7 @@ def ranking_leader_names(db: Session, employee_ids: list[int], on_date: str) -> 
             GroupLeaderAssignment.starts_on <= on_date,
             or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= on_date),
         )
-        .order_by(GroupLeaderAssignment.group_id, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
+        .order_by(GroupLeaderAssignment.group_id, ACTING_LEADER_FIRST, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
         .all()
         if group_ids
         else []
@@ -943,7 +943,7 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
             GroupLeaderAssignment.starts_on <= month_end,
             or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= month_end),
         )
-        .order_by(GroupLeaderAssignment.group_id, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
+        .order_by(GroupLeaderAssignment.group_id, ACTING_LEADER_FIRST, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
         .all()
         if group_ids
         else []
@@ -1027,8 +1027,9 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
             leader_defaults = {"name": "主管", "role_name": "", "employees": []}
         else:
             leader_key = f"employee-{leader.id}" if leader else (f"group-{group.id}" if group else "ungrouped")
+            formal_name, acting_name = group_leader_names(db, group.id) if group and leader else ("", "")
             leader_defaults = {
-                "name": leader.name if leader else "未配置主管",
+                "name": f"{formal_name}（代理：{acting_name}）" if formal_name and acting_name else (leader.name if leader else "未配置主管"),
                 "role_name": leader_labels.get(leader.id, "") if leader else "",
                 "employees": [],
             }
