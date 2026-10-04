@@ -789,6 +789,42 @@ def end_acting_leader(group_id: int, payload: dict, request: Request, db: Sessio
     return {"ok": True}
 
 
+@router.post("/hr/groups/{group_id}/close")
+def close_empty_group(group_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    """Close a group with no members; its leader assignments end, history stays."""
+    group = db.get(WorkGroup, group_id)
+    if not group or group.status == "closed":
+        raise HTTPException(404, "工作组不存在或已关闭")
+    ensure_scoped_hr_attraction(db, user, group.attraction_id)
+    if int(payload.get("revision") or 0) != group.revision:
+        raise HTTPException(409, "工作组已被其他操作修改，请刷新后重试")
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(400, "关闭原因必填")
+    if active_group_memberships(db, group.id):
+        raise HTTPException(400, "该组仍有组员，只能关闭没有组员的小组")
+    today_value = date.today().isoformat()
+    ended_leaders = []
+    for assignment in (
+        db.query(GroupLeaderAssignment)
+        .filter(GroupLeaderAssignment.group_id == group.id, GroupLeaderAssignment.status == "active")
+        .all()
+    ):
+        assignment.status = "ended"
+        assignment.ends_on = max(assignment.starts_on, today_value)
+        ended_leaders.append(assignment.leader.name)
+    group.status = "closed"
+    group.revision += 1
+    db.query(SystemAlert).filter(SystemAlert.group_id == group.id, SystemAlert.status == "open").update(
+        {SystemAlert.status: "handled", SystemAlert.handled_by: user.id, SystemAlert.handled_at: datetime.now()},
+        synchronize_session=False,
+    )
+    write_audit(db, user.employee, "关闭空工作组", "work_group", group.id, before={"leaders": ended_leaders, "status": "active", "member_count": 0}, after={"status": "closed"}, reason=reason, ip_address=client_ip(request))
+    db.commit()
+    invalidate_data_caches()
+    return {"ok": True}
+
+
 def sync_pending_reviewers(db: Session, group_id: int) -> None:
     """Point the group's pending self-submitted records at their current reviewer."""
     for member in active_group_memberships(db, group_id):

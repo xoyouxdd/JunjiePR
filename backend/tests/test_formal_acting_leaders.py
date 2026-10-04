@@ -107,6 +107,30 @@ def test_formal_and_acting_leaders_split_reviewing_and_viewing() -> None:
         assert client.post(f"/api/reviews/{record_id}", json={"action": "confirm"}).status_code == 200
 
 
+def test_only_groups_without_members_can_be_closed() -> None:
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            supervisor = db.query(Employee).filter_by(employee_no="SUPTEST01").one()
+            empty = WorkGroup(name="空小组测试", attraction_id=supervisor.attraction_id, status="active")
+            db.add(empty)
+            db.flush()
+            db.add(GroupLeaderAssignment(group_id=empty.id, leader_employee_id=supervisor.id, starts_on=date.today().isoformat(), status="active"))
+            db.commit()
+            empty_id, empty_revision = empty.id, empty.revision
+            busy_id = ta_group_id()
+            busy_revision = db.get(WorkGroup, busy_id).revision
+
+        login(client, "HR01", "HR123")
+        assert client.post(f"/api/hr/groups/{busy_id}/close", json={"reason": "关闭", "revision": busy_revision}).status_code == 400
+        closed = client.post(f"/api/hr/groups/{empty_id}/close", json={"reason": "多余空组", "revision": empty_revision})
+        assert closed.status_code == 200, closed.text
+        assert empty_id not in {row["id"] for row in client.get("/api/hr/groups").json()}
+        assert empty_id not in {row["group_id"] for row in client.get("/api/hr/leader-options").json()}
+        with SessionLocal() as db:
+            assert db.get(WorkGroup, empty_id).status == "closed"
+            assert db.query(GroupLeaderAssignment).filter_by(group_id=empty_id, status="active").count() == 0
+
+
 def test_acting_leader_inside_the_group_is_reviewed_by_its_formal_leader() -> None:
     with TestClient(app) as client:
         group_id = ta_group_id()
