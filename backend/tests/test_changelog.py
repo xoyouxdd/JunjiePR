@@ -127,7 +127,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         login(client, "TRTEST01")
         frontline = client.get("/api/changelog/announcement").json()
         assert frontline["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in frontline["release"]["items"]] == ["小组区分原组长和代理组长"]
+        assert [item["summary"] for item in frontline["release"]["items"]] == ["小组改为固定组名，组和负责人分开"]
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         client.post("/api/logout")
         login(client, "OMTEST01")

@@ -242,11 +242,13 @@ def test_hr_confirms_legacy_base_and_assigns_the_original_leader_in_one_save() -
             gsm_id, ta_id = legacy_gsm.id, legacy_ta.id
 
         login(client, "HR01", "HR123")
-        # A legacy TA GSM cannot lead a group until HR confirms the base 主管.
-        too_early = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "leader_id": gsm_id, "reason": "确认本职"})
+        # A legacy TA GSM cannot be a group's 主管 until HR confirms the base 主管.
+        too_early = client.post("/api/hr/groups", json={"attraction_id": circle_id, "supervisor_id": gsm_id})
         assert too_early.status_code == 400, too_early.text
         assert client.put(f"/api/hr/employees/{gsm_id}", json={"role_code": "SUPERVISOR", "reason": "确认本职"}).status_code == 200
-        assigned = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "leader_id": gsm_id, "reason": "确认本职并归组"})
+        created = client.post("/api/hr/groups", json={"attraction_id": circle_id, "supervisor_id": gsm_id})
+        assert created.status_code == 200, created.text
+        assigned = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "group_id": created.json()["id"], "reason": "确认本职并归组"})
         assert assigned.status_code == 200, assigned.text
         with SessionLocal() as db:
             assert role_at(db, gsm_id).code == "TA_GSM" and base_role_at(db, gsm_id).code == "SUPERVISOR"

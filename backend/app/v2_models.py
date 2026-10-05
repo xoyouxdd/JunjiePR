@@ -239,7 +239,11 @@ class WorkGroup(Base):
     __tablename__ = "work_groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Fixed name "<circle><code>组" (e.g. 热力追踪A组); a leader change never
+    # renames it.  The code letter is unique within the circle and is not
+    # reused after the group closes.
     name: Mapped[str] = mapped_column(String(100), index=True)
+    code: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
     attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     revision: Mapped[int] = mapped_column(Integer, default=1)
@@ -258,9 +262,11 @@ class GroupLeaderAssignment(Base):
     starts_on: Mapped[str] = mapped_column(String(10), index=True)
     ends_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
-    # A group has at most one active `formal` leader (原组长, a base 主管 or
-    # above) and one active `acting` leader (代理组长).  The acting leader runs
-    # the group and reviews members while assigned; the formal leader views.
+    # A group has at most one active `formal` leader (主管, a base 主管) and
+    # one active `acting` leader (代理主管, an acting TA主管).  The acting
+    # leader runs the group and reviews members; the formal leader views.
+    # A person is the formal leader of at most one group and the acting
+    # leader of at most one group.
     leader_type: Mapped[str] = mapped_column(String(20), default="formal", server_default="formal", index=True)
     transfer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

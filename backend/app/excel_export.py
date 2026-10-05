@@ -163,7 +163,7 @@ def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role]
             continue
         if node_type == "gsm_team":
             finish_supervisor()
-            ws.append([f"主管组（由GSM共同承接）：{node['name']}"])
+            ws.append([node["name"]])
             row_number = ws.max_row
             ws.row_dimensions[row_number].outlineLevel = 1
             for cell in ws[row_number]:
@@ -173,7 +173,8 @@ def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role]
         if node_type == "supervisor":
             finish_supervisor()
             ws.append([
-                f"主管组：{node['name']}（{node.get('role_name') or '主管'}；共{node.get('member_count') or 0}人）",
+                # A group: "热力追踪A组（主管 X · 代理主管 Y；共N人）".
+                f"{node['name']}（{node['role_name'] + '；' if node.get('role_name') else ''}共{node.get('member_count') or 0}人）",
                 "",
                 "",
                 "",
@@ -352,7 +353,7 @@ def write_hierarchical_performance_sheet(ws, data: dict) -> None:
         elif kind == "supervisor":
             current_context["leader"] = f"LEADER:{node.get('node_id')}"
             current_context["employee"] = ""
-            row_number = append_header(f"组长：{node['name']}（{node.get('role_name') or '主管'}；{node.get('member_count') or 0}人）", 2, "leader", current_context, "supervisor")
+            row_number = append_header(f"{node['name']}（{node['role_name'] + '；' if node.get('role_name') else ''}{node.get('member_count') or 0}人）", 2, "leader", current_context, "supervisor")
             ws.row_dimensions[row_number].collapsed = True
         elif kind == "employee" and node.get("employee_id") is not None:
             employee_id = int(node["employee_id"])
@@ -422,21 +423,21 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
         row["employee_no"] = current_no
         row["employee_number_status"] = employee_number_status(current_no, ranking_histories.get(int(employee_id)))
     if category == "overall":
-        headers = ["排名", "员工号", "工号状态", "姓名", "角色", "主管", "加分", "扣分", "全勤分", "综合分"]
+        headers = ["排名", "员工号", "工号状态", "姓名", "角色", "小组", "加分", "扣分", "全勤分", "综合分"]
         ws.append(headers)
         for row in data["rows"]:
-            ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["leader_name"], row["recognition_score"], row["deduction_score"], row["attendance_score"], row["total_score"]]))
+            ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["group_label"], row["recognition_score"], row["deduction_score"], row["attendance_score"], row["total_score"]]))
     elif category == "absence":
-        headers = ["排名", "员工号", "工号状态", "姓名", "角色", "主管", "缺勤类型", "登记次数", "缺勤天数", "计费天数", "扣减全勤分", "最近一次缺勤"]
+        headers = ["排名", "员工号", "工号状态", "姓名", "角色", "小组", "缺勤类型", "登记次数", "缺勤天数", "计费天数", "扣减全勤分", "最近一次缺勤"]
         ws.append(headers)
         for row in data["rows"]:
-            ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["leader_name"], data["subtype_name"], row["count"], row["leave_days"], row["charged_days"], row["score"], row["recent_date"]]))
+            ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["group_label"], data["subtype_name"], row["count"], row["leave_days"], row["charged_days"], row["score"], row["recent_date"]]))
     else:
         person_label = "GSM/TA GSM" if category == "gsm_leader" else ("组长" if category == "leader" else "员工")
-        headers = ["排名", "员工号", "工号状态", person_label, "角色", "主管", "类型", "登记次数", "累计分值", "最近一次登记"]
+        headers = ["排名", "员工号", "工号状态", person_label, "角色", "小组", "类型", "登记次数", "累计分值", "最近一次登记"]
         ws.append(headers)
         for row in data["rows"]:
-            ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["leader_name"], data["subtype_name"], row["count"], row["score"], row["recent_date"]]))
+            ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["group_label"], data["subtype_name"], row["count"], row["score"], row["recent_date"]]))
     if data.get("uncapped_ranking"):
         ws.cell(1, 11, "未封顶分数（累计分值排名依据）")
         for index, row in enumerate(data["rows"], start=2):

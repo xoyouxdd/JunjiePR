@@ -363,7 +363,58 @@ def gsm_candidates_for_attractions_bulk(
 # The acting leader (代理组长) runs a group while assigned; otherwise the
 # formal leader (原组长) does.  Use this ordering wherever one row is picked.
 ACTING_LEADER_FIRST = case((GroupLeaderAssignment.leader_type == "acting", 0), else_=1)
+# New 主管 appointments need a base 主管.  Assignments made before 2026-10
+# may still hold a GSM/AM/OM; they stay valid until HR replaces them.
+GROUP_SUPERVISOR_BASE_CODES = {"SUPERVISOR"}
 FORMAL_LEADER_BASE_CODES = {"SUPERVISOR", "GSM", "AM", "OM"}
+
+
+def group_code_for_index(index: int) -> str:
+    """0 → A, 25 → Z, 26 → AA, 27 → AB …"""
+    letters = ""
+    index += 1
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
+def group_code_index(code: str | None) -> int:
+    value = 0
+    for char in str(code or "").upper():
+        if not "A" <= char <= "Z":
+            return -1
+        value = value * 26 + (ord(char) - ord("A") + 1)
+    return value - 1
+
+
+def group_code_sort_key(code: str | None) -> tuple[int, str]:
+    return (len(code or "") or 99, code or "")
+
+
+def group_display_name(circle_name: str, code: str) -> str:
+    return f"{circle_name}{code}组"
+
+
+def next_group_code(db: Session, attraction_id: int) -> str:
+    """Next unused letter in the circle; letters of closed groups stay retired."""
+    codes = [code for (code,) in db.query(WorkGroup.code).filter(WorkGroup.attraction_id == attraction_id, WorkGroup.code.isnot(None))]
+    return group_code_for_index(max((group_code_index(code) for code in codes), default=-1) + 1)
+
+
+def group_leader_label(formal_name: str, acting_name: str) -> str:
+    """'主管 X · 代理主管 Y', or just the one that is set; empty when neither."""
+    parts = [f"主管 {formal_name}" if formal_name else "", f"代理主管 {acting_name}" if acting_name else ""]
+    return " · ".join(part for part in parts if part)
+
+
+def group_supervisor_eligible(db: Session, employee_id: int, on_date: str | date | None = None) -> bool:
+    base = base_role_at(db, employee_id, on_date)
+    return bool(base and base.code in GROUP_SUPERVISOR_BASE_CODES)
+
+
+def group_acting_eligible(db: Session, employee_id: int, on_date: str | date | None = None) -> bool:
+    return duty_code_at(db, employee_id, on_date) == "TA_SUPERVISOR"
 
 
 def _active_leader_query(db: Session, group_id: int, on_date: str | None = None):
@@ -395,7 +446,8 @@ def group_leader_of_type(db: Session, group_id: int, leader_type: str, on_date: 
 
 
 def formal_leader_eligible(db: Session, employee_id: int, on_date: str | date | None = None) -> bool:
-    """原组长 must hold a base identity of 主管 or above (not an acting duty)."""
+    """Whether an existing 主管 assignment stays valid: base 主管 or above.
+    New appointments use group_supervisor_eligible (base 主管 only)."""
     base = base_role_at(db, employee_id, on_date)
     return bool(base and base.code in FORMAL_LEADER_BASE_CODES)
 
@@ -609,6 +661,17 @@ def current_leader_for_employee(db: Session, employee_id: int) -> Employee | Non
         formal = group_leader_of_type(db, group.id, "formal")
         return formal.leader if formal and formal.leader_employee_id != employee_id else None
     return assignment.leader if assignment else None
+
+
+def sync_pending_reviewers(db: Session, group_id: int) -> None:
+    """Point the group's pending self-submitted records at their current reviewer."""
+    for member in active_group_memberships(db, group_id):
+        reviewer = current_leader_for_employee(db, member.employee_id)
+        db.query(RecognitionRecord).filter(
+            RecognitionRecord.employee_id == member.employee_id,
+            RecognitionRecord.status == "pending",
+            RecognitionRecord.source == "self",
+        ).update({RecognitionRecord.assigned_reviewer_id: reviewer.id if reviewer else None}, synchronize_session=False)
 
 
 def group_leader_names(db: Session, group_id: int) -> tuple[str, str]:
@@ -1353,7 +1416,7 @@ def process_role_expirations(db: Session) -> None:
         if leader_assignment.ends_on and leader_assignment.ends_on < today_text:
             still_valid = False
         elif leader_assignment.leader_type == "formal":
-            # 原组长 may sit above the group (e.g. a supervisor acting as TA GSM).
+            # A 主管 acting as TA GSM keeps their group.
             still_valid = formal_leader_eligible(db, leader_assignment.leader_employee_id, today_text)
         else:
             still_valid = can_lead_on(db, leader_assignment.leader_employee_id, today_text)
@@ -1375,7 +1438,7 @@ def process_role_expirations(db: Session) -> None:
             db,
             "group_pending_takeover",
             str(group.id),
-            f"工作组{group.name}的原组长已失去带组资格，请整组移交",
+            f"{group.name}的负责人已失去带组资格，请在小组管理中设置负责人",
             employee_id=leader_assignment.leader_employee_id,
             group_id=group.id,
         )

@@ -65,11 +65,12 @@ def test_manager_recognition_can_submit_without_a_self_evidence_control() -> Non
     assert "recognitionSubmissionData(e.target,selfMode)" in script
 
 
-def test_hr_batch_save_button_has_a_stable_template_contract() -> None:
+def test_hr_member_group_is_the_only_inline_control() -> None:
     script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-    assert '<button type="button" id="hrBatchLeaderSave" class="primary">' in script
-    assert "hrBatchSave.id='hrBatchLeaderSave'" not in script
+    assert "data-hr-group-select" in script
+    assert "hrBatchLeaderSave" not in script
+    assert "/api/hr/employees/batch-leaders" not in script
 
 
 def test_score_rule_ui_describes_global_scope_and_is_read_only_for_circle_hr() -> None:
@@ -107,7 +108,6 @@ def test_mobile_fixed_actions_and_motion_preferences_have_shared_rules() -> None
     css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
     script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-    assert ".hr-batch-leader-bar { bottom: calc(64px + env(safe-area-inset-bottom))" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert "behavior:prefersReducedMotion()?'auto':'smooth'" in script
 
@@ -433,7 +433,8 @@ def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
     assert "allowClose:()=>!submitting" in script
     assert "aria-label=\"撤回签卡\"" in script
     assert "confirmModal('撤回签卡'" in script
-    assert "confirmModal('确认设置组长'" in script
+    assert "confirmModal('调整所属小组'" in script
+    assert "function formModal" in script and "bindDialogLayer(overlay,{initialFocus:form.querySelector" in script
     assert "待复核记录" in script
     assert "function readApiBody(res)" in script
     assert "function beginViewRequest()" in script

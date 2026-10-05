@@ -294,7 +294,7 @@ def test_closed_circle_blocks_record_mutations() -> None:
         assert client.post(f"/api/reviews/{pending_id}", json={"action": "confirm"}).status_code == 423
 
 
-def test_group_display_uses_new_leader_but_keeps_previous_leader_for_transition() -> None:
+def test_group_keeps_its_fixed_name_when_the_supervisor_changes() -> None:
     with TestClient(app) as client:
         restore_test_accounts()
         with SessionLocal() as db:
@@ -307,26 +307,15 @@ def test_group_display_uses_new_leader_but_keeps_previous_leader_for_transition(
                 db.add(EmployeeRoleAssignment(employee_id=second.id, role_id=supervisor_role.id, starts_on=date.today().isoformat(), status="active"))
                 db.commit()
         login(client, "HR-HEAT")
-        groups = client.get("/api/hr/groups").json()
-        leaders = client.get("/api/hr/leader-options").json()
-        # Formal leader to formal leader: the new 原组长 replaces the old one.
-        group = next(row for row in groups if row["leader_id"] and row["formal_leader_name"] and not row["acting_leader_name"])
-        candidate = next(
-            row for row in leaders
-            if row["attraction_id"] == group["attraction_id"] and row["id"] != group["leader_id"] and row["role_name"].startswith("主管")
-        )
+        circle = client.get("/api/hr/groups").json()["circles"][0]
+        group = next(row for row in circle["groups"] if row["formal_leader"] and not row["acting_leader"])
+        candidate = next(row for row in circle["supervisors"] if not row["group_id"])
         moved = client.post(
-            f"/api/hr/groups/{group['id']}/transfer",
-            json={
-                "revision": group["revision"],
-                "new_leader_id": candidate["id"],
-                "effective_date": date.today().isoformat(),
-                "reason": "测试动态组名展示",
-            },
+            f"/api/hr/groups/{group['id']}/leaders",
+            json={"revision": group["revision"], "supervisor_id": candidate["id"], "acting_id": None, "reason": "测试固定组名"},
         )
         assert moved.status_code == 200, moved.text
-        current = next(row for row in client.get("/api/hr/groups").json() if row["id"] == group["id"])
-        assert current["stored_name"] == group["stored_name"]
-        assert current["name"] == f"{candidate['name']}工作组"
-        assert current["previous_leader_name"] == group["leader_name"]
-        assert current["previous_leader_until"]
+        current = next(row for row in client.get("/api/hr/groups").json()["circles"][0]["groups"] if row["id"] == group["id"])
+        # The group keeps its fixed name; only its 主管 changes.
+        assert current["name"] == group["name"]
+        assert current["formal_leader"]["id"] == candidate["id"]
