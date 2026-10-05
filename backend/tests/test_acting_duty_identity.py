@@ -240,8 +240,13 @@ def test_hr_confirms_legacy_base_and_assigns_the_original_leader_in_one_save() -
             )
             db.commit()
             gsm_id, ta_id = legacy_gsm.id, legacy_ta.id
+            for employee_id in (gsm_id, ta_id):
+                db.add(SystemAlert(alert_type="acting_duty_migration", dedupe_key=f"{employee_id}:test", employee_id=employee_id, message=f"测试待确认本职{employee_id}", status="open"))
+            db.commit()
 
         login(client, "HR01", "HR123")
+        # Unconfirmed legacy records keep their alert.
+        assert any(row["message"] == f"测试待确认本职{ta_id}" and row["status"] == "open" for row in client.get("/api/hr/alerts").json())
         # A legacy TA GSM cannot be a group's 主管 until HR confirms the base 主管.
         too_early = client.post("/api/hr/groups", json={"attraction_id": circle_id, "supervisor_id": gsm_id})
         assert too_early.status_code == 400, too_early.text
@@ -254,6 +259,9 @@ def test_hr_confirms_legacy_base_and_assigns_the_original_leader_in_one_save() -
             assert role_at(db, gsm_id).code == "TA_GSM" and base_role_at(db, gsm_id).code == "SUPERVISOR"
             assert role_at(db, ta_id).code == "TA_SUPERVISOR" and base_role_at(db, ta_id).code == "TR"
             assert current_leader_for_employee(db, ta_id).id == gsm_id
+            # Confirming the base identity closes the "无法确定本职" alert.
+            assert db.query(SystemAlert).filter(SystemAlert.alert_type == "acting_duty_migration", SystemAlert.employee_id.in_([gsm_id, ta_id]), SystemAlert.status == "open").count() == 0
+        assert not any(row["message"].startswith("测试待确认本职") and row["status"] == "open" for row in client.get("/api/hr/alerts").json())
 
 
 def test_hr_sets_and_ends_a_duty_without_moving_the_group() -> None:

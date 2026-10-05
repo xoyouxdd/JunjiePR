@@ -14,7 +14,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_crypto import default_initial_password, hash_password
 from app.v2_database import get_db, synchronize_gsm_management_scope
 from app.v2_models import Attraction, AttendanceMonthlyScore, Employee, EmployeeActingDuty, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupMembership, RecognitionRecord, Role, UserAccount, UserSession, WorkGroup
-from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_memberships, base_role_at, current_leader_for_employee, duties_at_bulk, group_leader_of_type, groups_assigned_to, recalculate_attendance, role_at, sync_pending_reviewers, write_audit
+from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_memberships, base_role_at, current_leader_for_employee, duties_at_bulk, group_leader_of_type, groups_assigned_to, recalculate_attendance, resolve_acting_duty_migration_alerts, role_at, sync_pending_reviewers, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.routers._shared import (
@@ -913,6 +913,7 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
         db.add(duty)
         db.flush()
         write_audit(db, user.employee, "确认旧代理记录的本职", "acting_duty", duty.id, before={"role": legacy_duty_role.name}, after={"base_role": new_role.name, "duty": legacy_duty_role.name, "ends_on": duty.ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
+        resolve_acting_duty_migration_alerts(db, employee.id)
         resulting_role = legacy_duty_role
         resulting_base_role = new_role
     if not resolves_legacy and new_role_code and current_role and new_role_code != current_role.code:

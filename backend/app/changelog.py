@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.05.3",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "组织提醒只显示待处理事项",
+                "detail": "在员工管理中为旧TA记录确认本职后，「无法确定本职」的提醒会自动消除；小组管理的「组织提醒」只显示仍待处理的事项，已处理的不再列出。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.05.2",
         "date": "2026-10-05",
         "status": "candidate",

@@ -1442,4 +1442,17 @@ def process_role_expirations(db: Session) -> None:
             employee_id=leader_assignment.leader_employee_id,
             group_id=group.id,
         )
+    resolve_acting_duty_migration_alerts(db)
     db.commit()
+
+
+def resolve_acting_duty_migration_alerts(db: Session, employee_id: int | None = None) -> None:
+    """Close "无法确定本职" alerts once HR has confirmed the person's base identity."""
+    query = db.query(SystemAlert).filter(SystemAlert.alert_type == "acting_duty_migration", SystemAlert.status == "open")
+    if employee_id is not None:
+        query = query.filter(SystemAlert.employee_id == employee_id)
+    for alert in query.all():
+        base = base_role_at(db, alert.employee_id) if alert.employee_id else None
+        if base and base.code not in DUTY_ROLE_CODES:
+            alert.status = "handled"
+            alert.handled_at = datetime.now()
