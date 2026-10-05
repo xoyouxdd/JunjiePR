@@ -116,8 +116,8 @@ ROLE_PERMISSION_CODES = {
 for _report_role in ("GSM", "AM", "OM", "SYSTEM_ADMIN"):
     ROLE_PERMISSION_CODES[_report_role] += ("HR_MONTHLY_REPORT",)
 
-# 轮岗：TA主管及以上可调整，CM/TR 只看本人。
-for _rotation_role in ("TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"):
+# 轮岗：TA主管、主管、TA GSM、GSM 可调整，CM/TR 只看本人；AM、OM 不使用轮岗。
+for _rotation_role in ("TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM"):
     ROLE_PERMISSION_CODES[_rotation_role] += ("ROTATION_MANAGE",)
 for _rotation_role in ("CM", "TR"):
     ROLE_PERMISSION_CODES[_rotation_role] += ("ROTATION_SELF",)
@@ -177,9 +177,9 @@ def _init_db_unlocked() -> None:
         ensure_highest_admin_account(db)
         ensure_circle_hr_accounts(db)
         create_score_view(db)
-        from app.rotation.access import ensure_screen_account
+        from app.rotation.access import ensure_rotation_accounts
 
-        ensure_screen_account(db)
+        ensure_rotation_accounts(db)
     finally:
         db.close()
 

@@ -15,7 +15,7 @@ from app.changelog import RELEASES, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
 from app.routers._shared import client_ip, group_display_metadata_bulk
-from app.rotation.access import find_screen_account, screen_login
+from app.rotation.access import find_rotation_account, rotation_login
 
 router = APIRouter()
 
@@ -65,9 +65,9 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
         .first()
     )
     if not account:
-        screen_account = find_screen_account(db, login_name)
-        if screen_account:
-            return screen_login(db, request, response, screen_account, password)
+        rotation_account = find_rotation_account(db, login_name)
+        if rotation_account:
+            return rotation_login(db, request, response, rotation_account, password)
     if not account or not account.enabled:
         raise HTTPException(401, "账号或密码/PIN不正确")
     if account.locked_until and account.locked_until > datetime.now():

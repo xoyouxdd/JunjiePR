@@ -69,7 +69,7 @@
 | `audit_logs` | 审计 |
 | `system_alerts` | 系统告警 |
 | `system_job_runs` | 系统任务去重 |
-| `rotation_screen_accounts` / `rotation_screen_sessions` | 休息室大屏账号与会话（不对应员工） |
+| `rotation_accounts` / `rotation_account_sessions` | 轮岗专用账号（大屏、轮岗主管、轮岗经理）与会话，不对应员工 |
 | `rotation_configs` | 轮岗线、岗位与参数 |
 | `rotation_roster_uploads` / `rotation_roster_entries` | 轮岗名单上传批次与每人每天明细 |
 | `rotation_days` | 每天轮岗状态 |
@@ -1096,18 +1096,18 @@
 
 | 表 | 键与约束 | 索引 |
 |---|---|---|
-| `rotation_screen_accounts` | `login_account` 唯一；`attraction_id` → `attractions` | `login_account`、`attraction_id` |
-| `rotation_screen_sessions` | `account_id` → `rotation_screen_accounts`（级联删除）；`token_hash` 唯一 | `account_id`、`token_hash`、`expires_at` |
+| `rotation_accounts` | `login_account` 唯一；`kind` 为 screen / supervisor / manager；`attraction_id` → `attractions` | `login_account`、`attraction_id` |
+| `rotation_account_sessions` | `account_id` → `rotation_accounts`（级联删除）；`token_hash` 唯一 | `account_id`、`token_hash`、`expires_at` |
 | `rotation_configs` | `attraction_id` 唯一 | — |
 | `rotation_roster_uploads` | `attraction_id`、`uploaded_by_id` → `employees` | `attraction_id` |
 | `rotation_roster_entries` | `upload_id` → `rotation_roster_uploads`（级联删除）；`employee_id` 可空 | `ix_rotation_roster_entry_day (attraction_id, work_date)`、`upload_id`、`employee_no` |
 | `rotation_days` | `uq_rotation_day (attraction_id, work_date)`；`status` 为 draft / live / ended | `status` |
-| `rotation_events` | `actor_type` 为 employee / screen / system | `ix_rotation_event_day (attraction_id, work_date, id)`、`employee_no` |
+| `rotation_events` | `actor_type` 为 employee / screen / supervisor / manager / system | `ix_rotation_event_day (attraction_id, work_date, id)`、`employee_no` |
 | `rotation_segments` | — | `ix_rotation_segment_week (attraction_id, work_date, employee_no)` |
 | `rotation_duties` | `uq_rotation_duty (attraction_id, work_date, employee_no, kind)`；`kind` 为 push7 / lost | `work_date` |
 | `rotation_notices` | `employee_id` → `employees`（级联删除）；`status` 为 open / done | `ix_rotation_notice_open (employee_id, status)`、`ix_rotation_notice_day (attraction_id, work_date, status)` |
 
-`rotation_screen_accounts` 由启动时 `ensure_screen_account` 保证存在，已存在时不改密码。
+`rotation_accounts` 由启动时 `ensure_rotation_accounts` 保证三个账号存在，已存在时不改密码。
 
 ---
 

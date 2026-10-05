@@ -56,9 +56,9 @@ form.addEventListener('submit', async event => {
     } catch (_error) {
       /* Ignore storage failures after a successful login. */
     }
-    // 休息室大屏账号登录后直接进入大屏页面。
-    if (body.redirect === '/rotation/screen') {
-      location.href = portalPath('/rotation/screen');
+    // 轮岗专用账号（大屏、轮岗主管、轮岗经理）登录后直接进入轮岗页面。
+    if (body.redirect === '/rotation/screen' || body.redirect === '/rotation') {
+      location.href = portalPath(body.redirect);
       return;
     }
     location.href = portalPath('/');

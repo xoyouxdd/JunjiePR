@@ -9,13 +9,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.v2_database import Base
 
 
-class RotationScreenAccount(Base):
-    """休息室大屏账号。不对应员工，不进入任何员工列表、统计或待办。"""
+class RotationAccount(Base):
+    """轮岗专用账号：休息室大屏、轮岗主管、轮岗经理。
 
-    __tablename__ = "rotation_screen_accounts"
+    不对应员工，不进入任何员工列表、统计或待办，只能使用轮岗功能。
+    kind 为 screen / supervisor / manager。
+    """
+
+    __tablename__ = "rotation_accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     login_account: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(20))
     name: Mapped[str] = mapped_column(String(100))
     attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"), index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -27,11 +32,11 @@ class RotationScreenAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
-class RotationScreenSession(Base):
-    __tablename__ = "rotation_screen_sessions"
+class RotationAccountSession(Base):
+    __tablename__ = "rotation_account_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    account_id: Mapped[int] = mapped_column(ForeignKey("rotation_screen_accounts.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("rotation_accounts.id", ondelete="CASCADE"), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -104,7 +109,7 @@ class RotationDay(Base):
 
 
 class RotationEvent(Base):
-    """轮岗操作日志。actor_type 为 employee / screen / system。"""
+    """轮岗操作日志。actor_type 为 employee / screen / supervisor / manager / system。"""
 
     __tablename__ = "rotation_events"
     __table_args__ = (
