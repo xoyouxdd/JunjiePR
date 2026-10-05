@@ -373,10 +373,13 @@ def end_stale_days(db: Session, cfg: RotationConfig, attraction_id: int, today: 
 
 
 def tick_attraction(attraction_id: int) -> None:
+    """后台每秒调用。没有运行中的轮岗时只读不写，避免和其他请求的写入冲突。"""
     with RUNTIME.lock:
         db = SessionLocal()
         try:
-            cfg = load_config(db, attraction_id)
+            cfg = db.query(RotationConfig).filter(RotationConfig.attraction_id == attraction_id).first()
+            if cfg is None:
+                return
             day, minute = clock_now(cfg)
             end_stale_days(db, cfg, attraction_id, day)
             row = day_row(db, attraction_id, day)
