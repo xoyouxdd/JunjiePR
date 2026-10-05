@@ -6,7 +6,7 @@
 - 推下班、推出圈（固定暂离）最优先：替换者在下班/出圈前 offLead 分钟到岗，从入口岗推进，
   链条后移到要走的人为止把他推出来；被推出的人直接转为已下班/出圈中，不需要到大屏确认；
 - 推 7 点：07:15 班的人直接在 7 点岗位对换 07:00 班的人，被替下的人照常休息后轮岗；
-- 固定暂离优先：到出圈时间仍没人替也按时出圈，空出的岗位由下一个人优先补上；
+- 到出圈时间仍没人替：继续在岗并保持准备出圈，一直找人来推，超过 outWarnAfter 分钟提醒主管；
 - 吃饭：休息中、待出发和吃饭剩不到 mealReserveLeft 分钟的人，够开着的线数时才安排吃饭；
 - 到岗时距下班/出圈不超过 noBoardBefore 分钟就不再上岗；
 - 出发只能在计划出发时间前 departEarly 分钟以内点。
@@ -33,7 +33,8 @@ DEFAULT_SETTINGS = {
     'mealLastChance': 270,        # 离下班或闭园不到这么多分钟仍没吃饭，不再等休息人数够了才吃
     'offLead': 20,                # 下班/出圈前多少分钟被替下（替换者到岗时间）
     'noBoardBefore': 30,          # 到岗时距下班/出圈不超过这么多分钟，不再上岗
-    'endLead': 45,                # 比替换到岗时间提前多少分钟开始安排替换的人
+    'outWarnAfter': 5,            # 过了出圈时间多少分钟仍没人可推，提醒主管
+    'endLead': 45,               # 比替换到岗时间提前多少分钟开始安排替换的人
     'departEarly': 1,             # 最多可比计划出发时间提前几分钟点出发
     'futureWait': 15,             # 等定时开岗最多等多久
     'readyYellow': 0,             # 超过出发时间多少分钟变黄
@@ -353,20 +354,14 @@ class Engine:
                         self._go_out(p, a, now, 'system')
                         changed = True
                         break
-            # 固定暂离优先：到出圈时间仍没人替也按时出圈，空出的岗位由下一个人优先补上
+            # 到出圈时间仍没人替：继续在岗、保持准备出圈，一直找人来推；暂离结束仍没推出则视为错过
             if p['state'] == 'onpost':
                 for a in p.get('absences', []):
-                    if not a.get('done') and a['start'] <= now < a['end']:
-                        L, i = self.find_post(p['pid'])
-                        if L is not None:
-                            self._leave_line(p, L, i, now)
-                            L['posts'][i]['occ'] = None
-                            self.alert('%s 到出圈时间（%s）无人替换已出圈，%s %s 空岗待补' % (p['name'], a['label'], L['id'], L['posts'][i]['name']), now)
-                        p['downReason'] = '出圈'
-                        self._go_out(p, a, now, 'system')
-                        self.h.log('out_unreplaced', 'system', p['pid'], L['id'] if L else None, L['posts'][i]['name'] if L else None, {'reason': a['label']})
+                    if not a.get('done') and now >= a['end']:
+                        a['done'] = True
+                        a['missed'] = True
+                        self.h.log('absence_missed', 'system', p['pid'], p.get('line'), None, {'reason': a['label']})
                         changed = True
-                        break
             # 下班：池子里、暂离中、下线途中的人在下班前 offLead 分钟直接下班
             if p['state'] in ('walkback', 'rest', 'meal', 'ready', 'pending', 'away') and now >= p['end'] - off_lead:
                 was = p['state']
@@ -1075,7 +1070,10 @@ class Engine:
             if st == 'onpost':
                 t, kind, _ = self.leave_at(p, now)
                 word = '出圈' if kind == 'out' else '下班'
-                if now >= t - S['offLead'] - 10 and p['pid'] not in taken:
+                if kind == 'out':
+                    if now >= t + S['outWarnAfter'] and p['pid'] not in taken:
+                        out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 已过出圈时间 %s %d 分钟，暂无人可推' % (p['name'], fmt(t), now - t)})
+                elif now >= t - S['offLead'] - 10 and p['pid'] not in taken:
                     out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 需在 %s 前推%s，暂无人可替' % (p['name'], fmt(t - S['offLead']), word)})
             if p.get('role') in ('rotation', 'op') and st in ('onpost', 'heading') and not p.get('ate') \
                     and self.meal_eligible(p) and not self.d.get('closed') \
