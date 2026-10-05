@@ -183,21 +183,32 @@ def test_push_out_of_circle_for_fixed_absence_then_returns_to_pool():
     assert out["state"] == "ready"
 
 
-def test_onpost_person_without_replacement_stays_and_supervisor_is_alerted():
+def test_fixed_absence_wins_even_without_replacement_and_the_gap_is_filled_first():
     ssei = {"start": hm("12:00"), "end": hm("13:00"), "label": "SSEI"}
-    people = [person("a0", "07:00", "21:00"), person("out", "07:00", "21:00", [ssei]), person("a2", "07:00", "21:00")]
-    eng, hooks = live_day(people, lines=[two_lines()[0]], now="11:00")
+    people = [person("a0", "07:00", "21:00"), person("out", "07:00", "21:00", [ssei]), person("a2", "07:00", "21:00"),
+              person("b0", "07:00", "21:00"), person("b1", "07:00", "21:00"), person("b2", "07:00", "21:00"),
+              person("late", "12:00", "21:00")]
+    eng, hooks = live_day(people, now="11:00")
     seat(eng, "a0", "A", 0, "10:50")
     seat(eng, "out", "A", 1, "10:40")
     seat(eng, "a2", "A", 2, "10:30")
+    for i, p in enumerate(("b0", "b1", "b2")):
+        seat(eng, p, "B", i, "08:00")
     eng.tick(hm("11:45"))
     assert any("需在 11:40 前推出圈" in a["msg"] for a in eng.alerts(hm("11:45")))
-    eng.tick(hm("12:05"))
-    assert eng.P["out"]["state"] == "onpost"
-    assert any("已到出圈时间 12:00 仍在岗" in a["msg"] for a in eng.alerts(hm("12:05")))
-    eng.tick(hm("13:00"))
-    assert "absence_missed" in hooks.types("out")
-    assert not any(a.get("pid") == "out" for a in eng.alerts(hm("13:01")))
+    # 到出圈时间没人替：按时出圈，岗位空出来
+    eng.tick(hm("12:00"))
+    out = eng.P["out"]
+    assert out["state"] == "away" and out["away"]["reason"] == "SSEI"
+    assert occupants(eng, "A") == ["a0", None, "a2"]
+    assert "out_unreplaced" in hooks.types("out")
+    assert any("空岗待补" in n["msg"] for n in eng.d["notices"])
+    # 下一个可出发的人优先补空岗，而不是去推 B 线站得更久的人
+    assert eng.P["late"]["assign"]["line"] == "A"
+    eng.act_depart("late", hm("12:00"), "screen")
+    eng.tick(hm("12:03"))
+    assert occupants(eng, "A") == ["late", "a0", "a2"]
+    assert eng.P["b2"]["state"] == "onpost"
 
 
 def test_stale_replacement_is_cleared_when_target_leaves_the_line():
@@ -377,13 +388,31 @@ def test_push7_substitute_is_chosen_when_the_planned_person_is_away():
 
 # ---------------------------------------------------------------- 吃饭、闭园
 
-def test_meal_last_chance_ignores_the_meal_cap():
-    people = [person(f"m{i}", "07:00", "21:00") for i in range(4)] + [person("late", "13:00", "21:30")]
+def test_meal_only_when_enough_people_rest_for_every_open_line():
+    lines = two_lines()
+    people = [person(f"r{i}", "07:00", "21:00") for i in range(3)] + [person("eater", "07:00", "21:00")]
+    eng, _ = live_day(people, lines=lines, now="11:00")
+    for i in range(3):
+        eng.P[f"r{i}"]["state"] = "rest"
+        eng.P[f"r{i}"]["readyAt"] = hm("11:10")
+    eater = eng.P["eater"]
+    # 2 条线开着，休息中 3 人：够了，可以吃饭
+    assert eng._meal_decision(eater, hm("11:00")) == "meal"
+    eng.P["r0"]["state"] = "meal"
+    eng.P["r0"]["readyAt"] = hm("11:40")
+    eng.P["r1"]["state"] = "meal"
+    eng.P["r1"]["readyAt"] = hm("11:40")
+    # 只剩 1 人休息，不够 2 条线：只休息
+    assert eng._meal_decision(eater, hm("11:00")) == "rest"
+    # 吃饭剩不到 20 分钟的人算作休息中
+    assert eng._meal_decision(eater, hm("11:21")) == "meal"
+
+
+def test_meal_last_chance_does_not_wait_for_enough_rest():
+    people = [person("late", "13:00", "21:30")]
     eng, _ = live_day(people, lines=[two_lines()[0]], now="17:00", close="21:30")
-    for i in range(4):
-        eng.P[f"m{i}"]["state"] = "meal"
     late = eng.P["late"]
-    # 17:00 距闭园 270 分钟以内、还没吃饭：即使已有 4 人在吃，也安排吃饭
+    # 离闭园 270 分钟以内、还没吃饭：即使没有人在休息也安排吃饭
     assert eng._meal_decision(late, hm("17:01")) == "meal"
     assert eng._meal_decision(late, hm("16:59")) == "rest"
 
