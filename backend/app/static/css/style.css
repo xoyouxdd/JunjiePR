@@ -1790,3 +1790,22 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
   .group-row > [data-label]::before { content: attr(data-label) "："; color: var(--muted); font-size: 12px; }
   .group-row .actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
+
+/* 轮岗（测试）入口；轮岗页面本身的样式在 rotation.css */
+.rotation-test-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn-text-strong);
+  border: 1px solid var(--warn-border);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.rotation-entry-heading { display: flex; align-items: center; gap: 10px; }
+.rotation-entry-heading h2 { margin: 0; }
+.rotation-entry-quick { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 8px; }
+.rotation-entry-quick button { display: grid; gap: 2px; width: auto; min-width: 140px; padding: 8px 14px; text-align: left; }
+.rotation-entry-quick small { color: var(--text-secondary); font-weight: 400; }

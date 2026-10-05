@@ -125,14 +125,18 @@ def test_changelog_api_and_navigation_exist() -> None:
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
     with TestClient(app) as client:
-        # The current release is an HR-only fix: frontline accounts get no announcement.
-        login(client, "TRTEST01")
+        # The current release is the rotation test entry: TR, GSM and the highest admin see it; CM does not.
+        login(client, "CMTEST01")
         assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
+        client.post("/api/logout")
+        login(client, "TRTEST01")
+        tr = client.get("/api/changelog/announcement").json()
+        assert [item["summary"] for item in tr["release"]["items"]] == ["新增「轮岗（测试）」入口（测试功能）"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in hr["release"]["items"]] == ["主管签卡复核与代理TA GSM期间规则调整"]
+        assert [item["summary"] for item in hr["release"]["items"]] == ["新增「轮岗（测试）」入口（测试功能）"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()

@@ -154,6 +154,7 @@ def init_db() -> None:
 def _init_db_unlocked() -> None:
     ensure_directories()
     from app import v2_models  # noqa: F401
+    from app.rotation import models as rotation_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -168,6 +169,9 @@ def _init_db_unlocked() -> None:
         ensure_highest_admin_account(db)
         ensure_circle_hr_accounts(db)
         create_score_view(db)
+        from app.rotation.access import ensure_rotation_accounts
+
+        ensure_rotation_accounts(db)
     finally:
         db.close()
 

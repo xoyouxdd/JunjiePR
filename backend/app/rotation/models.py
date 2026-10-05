@@ -1,0 +1,198 @@
+"""轮岗模块的表。时间字段 *_min 一律是“当天零点起的分钟数”。"""
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.v2_database import Base
+
+
+class RotationAccount(Base):
+    """轮岗专用账号：休息室大屏、轮岗主管、轮岗经理。
+
+    不对应员工，不进入任何员工列表、统计或待办，只能使用轮岗功能。
+    kind 为 screen / supervisor / manager。
+    """
+
+    __tablename__ = "rotation_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    login_account: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    name: Mapped[str] = mapped_column(String(100))
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"), index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RotationAccountSession(Base):
+    """轮岗会话：专用账号登录（account_id），或测试入口里模拟某个 CM/TR（member_employee_no）。"""
+
+    __tablename__ = "rotation_account_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("rotation_accounts.id", ondelete="CASCADE"), nullable=True, index=True)
+    member_employee_no: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 测试入口里由哪个 PR 员工发起；大屏在登录页直接登录时为空。
+    entered_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RotationConfig(Base):
+    """每个景点圈一份线和岗位配置、参数。"""
+
+    __tablename__ = "rotation_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"), unique=True)
+    lines_json: Mapped[str] = mapped_column(Text)
+    settings_json: Mapped[str] = mapped_column(Text)
+    # 测试时钟：{"mode": "real"} 或 {"mode": "sim", "date", "minute", "real_ts", "speed", "paused"}
+    clock_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RotationRosterUpload(Base):
+    """一次名单上传。scope 为 week 或 day；同一天按天上传的覆盖按周上传的。"""
+
+    __tablename__ = "rotation_roster_uploads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"), index=True)
+    scope: Mapped[str] = mapped_column(String(10))
+    start_date: Mapped[str] = mapped_column(String(10))
+    end_date: Mapped[str] = mapped_column(String(10))
+    file_name: Mapped[str] = mapped_column(String(255))
+    hours_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entry_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 从测试入口进入时记录发起的员工；专用账号直接登录时为空。
+    uploaded_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    uploaded_by_name: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RotationRosterEntry(Base):
+    __tablename__ = "rotation_roster_entries"
+    __table_args__ = (
+        Index("ix_rotation_roster_entry_day", "attraction_id", "work_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    upload_id: Mapped[int] = mapped_column(ForeignKey("rotation_roster_uploads.id", ondelete="CASCADE"), index=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    work_date: Mapped[str] = mapped_column(String(10))
+    employee_no: Mapped[str] = mapped_column(String(50), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    person_type: Mapped[str] = mapped_column(String(30), default="")
+    mark: Mapped[str] = mapped_column(String(30), default="")
+    cell_raw: Mapped[str] = mapped_column(String(255), default="")
+
+
+class RotationDay(Base):
+    """某个景点圈某一天的轮岗。state_json 是引擎的当天完整状态。"""
+
+    __tablename__ = "rotation_days"
+    __table_args__ = (UniqueConstraint("attraction_id", "work_date", name="uq_rotation_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    work_date: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(10), default="draft", index=True)  # draft / live / ended
+    state_json: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RotationEvent(Base):
+    """轮岗操作日志。actor_type 为 employee / screen / supervisor / manager / system。"""
+
+    __tablename__ = "rotation_events"
+    __table_args__ = (
+        Index("ix_rotation_event_day", "attraction_id", "work_date", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    work_date: Mapped[str] = mapped_column(String(10))
+    minute: Mapped[float] = mapped_column(Float)
+    actor_type: Mapped[str] = mapped_column(String(10))
+    actor_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_name: Mapped[str] = mapped_column(String(100))
+    event_type: Mapped[str] = mapped_column(String(40))
+    employee_no: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    line: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    post: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RotationSegment(Base):
+    """每段在线记录，用于本周各线累计。"""
+
+    __tablename__ = "rotation_segments"
+    __table_args__ = (
+        Index("ix_rotation_segment_week", "attraction_id", "work_date", "employee_no"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    work_date: Mapped[str] = mapped_column(String(10))
+    employee_no: Mapped[str] = mapped_column(String(50))
+    line: Mapped[str] = mapped_column(String(20))
+    start_min: Mapped[float] = mapped_column(Float)
+    end_min: Mapped[float] = mapped_column(Float)
+    minutes: Mapped[float] = mapped_column(Float)
+
+
+class RotationDuty(Base):
+    """每天的推 7 点和送失物人选，用于本周公平轮换。"""
+
+    __tablename__ = "rotation_duties"
+    __table_args__ = (
+        UniqueConstraint("attraction_id", "work_date", "employee_no", "kind", name="uq_rotation_duty"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    work_date: Mapped[str] = mapped_column(String(10), index=True)
+    employee_no: Mapped[str] = mapped_column(String(50))
+    kind: Mapped[str] = mapped_column(String(10))  # push7 / lost
+
+
+class RotationNotice(Base):
+    """CM/TR 的轮岗待办（测试阶段只在轮岗模拟页显示，不进 PR 待办中心）。
+
+    由当前状态推导：状态变了就更新或关闭，每人每个 slot 最多一条进行中。
+    """
+
+    __tablename__ = "rotation_notices"
+    __table_args__ = (
+        Index("ix_rotation_notice_open", "employee_no", "status"),
+        Index("ix_rotation_notice_day", "attraction_id", "work_date", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    work_date: Mapped[str] = mapped_column(String(10))
+    employee_no: Mapped[str] = mapped_column(String(50))
+    # 去重键：同一人同一天同一 slot 只有一条进行中，例如 "step"、"duty:lost"。
+    slot: Mapped[str] = mapped_column(String(40))
+    kind: Mapped[str] = mapped_column(String(30))
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(10), default="open")  # open / done
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

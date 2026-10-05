@@ -15,6 +15,7 @@ from app.v2_models import Employee, UserAccount, UserSession
 from app.v2_crypto import token_hash
 from app.v2_services import process_role_expirations, write_audit
 from app.deduction_materials import start_deduction_material_worker
+from app.rotation.service import start_rotation_ticker
 from app.v2_database import SessionLocal
 from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 
@@ -186,6 +187,7 @@ async def reject_cross_site_state_changes(request: Request, call_next):
 def startup() -> None:
     init_db()
     start_deduction_material_worker()
+    start_rotation_ticker()
     db = SessionLocal()
     try:
         process_role_expirations(db)
@@ -205,6 +207,18 @@ def root():
 @app.get("/login")
 def login_page():
     return render_static_page(BASE_DIR / "app" / "static" / "login.html")
+
+
+@app.get("/rotation")
+def rotation_page():
+    """轮岗（测试）：主管看板与 CM/TR 个人页；身份由轮岗会话决定。"""
+    return render_static_page(BASE_DIR / "app" / "static" / "rotation.html")
+
+
+@app.get("/rotation/screen")
+def rotation_screen_page():
+    """休息室大屏。"""
+    return render_static_page(BASE_DIR / "app" / "static" / "rotation-screen.html")
 
 
 @app.get("/health")

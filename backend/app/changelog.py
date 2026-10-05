@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.06.2",
+        "date": "2026-10-06",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "新增「轮岗（测试）」入口（测试功能）",
+                "detail": "仅热力追踪的TR和GSM在导航中看到「轮岗（测试）」。这是测试功能，所有数据均为模拟数据，不影响签卡、待办、统计等正式功能。进入后输入模拟账号即可查看：6666666为休息室大屏，7777777为轮岗主管，8888888为轮岗经理，输入名单中某位CM/TR的工号可查看该员工的个人轮岗和待办。测试数据和测试时钟全场共用，多人同时测试会互相影响。",
+                "audiences": ["TR", "GSM", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.06.1",
         "date": "2026-10-06",
         "status": "candidate",

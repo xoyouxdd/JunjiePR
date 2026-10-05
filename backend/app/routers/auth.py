@@ -15,6 +15,7 @@ from app.changelog import RELEASES, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
 from app.routers._shared import client_ip, group_display_metadata_bulk
+from app.rotation.access import can_enter as can_enter_rotation, find_rotation_account, rotation_login
 
 router = APIRouter()
 
@@ -54,6 +55,8 @@ def user_payload(db: Session, user: V2User) -> dict:
         "permissions": sorted(user.permissions),
         "member_count": len(direct_member_ids(db, user.id)),
         "must_change_password": user.account.must_change_password,
+        # 「轮岗（测试）」入口：热力追踪的 TR 和 GSM。
+        "rotation_entry": can_enter_rotation(db, user),
     }
 
 
@@ -67,6 +70,10 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
         .filter(or_(UserAccount.login_account == login_name, Employee.employee_no == login_name))
         .first()
     )
+    if not account:
+        rotation_account = find_rotation_account(db, login_name)
+        if rotation_account:
+            return rotation_login(db, request, response, rotation_account, password)
     if not account or not account.enabled:
         raise HTTPException(401, "账号或密码/PIN不正确")
     if account.locked_until and account.locked_until > datetime.now():

@@ -56,6 +56,11 @@ form.addEventListener('submit', async event => {
     } catch (_error) {
       /* Ignore storage failures after a successful login. */
     }
+    // 轮岗专用账号（大屏、轮岗主管、轮岗经理）登录后直接进入轮岗页面。
+    if (body.redirect === '/rotation/screen' || body.redirect === '/rotation') {
+      location.href = portalPath(body.redirect);
+      return;
+    }
     location.href = portalPath('/');
   } catch (_error) {
     message.textContent = '网络连接失败，请稍后重试';
