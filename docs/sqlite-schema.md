@@ -1101,8 +1101,8 @@
 |---|---|---|
 | `rotation_accounts` | `login_account` 唯一；`kind` 为 screen / supervisor / manager；`attraction_id` → `attractions` | `login_account`、`attraction_id` |
 | `rotation_account_sessions` | `account_id` → `rotation_accounts`（级联删除，可空）；模拟 CM/TR 时 `account_id` 为空、`member_employee_no` 为工号；`entered_by_id` → `employees` 为从测试入口进入的员工；`token_hash` 唯一 | `account_id`、`token_hash`、`expires_at` |
-| `rotation_configs` | `attraction_id` 唯一 | — |
-| `rotation_roster_uploads` | `attraction_id`、`uploaded_by_id` → `employees` | `attraction_id` |
+| `rotation_configs` | `attraction_id` 唯一；`clock_json` 为测试时钟状态 | — |
+| `rotation_roster_uploads` | `attraction_id`；`uploaded_by_id` → `employees` 可空（专用账号直接登录时为空），`uploaded_by_name` 为操作人 | `attraction_id` |
 | `rotation_roster_entries` | `upload_id` → `rotation_roster_uploads`（级联删除） | `ix_rotation_roster_entry_day (attraction_id, work_date)`、`upload_id`、`employee_no` |
 | `rotation_days` | `uq_rotation_day (attraction_id, work_date)`；`status` 为 draft / live / ended | `status` |
 | `rotation_events` | `actor_type` 为 employee / screen / supervisor / manager / system | `ix_rotation_event_day (attraction_id, work_date, id)`、`employee_no` |

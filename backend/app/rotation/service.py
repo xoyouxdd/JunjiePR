@@ -592,6 +592,8 @@ def board_payload(db: Session, attraction_id: int) -> dict:
         "settings": settings_of(cfg),
         "lines": lines_of(cfg),
         "roster": roster_summary(db, attraction_id, day),
+        "rosterDates": [d for (d,) in db.query(RotationRosterEntry.work_date).filter(RotationRosterEntry.attraction_id == attraction_id).distinct().order_by(RotationRosterEntry.work_date.asc()).all()],
+        "days": [{"date": r.work_date, "status": r.status} for r in db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id).order_by(RotationDay.work_date.desc()).limit(30).all()],
         "day": None,
         "draft": None,
     }
@@ -606,7 +608,8 @@ def screen_payload(db: Session, attraction_id: int) -> dict:
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
     row = day_row(db, attraction_id, day)
-    out = {"clock": clock_payload(cfg), "version": RUNTIME.version, "day": None}
+    out = {"clock": clock_payload(cfg), "version": RUNTIME.version, "day": None,
+           "settings": {"departEarly": settings_of(cfg)["departEarly"]}}
     if row and row.status in ("live", "ended"):
         view = live_view(db, cfg, row, minute)
         view.pop("alerts", None)

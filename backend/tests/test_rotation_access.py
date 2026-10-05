@@ -185,3 +185,14 @@ def test_rotation_supervisor_resets_screen_password_and_old_sessions_end() -> No
         audit = db.query(AuditLog).filter_by(action="重置休息室大屏密码").one()
         assert audit.attraction_id == heat.id
         assert audit.operator_id == gsm.id
+
+
+def test_me_exposes_entry_and_rotation_pages_are_served() -> None:
+    with TestClient(app) as client:
+        relogin(client, "TRTEST01")
+        assert client.get("/api/me").json()["rotation_entry"] is True
+        relogin(client, "CMTEST01")
+        assert client.get("/api/me").json()["rotation_entry"] is False
+        for path, script in (("/rotation", "static/js/rotation.js"), ("/rotation/screen", "../static/js/rotation-screen.js")):
+            page = client.get(path)
+            assert page.status_code == 200 and script in page.text and "__STATIC_CACHE_VERSION__" not in page.text

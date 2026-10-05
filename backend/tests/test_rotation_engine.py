@@ -449,3 +449,14 @@ def test_postponed_close_restores_posts_and_closing_work_people():
     assert not eng.d["closed"]
     assert all(x["open"] for x in eng.line("A")["posts"])
     assert eng.P["pool"]["state"] == "ready"
+
+
+def test_a_batch_starting_together_spreads_across_lines_when_everything_ties():
+    people = [person(p, "07:00", "21:00") for p in ("a0", "a1", "a2", "b0", "b1", "b2", "n1", "n2")]
+    eng, _ = live_day(people)
+    for i, p in enumerate(("a0", "a1", "a2")):
+        seat(eng, p, "A", i, "08:00")
+    for i, p in enumerate(("b0", "b1", "b2")):
+        seat(eng, p, "B", i, "08:00")
+    eng.tick(hm("09:00"))
+    assert sorted(eng.P[p]["assign"]["line"] for p in ("n1", "n2")) == ["A", "B"]

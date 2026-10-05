@@ -15,7 +15,7 @@ from app.changelog import RELEASES, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
 from app.routers._shared import client_ip, group_display_metadata_bulk
-from app.rotation.access import find_rotation_account, rotation_login
+from app.rotation.access import can_enter as can_enter_rotation, find_rotation_account, rotation_login
 
 router = APIRouter()
 
@@ -55,6 +55,8 @@ def user_payload(db: Session, user: V2User) -> dict:
         "permissions": sorted(user.permissions),
         "member_count": len(direct_member_ids(db, user.id)),
         "must_change_password": user.account.must_change_password,
+        # 「轮岗（测试）」入口：热力追踪的 TR 和 GSM。
+        "rotation_entry": can_enter_rotation(db, user),
     }
 
 

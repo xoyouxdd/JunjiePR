@@ -198,6 +198,7 @@ function menuItems() {
   if(r==='SYSTEM_ADMIN')items.splice(5,0,['operations','系统运营']);
   if(isActingFrontline())items.unshift(['home','我的成绩']);
   items.splice(['CM','TR'].includes(r)?1:0,0,['actionCenter','待办']);
+  if(state.me.rotation_entry)items.push(['rotationTest','轮岗（测试）']);
   items.push(['changelog','更新记录']);
   items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);
   return items;
@@ -253,6 +254,7 @@ const NAV_GROUP_DEFS=[
   {id:'close',label:'结算',ids:['monthClose','hrScores']},
   {id:'govern',label:'治理',ids:['logs']},
   {id:'system',label:'系统',ids:['operations']},
+  {id:'rotation',label:'轮岗',ids:['rotationTest']},
 ];
 function navIcon(id){
   const inner={
@@ -273,6 +275,7 @@ function navIcon(id){
     circleHrAccounts:'<rect x="4" y="10" width="16" height="10" rx="1.5"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/>',
     hrGroups:'<circle cx="8" cy="8" r="2.4"/><circle cx="16" cy="8" r="2.4"/><circle cx="12" cy="16" r="2.4"/><path d="M10 9.6 11.2 13.8M14 9.6 12.8 13.8"/>',
     circleTransfers:'<path d="M8 7h11l-3.2-3.2M16 17H5l3.2 3.2"/>',
+    rotationTest:'<path d="M19 12a7 7 0 0 1-12.2 4.7M5 12a7 7 0 0 1 12.2-4.7"/><path d="M17.5 3.5v4h-4M6.5 20.5v-4h4"/>',
     logs:'<path d="M6 4h9l3 3v13H6z"/><path d="M15 4v3h3M8 12h8M8 16h5.5"/>',
     hrScores:'<path d="M4 7h10M4 12h16M4 17h7"/><circle cx="16.5" cy="7" r="2"/><circle cx="12.5" cy="17" r="2"/>',
     operations:'<circle cx="12" cy="12" r="3"/><path d="M12 3.5V6M12 18v2.5M5 6.6 6.8 8M17.2 16l1.8 1.4M5 17.4 6.8 16M17.2 8l1.8-1.4"/>',
@@ -415,6 +418,7 @@ async function render(){
   try {
     const views={home:renderHome,actionCenter:renderActionCenter,operations:renderOperations,register:renderRegister,absence:renderAbsence,entries:renderEntries,review:()=>{reviewApiBase='/api/reviews';return renderReview();},supervisorReview:()=>{reviewApiBase='/api/supervisor-reviews';return renderReview();},upgradeReview:renderUpgradeReview,members:renderMembers,statistics:renderStatistics,statisticsDetail:renderStatisticsDetail,declarationStatistics:renderDeclarationStatistics,prRankings:renderPrRankings,password:renderPasswordPage,accountReset:renderAccountReset,circleHrAccounts:renderCircleHrAccounts,hrEmployees:renderHrEmployees,monthClose:renderMonthClose,circleTransfers:renderCircleTransfers,hrGroups:renderHrGroups,hrScores:renderHrScores,logs:renderLogs,changelog:renderChangelog,sickLeaveImport:renderSickLeaveImport,loa:renderLoa};
     views.hrMonthlyReport=renderHrMonthlyReport;
+    views.rotationTest=renderRotationTest;
     await (views[state.tab] || renderHome)();
     if(generation!==renderGeneration) return;
   } catch(e) {
@@ -1607,6 +1611,16 @@ async function renderHrMonthlyReport(){
   await load();
 }
 
+// 轮岗（测试）：输入模拟账号后进入独立的轮岗页面；数据全为模拟，不影响正式功能。
+async function renderRotationTest(){
+  const request=beginViewRequest();
+  const quick=[['6666666','休息室大屏'],['7777777','轮岗主管'],['8888888','轮岗经理']];
+  if(!request.write(`<section class="panel rotation-entry"><div class="rotation-entry-heading"><h2>轮岗</h2><span class="rotation-test-badge">测试</span></div><p>轮岗功能正在测试，所有数据均为模拟数据，不影响正式的签卡、待办和统计。</p><form id="rotationEnterForm" class="form-stack"><label>模拟账号<input name="account" inputmode="numeric" autocomplete="off" maxlength="50" placeholder="输入模拟账号，或名单中 CM/TR 的工号" required></label><button type="submit" class="primary">进入</button></form><div class="rotation-entry-quick">${quick.map(([no,label])=>`<button type="button" class="secondary" data-rotation-account="${no}"><span>${esc(label)}</span><small>${no}</small></button>`).join('')}</div><p class="field-hint">输入名单中某位 CM/TR 的工号，可查看他的个人轮岗和待办。</p></section>`))return;
+  const enter=async account=>{try{const out=await api('/api/rotation/enter',json('POST',{account}));location.href=portalPath(out.redirect);}catch(error){toast(error.message,true);}};
+  const form=document.getElementById('rotationEnterForm');
+  form.onsubmit=event=>{event.preventDefault();const value=form.account.value.trim();if(value)void enter(value);};
+  app.querySelectorAll('[data-rotation-account]').forEach(button=>button.onclick=()=>enter(button.dataset.rotationAccount));
+}
 async function logout(){await api('/api/logout',{method:'POST'});location.href=portalPath('/login')}
 document.getElementById('logoutBtn').onclick=logout;
 (async()=>{try{state.me=await api('/api/me');if(state.me.must_change_password){renderPasswordChangeRequired();return;}state.options=await api('/api/options');if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';applyCircleTheme();installScreenWatermark();installPageBindHint();renderUserBadge();renderTabs();void refreshActionBadge();await render();void showReleaseAnnouncement().catch(error=>toast(error.message||'更新公告加载失败',true));}catch(e){if(!location.pathname.includes('/login'))location.href=portalPath('/login');}})();

@@ -689,7 +689,8 @@ class Engine:
     def _best_line(self, p, now, wk):
         """选线：先补空岗或马上定时开的岗位；否则推出口岗站得最久的人。
 
-        站岗时长按整分钟比，相同再看：不是刚下来的线、当天没进过、本周在该线累计少。
+        站岗时长按整分钟比，相同再看：不是刚下来的线、当天没进过、本周在该线累计少，
+        最后看已排去这条线的人少。
         """
         S = self.S
         ready = self._ready_time(p, now)
@@ -733,8 +734,9 @@ class Engine:
                 continue
             if cm is not None and arrival >= cm - S.get('closeStopPush', 20):
                 continue
+            # 最后按已排去这条线的人数分散，避免同时上班的一批人全挤进同一条线
             key = (cls, rank, p.get('lastLine') == L['id'], L['id'] in p.get('visited', []),
-                   wk.get(p['pid'], {}).get(L['id'], 0), order)
+                   wk.get(p['pid'], {}).get(L['id'], 0), k, order)
             if best is None or key < best[0]:
                 best = (key, {'line': L['id'], 'mode': 'push', 'departAt': arrival - walk})
         return best[1] if best else None

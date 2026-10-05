@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#102033">
+  <meta name="format-detection" content="telephone=no">
+  <title>轮岗（测试）</title>
+  <link rel="stylesheet" href="static/css/style.css?v=__STATIC_CACHE_VERSION__">
+  <link rel="stylesheet" href="static/css/rotation.css?v=__STATIC_CACHE_VERSION__">
+</head>
+<body class="rotation-page">
+  <header class="rt-top">
+    <div class="rt-title"><strong>轮岗</strong><span class="rotation-test-badge">测试环境 · 模拟数据</span></div>
+    <div class="rt-who" id="rtWho"></div>
+    <div class="rt-clock" id="rtClock" aria-live="off"></div>
+    <button type="button" class="ghost rt-switch" id="rtSwitch">切换模拟账号</button>
+  </header>
+  <section class="rt-clockbar" id="rtClockBar" hidden></section>
+  <nav class="rt-tabs" id="rtTabs" aria-label="轮岗功能" hidden></nav>
+  <main class="rt-main" id="rtApp"><section class="empty">正在加载…</section></main>
+  <div id="rtModal"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script src="static/js/rotation-common.js?v=__STATIC_CACHE_VERSION__"></script>
+  <script src="static/js/rotation.js?v=__STATIC_CACHE_VERSION__"></script>
+</body>
+</html>
