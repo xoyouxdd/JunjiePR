@@ -719,8 +719,9 @@ def ensure_enabled_scored_target(db: Session, employee_id: int, action_name: str
     return target, target_role
 
 
-# Who may credit or deduct a supervisor: formal GSM and acting TA GSM; a
-# supervisor acting as TA GSM is handled by AM only.
+# Who may credit or deduct a supervisor: formal GSM and acting TA GSM.  While
+# a supervisor acts as TA GSM nobody credits or deducts them; they register
+# their own recognitions, which AM reviews.
 SUPERVISOR_SCORER_CODES = {"GSM", "TA_GSM"}
 
 
@@ -728,9 +729,7 @@ def ensure_supervisor_target_allowed(db: Session, user: V2User, target: Employee
     if target.id == user.id:
         raise HTTPException(403, "不能对本人登记")
     if duty_code_at(db, target.id, on_date) == "TA_GSM":
-        if not user.has_role("AM"):
-            raise HTTPException(403, f"代理TA GSM期间的主管只能由AM{action_name}")
-        return
+        raise HTTPException(403, f"代理TA GSM期间的主管不能由他人{action_name}，请其本人登记后由AM复核")
     if user.role.code not in SUPERVISOR_SCORER_CODES:
         raise HTTPException(403, f"只有正式GSM和TA GSM可以为主管{action_name}")
 

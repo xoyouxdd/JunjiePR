@@ -89,7 +89,7 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
     # 本次升级计分口径与普通员工相关；月报条目仍按原权限过滤。
-    # 2026.10.05.3 至 2026.10.05.6 只面向HR，普通员工看到的最新一版是 2026.10.05.2。
+    # 2026.10.05.3 之后的版本不面向CM，普通员工看到的最新一版是 2026.10.05.2。
     assert cm[0]["version"] == "2026.10.05.2" and cm[0]["current"] is False
     assert "声明升级按考勤类别匹配并修正实际扣分" in cm_text
     assert "手机底部栏按角色放常用功能" in cm_text
@@ -132,7 +132,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in hr["release"]["items"]] == ["员工管理的小组和顶部功能默认折叠"]
+        assert [item["summary"] for item in hr["release"]["items"]] == ["主管签卡复核与代理TA GSM期间规则调整"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()

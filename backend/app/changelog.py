@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.06.1",
+        "date": "2026-10-06",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "主管签卡复核与代理TA GSM期间规则调整",
+                "detail": "主管本人登记的签卡改为只由正式GSM复核（不限景点圈）。主管代理TA GSM期间：认可人可选GSM、AM或OM，由AM复核；期间不能由他人加分、扣分或开具POC，请本人登记。病假、LOA等缺勤登记不受影响。OM不再复核主管签卡，AM不再提供为主管登记的入口。",
+                "audiences": ["SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.05.6",
         "date": "2026-10-05",
         "status": "candidate",

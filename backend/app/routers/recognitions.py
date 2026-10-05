@@ -12,7 +12,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionMonthlyQuota, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
 from app.recognition_encouragement import encouragement_options
-from app.v2_services import FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, SENIOR_RECOGNIZER_CODES, base_role_at, scoring_category, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
+from app.v2_services import ACTING_TA_GSM_RECOGNIZER_CODES, FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, SENIOR_RECOGNIZER_CODES, base_role_at, scoring_category, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
 from app.routers._shared import (
     ATTENDANCE_FILTER_STATUSES,
     DEDICATED_RECOGNITION_TYPE_CODES,
@@ -204,10 +204,10 @@ async def create_recognition(
         if recognizer.id == target.id:
             raise HTTPException(400, "认可人不能是被加分员工本人")
         if target_category == "supervisor":
-            # Supervisors are recognized by TA GSM and above; an acting TA GSM only by AM.
-            allowed_codes = {"AM"} if target_duty_code == "TA_GSM" else SENIOR_RECOGNIZER_CODES
+            # Supervisors are recognized by TA GSM and above; while acting as TA GSM by GSM, AM or OM.
+            allowed_codes = ACTING_TA_GSM_RECOGNIZER_CODES if target_duty_code == "TA_GSM" else SENIOR_RECOGNIZER_CODES
             if recognizer_role.code not in allowed_codes:
-                raise HTTPException(400, "代理TA GSM期间的认可人只能是AM" if target_duty_code == "TA_GSM" else "主管的认可人必须是TA GSM、GSM、AM或OM")
+                raise HTTPException(400, "代理TA GSM期间的认可人必须是GSM、AM或OM" if target_duty_code == "TA_GSM" else "主管的认可人必须是TA GSM、GSM、AM或OM")
         recognizer_name = recognizer.name
         recognizer_role_name = recognizer_role.name
         fraction = recognition_score_for_role(db, recognizer_role.id, recognition_date)
@@ -400,6 +400,8 @@ def create_poc_recognition(
     target, target_role = ensure_enabled_poc_target(db, int(employee_id))
     if target.id == user.id:
         raise HTTPException(403, "不能为本人开具POC特别贡献")
+    if duty_code_at(db, target.id, recognition_date) == "TA_GSM":
+        raise HTTPException(403, "代理TA GSM期间的主管不能由他人开具POC，请其本人登记后由AM复核")
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.employee_circle:
         raise HTTPException(400, "被认可员工未配置有效景点圈")
@@ -526,18 +528,19 @@ def reviews(
 
 
 def supervisor_review_query(db: Session, user: V2User):
-    """Self-submitted supervisor records: any formal GSM/AM/OM across circles;
-    records made while acting as TA GSM go to AM only."""
+    """Self-submitted supervisor records: any formal GSM reviews them across
+    circles; records made while acting as TA GSM go to AM only."""
     if "REVIEW_SUPERVISOR" not in user.permissions:
-        raise HTTPException(403, "仅正式GSM、AM、OM可以复核主管签卡")
-    query = db.query(RecognitionRecord).filter(
+        raise HTTPException(403, "仅正式GSM、AM可以复核主管签卡")
+    acting = RecognitionRecord.employee_acting_duty_code == "TA_GSM"
+    not_acting = or_(RecognitionRecord.employee_acting_duty_code.is_(None), RecognitionRecord.employee_acting_duty_code != "TA_GSM")
+    scopes = ([not_acting] if user.has_role("GSM") else []) + ([acting] if user.has_role("AM") else [])
+    return db.query(RecognitionRecord).filter(
         RecognitionRecord.source == "self",
         RecognitionRecord.employee_role_code_snapshot == "SUPERVISOR",
         RecognitionRecord.employee_id != user.id,
+        or_(*scopes) if scopes else RecognitionRecord.id == -1,
     )
-    if not user.has_role("AM"):
-        query = query.filter(or_(RecognitionRecord.employee_acting_duty_code.is_(None), RecognitionRecord.employee_acting_duty_code != "TA_GSM"))
-    return query
 
 
 @router.get("/supervisor-reviews")

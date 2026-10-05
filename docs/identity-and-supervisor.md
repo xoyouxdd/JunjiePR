@@ -30,15 +30,15 @@
 |---|---|---|---|---|
 | CM/TR | 组长级与 TAGSM 及以上，不含本人 | 所在小组的负责人 | TA主管、主管、TA GSM、GSM | 主管级只能登记声明；GSM、TA GSM 全部等级 |
 | CM/TR 在代理 TA主管期间 | 同上 | 所在小组的负责人（在自己代理的组内时为该组主管） | TA GSM、GSM；主管级不可（表扬信等系统固定分值类型除外） | 同 CM/TR |
-| 主管 | TA GSM、GSM、AM、OM，不含本人 | 任一正式 GSM、AM、OM，不限景点圈 | 正式 GSM、TA GSM | 正式 GSM、TA GSM，全部等级 |
-| 主管在代理 TA GSM 期间 | 只能选 AM | 只有 AM | 只有 AM | 只有 AM，全部等级 |
+| 主管 | TA GSM、GSM、AM、OM，不含本人 | 任一正式 GSM，不限景点圈 | 正式 GSM、TA GSM | 正式 GSM、TA GSM，全部等级 |
+| 主管在代理 TA GSM 期间 | GSM、AM、OM，不含本人 | 只有 AM | 无（包括 POC、表扬信等固定分值类型，请本人登记） | 无 |
 
 - 是否处于代理期间，按认可日期 / 事件日期判断。
 - 认可分值按认可人在认可当天的身份计算；认可日期在未来时按当天身份。认可人名单按认可日期生成，包括当天尚未离职的人；只有更早于全部角色记录的日期，才回退到最早的角色记录。
 - 不能对本人复核、加分（认可人不能是本人）、扣分、登记病假或 LOA、开具 POC。
 - 主管本人登记的认可进入 `GET /api/supervisor-reviews` 公共队列，`POST /api/supervisor-reviews/{id}` 复核；并发复核沿用原子领取，只有一人生效。待办中心显示「主管待复核签卡」。
-- 员工查询 `GET /api/employee-targets?scope=supervisor` 按权限返回可登记的主管（GSM/TA GSM 不含代理 TA GSM 的主管；AM 只含代理 TA GSM 的主管）。
-- 相关权限：`REVIEW_SUPERVISOR`（GSM、AM、OM）、`SUPERVISOR_SCORE`（GSM、TA GSM）、`TA_GSM_SCORE`（AM）；主管具备 `SELF_RECOGNITION`。
+- 员工查询 `GET /api/employee-targets?scope=supervisor` 返回 GSM、TA GSM 可登记的主管，不含代理 TA GSM 期间的主管。
+- 相关权限：`REVIEW_SUPERVISOR`（GSM 复核非代理期间的主管签卡，AM 复核代理 TA GSM 期间的；OM 不复核）、`SUPERVISOR_SCORE`（GSM、TA GSM）；主管具备 `SELF_RECOGNITION`。代理期间的病假、LOA 等缺勤登记不受影响，照常登记、照常扣全勤分。
 
 ## 计分类别与全勤
 

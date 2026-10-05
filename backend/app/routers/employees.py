@@ -89,9 +89,7 @@ def supervisor_targets(db: Session, user: V2User, usage: str, keyword: str, attr
     """Supervisors that this account may credit or deduct (see ensure_supervisor_target_allowed)."""
     if usage not in {"recognition", "deduction"}:
         raise HTTPException(400, "员工查询用途无效")
-    may_score_supervisors = "SUPERVISOR_SCORE" in user.permissions and user.role.code in {"GSM", "TA_GSM"}
-    may_score_ta_gsm = "TA_GSM_SCORE" in user.permissions
-    if not (may_score_supervisors or may_score_ta_gsm):
+    if not ("SUPERVISOR_SCORE" in user.permissions and user.role.code in {"GSM", "TA_GSM"}):
         raise HTTPException(403, "没有为主管登记的权限")
     if not keyword.strip():
         return {"items": [], "total": 0, "limit": max(1, min(limit, 50)), "search_scope": "全部景点圈在职主管（请输入姓名或员工号）"}
@@ -100,12 +98,12 @@ def supervisor_targets(db: Session, user: V2User, usage: str, keyword: str, attr
     items = []
     for row in result["items"]:
         duty = (duties.get(row["id"]) or [None])[0]
-        acting_ta_gsm = bool(duty and duty.code == "TA_GSM")
-        if row["id"] == user.id or (acting_ta_gsm and not may_score_ta_gsm) or (not acting_ta_gsm and not may_score_supervisors):
+        # Supervisors acting as TA GSM are scored by nobody else.
+        if row["id"] == user.id or (duty and duty.code == "TA_GSM"):
             continue
         items.append({**row, "duty_role_code": duty.code if duty else "", "role_name": f"主管 · 代理{duty.name}" if duty else row["role_name"], "scoring_category": "supervisor"})
     shown = items[: max(1, min(limit, 50))]
-    return {"items": shown, "total": len(items), "limit": max(1, min(limit, 50)), "search_scope": "代理TA GSM的主管" if may_score_ta_gsm and not may_score_supervisors else "全部景点圈在职主管"}
+    return {"items": shown, "total": len(items), "limit": max(1, min(limit, 50)), "search_scope": "全部景点圈在职主管（不含代理TA GSM期间的主管）"}
 
 
 @router.get("/employee-targets")
