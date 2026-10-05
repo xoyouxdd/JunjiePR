@@ -40,7 +40,7 @@
 | `release_announcement_reads` | 更新公告已读状态 |
 | `submission_requests` | 提交幂等 |
 | `management_scopes` | GSM/TA GSM 管理范围 |
-| `work_groups` | 工作组 |
+| `work_groups` | 小组 |
 | `group_leader_assignments` | 组长任职 |
 | `group_memberships` | 组员归属 |
 | `group_transfers` | 组内交接 |
@@ -368,18 +368,21 @@
 
 | 字段 | 类型 | 空 | 说明 |
 |---|---|---|---|
-| `id` | INTEGER PK | 否 | 组身份，不随显示名变 |
-| `name` | VARCHAR(100) | 否 | |
+| `id` | INTEGER PK | 否 | 组身份 |
+| `name` | VARCHAR(100) | 否 | 组名，新建为「景点圈 + 字母 + 组」，如 `热力追踪A组`；换负责人不改名，HR 可改名；关闭后加「（已关闭）」 |
+| `code` | VARCHAR(8) | 是 | 字母代号（A…Z、AA…），同一景点圈未关闭的组内唯一；新建取最前面空着的字母，关闭时清空 |
 | `attraction_id` | INTEGER | 否 | FK → `attractions.id` |
-| `status` | VARCHAR(20) | 否 | 默认 `active` |
+| `status` | VARCHAR(20) | 否 | `active` / `pending_takeover` / `closed`，默认 `active` |
 | `revision` | INTEGER | 否 | |
 | `created_at` | DATETIME | 否 | |
 
-键：PK `id`；FK `attraction_id`。列级索引：`name`、`attraction_id`、`status`。
+键：PK `id`；FK `attraction_id`。列级索引：`name`、`code`、`attraction_id`、`status`。
+
+2026-10 迁移（`2026-10-group-codes`）为每个景点圈未关闭的组按原显示名（「组长工作组」）的拼音顺序依次分配字母，并把旧名和新名写入审计日志（动作「小组统一命名」）。
 
 ### `group_leader_assignments`
 
-`leader_type`：`formal`（原组长，本职主管及以上）或 `acting`（代理组长），VARCHAR(20)，默认 `formal`，有列级索引。2026-10 迁移按当时本职标注现有在任组长。规则见 [identity-and-supervisor.md](identity-and-supervisor.md)。
+`leader_type`：`formal`（主管）或 `acting`（代理主管），VARCHAR(20)，默认 `formal`，有列级索引。新任主管须为本职主管；2026-10 之前已在任的 GSM 及以上保留到 HR 更换，迁移时生成告警。规则见 [identity-and-supervisor.md](identity-and-supervisor.md)。
 
 | 字段 | 类型 | 空 | 说明 |
 |---|---|---|---|

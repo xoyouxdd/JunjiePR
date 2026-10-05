@@ -45,9 +45,9 @@ def test_material_preview_metadata_and_all_image_entry_points() -> None:
     assert "function bindPasswordForm" in script
     assert "function passwordResetScopeHint" in script
     assert "async function renderAccountReset" in script
-    assert "hrBatchLeaderBar" in script
-    assert "/api/hr/employees/batch-leaders" in script
-    assert '@router.post("/hr/employees/batch-leaders")' in router
+    assert "function hrEditEmployee" in script
+    assert "/api/hr/groups/'+group.id+'/leaders" in script
+    assert '@router.post("/hr/groups/{group_id}/leaders")' in router
     assert "/api/accounts/update-name" in script
     assert '<button type="submit" class="primary" disabled>确认修改姓名</button>' in script
     assert "可重置范围" in script

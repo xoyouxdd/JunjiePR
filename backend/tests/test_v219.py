@@ -192,7 +192,7 @@ def test_void_filter_export_and_security_watermarks() -> None:
         assert hierarchy_sheet["F2"].data_type == "f"
         assert "SUMIFS" in hierarchy_sheet["F2"].value
         assert any(row[13].value == "明细" for row in hierarchy_sheet.iter_rows(min_row=2))
-        supervisor_export_row = next(row for row in workbook["月度综合分"].iter_rows(min_row=2) if isinstance(row[0].value, str) and row[0].value.startswith("主管组："))
+        supervisor_export_row = next(row for row in workbook["月度综合分"].iter_rows(min_row=2) if isinstance(row[0].value, str) and row[0].value.startswith("热力追踪") and "共" in row[0].value)
         assert supervisor_export_row[8].value == "小组汇总"
         assert workbook["月度综合分"].row_dimensions[supervisor_export_row[0].row].collapsed is True
         detail_headers = [cell.value for cell in workbook["月度综合分明细"][1]]
@@ -629,6 +629,9 @@ def test_circle_hr_transfer_acceptance_is_immediate_and_migrates_current_data() 
         )
         assert created_leader.status_code == 200, created_leader.text
         target_leader_id = created_leader.json()["employee"]["id"]
+        dwarf_group = client.post("/api/hr/groups", json={"attraction_id": dwarf_id, "supervisor_id": target_leader_id, "reason": "调动接收小组"})
+        assert dwarf_group.status_code == 200, dwarf_group.text
+        target_group_id = dwarf_group.json()["id"]
         assert all(row["employee_no"] != "1000001" for row in client.get("/api/hr/employees").json())
         client.post("/api/logout")
 
@@ -661,7 +664,7 @@ def test_circle_hr_transfer_acceptance_is_immediate_and_migrates_current_data() 
             recognition_type = db.query(RecognitionType).filter_by(code="SAFETY").one()
             deduction_type = db.query(DeductionType).filter_by(code="ATT_LATE_WITHIN_30").one()
             deduction_level = db.query(DeductionLevel).filter_by(code="STATEMENT").one()
-            source_group = db.query(WorkGroup).filter_by(name="V2-A-TA组").one()
+            source_group = db.query(WorkGroup).filter_by(name="热力追踪B组").one()
             stored_file = StoredFile(
                 storage_key="circle-transfer-fixture.pdf",
                 original_filename="circle-transfer-fixture.pdf",
@@ -801,7 +804,7 @@ def test_circle_hr_transfer_acceptance_is_immediate_and_migrates_current_data() 
         assert duplicate.status_code == 409
         source_approval = client.post(
             f"/api/hr/circle-transfers/{transfer_id}/review",
-            json={"action": "accept", "target_leader_id": target_leader_id},
+            json={"action": "accept", "target_group_id": target_group_id},
         )
         assert source_approval.status_code == 403
         client.post("/api/logout")
@@ -809,7 +812,7 @@ def test_circle_hr_transfer_acceptance_is_immediate_and_migrates_current_data() 
         login_circle_hr(client, "HR-DWARF")
         accepted = client.post(
             f"/api/hr/circle-transfers/{transfer_id}/review",
-            json={"action": "accept", "target_leader_id": target_leader_id, "review_note": "接收并立即生效"},
+            json={"action": "accept", "target_group_id": target_group_id, "review_note": "接收并立即生效"},
         )
         assert accepted.status_code == 200, accepted.text
         assert accepted.json()["transfer"]["status"] == "completed"
@@ -1029,98 +1032,54 @@ def test_gsm_scopes_are_backfilled_and_parallel_gsms_jointly_own_supervisor_bran
 
         organization = client.get("/api/hr/organization")
         assert organization.status_code == 200, organization.text
-        rows = organization.json()["rows"]
-        heat_node = next(row["node_id"] for row in rows if row["node_type"] == "attraction" and row["name"] == "热力追踪")
-        direct_gsm_rows = [
-            row for row in rows
-            if row["node_type"] == "employee" and row["parent_id"] == heat_node and row.get("hierarchy_role") == "gsm"
-        ]
-        direct_gsm_ids = {row["employee"]["id"] for row in direct_gsm_rows}
-        assert {gsm_one["id"], gsm_two["id"], cm["id"], tagsm["id"], imported_id} <= direct_gsm_ids
-        team_row = next(row for row in rows if row["node_type"] == "gsm_team" and row["parent_id"] == heat_node)
-        assert "共同承接" in team_row["name"]
-        assert gsm_one["name"] in team_row["name"] and gsm_two["name"] in team_row["name"]
-        assert not any(row["parent_id"] == f"hr-gsm-{heat_id}-{tagsm['id']}" for row in rows)
+        heat = next(row for row in organization.json()["circles"] if row["name"] == "热力追踪")
+        # Parallel GSMs and the TA GSM are listed once on the circle header.
+        assert {gsm_one["name"], gsm_two["name"], cm["name"], "存量GSM"} <= set(heat["gsm_names"])
+        assert tagsm["name"] in heat["ta_gsm_names"]
+        assert not any(member["id"] == tagsm["id"] for group in heat["groups"] for member in group["members"])
 
 
-def test_hr_unclassified_frontline_batch_leader_assignment_is_atomic() -> None:
+def test_hr_places_unassigned_frontline_into_a_group_of_their_circle() -> None:
     today = date.today().isoformat()
     temporary_ids: list[int] = []
     with TestClient(app) as client:
         login(client, "HR01", "HR123")
         options = client.get("/api/options").json()
         heat_id = next(row["id"] for row in options["employee_circles"] if row["name"] == "热力追踪")
-        leader_options = client.get("/api/hr/leader-options")
-        assert leader_options.status_code == 200, leader_options.text
-        leader = next(row for row in leader_options.json() if row["attraction_id"] == heat_id and row.get("group_id"))
+        dwarf_id = next(row["id"] for row in options["employee_circles"] if row["name"] == "矮人迷宫")
 
         with SessionLocal() as db:
             role = db.query(Role).filter_by(code="CM").one()
-            operator = db.query(Employee).filter_by(employee_no="HR01").one()
             for suffix in ("81", "82"):
-                employee = Employee(
-                    employee_no=f"99800{suffix}",
-                    name=f"批量分组测试{suffix}",
-                    attraction_id=heat_id,
-                    is_active=True,
-                    hired_on=today,
-                )
+                employee = Employee(employee_no=f"99800{suffix}", name=f"分组测试{suffix}", attraction_id=heat_id, is_active=True, hired_on=today)
                 db.add(employee)
                 db.flush()
                 temporary_ids.append(employee.id)
-                db.add(
-                    EmployeeRoleAssignment(
-                        employee_id=employee.id,
-                        role_id=role.id,
-                        starts_on=today,
-                        status="active",
-                        reason="批量分组隔离测试",
-                        created_by=operator.id,
-                    )
-                )
+                db.add(EmployeeRoleAssignment(employee_id=employee.id, role_id=role.id, starts_on=today, status="active", reason="分组隔离测试"))
             db.commit()
 
-        invalid = client.post(
-            "/api/hr/employees/batch-leaders",
-            json={
-                "items": [
-                    {"employee_id": temporary_ids[0], "group_id": leader["group_id"], "leader_id": leader["id"]},
-                    {"employee_id": temporary_ids[1], "group_id": leader["group_id"], "leader_id": 999999999},
-                ]
-            },
-        )
-        assert invalid.status_code == 400, invalid.text
-        with SessionLocal() as db:
-            assert db.query(GroupMembership).filter(GroupMembership.employee_id.in_(temporary_ids)).count() == 0
-
-        saved = client.post(
-            "/api/hr/employees/batch-leaders",
-            json={
-                "items": [
-                    {"employee_id": employee_id, "group_id": leader["group_id"], "leader_id": leader["id"]}
-                    for employee_id in temporary_ids
-                ],
-                "reason": "批量分组接口测试",
-            },
-        )
-        assert saved.status_code == 200, saved.text
-        assert saved.json()["updated"] == 2
+        heat = next(row for row in client.get("/api/hr/organization").json()["circles"] if row["id"] == heat_id)
+        assert set(temporary_ids) <= {row["id"] for row in heat["unassigned"]}
+        heat_group = heat["groups"][0]
+        other_circle = client.post("/api/hr/groups", json={"attraction_id": dwarf_id})
+        assert other_circle.status_code == 200, other_circle.text
+        # A group of another circle is refused; nothing is ever auto-created.
+        refused = client.put(f"/api/hr/employees/{temporary_ids[0]}", json={"group_id": other_circle.json()["id"], "reason": "跨圈小组"})
+        assert refused.status_code == 400, refused.text
+        for employee_id in temporary_ids:
+            placed = client.put(f"/api/hr/employees/{employee_id}", json={"group_id": heat_group["id"], "reason": "分组测试"})
+            assert placed.status_code == 200, placed.text
         with SessionLocal() as db:
             memberships = db.query(GroupMembership).filter(GroupMembership.employee_id.in_(temporary_ids), GroupMembership.status == "active").all()
-            assert len(memberships) == 2
-            assert {row.group_id for row in memberships} == {leader["group_id"]}
-            assert db.query(AuditLog).filter_by(entity_type="employee_group_batch").count() >= 1
+            assert {row.group_id for row in memberships} == {heat_group["id"]}
+            assert db.query(AuditLog).filter(AuditLog.entity_type == "employee_group", AuditLog.action == "调整员工小组").count() >= 2
 
     with SessionLocal() as db:
-        db.query(AuditLog).filter(
-            (AuditLog.entity_type == "employee_group_batch")
-            | ((AuditLog.entity_type == "employee_group") & AuditLog.entity_id.in_([str(row) for row in temporary_ids]))
-        ).delete(synchronize_session=False)
+        db.query(AuditLog).filter((AuditLog.entity_type == "employee_group") & AuditLog.entity_id.in_([str(row) for row in temporary_ids])).delete(synchronize_session=False)
         db.query(GroupMembership).filter(GroupMembership.employee_id.in_(temporary_ids)).delete(synchronize_session=False)
         db.query(EmployeeRoleAssignment).filter(EmployeeRoleAssignment.employee_id.in_(temporary_ids)).delete(synchronize_session=False)
         db.query(Employee).filter(Employee.id.in_(temporary_ids)).delete(synchronize_session=False)
         db.commit()
-
 
 def test_highest_admin_can_manage_circle_hr_passwords_and_senior_roles() -> None:
     with SessionLocal() as db:
@@ -1273,7 +1232,7 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     assert "const r=state.me.role_code, items=[];" in script
     assert "if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记']);" in script
     assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);" in script
-    assert "items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','整组移交']" in script
+    assert "items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','小组管理']" in script
     assert "async function renderMonthClose" in script
     assert "items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);" in script
     assert "function renderPasswordPage" in script
@@ -1282,7 +1241,7 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     assert 'id="passwordBtn"' not in script
     assert "function recognizerGroups(rows)" in script
     assert "recognitionSubmissionData(e.target,selfMode)" in script
-    assert 'id="hrBatchLeaderSave"' in script
+    assert "data-hr-group-select" in script
     assert "const canEdit=state.me.role_code==='SYSTEM_ADMIN'" in script
     assert "label:'热力追踪主管'" in script
     assert "label:'矮人迷宫主管'" in script

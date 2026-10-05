@@ -87,7 +87,7 @@ def deduct(client: TestClient, target_no: str, level_code: str, key: str):
     )
 
 
-def test_supervisor_self_recognition_goes_to_the_shared_gsm_am_om_queue() -> None:
+def test_supervisor_self_recognition_goes_to_the_formal_gsm_queue() -> None:
     with TestClient(app) as client:
         login(client, "SUPTEST01")
         me = client.get("/api/me").json()
@@ -99,10 +99,13 @@ def test_supervisor_self_recognition_goes_to_the_shared_gsm_am_om_queue() -> Non
         assert record["status"] == "pending"
         assert client.get("/api/supervisor-reviews").status_code == 403
 
-        for reviewer in ("GSMTEST01", "AMTEST01", "OMTEST01"):
-            login(client, reviewer)
-            queue = client.get("/api/supervisor-reviews").json()["items"]
-            assert record["id"] in {row["id"] for row in queue}, reviewer
+        # Only a formal GSM reviews it; AM sees only acting TA GSM records, OM none.
+        login(client, "AMTEST01")
+        assert record["id"] not in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
+        login(client, "OMTEST01")
+        assert client.get("/api/supervisor-reviews").status_code == 403
+        login(client, "GSMTEST01")
+        assert record["id"] in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
         actions = client.get("/api/action-center").json()["items"]
         assert any(item["type"] == "supervisor_review" for item in actions)
         confirmed = client.post(f"/api/supervisor-reviews/{record['id']}", json={"action": "confirm"})
@@ -113,11 +116,12 @@ def test_supervisor_self_recognition_goes_to_the_shared_gsm_am_om_queue() -> Non
         assert client.get("/api/supervisor-reviews").status_code == 403
 
 
-def test_acting_ta_gsm_is_recognized_and_reviewed_by_am_only() -> None:
+def test_acting_ta_gsm_is_recognized_by_gsm_am_om_and_reviewed_by_am_only() -> None:
     with TestClient(app) as client:
         login(client, "TAGSMTEST01")
-        assert recognize(client, recognizer_no="GSMTEST01", key="tagsm-self-gsm", self_image=True).status_code == 400
-        created = recognize(client, recognizer_no="AMTEST01", key="tagsm-self-am", self_image=True)
+        # Recognizers: formal GSM, AM or OM; not another TA GSM.
+        assert recognize(client, recognizer_no="TAGSMTEST01", key="tagsm-self-self", self_image=True).status_code == 400
+        created = recognize(client, recognizer_no="GSMTEST01", key="tagsm-self-gsm", self_image=True)
         assert created.status_code == 200, created.text
         record_id = created.json()["record"]["id"]
         with SessionLocal() as db:
@@ -126,9 +130,8 @@ def test_acting_ta_gsm_is_recognized_and_reviewed_by_am_only() -> None:
         login(client, "GSMTEST01")
         assert record_id not in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
         assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "confirm"}).status_code == 404
-        login(client, "OMTEST01")
-        assert record_id not in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
         login(client, "AMTEST01")
+        assert record_id in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
         assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "confirm"}).status_code == 200
 
 
@@ -150,12 +153,18 @@ def test_who_may_credit_supervisors() -> None:
         login(client, "SUPTEST01")
         assert recognize(client, recognizer_no="GSMTEST01", key="sup-tagsm", target_no="TAGSMTEST01").status_code == 403
 
+        # Nobody credits a supervisor acting as TA GSM, AM included; AM has no supervisor entry.
         login(client, "AMTEST01")
         assert recognize(client, recognizer_no="GSMTEST01", key="am-sup", target_no="SUPTEST01").status_code == 403
-        assert recognize(client, recognizer_no="GSMTEST01", key="am-tagsm-gsm-recognizer", target_no="TAGSMTEST01").status_code == 400
-        assert recognize(client, recognizer_no="AMTEST01", key="am-tagsm", target_no="TAGSMTEST01").status_code == 200
-        found = client.get("/api/employee-targets", params={"usage": "deduction", "scope": "supervisor", "keyword": "测试"}).json()["items"]
-        assert {row["employee_no"] for row in found} == {"TAGSMTEST01"}
+        assert recognize(client, recognizer_no="AMTEST01", key="am-tagsm", target_no="TAGSMTEST01").status_code == 403
+        assert client.get("/api/employee-targets", params={"usage": "deduction", "scope": "supervisor", "keyword": "测试"}).status_code == 403
+        with SessionLocal() as db:
+            tagsm_id = db.query(Employee).filter_by(employee_no="TAGSMTEST01").one().id
+        poc = client.post(
+            "/api/recognitions/poc",
+            data={"recognition_date": date.today().isoformat(), "employee_id": str(tagsm_id), "points": "2", "poc_period_type": "month", "poc_reason": "代理期间"},
+        )
+        assert poc.status_code == 403, poc.text
 
 
 def test_who_may_deduct_supervisors() -> None:
@@ -168,7 +177,7 @@ def test_who_may_deduct_supervisors() -> None:
         login(client, "SUPTEST01")
         assert deduct(client, "TAGSMTEST01", "STATEMENT", "sup-deduct-tagsm").status_code == 403
 
+        # Nobody deducts a supervisor acting as TA GSM, AM included.
         login(client, "AMTEST01")
-        warning = deduct(client, "TAGSMTEST01", "WARNING_1", "am-deduct-tagsm")
-        assert warning.status_code == 200, warning.text
+        assert deduct(client, "TAGSMTEST01", "WARNING_1", "am-deduct-tagsm").status_code == 403
         assert deduct(client, "SUPTEST01", "STATEMENT", "am-deduct-sup").status_code == 403

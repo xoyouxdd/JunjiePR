@@ -240,18 +240,28 @@ def test_hr_confirms_legacy_base_and_assigns_the_original_leader_in_one_save() -
             )
             db.commit()
             gsm_id, ta_id = legacy_gsm.id, legacy_ta.id
+            for employee_id in (gsm_id, ta_id):
+                db.add(SystemAlert(alert_type="acting_duty_migration", dedupe_key=f"{employee_id}:test", employee_id=employee_id, message=f"测试待确认本职{employee_id}", status="open"))
+            db.commit()
 
         login(client, "HR01", "HR123")
-        # A legacy TA GSM cannot lead a group until HR confirms the base 主管.
-        too_early = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "leader_id": gsm_id, "reason": "确认本职"})
+        # Unconfirmed legacy records keep their alert.
+        assert any(row["message"] == f"测试待确认本职{ta_id}" and row["status"] == "open" for row in client.get("/api/hr/alerts").json())
+        # A legacy TA GSM cannot be a group's 主管 until HR confirms the base 主管.
+        too_early = client.post("/api/hr/groups", json={"attraction_id": circle_id, "supervisor_id": gsm_id})
         assert too_early.status_code == 400, too_early.text
         assert client.put(f"/api/hr/employees/{gsm_id}", json={"role_code": "SUPERVISOR", "reason": "确认本职"}).status_code == 200
-        assigned = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "leader_id": gsm_id, "reason": "确认本职并归组"})
+        created = client.post("/api/hr/groups", json={"attraction_id": circle_id, "supervisor_id": gsm_id})
+        assert created.status_code == 200, created.text
+        assigned = client.put(f"/api/hr/employees/{ta_id}", json={"role_code": "TR", "group_id": created.json()["id"], "reason": "确认本职并归组"})
         assert assigned.status_code == 200, assigned.text
         with SessionLocal() as db:
             assert role_at(db, gsm_id).code == "TA_GSM" and base_role_at(db, gsm_id).code == "SUPERVISOR"
             assert role_at(db, ta_id).code == "TA_SUPERVISOR" and base_role_at(db, ta_id).code == "TR"
             assert current_leader_for_employee(db, ta_id).id == gsm_id
+            # Confirming the base identity closes the "无法确定本职" alert.
+            assert db.query(SystemAlert).filter(SystemAlert.alert_type == "acting_duty_migration", SystemAlert.employee_id.in_([gsm_id, ta_id]), SystemAlert.status == "open").count() == 0
+        assert not any(row["message"].startswith("测试待确认本职") and row["status"] == "open" for row in client.get("/api/hr/alerts").json())
 
 
 def test_hr_sets_and_ends_a_duty_without_moving_the_group() -> None:
@@ -277,14 +287,19 @@ def test_hr_sets_and_ends_a_duty_without_moving_the_group() -> None:
             assert current_leader_for_employee(db, cm_id).employee_no == before_group
 
 
-def test_leader_cannot_join_the_group_they_lead() -> None:
+def test_acting_leader_may_join_their_group_without_a_supervisor_with_a_hint() -> None:
     with TestClient(app) as client:
         login(client, "HR01", "HR123")
         ta_id = employee_id("TATEST01")
         with SessionLocal() as db:
             led_group = db.query(GroupLeaderAssignment).filter_by(leader_employee_id=ta_id, status="active").first().group_id
-        response = client.put(f"/api/hr/employees/{ta_id}", json={"group_id": led_group, "leader_id": ta_id, "reason": "错误分组"})
-        assert response.status_code == 400, response.text
+            home_group = db.query(GroupMembership).filter_by(employee_id=ta_id, status="active").one().group_id
+        response = client.put(f"/api/hr/employees/{ta_id}", json={"group_id": led_group, "reason": "归入所代理的小组"})
+        assert response.status_code == 200, response.text
+        assert "暂时无人复核" in response.json()["warnings"][0]
         with SessionLocal() as db:
-            assert db.query(WorkGroup).get(led_group) is not None
+            assert current_leader_for_employee(db, ta_id) is None
+        back = client.put(f"/api/hr/employees/{ta_id}", json={"group_id": home_group, "reason": "回到原小组"})
+        assert back.status_code == 200 and back.json()["warnings"] == []
+        with SessionLocal() as db:
             assert current_leader_for_employee(db, ta_id).employee_no == "SUPTEST01"

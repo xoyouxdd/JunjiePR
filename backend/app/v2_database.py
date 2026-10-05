@@ -84,7 +84,6 @@ PERMISSION_DEFINITIONS = {
     "POC_ISSUE": "开具POC特别贡献认可",
     "REVIEW_SUPERVISOR": "复核主管本人登记",
     "SUPERVISOR_SCORE": "为主管加分和扣分",
-    "TA_GSM_SCORE": "为代理TA GSM的主管加分、扣分和审批",
     "SYSTEM_ADMIN": "系统紧急纠错",
 }
 
@@ -95,8 +94,9 @@ ROLE_PERMISSION_CODES = {
     "SUPERVISOR": ("SELF_RECOGNITION", "EMPLOYEE_ADD", "DEDUCTION_DIRECT", "REVIEW_DIRECT", "MEMBER_RECORDS", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
     "TA_GSM": ("EMPLOYEE_ADD", "DEDUCTION_ALL", "SUPERVISOR_SCORE", "DATA_VIEW", "POC_ISSUE", "LOA_REGISTER", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
     "GSM": ("EMPLOYEE_ADD", "DEDUCTION_ALL", "SUPERVISOR_SCORE", "REVIEW_SUPERVISOR", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE", "SICK_LEAVE_IMPORT", "LOA_REGISTER", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
-    "AM": ("TA_GSM_SCORE", "REVIEW_SUPERVISOR", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE", "LOA_REGISTER", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
-    "OM": ("REVIEW_SUPERVISOR", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE", "LOA_REGISTER", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
+    # AM reviews only supervisors acting as TA GSM; OM reviews none.
+    "AM": ("REVIEW_SUPERVISOR", "DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE", "LOA_REGISTER", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
+    "OM": ("DATA_VIEW", "DATA_EXPORT", "PASSWORD_RESET", "POC_ISSUE", "LOA_REGISTER", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
     "HR_ADMIN": ("HR_MANAGE", "DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"),
     "HR_CIRCLE": (
         "DATA_VIEW",
@@ -199,6 +199,8 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-10-acting-duties", "ensure_acting_duty_columns_and_migrate"),
     ("2026-10-audit-scope-and-appeal-removal", "backfill_audit_scope_and_remove_appeals"),
     ("2026-10-group-leader-types", "ensure_group_leader_types"),
+    ("2026-10-group-codes", "ensure_group_codes"),
+    ("2026-10-group-codes-resequence", "resequence_all_group_codes"),
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
 ]
 
@@ -895,6 +897,95 @@ def ensure_group_leader_types(db) -> None:
     db.commit()
 
 
+def legacy_group_display_name(db, group, today: str) -> str:
+    """The name HR saw before fixed group names: '<leader>工作组' after the
+    leader (主管 first, else whoever runs it), or the stored name."""
+    from app.v2_services import active_group_leader, group_leader_of_type
+
+    leader = group_leader_of_type(db, group.id, "formal", today) or active_group_leader(db, group.id, today)
+    return f"{leader.leader.name}工作组" if leader else group.name
+
+
+def group_name_sort_key(name: str) -> bytes:
+    # GB2312 orders its common characters by pinyin.
+    return name.encode("gbk", errors="replace")
+
+
+def ensure_group_codes(db) -> None:
+    """Give every open group a fixed name "<circle><letter>组".
+
+    Letters follow the pinyin order of the names HR saw before.  Each rename
+    goes to the audit log; a 主管 or 代理主管 who holds more than one group,
+    or a 主管 whose base identity is not 主管, becomes an HR alert.
+    """
+    from app.v2_models import Attraction, GroupLeaderAssignment, WorkGroup
+    from app.v2_services import base_role_at, create_alert, group_code_for_index, group_code_index, group_display_name, next_group_code, write_audit
+
+    existing = {row[1] for row in db.execute(text("PRAGMA table_info(work_groups)"))}
+    if "code" not in existing:
+        db.execute(text("ALTER TABLE work_groups ADD COLUMN code VARCHAR(8)"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_work_groups_code ON work_groups (code)"))
+    db.commit()
+    today = date.today().isoformat()
+    circles = {row.id: row.name for row in db.query(Attraction).all()}
+    open_groups = db.query(WorkGroup).filter(WorkGroup.status != "closed", WorkGroup.code.is_(None)).all()
+    by_circle: dict[int, list[tuple[str, WorkGroup]]] = {}
+    for group in open_groups:
+        by_circle.setdefault(group.attraction_id, []).append((legacy_group_display_name(db, group, today), group))
+    for attraction_id, rows in by_circle.items():
+        rows.sort(key=lambda item: (group_name_sort_key(item[0]), item[1].id))
+        first = group_code_index(next_group_code(db, attraction_id))
+        for index, (old_name, group) in enumerate(rows, start=first):
+            stored_name = group.name
+            group.code = group_code_for_index(index)
+            group.name = group_display_name(circles.get(attraction_id, ""), group.code)
+            group.revision += 1
+            db.flush()
+            write_audit(db, None, "小组统一命名", "work_group", group.id, before={"name": old_name, "stored_name": stored_name}, after={"name": group.name, "code": group.code}, reason="2026-10 小组改为景点圈+字母命名")
+    db.flush()
+
+    active_rows = db.query(GroupLeaderAssignment).filter(GroupLeaderAssignment.status == "active").all()
+    held: dict[tuple[int, str], list[GroupLeaderAssignment]] = {}
+    for row in active_rows:
+        if row.group.status == "closed":
+            continue
+        held.setdefault((row.leader_employee_id, row.leader_type), []).append(row)
+    for (employee_id, leader_type), rows in held.items():
+        label = "主管" if leader_type == "formal" else "代理主管"
+        if len(rows) > 1:
+            names = "、".join(sorted(row.group.name for row in rows))
+            create_alert(
+                db,
+                "group_structure",
+                f"multiple:{leader_type}:{employee_id}",
+                f"{rows[0].leader.name}同时是{names}的{label}，一人只能负责一个小组，请在小组管理中调整",
+                employee_id=employee_id,
+            )
+        if leader_type == "formal":
+            base = base_role_at(db, employee_id, today)
+            if not base or base.code != "SUPERVISOR":
+                for row in rows:
+                    create_alert(
+                        db,
+                        "group_structure",
+                        f"formal_base:{row.id}",
+                        f"{row.group.name}的主管{row.leader.name}本职不是主管，请在小组管理中更换",
+                        employee_id=employee_id,
+                        group_id=row.group_id,
+                    )
+    db.commit()
+
+
+def resequence_all_group_codes(db) -> None:
+    """Re-letter every circle's open groups from A without gaps (one-off)."""
+    from app.v2_models import WorkGroup
+    from app.v2_services import resequence_group_codes
+
+    for (attraction_id,) in db.query(WorkGroup.attraction_id).distinct().all():
+        resequence_group_codes(db, attraction_id, None, "2026-10 小组从A开始重新排列字母")
+    db.commit()
+
+
 def backfill_audit_scope_and_remove_appeals(db) -> None:
     """Give old audit rows their employee circle; drop the retired online appeals.
 
@@ -1385,8 +1476,8 @@ def seed_test_accounts(db) -> None:
     add_employee("HR01", "最高管理员", "SYSTEM_ADMIN", None, test_admin_password)
     db.flush()
 
-    group_ta = WorkGroup(name="V2-A-TA组", attraction_id=attraction_a.id, status="active")
-    group_supervisor = WorkGroup(name="V2-A-主管组", attraction_id=attraction_a.id, status="active")
+    group_supervisor = WorkGroup(name="热力追踪A组", code="A", attraction_id=attraction_a.id, status="active")
+    group_ta = WorkGroup(name="热力追踪B组", code="B", attraction_id=attraction_a.id, status="active")
     db.add_all([group_ta, group_supervisor])
     db.flush()
     db.add_all(

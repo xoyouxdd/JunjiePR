@@ -14,7 +14,7 @@ from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionLevel, DeductionFollowUp, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, GroupLeaderAssignment, MonthClosure, RecognitionRecord, Role, SickLeaveRecord, StoredFile, SubmissionRequest, SystemAlert, UserAccount, WorkGroup
-from app.v2_services import ACTING_LEADER_FIRST, FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, SCORED_BASE_CODES, active_group_leaders_bulk, base_role_at, base_roles_at, duties_at_bulk, duty_code_at, groups_led_by, identity_labels, managed_attraction_ids, role_at
+from app.v2_services import ACTING_LEADER_FIRST, FRONTLINE_CODES, GSM_CODES, LEADER_CODES, RECOGNIZER_CODES, SCORED_BASE_CODES, base_role_at, base_roles_at, duties_at_bulk, duty_code_at, group_leader_label, groups_assigned_to, identity_labels, managed_attraction_ids, role_at
 from app.v2_models import EmployeeActingDuty, EmployeeLOAPeriod, GroupMembership
 from app.v2_services import roles_at
 
@@ -187,9 +187,6 @@ MATERIAL_COLLABORATOR_CODES = LEADER_CODES | GSM_CODES
 
 
 MONTH_CLOSE_EFFECTIVE_DATE = "2026-09-01"
-
-
-GROUP_DISPLAY_EFFECTIVE_DATE = "2026-09-01"
 
 
 BACKUP_HEALTH_STATUS_PATH = Path(
@@ -546,51 +543,16 @@ def add_calendar_months(value: date, months: int) -> date:
 
 
 def group_display_metadata_bulk(db: Session, group_ids: list[int] | set[int], on_date: str | None = None) -> dict[int, dict]:
-    """Resolve presentation-only group labels without ever renaming historic groups.
+    """Group names with their 主管 and 代理主管 on a date.
 
-    Since 2026-09-01, a workgroup is displayed under its current leader.  The
-    prior leader remains a one-month visual aid only; IDs, memberships,
-    snapshots and historic exports all continue to use their original records.
+    Group names are fixed ("热力追踪A组"); leaders are reported separately.
+    `label` reads "主管 X · 代理主管 Y" (only the ones set).
     """
     ids = list(dict.fromkeys(int(group_id) for group_id in group_ids if group_id))
     if not ids:
         return {}
     value = on_date or date.today().isoformat()
-    try:
-        as_of = date.fromisoformat(value)
-    except ValueError:
-        as_of = date.today()
-        value = as_of.isoformat()
     groups = {row.id: row for row in db.query(WorkGroup).filter(WorkGroup.id.in_(ids)).all()}
-    active = active_group_leaders_bulk(db, ids, value)
-    # The old leader only matters during the 1-calendar-month transition
-    # window.  It is intentionally calculated on read and never stored on the
-    # WorkGroup itself.
-    transition_start = add_calendar_months(as_of, -1).isoformat()
-    ended_rows = (
-        db.query(GroupLeaderAssignment)
-        .filter(
-            GroupLeaderAssignment.group_id.in_(ids),
-            GroupLeaderAssignment.status == "ended",
-            GroupLeaderAssignment.ends_on.is_not(None),
-            GroupLeaderAssignment.ends_on >= transition_start,
-            GroupLeaderAssignment.ends_on <= value,
-        )
-        .order_by(GroupLeaderAssignment.group_id, GroupLeaderAssignment.ends_on.desc(), GroupLeaderAssignment.id.desc())
-        .all()
-    )
-    latest_ended: dict[int, GroupLeaderAssignment] = {}
-    for row in ended_rows:
-        latest_ended.setdefault(row.group_id, row)
-    leader_ids = {
-        assignment.leader_employee_id
-        for assignment in [*active.values(), *latest_ended.values()]
-        if assignment
-    }
-    employees = {
-        row.id: row for row in db.query(Employee).filter(Employee.id.in_(leader_ids)).all()
-    } if leader_ids else {}
-    enabled = as_of >= date.fromisoformat(GROUP_DISPLAY_EFFECTIVE_DATE)
     typed_leaders: dict[tuple[int, str], Employee] = {}
     for assignment, leader in (
         db.query(GroupLeaderAssignment, Employee)
@@ -609,24 +571,16 @@ def group_display_metadata_bulk(db: Session, group_ids: list[int] | set[int], on
         group = groups.get(group_id)
         formal_leader = typed_leaders.get((group_id, "formal"))
         acting_leader = typed_leaders.get((group_id, "acting"))
-        current_assignment = active.get(group_id)
-        # A group is named after its 原组长 while an acting leader runs it.
-        current = formal_leader or (employees.get(current_assignment.leader_employee_id) if current_assignment else None)
-        previous_assignment = latest_ended.get(group_id) if enabled else None
-        previous = employees.get(previous_assignment.leader_employee_id) if previous_assignment else None
-        previous_until = ""
-        if previous_assignment and previous_assignment.ends_on:
-            previous_until = add_calendar_months(date.fromisoformat(previous_assignment.ends_on), 1).isoformat()
-            if as_of > date.fromisoformat(previous_until) or (current and previous and current.id == previous.id):
-                previous = None
-                previous_until = ""
+        formal_name = formal_leader.name if formal_leader else ""
+        acting_name = acting_leader.name if acting_leader else ""
         result[group_id] = {
-            "name": f"{current.name}工作组" if enabled and current else (group.name if group else ""),
-            "leader_name": current.name if current else "",
-            "previous_leader_name": previous.name if previous else "",
-            "previous_leader_until": previous_until if previous else "",
-            "formal_leader_name": formal_leader.name if formal_leader else "",
-            "acting_leader_name": acting_leader.name if acting_leader else "",
+            "name": group.name if group else "",
+            "code": group.code if group else None,
+            "formal_leader_id": formal_leader.id if formal_leader else None,
+            "formal_leader_name": formal_name,
+            "acting_leader_id": acting_leader.id if acting_leader else None,
+            "acting_leader_name": acting_name,
+            "label": group_leader_label(formal_name, acting_name),
         }
     return result
 
@@ -765,8 +719,9 @@ def ensure_enabled_scored_target(db: Session, employee_id: int, action_name: str
     return target, target_role
 
 
-# Who may credit or deduct a supervisor: formal GSM and acting TA GSM; a
-# supervisor acting as TA GSM is handled by AM only.
+# Who may credit or deduct a supervisor: formal GSM and acting TA GSM.  While
+# a supervisor acts as TA GSM nobody credits or deducts them; they register
+# their own recognitions, which AM reviews.
 SUPERVISOR_SCORER_CODES = {"GSM", "TA_GSM"}
 
 
@@ -774,9 +729,7 @@ def ensure_supervisor_target_allowed(db: Session, user: V2User, target: Employee
     if target.id == user.id:
         raise HTTPException(403, "不能对本人登记")
     if duty_code_at(db, target.id, on_date) == "TA_GSM":
-        if not user.has_role("AM"):
-            raise HTTPException(403, f"代理TA GSM期间的主管只能由AM{action_name}")
-        return
+        raise HTTPException(403, f"代理TA GSM期间的主管不能由他人{action_name}，请其本人登记后由AM复核")
     if user.role.code not in SUPERVISOR_SCORER_CODES:
         raise HTTPException(403, f"只有正式GSM和TA GSM可以为主管{action_name}")
 
@@ -806,7 +759,7 @@ def void_operator_snapshot(db: Session, user: V2User) -> tuple[str, str, str]:
     if user.role.code in FRONTLINE_CODES:
         scope = f"本人账号（{user.employee.employee_no}）"
     elif user.role.code in LEADER_CODES:
-        group_names = [group.name for group in groups_led_by(db, user.id)]
+        group_names = [group.name for group in groups_assigned_to(db, user.id)]
         scope = f"直属小组：{'、'.join(group_names)}" if group_names else "直属小组：未配置"
     elif user.role.code in GSM_CODES:
         attraction_ids = sorted(managed_attraction_ids(db, user.id))
@@ -1243,15 +1196,17 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
         "role_code": role.code if role else "",
         "role_name": role.name if role else "未配置",
         "base_role_code": base_role_map[employee.id].code if base_role_map.get(employee.id) else "",
+        "base_role_name": base_role_map[employee.id].name if base_role_map.get(employee.id) else "未配置",
         "duty_role_code": duty_map[employee.id][0].code if duty_map.get(employee.id) else "",
+        "duty_role_name": duty_map[employee.id][0].name if duty_map.get(employee.id) else "",
         "duty_ends_on": duty_ends.get(employee.id, ""),
         "role_label": labels.get(employee.id, "未配置"),
         "attraction_id": employee.attraction_id,
         "attraction_name": attraction.name if attraction else "",
         "group_id": group.id if group else None,
         "group_name": display.get("name", group.name if group else ""),
-        "previous_group_leader_name": display.get("previous_leader_name", ""),
-        "previous_group_leader_until": display.get("previous_leader_until", ""),
+        "group_code": group.code if group else None,
+        "group_leader_label": display.get("label", ""),
         "leader_id": leader.id if leader else None,
         "leader_name": leader.name if leader else "",
         "formal_leader_name": display.get("formal_leader_name", ""),

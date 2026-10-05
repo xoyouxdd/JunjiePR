@@ -89,7 +89,8 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
     # 本次升级计分口径与普通员工相关；月报条目仍按原权限过滤。
-    assert cm[0]["current"] is True
+    # 2026.10.05.3 之后的版本不面向CM，普通员工看到的最新一版是 2026.10.05.2。
+    assert cm[0]["version"] == "2026.10.05.2" and cm[0]["current"] is False
     assert "声明升级按考勤类别匹配并修正实际扣分" in cm_text
     assert "手机底部栏按角色放常用功能" in cm_text
     assert "新增HR月报制作与PPTX导出" not in cm_text
@@ -124,13 +125,16 @@ def test_changelog_api_and_navigation_exist() -> None:
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
     with TestClient(app) as client:
+        # The current release is an HR-only fix: frontline accounts get no announcement.
         login(client, "TRTEST01")
-        frontline = client.get("/api/changelog/announcement").json()
-        assert frontline["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in frontline["release"]["items"]] == ["小组区分原组长和代理组长"]
-        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
+        assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
         client.post("/api/logout")
-        login(client, "OMTEST01")
+        login(client, "HR01", "HR123")
+        hr = client.get("/api/changelog/announcement").json()
+        assert hr["release"]["version"] == APP_VERSION
+        assert [item["summary"] for item in hr["release"]["items"]] == ["主管签卡复核与代理TA GSM期间规则调整"]
+        client.post("/api/logout")
+        login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()
         history = client.get("/api/changelog").json()["releases"]
         assert first["read"] is False
@@ -169,13 +173,17 @@ def test_current_sick_leave_notes_require_import_permission() -> None:
 
 def test_release_announcement_is_role_filtered_and_read_once_per_account() -> None:
     # 复用旧公告（announcement_items_from）的行为：临时给当前版本加上复用设置来验证。
+    # 当前版本只面向HR，借用上一版的条目让各角色都能看到当前版本。
     current = RELEASES[0]
     assert "announcement_items_from" not in current
+    own_items = current["items"]
+    current["items"] = next(release["items"] for release in RELEASES if release["version"] == "2026.10.05.2")
     current["announcement_items_from"] = "2026.09.25.1"
     try:
         _check_reused_announcement()
     finally:
         current.pop("announcement_items_from", None)
+        current["items"] = own_items
 
 
 def _check_reused_announcement() -> None:

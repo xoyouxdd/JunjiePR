@@ -11,7 +11,7 @@ from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
 from app.routers._shared import (
     MATERIAL_COLLABORATOR_CODES,
     MONTH_CLOSE_EFFECTIVE_DATE,
@@ -62,6 +62,7 @@ def capture_month_organization_snapshots(db: Session, month: str, attraction_id:
         attraction = db.get(Attraction, employee.attraction_id) if employee.attraction_id else None
         group = current_group_for_employee(db, employee.id)
         leader = current_leader_for_employee(db, employee.id)
+        leader_label = group_leader_label(*group_leader_names(db, group.id)) if group else ""
         base_role = base_role_at(db, employee.id, month_last_day)
         duty_code, duty_days = acting_duty_summary(db, employee.id, month)
         db.add(
@@ -72,8 +73,9 @@ def capture_month_organization_snapshots(db: Session, month: str, attraction_id:
                 attraction_name=attraction.name if attraction else "未设置景点圈",
                 group_id=group.id if group else None,
                 group_name=group.name if group else "未分组",
+                # The reviewer; leader_name keeps "主管 X · 代理主管 Y".
                 leader_employee_id=leader.id if leader else None,
-                leader_name=leader.name if leader else "未配置主管",
+                leader_name=leader_label or "未设置负责人",
                 base_role_code=base_role.code if base_role else None,
                 scoring_category=scoring_category(base_role),
                 acting_duty_code=duty_code,
@@ -109,7 +111,9 @@ def action_center_recognition_details(db: Session, rows: list[RecognitionRecord]
     for row in rows:
         reviewer = reviewers.get(row.assigned_reviewer_id)
         reviewer_role = role_at(db, reviewer.id) if reviewer else None
+        group = current_group_for_employee(db, row.employee_id)
         details.append({
+            "group_name": group.name if group else "未分组",
             "id": row.id,
             "employee_name": row.employee_name,
             "employee_no": row.employee_no,
@@ -118,7 +122,7 @@ def action_center_recognition_details(db: Session, rows: list[RecognitionRecord]
             "recognition_date": row.recognition_date,
             "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
             "waiting_hours": action_center_wait_hours(row.submitted_at, now),
-            "reviewer_name": reviewer.name if reviewer else "未配置主管",
+            "reviewer_name": reviewer.name if reviewer else "未设置",
             "reviewer_no": reviewer.employee_no if reviewer else "",
             "reviewer_role_name": reviewer_role.name if reviewer_role else "",
         })
@@ -178,7 +182,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     if role_code in {"HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"}:
         open_alerts = [row for row in visible_system_alerts(db, user) if row.status == "open"]
         if open_alerts:
-            items.append(action_center_item("system_alert", "系统告警待处理", len(open_alerts), "hrEmployees", "critical", "员工、工作组或规则存在需要核对的告警。"))
+            items.append(action_center_item("system_alert", "系统告警待处理", len(open_alerts), "hrGroups", "critical", "员工、小组或规则存在需要核对的告警，请在小组管理查看。"))
         allowed_attractions = scoped_hr_attraction_ids(db, user)
         employee_query = db.query(Employee).filter(Employee.is_active.is_(True), Employee.attraction_id.is_not(None))
         if allowed_attractions is not None:
@@ -189,7 +193,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
             if role and role.code in FRONTLINE_CODES and not current_group_for_employee(db, employee.id):
                 ungrouped += 1
         if ungrouped:
-            items.append(action_center_item("ungrouped_employee", "在职CM/TR待分组", ungrouped, "hrEmployees", "warning", "人员尚未归入主管组，影响直属复核和管理范围。"))
+            items.append(action_center_item("ungrouped_employee", "在职CM/TR待分组", ungrouped, "hrEmployees", "warning", "人员尚未归入小组，影响直属复核和管理范围。"))
         transfers = db.query(CircleTransferRequest).filter(CircleTransferRequest.status == "pending")
         if allowed_attractions is not None:
             transfers = transfers.filter(CircleTransferRequest.target_attraction_id.in_(allowed_attractions))

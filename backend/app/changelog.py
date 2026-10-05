@@ -7,6 +7,98 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.06.1",
+        "date": "2026-10-06",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "主管签卡复核与代理TA GSM期间规则调整",
+                "detail": "主管本人登记的签卡改为只由正式GSM复核（不限景点圈）。主管代理TA GSM期间：认可人可选GSM、AM或OM，由AM复核；期间不能由他人加分、扣分或开具POC，请本人登记。病假、LOA等缺勤登记不受影响。OM不再复核主管签卡，AM不再提供为主管登记的入口。",
+                "audiences": ["SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
+        "version": "2026.10.05.6",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "员工管理的小组和顶部功能默认折叠",
+                "detail": "员工管理中各小组和主管列表默认收起，标题上仍显示负责人和人数，点击标题展开；保存修改后，已展开的小组保持展开。「未分组」保持展开，方便分配。页面顶部的「Excel 导入」「新建员工账号」「员工号变更」也改为默认收起，点击标题展开。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
+        "version": "2026.10.05.5",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "小组字母重新从A排列，可以改名",
+                "detail": "各景点圈的小组已按原顺序从A开始重新连续排列，组员、负责人和历史记录不变，排名、统计和导出同步显示新组名。新建小组优先使用前面空出的字母；关闭的小组会让出字母并标注“已关闭”。HR和系统管理员可在小组管理中点“改名”修改组名，确认后生效。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "小组可以暂时没有负责人",
+                "detail": "小组没有主管或代理主管也可以保存，系统会提示组员的签卡暂时无人复核。员工管理的小组下拉同时显示该组的主管和代理主管；跨圈调动也可选择暂无负责人的小组。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "员工管理筛选栏对齐",
+                "detail": "员工管理顶部的景点圈、搜索、人员状态三个筛选框统一宽度和高度，排成一行对齐；手机上改为上下排列。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
+        "version": "2026.10.05.4",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "员工管理的主管列表默认折叠",
+                "detail": "员工管理中每个景点圈的「主管」列表默认收起，点击标题展开；有暂未带组的主管时，标题上会显示人数。搜索时会自动展开匹配的人员。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
+        "version": "2026.10.05.3",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "组织提醒只显示待处理事项",
+                "detail": "在员工管理中为旧TA记录确认本职后，「无法确定本职」的提醒会自动消除；小组管理的「组织提醒」只显示仍待处理的事项，已处理的不再列出。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
+        "version": "2026.10.05.2",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "小组改为固定组名，组和负责人分开",
+                "detail": "小组统一命名为「景点圈 + 字母」，如「热力追踪A组」，换负责人不再改名。每组可有一位主管和一位代理主管：有代理主管时由代理主管复核组员，主管可查看。首页显示所在小组及其主管、代理主管。",
+                "audiences": ["CM", "TR", "TA_SUPERVISOR", "SUPERVISOR"],
+            },
+            {
+                "summary": "排名、统计和导出按小组显示",
+                "detail": "PR排名和导出的「主管」列改为「小组」，显示组名及主管、代理主管；景点数据统计树和月度导出按小组分组，小组行标出主管和代理主管。",
+                "audiences": ["TA_GSM", "GSM", "AM", "OM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "新增「小组管理」，员工管理改版",
+                "detail": "「整组移交」改为「小组管理」：新建小组自动取下一个字母，设置主管（本职主管、一人一组）和代理主管（代理TA主管、一人一组），关闭空小组，组员只读。员工管理按「景点圈 → 主管 → 各小组 → 未分组」展示，组员行可直接选择所属小组，其他修改点「编辑」。选择人员不再自动新建小组；跨圈调动由目标HR选择目标小组。现有小组已按原组名拼音顺序分配字母，对照记录见审计日志「小组统一命名」。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.05.1",
         "date": "2026-10-05",
         "status": "candidate",

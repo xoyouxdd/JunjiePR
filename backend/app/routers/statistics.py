@@ -14,9 +14,9 @@ from sqlalchemy import and_, func, or_, text, update
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
-from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, DeductionRecord, DeductionType, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, ManagementScope, RecognitionRecord, RecognitionType, Role, SickLeaveRecord, WorkGroup
+from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, DeductionRecord, DeductionType, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupMembership, ManagementScope, RecognitionRecord, RecognitionType, Role, SickLeaveRecord, WorkGroup
 from app.score_queries import employee_month_scores
-from app.v2_services import ACTING_LEADER_FIRST, group_leader_names, FRONTLINE_CODES, GSM_CODES, LEADER_CODES, SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH, acting_period_notes, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH, acting_period_notes, base_roles_at, direct_member_ids, ensure_month_attendance, identity_label, identity_labels, loa_excludes_month, recalculate_attendance, role_at, roles_at, write_audit
 from app.v2_watermark import watermark_workbook
 from app.excel_export_utils import content_disposition
 from app.excel_export import append_supervisor_score_sheets, build_pr_rankings_workbook, build_statistics_workbook
@@ -32,6 +32,7 @@ from app.routers._shared import (
     _statistics_response_cache,
     deduction_payload,
     effective_recognition_credit,
+    group_display_metadata_bulk,
     like_escaped_pattern,
     months_between,
     parse_iso_date,
@@ -399,7 +400,8 @@ def ranking_employees(db: Session, attraction_id: int | None, on_date: str, role
     return selected, role_map
 
 
-def ranking_leader_names(db: Session, employee_ids: list[int], on_date: str) -> dict[int, str]:
+def ranking_group_labels(db: Session, employee_ids: list[int], on_date: str) -> dict[int, str]:
+    """'热力追踪A组 · 主管 X · 代理主管 Y' for each employee's group on the date."""
     if not employee_ids:
         return {}
     memberships = (
@@ -416,34 +418,12 @@ def ranking_leader_names(db: Session, employee_ids: list[int], on_date: str) -> 
     membership_by_employee: dict[int, GroupMembership] = {}
     for membership in memberships:
         membership_by_employee.setdefault(membership.employee_id, membership)
-    group_ids = {membership.group_id for membership in membership_by_employee.values()}
-    assignments = (
-        db.query(GroupLeaderAssignment)
-        .filter(
-            GroupLeaderAssignment.group_id.in_(group_ids),
-            GroupLeaderAssignment.status == "active",
-            GroupLeaderAssignment.starts_on <= on_date,
-            or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= on_date),
-        )
-        .order_by(GroupLeaderAssignment.group_id, ACTING_LEADER_FIRST, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
-        .all()
-        if group_ids
-        else []
-    )
-    assignment_by_group: dict[int, GroupLeaderAssignment] = {}
-    for assignment in assignments:
-        assignment_by_group.setdefault(assignment.group_id, assignment)
-    leader_ids = {assignment.leader_employee_id for assignment in assignment_by_group.values()}
-    leader_names = {
-        employee.id: employee.name
-        for employee in db.query(Employee).filter(Employee.id.in_(leader_ids)).all()
-    } if leader_ids else {}
-    return {
-        employee_id: leader_names.get(assignment_by_group[membership.group_id].leader_employee_id, "未分配主管")
-        if membership.group_id in assignment_by_group
-        else "未分配主管"
-        for employee_id, membership in membership_by_employee.items()
-    }
+    display = group_display_metadata_bulk(db, {membership.group_id for membership in membership_by_employee.values()}, on_date)
+    labels = {}
+    for employee_id, membership in membership_by_employee.items():
+        group = display.get(membership.group_id, {})
+        labels[employee_id] = " · ".join(part for part in (group.get("name", ""), group.get("label", "")) if part)
+    return labels
 
 
 def gsm_recognizer_ranking_payload(db: Session, start_value: str, end_value: str, subtype_id: int | None, keyword: str, page: int, page_size: int, attraction: Attraction | None) -> dict:
@@ -544,7 +524,7 @@ def gsm_recognizer_ranking_payload(db: Session, start_value: str, end_value: str
         if value and value not in employee.name.lower() and value not in employee.employee_no.lower():
             continue
         data=aggregate[employee.id]
-        rows.append({"employee_id":employee.id,"employee_no":employee.employee_no,"employee_name":employee.name,"role_name":role_names.get(data["role_code"],data["role_code"]),"leader_name":"","count":int(data["count"]),"score":round(float(data["score"]),2),"recent_date":data["recent_date"],"leave_days":0,"charged_days":0,"recognition_score":0,"deduction_score":0,"attendance_score":0,"total_score":0})
+        rows.append({"employee_id":employee.id,"employee_no":employee.employee_no,"employee_name":employee.name,"role_name":role_names.get(data["role_code"],data["role_code"]),"group_label":"","count":int(data["count"]),"score":round(float(data["score"]),2),"recent_date":data["recent_date"],"leave_days":0,"charged_days":0,"recognition_score":0,"deduction_score":0,"attendance_score":0,"total_score":0})
     rows.sort(key=lambda item:(-item["count"],-item["score"],item["employee_no"]))
     for index,item in enumerate(rows,1): item["rank"]=index
     offset=(page-1)*page_size
@@ -608,7 +588,7 @@ def pr_ranking_payload(
             if keyword_value in employee.name.lower() or keyword_value in employee.employee_no.lower()
         ]
     employee_ids = [employee.id for employee in employees]
-    leader_names = ranking_leader_names(db, employee_ids, end_iso) if category != "leader" else {}
+    group_labels = ranking_group_labels(db, employee_ids, end_iso) if category != "leader" else {}
     aggregates: dict[int, dict] = {employee_id: {} for employee_id in employee_ids}
     subtype_name = ""
     uncapped_ranking = False
@@ -801,7 +781,7 @@ def pr_ranking_payload(
                 "role_name": ranking_labels.get(employee.id) or (role.name if role else "未配置"),
                 "acting_note": acting_notes.get(employee.id, ""),
                 # Supervisors have no group leader of their own.
-                "leader_name": "" if category == "leader" else ("—" if population == "supervisor" else leader_names.get(employee.id, "")),
+                "group_label": "" if category == "leader" else ("—" if population == "supervisor" else group_labels.get(employee.id, "未分组")),
                 "count": int(data.get("count", 0)),
                 "uncapped_score": round(float(data.get("uncapped_score", 0)), 2),
                 "score": round(float(data.get("score", 0)), 2),
@@ -935,25 +915,7 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
         membership_by_employee.setdefault(membership.employee_id, membership)
     group_ids = {membership.group_id for membership in membership_by_employee.values()}
     groups = {group.id: group for group in db.query(WorkGroup).filter(WorkGroup.id.in_(group_ids)).all()} if group_ids else {}
-    leader_assignments = (
-        db.query(GroupLeaderAssignment)
-        .filter(
-            GroupLeaderAssignment.group_id.in_(group_ids),
-            GroupLeaderAssignment.status == "active",
-            GroupLeaderAssignment.starts_on <= month_end,
-            or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= month_end),
-        )
-        .order_by(GroupLeaderAssignment.group_id, ACTING_LEADER_FIRST, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
-        .all()
-        if group_ids
-        else []
-    )
-    leader_assignment_by_group: dict[int, GroupLeaderAssignment] = {}
-    for assignment in leader_assignments:
-        leader_assignment_by_group.setdefault(assignment.group_id, assignment)
-    leader_ids = {assignment.leader_employee_id for assignment in leader_assignment_by_group.values()}
-    leaders = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(leader_ids)).all()} if leader_ids else {}
-    leader_labels = identity_labels(db, leader_ids, month_end)
+    group_labels = group_display_metadata_bulk(db, group_ids, month_end)
 
     attraction_ids = {score.get("attraction_id") for score in score_rows if score.get("attraction_id") is not None}
     attraction_rows = db.query(Attraction).filter(Attraction.id.in_(attraction_ids)).all() if attraction_ids else []
@@ -1013,24 +975,24 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
             {
                 "gsms": gsms,
                 "ta_gsms": ta_gsms,
-                "name": (f"主管组（由GSM共同承接：{'、'.join(employee.name for employee, _role in gsms)}）" if len(gsms) > 1 else (gsms[0][0].name if gsms else "未配置GSM")),
+                "name": (f"GSM共同管理（{'、'.join(employee.name for employee, _role in gsms)}）" if len(gsms) > 1 else (gsms[0][0].name if gsms else "未配置GSM")),
                 "role_name": "" if len(gsms) != 1 else gsms[0][1].name,
                 "leaders": {},
             },
         )
         membership = membership_by_employee.get(employee.id)
         group = groups.get(membership.group_id) if membership else None
-        leader_assignment = leader_assignment_by_group.get(group.id) if group else None
-        leader = leaders.get(leader_assignment.leader_employee_id) if leader_assignment and not supervisor_page else None
         if supervisor_page:
             leader_key = "supervisors"
             leader_defaults = {"name": "主管", "role_name": "", "employees": []}
         else:
-            leader_key = f"employee-{leader.id}" if leader else (f"group-{group.id}" if group else "ungrouped")
-            formal_name, acting_name = group_leader_names(db, group.id) if group and leader else ("", "")
+            # One node per group, titled with its fixed name; the role line
+            # shows "主管 X · 代理主管 Y".
+            leader_key = f"group-{group.id}" if group else "ungrouped"
             leader_defaults = {
-                "name": f"{formal_name}（代理：{acting_name}）" if formal_name and acting_name else (leader.name if leader else "未配置主管"),
-                "role_name": leader_labels.get(leader.id, "") if leader else "",
+                "name": group.name if group else "未分组",
+                "role_name": group_labels.get(group.id, {}).get("label", "") if group else "",
+                "code": group.code if group else None,
                 "employees": [],
             }
         leader_node = manager_node["leaders"].setdefault(leader_key, leader_defaults)
@@ -1097,7 +1059,7 @@ def statistics_hierarchy(db: Session, score_rows: list[dict], month_end: str, us
             for leader_key, leader in sorted(
                 manager["leaders"].items(),
                 key=lambda item: (
-                    item[1]["name"] == "未配置主管",
+                    item[1]["name"] == "未分组",
                     -sum(employee["total_score"] for employee in item[1]["employees"]),
                     item[1]["name"],
                     item[0],

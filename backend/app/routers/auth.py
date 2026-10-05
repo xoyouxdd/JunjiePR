@@ -10,7 +10,7 @@ from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, new_session_token, token_hash, verify_password
 from app.v2_database import get_db
 from app.v2_models import Employee, ReleaseAnnouncementRead, UserAccount, UserSession
-from app.v2_services import current_group_for_employee, current_leader_for_employee, direct_member_ids, role_at, write_audit
+from app.v2_services import current_group_for_employee, current_leader_for_employee, direct_member_ids, groups_assigned_to, role_at, write_audit
 from app.changelog import RELEASES, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
@@ -23,14 +23,9 @@ router = APIRouter()
 def user_payload(db: Session, user: V2User) -> dict:
     leader = current_leader_for_employee(db, user.id)
     group = current_group_for_employee(db, user.id)
-    display = group_display_metadata_bulk(db, [group.id]).get(group.id, {}) if group else {}
-    formal_name, acting_name = display.get("formal_leader_name", ""), display.get("acting_leader_name", "")
-    if formal_name and acting_name and acting_name != user.name:
-        leader_label = f"{formal_name}（代理：{acting_name}）"
-    elif leader:
-        leader_label = leader.name
-    else:
-        leader_label = "待接管" if group and group.status == "pending_takeover" else "未分配"
+    led = groups_assigned_to(db, user.id)
+    display = group_display_metadata_bulk(db, [*([group.id] if group else []), *(row.id for row in led)])
+    own = display.get(group.id, {}) if group else {}
     return {
         "id": user.id,
         "employee_no": user.employee.employee_no,
@@ -44,10 +39,19 @@ def user_payload(db: Session, user: V2User) -> dict:
         "role_label": user.display_role_name,
         "attraction_id": user.employee.attraction_id,
         "attraction_name": user.employee.attraction.name if user.employee.attraction else "",
-        "leader_name": leader_label,
-        "group_name": display.get("name", group.name if group else ""),
-        "previous_group_leader_name": display.get("previous_leader_name", ""),
-        "previous_group_leader_until": display.get("previous_leader_until", ""),
+        # Who reviews this employee's own submissions.
+        "leader_name": leader.name if leader else "未设置",
+        "group_name": group.name if group else "",
+        "group_leader_label": own.get("label", ""),
+        # Groups this employee is 主管 or 代理主管 of.
+        "led_groups": [
+            {
+                "id": row.id,
+                "name": row.name,
+                "leader_type": "acting" if display.get(row.id, {}).get("acting_leader_id") == user.id else "formal",
+            }
+            for row in led
+        ],
         "permissions": sorted(user.permissions),
         "member_count": len(direct_member_ids(db, user.id)),
         "must_change_password": user.account.must_change_password,
