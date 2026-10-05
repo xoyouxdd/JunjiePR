@@ -419,13 +419,22 @@ def test_meal_only_when_enough_people_rest_for_every_open_line():
     assert eng._meal_decision(eater, hm("11:21")) == "meal"
 
 
-def test_meal_last_chance_does_not_wait_for_enough_rest():
-    people = [person("late", "13:00", "21:30")]
-    eng, _ = live_day(people, lines=[two_lines()[0]], now="17:00", close="21:30")
+def test_supervisor_is_alerted_when_meal_deadline_is_under_three_hours():
+    people = [person("late", "13:00", "21:30"), person("short", "13:00", "18:00")]
+    eng, _ = live_day(people, lines=[two_lines()[0]], now="17:00", close="21:00")
     late = eng.P["late"]
-    # 离闭园 270 分钟以内、还没吃饭：即使没有人在休息也安排吃饭
-    assert eng._meal_decision(late, hm("17:01")) == "meal"
-    assert eng._meal_decision(late, hm("16:59")) == "rest"
+    eng.P["short"]["state"] = "walkback"
+    # 没人在休息：不安排吃饭，也不再有“快吃不上就强制吃”的兜底
+    assert eng._meal_decision(late, hm("17:30")) == "rest"
+    # 离闭园 21:00 不到 3 小时还没吃饭：提醒主管；班次不够长的人不提醒
+    def meal_alerts(t):
+        return [a["msg"] for a in eng.alerts(hm(t)) if "还没吃饭" in a["msg"]]
+
+    assert meal_alerts("18:00") == []
+    msgs = meal_alerts("18:01")
+    assert msgs == ["late 还没吃饭，离闭园不到 3 小时"]
+    late["ate"] = True
+    assert meal_alerts("18:01") == []
 
 
 def test_postponed_close_restores_posts_and_closing_work_people():

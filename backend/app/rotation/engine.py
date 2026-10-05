@@ -7,7 +7,8 @@
   链条后移到要走的人为止把他推出来；被推出的人直接转为已下班/出圈中，不需要到大屏确认；
 - 推 7 点：07:15 班的人直接在 7 点岗位对换 07:00 班的人，被替下的人照常休息后轮岗；
 - 到出圈时间仍没人替：继续在岗并保持准备出圈，一直找人来推，超过 outWarnAfter 分钟提醒主管；
-- 吃饭：休息中、待出发和吃饭剩不到 mealReserveLeft 分钟的人，够开着的线数时才安排吃饭；
+- 吃饭：休息中、待出发和吃饭剩不到 mealReserveLeft 分钟的人，够开着的线数时才安排吃饭，不设同时吃饭上限；
+  离下班或闭园不到 mealWarnLeft 分钟仍没吃饭的，提醒主管；
 - 到岗时距下班/出圈不超过 noBoardBefore 分钟就不再上岗；
 - 出发只能在计划出发时间前 departEarly 分钟以内点。
 
@@ -30,7 +31,7 @@ DEFAULT_SETTINGS = {
     'mealAfterStart': 150,        # 上班后多久才开始安排吃饭（早班自然优先）
     'mealForceAfterStart': 300,   # 上班超过这么久仍未吃饭，强制安排
     'mealReserveLeft': 20,        # 吃饭剩不到这么多分钟的人算作“休息中”
-    'mealLastChance': 270,        # 离下班或闭园不到这么多分钟仍没吃饭，不再等休息人数够了才吃
+    'mealWarnLeft': 180,          # 离下班或闭园不到这么多分钟仍没吃饭，提醒主管
     'offLead': 20,                # 下班/出圈前多少分钟被替下（替换者到岗时间）
     'noBoardBefore': 30,          # 到岗时距下班/出圈不超过这么多分钟，不再上岗
     'outWarnAfter': 5,            # 过了出圈时间多少分钟仍没人可推，提醒主管
@@ -800,8 +801,7 @@ class Engine:
         # 吃完后剩余时间太少也不安排
         if left < S['mealMin'] + 30:
             return 'rest'
-        if self.rest_supply(now, exclude=p['pid']) >= self.active_line_count() or now >= p['start'] + S['mealForceAfterStart'] \
-                or left <= S['mealLastChance']:
+        if self.rest_supply(now, exclude=p['pid']) >= self.active_line_count() or now >= p['start'] + S['mealForceAfterStart']:
             return 'meal'
         return 'rest'
 
@@ -1075,10 +1075,11 @@ class Engine:
                         out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 已过出圈时间 %s %d 分钟，暂无人可推' % (p['name'], fmt(t), now - t)})
                 elif now >= t - S['offLead'] - 10 and p['pid'] not in taken:
                     out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 需在 %s 前推%s，暂无人可替' % (p['name'], fmt(t - S['offLead']), word)})
-            if p.get('role') in ('rotation', 'op') and st in ('onpost', 'heading') and not p.get('ate') \
+            if p.get('role') in ('rotation', 'op') and st not in ('done', 'excluded', 'notyet', 'meal') and not p.get('ate') \
                     and self.meal_eligible(p) and not self.d.get('closed') \
-                    and self.meal_deadline(p) - now <= S['mealMin'] + 30 + 30:
-                out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 还没吃饭，%s 前需推下来吃饭' % (p['name'], fmt(self.meal_deadline(p) - S['mealMin'] - 30))})
+                    and self.meal_deadline(p) - now < S['mealWarnLeft']:
+                out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 还没吃饭，离%s不到 %d 小时' % (
+                    p['name'], '闭园' if self.meal_deadline(p) < p['end'] else '下班', S['mealWarnLeft'] // 60)})
         if now >= _m(S['lineOpenAt']) + 2 and not self.d.get('closed'):
             incoming = {q['assign']['line'] for q in self.P.values() if q.get('assign')}
             for L in self.d['lines']:
