@@ -33,10 +33,15 @@ class RotationAccount(Base):
 
 
 class RotationAccountSession(Base):
+    """轮岗会话：专用账号登录（account_id），或测试入口里模拟某个 CM/TR（member_employee_no）。"""
+
     __tablename__ = "rotation_account_sessions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    account_id: Mapped[int] = mapped_column(ForeignKey("rotation_accounts.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("rotation_accounts.id", ondelete="CASCADE"), nullable=True, index=True)
+    member_employee_no: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 测试入口里由哪个 PR 员工发起；大屏在登录页直接登录时为空。
+    entered_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -88,8 +93,6 @@ class RotationRosterEntry(Base):
     person_type: Mapped[str] = mapped_column(String(30), default="")
     mark: Mapped[str] = mapped_column(String(30), default="")
     cell_raw: Mapped[str] = mapped_column(String(255), default="")
-    # 名单里的工号在 PR 系统中找不到时为空：照常轮岗，但收不到待办。
-    employee_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
 
 
 class RotationDay(Base):
@@ -165,21 +168,21 @@ class RotationDuty(Base):
 
 
 class RotationNotice(Base):
-    """CM/TR 的轮岗待办。由当前状态推导：状态变了就更新或关闭，每人每个 slot 最多一条进行中。
+    """CM/TR 的轮岗待办（测试阶段只在轮岗模拟页显示，不进 PR 待办中心）。
 
-    主管的轮岗提醒不落表，待办中心按运行中的状态现算。
+    由当前状态推导：状态变了就更新或关闭，每人每个 slot 最多一条进行中。
     """
 
     __tablename__ = "rotation_notices"
     __table_args__ = (
-        Index("ix_rotation_notice_open", "employee_id", "status"),
+        Index("ix_rotation_notice_open", "employee_no", "status"),
         Index("ix_rotation_notice_day", "attraction_id", "work_date", "status"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
     work_date: Mapped[str] = mapped_column(String(10))
-    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"))
+    employee_no: Mapped[str] = mapped_column(String(50))
     # 去重键：同一人同一天同一 slot 只有一条进行中，例如 "step"、"duty:lost"。
     slot: Mapped[str] = mapped_column(String(40))
     kind: Mapped[str] = mapped_column(String(30))
