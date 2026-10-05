@@ -1314,13 +1314,15 @@ function hrBlock(title,tags,rows,{groupLabel='小组',empty='暂无人员',link=
 }
 function hrCircleSection(circle){
   const count=value=>hrTag(`${value}人`,'plain');
+  // 主管列表默认折叠，标题上仍提示暂未带组的人数。
+  const idleSupervisors=circle.supervisors.filter(employee=>!employee.led_group_id).length;
   const supervisors=circle.supervisors.map(employee=>hrPersonRow(employee,employee.led_group_name?esc(employee.led_group_name):hrTag('暂未带组','warn'))).join('');
   const groups=circle.groups.map(group=>hrBlock(`<span title="${esc(group.name)}">${esc(hrGroupShortName(group))}</span>`,`${hrLeaderTags(group.formal_leader,group.acting_leader)}${count(group.member_count)}`,group.members.map(employee=>hrPersonRow(employee,hrMemberGroupCell(employee,circle))).join(''),{empty:'暂无组员',link:true})).join('');
   const unassigned=circle.unassigned.length?hrBlock('未分组',hrTag(`${circle.unassigned.length}人`,'warn'),circle.unassigned.map(employee=>hrPersonRow(employee,hrMemberGroupCell(employee,circle))).join('')):'';
   const managers=circle.managers.length?hrBlock('GSM及以上 / HR',count(circle.managers.length),circle.managers.map(employee=>hrPersonRow(employee,'—')).join(''),{groupLabel:'',collapsed:true}):'';
   const inactive=circle.inactive.length?hrBlock('离职人员',count(circle.inactive.length),circle.inactive.map(employee=>hrPersonRow(employee,'—')).join(''),{groupLabel:'',collapsed:true}):'';
   const managerTags=`${circle.gsm_names.length?hrTag(`<b>景点GSM</b>${esc(circle.gsm_names.join('、'))}`):hrTag('未配置GSM','warn')}${circle.ta_gsm_names.length?hrTag(`<b>代理GSM</b>${esc(circle.ta_gsm_names.join('、'))}`,'accent'):''}`;
-  return `<section class="hr-circle" data-hr-circle="${circle.id}"><header class="hr-circle-head"><h3>${esc(circle.name)}</h3>${managerTags}</header>${hrBlock('主管',count(circle.supervisors.length),supervisors,{groupLabel:'带组',empty:'暂无主管'})}${groups}${unassigned}${managers}${inactive}</section>`;
+  return `<section class="hr-circle" data-hr-circle="${circle.id}"><header class="hr-circle-head"><h3>${esc(circle.name)}</h3>${managerTags}</header>${hrBlock('主管',`${count(circle.supervisors.length)}${idleSupervisors?hrTag(`暂未带组 ${idleSupervisors}人`,'warn'):''}`,supervisors,{groupLabel:'带组',empty:'暂无主管',collapsed:true})}${groups}${unassigned}${managers}${inactive}</section>`;
 }
 function hrOrganizationMarkup(organization){
   const circles=organization.circles||[],others=organization.others||[];

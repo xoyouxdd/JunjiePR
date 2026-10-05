@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.05.4",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "员工管理的主管列表默认折叠",
+                "detail": "员工管理中每个景点圈的「主管」列表默认收起，点击标题展开；有暂未带组的主管时，标题上会显示人数。搜索时会自动展开匹配的人员。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.05.3",
         "date": "2026-10-05",
         "status": "candidate",

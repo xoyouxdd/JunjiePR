@@ -1736,7 +1736,10 @@ table,
 .hr-circle-head h3 { margin: 0 6px 0 0; font-size: 17px; }
 .hr-block { margin: 10px 0 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
 .hr-block-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 9px 12px; background: var(--surface-raised); border-bottom: 1px solid var(--line); font-size: 14px; }
-details.hr-block > summary { cursor: pointer; }
+details.hr-block > summary { cursor: pointer; list-style: none; }
+details.hr-block > summary::-webkit-details-marker { display: none; }
+details.hr-block > summary::before { content: "›"; display: inline-block; width: 12px; color: var(--muted); font-size: 18px; line-height: 1; transition: transform .15s; }
+details.hr-block[open] > summary::before { transform: rotate(90deg); }
 details.hr-block:not([open]) > summary { border-bottom: 0; }
 .hr-block-head .link-button { margin-left: auto; font-size: 13px; }
 .hr-block-title { font-weight: 700; min-width: 40px; }
