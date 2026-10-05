@@ -1,9 +1,13 @@
-"""轮岗接口：测试入口、模拟账号、专用账号管理。"""
+"""轮岗接口：测试入口、模拟账号、看板、大屏、个人页、名单、记录、配置与实时同步。"""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from io import BytesIO
+import zipfile
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.rotation.access import (
@@ -18,13 +22,16 @@ from app.rotation.access import (
     require_actor,
     require_entry,
     require_manager,
+    require_member,
     require_screen,
     rotation_attraction_id,
     start_session,
     validate_account_password,
 )
+from app.rotation import service
 from app.rotation.models import RotationAccount, RotationAccountSession, RotationRosterEntry
-from app.routers._shared import client_ip
+from app.rotation.roster import parse_any
+from app.routers._shared import client_ip, parse_iso_date
 from app.security import request_is_https
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, token_hash
@@ -161,3 +168,161 @@ def reset_rotation_account_password(
     )
     db.commit()
     return {"ok": True, "message": f"{account.name}密码已重置，原有登录已失效"}
+
+
+# ---------------------------------------------------------------- 看板、大屏、个人页
+
+def _action_error(exc: service.ActionError) -> HTTPException:
+    return HTTPException(400, str(exc))
+
+
+@router.get("/board")
+def rotation_board(db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    payload = service.board_payload(db, rotation_attraction_id(db))
+    db.commit()
+    payload["me"] = {"kind": actor.kind, "name": actor.name}
+    return payload
+
+
+@router.get("/screen/state")
+def rotation_screen_state(db: Session = Depends(get_db), actor: RotationActor = Depends(require_screen)):
+    payload = service.screen_payload(db, rotation_attraction_id(db))
+    db.commit()
+    return payload
+
+
+@router.post("/screen/act")
+def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_screen)):
+    """大屏只能点「去休息」（到达）和「去轮岗」（出发）。"""
+    if payload.get("action") not in service.SCREEN_ACTIONS:
+        raise HTTPException(403, "大屏只能点去休息和去轮岗")
+    try:
+        service.do_live_action(db, rotation_attraction_id(db), actor, {"action": payload["action"], "pid": payload.get("pid")})
+    except service.ActionError as exc:
+        db.rollback()
+        raise _action_error(exc) from exc
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/me")
+def rotation_me(db: Session = Depends(get_db), actor: RotationActor = Depends(require_member)):
+    payload = service.member_payload(db, rotation_attraction_id(db), actor.member_employee_no)
+    db.commit()
+    payload["test_mode"] = True
+    return payload
+
+
+@router.post("/act")
+def rotation_act(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    try:
+        service.do_live_action(db, rotation_attraction_id(db), actor, payload)
+    except service.ActionError as exc:
+        db.rollback()
+        raise _action_error(exc) from exc
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/draft")
+def rotation_draft(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    try:
+        service.do_draft_action(db, rotation_attraction_id(db), actor, payload)
+    except service.ActionError as exc:
+        db.rollback()
+        raise _action_error(exc) from exc
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- 名单、记录、配置
+
+ROSTER_MAX_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/roster/upload")
+async def rotation_roster_upload(
+    file: UploadFile = File(...),
+    scope: str = Form("week"),
+    date: str = Form(""),
+    db: Session = Depends(get_db),
+    actor: RotationActor = Depends(require_manager),
+):
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400, "请上传 .xlsx 格式的名单")
+    content = await file.read(ROSTER_MAX_BYTES + 1)
+    if len(content) > ROSTER_MAX_BYTES:
+        raise HTTPException(400, "名单文件不能超过 10MB")
+    try:
+        parsed = parse_any(BytesIO(content))
+    except (ValueError, KeyError, StopIteration, zipfile.BadZipFile) as exc:
+        raise HTTPException(400, f"名单无法识别：{exc}") from exc
+    try:
+        upload = service.save_roster(
+            db, rotation_attraction_id(db), parsed, scope=scope, file_name=file.filename or "名单.xlsx",
+            uploader_id=actor.entered_by.id if actor.entered_by else None, uploader_name=actor.name,
+            only_date=date or None,
+        )
+    except service.ActionError as exc:
+        db.rollback()
+        raise _action_error(exc) from exc
+    db.commit()
+    service.RUNTIME.bump()
+    return {"ok": True, "scope": upload.scope, "start_date": upload.start_date, "end_date": upload.end_date, "entry_count": upload.entry_count}
+
+
+@router.get("/roster")
+def rotation_roster(date: str, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    return service.roster_summary(db, rotation_attraction_id(db), parse_iso_date(date).isoformat())
+
+
+@router.get("/log")
+def rotation_log(date: str, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    return {"items": service.day_log(db, rotation_attraction_id(db), parse_iso_date(date).isoformat())}
+
+
+@router.get("/person")
+def rotation_person(employee_no: str, date: str, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    return service.person_record(db, rotation_attraction_id(db), employee_no.strip(), parse_iso_date(date).isoformat())
+
+
+@router.get("/config")
+def rotation_config(db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    cfg = service.load_config(db, rotation_attraction_id(db))
+    db.commit()
+    return {"lines": service.lines_of(cfg), "settings": service.settings_of(cfg), "defaults": service.E.DEFAULT_SETTINGS}
+
+
+@router.put("/config")
+def rotation_config_update(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    with service.RUNTIME.lock:
+        cfg = service.load_config(db, rotation_attraction_id(db))
+        try:
+            service.update_config(cfg, payload.get("lines"), payload.get("settings"), actor.entered_by.id if actor.entered_by else None)
+        except service.ActionError as exc:
+            db.rollback()
+            raise _action_error(exc) from exc
+        db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- 实时同步
+
+@router.get("/stream")
+async def rotation_stream(request: Request, actor: RotationActor = Depends(require_actor)):
+    """推送版本号：版本变了，页面再去拉取最新数据。"""
+
+    async def events():
+        last, idle = None, 0.0
+        while not await request.is_disconnected():
+            version = service.RUNTIME.version
+            if version != last:
+                last, idle = version, 0.0
+                yield f"data: {version}\n\n"
+            elif idle >= 15:
+                idle = 0.0
+                yield ": ping\n\n"
+            await asyncio.sleep(0.5)
+            idle += 0.5
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

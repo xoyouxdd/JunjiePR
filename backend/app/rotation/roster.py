@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""周班表解析：只用 Python 标准库读取 .xlsx。"""
+"""名单解析：ZTP 周班表或标准模板（工号、姓名、日期、班次、备注），只用 Python 标准库读取 .xlsx。"""
 import re
 import zipfile
 import datetime as dt
@@ -196,10 +196,59 @@ def parse_roster(path_or_file):
     return {'people': people, 'days': days, 'hours': hours}
 
 
-if __name__ == '__main__':
-    import sys, collections
-    res = parse_roster(sys.argv[1])
-    print(len(res['people']), 'people', sorted(res['days']))
-    for d in sorted(res['days']):
-        c = collections.Counter(classify(v)['kind'] for v in res['days'][d].values())
-        print(d, dict(c))
+# ---------------------------------------------------------------- 标准模板与自动识别
+
+TEMPLATE_HEADERS = ('工号', '姓名', '日期', '班次', '备注')
+
+
+def _template_date(value):
+    if isinstance(value, float) and 30000 < value < 80000:
+        return serial_to_date(value).isoformat()
+    text = str(value or '').strip().replace('/', '-').replace('.', '-')
+    try:
+        return dt.date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        parts = text.split('-')
+        if len(parts) == 3 and all(p.isdigit() for p in parts):
+            return dt.date(int(parts[0]), int(parts[1]), int(parts[2])).isoformat()
+    raise ValueError('日期格式无法识别：%s' % value)
+
+
+def parse_template(sheets):
+    """标准模板：一行一人一天，列为 工号、姓名、日期、班次、备注。"""
+    for rows in sheets.values():
+        for hdr_i, r in enumerate(rows[:10]):
+            H = [None if x is None else str(x).strip() for x in (r or [])]
+            if all(h in H for h in TEMPLATE_HEADERS[:4]):
+                col = {h: H.index(h) for h in TEMPLATE_HEADERS if h in H}
+                people, days = {}, {}
+                for r2 in rows[hdr_i + 1:]:
+                    if not r2:
+                        continue
+                    get = (lambda h: r2[col[h]] if h in col and col[h] < len(r2) else None)
+                    pid, name = get('工号'), get('姓名')
+                    if pid is None or not name:
+                        continue
+                    pid = str(int(pid)) if isinstance(pid, float) else str(pid).strip()
+                    d = _template_date(get('日期'))
+                    cell = str(get('班次') or '').strip()
+                    note = str(get('备注') or '').strip()
+                    if note:
+                        cell = (cell + '\n' + note).strip()
+                    people[pid] = {'pid': pid, 'name': str(name).strip(), 'type': '', 'mark': ''}
+                    days.setdefault(d, {})[pid] = cell
+                if not days:
+                    raise ValueError('模板里没有任何人员数据')
+                return {'people': people, 'days': days, 'hours': {}}
+    return None
+
+
+def parse_any(path_or_file):
+    """自动识别 ZTP 周班表或标准模板。"""
+    sheets = read_xlsx(path_or_file)
+    result = parse_template(sheets)
+    if result is not None:
+        return result
+    if hasattr(path_or_file, 'seek'):
+        path_or_file.seek(0)
+    return parse_roster(path_or_file)

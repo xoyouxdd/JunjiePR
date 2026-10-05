@@ -57,6 +57,8 @@ class RotationConfig(Base):
     attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"), unique=True)
     lines_json: Mapped[str] = mapped_column(Text)
     settings_json: Mapped[str] = mapped_column(Text)
+    # 测试时钟：{"mode": "real"} 或 {"mode": "sim", "date", "minute", "real_ts", "speed", "paused"}
+    clock_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -74,7 +76,9 @@ class RotationRosterUpload(Base):
     file_name: Mapped[str] = mapped_column(String(255))
     hours_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     entry_count: Mapped[int] = mapped_column(Integer, default=0)
-    uploaded_by_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    # 从测试入口进入时记录发起的员工；专用账号直接登录时为空。
+    uploaded_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    uploaded_by_name: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
