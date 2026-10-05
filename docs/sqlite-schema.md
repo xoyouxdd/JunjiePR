@@ -2,7 +2,7 @@
 
 对照当前程序 `2026.09.10.10`。权威定义在代码里，本文件只记录现在落地的结构：
 
-- 表与字段：`backend/app/v2_models.py`
+- 表与字段：`backend/app/v2_models.py`；轮岗模块的表在 `backend/app/rotation/models.py`
 - 启动建库、一次性补丁、额外索引、月度分值视图：`backend/app/v2_database.py`
 
 改模型或迁移后，同步改本文件。不要对着生产库手改结构。
@@ -69,6 +69,14 @@
 | `audit_logs` | 审计 |
 | `system_alerts` | 系统告警 |
 | `system_job_runs` | 系统任务去重 |
+| `rotation_screen_accounts` / `rotation_screen_sessions` | 休息室大屏账号与会话（不对应员工） |
+| `rotation_configs` | 轮岗线、岗位与参数 |
+| `rotation_roster_uploads` / `rotation_roster_entries` | 轮岗名单上传批次与每人每天明细 |
+| `rotation_days` | 每天轮岗状态 |
+| `rotation_events` | 轮岗操作日志 |
+| `rotation_segments` | 每段在线记录 |
+| `rotation_duties` | 推 7 点、送失物人选 |
+| `rotation_notices` | CM/TR 轮岗待办 |
 | `v_employee_month_scores` | 月度综合分视图（不是表） |
 
 ---
@@ -1079,6 +1087,27 @@
 | `completed_at` | DATETIME | 是 | |
 
 键：PK `id`；UNIQUE `uq_system_job_run` (`job_type`, `idempotency_key`)。列级索引：`job_type`。
+
+---
+
+## 轮岗
+
+表在 `backend/app/rotation/models.py`，随启动 `create_all` 建立。时间字段 `*_min`、`minute` 为当天零点起的分钟数（浮点）。轮岗数据以工号 `employee_no` 关联名单，名单中能匹配到员工时另存 `employee_id`。
+
+| 表 | 键与约束 | 索引 |
+|---|---|---|
+| `rotation_screen_accounts` | `login_account` 唯一；`attraction_id` → `attractions` | `login_account`、`attraction_id` |
+| `rotation_screen_sessions` | `account_id` → `rotation_screen_accounts`（级联删除）；`token_hash` 唯一 | `account_id`、`token_hash`、`expires_at` |
+| `rotation_configs` | `attraction_id` 唯一 | — |
+| `rotation_roster_uploads` | `attraction_id`、`uploaded_by_id` → `employees` | `attraction_id` |
+| `rotation_roster_entries` | `upload_id` → `rotation_roster_uploads`（级联删除）；`employee_id` 可空 | `ix_rotation_roster_entry_day (attraction_id, work_date)`、`upload_id`、`employee_no` |
+| `rotation_days` | `uq_rotation_day (attraction_id, work_date)`；`status` 为 draft / live / ended | `status` |
+| `rotation_events` | `actor_type` 为 employee / screen / system | `ix_rotation_event_day (attraction_id, work_date, id)`、`employee_no` |
+| `rotation_segments` | — | `ix_rotation_segment_week (attraction_id, work_date, employee_no)` |
+| `rotation_duties` | `uq_rotation_duty (attraction_id, work_date, employee_no, kind)`；`kind` 为 push7 / lost | `work_date` |
+| `rotation_notices` | `employee_id` → `employees`（级联删除）；`status` 为 open / done | `ix_rotation_notice_open (employee_id, status)`、`ix_rotation_notice_day (attraction_id, work_date, status)` |
+
+`rotation_screen_accounts` 由启动时 `ensure_screen_account` 保证存在，已存在时不改密码。
 
 ---
 

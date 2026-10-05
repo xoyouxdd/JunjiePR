@@ -86,6 +86,8 @@ PERMISSION_DEFINITIONS = {
     "SUPERVISOR_SCORE": "为主管加分和扣分",
     "TA_GSM_SCORE": "为代理TA GSM的主管加分、扣分和审批",
     "SYSTEM_ADMIN": "系统紧急纠错",
+    "ROTATION_MANAGE": "轮岗看板调整、名单与记录",
+    "ROTATION_SELF": "查看本人轮岗",
 }
 
 ROLE_PERMISSION_CODES = {
@@ -113,6 +115,12 @@ ROLE_PERMISSION_CODES = {
 
 for _report_role in ("GSM", "AM", "OM", "SYSTEM_ADMIN"):
     ROLE_PERMISSION_CODES[_report_role] += ("HR_MONTHLY_REPORT",)
+
+# 轮岗：TA主管及以上可调整，CM/TR 只看本人。
+for _rotation_role in ("TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"):
+    ROLE_PERMISSION_CODES[_rotation_role] += ("ROTATION_MANAGE",)
+for _rotation_role in ("CM", "TR"):
+    ROLE_PERMISSION_CODES[_rotation_role] += ("ROTATION_SELF",)
 
 # Seed only creates these when a role has no score rules at all. Later edits
 # go through the admin API; startup must not insert a new "today" default.
@@ -154,6 +162,7 @@ def init_db() -> None:
 def _init_db_unlocked() -> None:
     ensure_directories()
     from app import v2_models  # noqa: F401
+    from app.rotation import models as rotation_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -168,6 +177,9 @@ def _init_db_unlocked() -> None:
         ensure_highest_admin_account(db)
         ensure_circle_hr_accounts(db)
         create_score_view(db)
+        from app.rotation.access import ensure_screen_account
+
+        ensure_screen_account(db)
     finally:
         db.close()
 

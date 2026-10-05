@@ -56,6 +56,11 @@ form.addEventListener('submit', async event => {
     } catch (_error) {
       /* Ignore storage failures after a successful login. */
     }
+    // 休息室大屏账号登录后直接进入大屏页面。
+    if (body.redirect === '/rotation/screen') {
+      location.href = portalPath('/rotation/screen');
+      return;
+    }
     location.href = portalPath('/');
   } catch (_error) {
     message.textContent = '网络连接失败，请稍后重试';

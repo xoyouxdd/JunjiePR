@@ -828,6 +828,11 @@ def audit_attraction_id(db: Session, entity_type: str, entity_id) -> int | None:
     if entity_type == "month_close":
         row = db.get(MonthClosure, key)
         return row.attraction_id if row else None
+    if entity_type == "rotation_screen":
+        from app.rotation.models import RotationScreenAccount
+
+        row = db.get(RotationScreenAccount, key)
+        return row.attraction_id if row else None
     if entity_type == "circle_transfer":
         # The source circle; the target circle's HR is matched by the log query.
         row = db.get(CircleTransferRequest, key)
