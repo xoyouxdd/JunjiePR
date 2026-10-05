@@ -7,6 +7,28 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.05.2",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "小组改为固定组名，组和负责人分开",
+                "detail": "小组统一命名为「景点圈 + 字母」，如「热力追踪A组」，换负责人不再改名。每组可有一位主管和一位代理主管：有代理主管时由代理主管复核组员，主管可查看。首页显示所在小组及其主管、代理主管。",
+                "audiences": ["CM", "TR", "TA_SUPERVISOR", "SUPERVISOR"],
+            },
+            {
+                "summary": "排名、统计和导出按小组显示",
+                "detail": "PR排名和导出的「主管」列改为「小组」，显示组名及主管、代理主管；景点数据统计树和月度导出按小组分组，小组行标出主管和代理主管。",
+                "audiences": ["TA_GSM", "GSM", "AM", "OM", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "新增「小组管理」，员工管理改版",
+                "detail": "「整组移交」改为「小组管理」：新建小组自动取下一个字母，设置主管（本职主管、一人一组）和代理主管（代理TA主管、一人一组），关闭空小组，组员只读。员工管理按「景点圈 → 主管 → 各小组 → 未分组」展示，组员行可直接选择所属小组，其他修改点「编辑」。选择人员不再自动新建小组；跨圈调动由目标HR选择目标小组。现有小组已按原组名拼音顺序分配字母，对照记录见审计日志「小组统一命名」。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.05.1",
         "date": "2026-10-05",
         "status": "candidate",
