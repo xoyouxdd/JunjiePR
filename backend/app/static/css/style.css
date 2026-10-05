@@ -1176,6 +1176,9 @@ body[data-circle-theme="bear"] { --circle-accent: var(--circle-bear); --circle-s
 .account-status-panel summary small { display: block; margin-top: 3px; color: var(--muted); }
 .account-status-panel summary .badge { margin-left: auto; }
 .account-status-content { padding: 16px 18px 18px; }
+/* 员工管理顶部的导入、新建、员工号变更默认折叠。 */
+.hr-tool-panel .account-status-content > p:first-child { margin-top: 0; }
+.account-status-panel .hr-create-heading { display: block; margin: 0; }
 .account-status-panel .record-line { align-items: flex-start; }
 .account-status-panel h2 { margin-bottom: 4px; }
 .account-status-panel p { margin-top: 0; }

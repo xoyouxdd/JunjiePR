@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.05.6",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "员工管理的小组和顶部功能默认折叠",
+                "detail": "员工管理中各小组和主管列表默认收起，标题上仍显示负责人和人数，点击标题展开；保存修改后，已展开的小组保持展开。「未分组」保持展开，方便分配。页面顶部的「Excel 导入」「新建员工账号」「员工号变更」也改为默认收起，点击标题展开。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.05.5",
         "date": "2026-10-05",
         "status": "candidate",
