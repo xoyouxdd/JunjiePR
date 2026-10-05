@@ -397,9 +397,60 @@ def group_display_name(circle_name: str, code: str) -> str:
 
 
 def next_group_code(db: Session, attraction_id: int) -> str:
-    """Next unused letter in the circle; letters of closed groups stay retired."""
-    codes = [code for (code,) in db.query(WorkGroup.code).filter(WorkGroup.attraction_id == attraction_id, WorkGroup.code.isnot(None))]
-    return group_code_for_index(max((group_code_index(code) for code in codes), default=-1) + 1)
+    """The earliest letter no open group of the circle uses (gaps first)."""
+    used = {
+        group_code_index(code)
+        for (code,) in db.query(WorkGroup.code).filter(
+            WorkGroup.attraction_id == attraction_id,
+            WorkGroup.status != "closed",
+            WorkGroup.code.isnot(None),
+        )
+    }
+    index = 0
+    while index in used:
+        index += 1
+    return group_code_for_index(index)
+
+
+def resequence_group_codes(db: Session, attraction_id: int, operator: Employee | None, reason: str) -> list[tuple[str, str]]:
+    """Re-letter the circle's open groups A, B, C… in their current order.
+
+    Groups still named "<circle><old letter>组" get the matching new name; a
+    name HR changed by hand is kept.  Closed groups give up their letter (a
+    closed group sharing a new name is marked "（已关闭）").  Records refer to
+    groups by id, so every page follows the new names.  Returns the renames.
+    """
+    from app.v2_models import Attraction
+
+    circle = db.get(Attraction, attraction_id)
+    circle_name = circle.name if circle else ""
+    groups = db.query(WorkGroup).filter(WorkGroup.attraction_id == attraction_id).all()
+    open_groups = sorted(
+        (group for group in groups if group.status != "closed"),
+        key=lambda group: (group.code is None, group_code_index(group.code), group.id),
+    )
+    changes: list[tuple[str, str]] = []
+    new_names = set()
+    for index, group in enumerate(open_groups):
+        code = group_code_for_index(index)
+        old_name = group.name
+        default_name = not group.code or old_name == group_display_name(circle_name, group.code)
+        name = group_display_name(circle_name, code) if default_name else old_name
+        new_names.add(name)
+        if (group.code, group.name) == (code, name):
+            continue
+        group.code, group.name = code, name
+        group.revision += 1
+        db.flush()
+        changes.append((old_name, name))
+        write_audit(db, operator, "小组重新排列字母", "work_group", group.id, before={"name": old_name}, after={"name": name, "code": code}, reason=reason)
+    for group in groups:
+        if group.status == "closed" and group.code:
+            group.code = None
+            if group.name in new_names:
+                group.name = f"{group.name}（已关闭）"
+    db.flush()
+    return changes
 
 
 def group_leader_label(formal_name: str, acting_name: str) -> str:

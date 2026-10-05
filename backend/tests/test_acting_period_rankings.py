@@ -86,11 +86,6 @@ def test_issuing_ranking_counts_role_used_and_keeps_former_ta_records() -> None:
         assert counts["TATEST01"] == 1
         assert counts["SUPTEST01"] == 1
 
-        login(client, "HR01", "HR123")
-        ended = client.put(f"/api/hr/employees/{employee_id('TATEST01')}", json={"role_code": "CM", "reason": "结束代理"})
-        assert ended.status_code == 400  # still leads a group with members
-        login(client, "GSMTEST01")
-        assert issuing_counts(client)["TATEST01"] == 1
 
 
 def test_monthly_statistics_note_the_acting_period_score() -> None:

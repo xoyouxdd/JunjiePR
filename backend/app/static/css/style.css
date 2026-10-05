@@ -1729,7 +1729,8 @@ table,
 .link-button:hover { text-decoration: underline; }
 .muted-text { color: var(--muted); font-size: 13px; }
 .toolbar-spacer { flex: 1; }
-.hr-org-toolbar { margin-bottom: 8px; }
+.hr-org-toolbar { grid-template-columns: repeat(3, minmax(160px, 260px)); align-items: end; margin-bottom: 8px; }
+.hr-org-toolbar #hrSearch { margin: 0; }
 .hr-org-warning { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .hr-circle { margin-top: 16px; }
 .hr-circle-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 2px solid var(--line); }
@@ -1743,7 +1744,7 @@ details.hr-block[open] > summary::before { transform: rotate(90deg); }
 details.hr-block:not([open]) > summary { border-bottom: 0; }
 .hr-block-head .link-button { margin-left: auto; font-size: 13px; }
 .hr-block-title { font-weight: 700; min-width: 40px; }
-.hr-person-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) 150px 92px 68px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.hr-person-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(150px, 260px) 92px 68px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .hr-person-head { border-top: 0; padding-top: 6px; padding-bottom: 4px; color: var(--muted); font-size: 12px; }
 .hr-person-name small { display: block; color: var(--muted); font-size: 12px; }
 .hr-person-identity { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -1766,7 +1767,7 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
 .group-metric strong { font-size: 22px; }
 .group-metric.warn strong { color: var(--warn-text); }
 .group-table { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.group-row { display: grid; grid-template-columns: 70px minmax(0, 1.2fr) minmax(0, 1.2fr) 52px 190px; gap: 10px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.group-row { display: grid; grid-template-columns: minmax(70px, auto) minmax(0, 1.2fr) minmax(0, 1.2fr) 52px 250px; gap: 10px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 14px; }
 .group-head { border-top: 0; background: var(--surface-raised); color: var(--muted); font-size: 12px; }
 .group-row .group-name { font-weight: 700; text-align: left; }
 .group-row .actions { margin: 0; justify-content: flex-end; }
@@ -1775,6 +1776,7 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
 .group-members span small { margin-left: 4px; color: var(--muted); }
 .group-members .field-hint { flex-basis: 100%; margin: 4px 0 0; }
 @media (max-width: 760px) {
+  .hr-org-toolbar { grid-template-columns: 1fr; }
   .hr-person-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; }
   .hr-person-head { display: none; }
   .hr-person-identity, .hr-person-group { grid-column: 1 / -1; }

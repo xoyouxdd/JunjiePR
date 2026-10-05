@@ -7,6 +7,28 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.05.5",
+        "date": "2026-10-05",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "小组字母重新从A排列，可以改名",
+                "detail": "各景点圈的小组已按原顺序从A开始重新连续排列，组员、负责人和历史记录不变，排名、统计和导出同步显示新组名。新建小组优先使用前面空出的字母；关闭的小组会让出字母并标注“已关闭”。HR和系统管理员可在小组管理中点“改名”修改组名，确认后生效。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "小组可以暂时没有负责人",
+                "detail": "小组没有主管或代理主管也可以保存，系统会提示组员的签卡暂时无人复核。员工管理的小组下拉同时显示该组的主管和代理主管；跨圈调动也可选择暂无负责人的小组。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "员工管理筛选栏对齐",
+                "detail": "员工管理顶部的景点圈、搜索、人员状态三个筛选框统一宽度和高度，排成一行对齐；手机上改为上下排列。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.05.4",
         "date": "2026-10-05",
         "status": "candidate",

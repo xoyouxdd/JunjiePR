@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.v2_database import SessionLocal, ensure_group_codes  # noqa: E402
 from app.v2_models import AuditLog, Employee, EmployeeRoleAssignment, GroupLeaderAssignment, Role, SystemAlert, WorkGroup  # noqa: E402
-from app.v2_services import group_code_for_index, group_code_index  # noqa: E402
+from app.v2_services import group_code_for_index, group_code_index, next_group_code, resequence_group_codes  # noqa: E402
 
 
 def test_code_letters_roll_over_after_z() -> None:
@@ -63,3 +63,18 @@ def test_existing_groups_get_fixed_names_in_pinyin_order_with_alerts() -> None:
             # Running it again changes nothing.
             ensure_group_codes(db)
             assert db.get(WorkGroup, legacy["wang"]).name == "热力追踪E组"
+
+            # Closing C and a hand-renamed group: re-lettering fills the gap in order.
+            db.get(WorkGroup, legacy["gsm"]).status = "closed"
+            db.get(WorkGroup, legacy["wang2"]).name = "热力追踪夜班组"
+            db.commit()
+            changes = resequence_group_codes(db, heat_id, None, "测试重新排列")
+            db.commit()
+            assert ("热力追踪D组", "热力追踪C组") in changes and ("热力追踪E组", "热力追踪D组") in changes
+            assert db.get(WorkGroup, legacy["chen"]).name == "热力追踪C组"
+            assert db.get(WorkGroup, legacy["wang"]).name == "热力追踪D组"
+            renamed = db.get(WorkGroup, legacy["wang2"])
+            assert renamed.name == "热力追踪夜班组" and renamed.code == "E"
+            closed = db.get(WorkGroup, legacy["gsm"])
+            assert closed.code is None and closed.name == "热力追踪C组（已关闭）"
+            assert next_group_code(db, heat_id) == "F"

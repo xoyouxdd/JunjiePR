@@ -287,14 +287,19 @@ def test_hr_sets_and_ends_a_duty_without_moving_the_group() -> None:
             assert current_leader_for_employee(db, cm_id).employee_no == before_group
 
 
-def test_leader_cannot_join_the_group_they_lead() -> None:
+def test_acting_leader_may_join_their_group_without_a_supervisor_with_a_hint() -> None:
     with TestClient(app) as client:
         login(client, "HR01", "HR123")
         ta_id = employee_id("TATEST01")
         with SessionLocal() as db:
             led_group = db.query(GroupLeaderAssignment).filter_by(leader_employee_id=ta_id, status="active").first().group_id
-        response = client.put(f"/api/hr/employees/{ta_id}", json={"group_id": led_group, "leader_id": ta_id, "reason": "错误分组"})
-        assert response.status_code == 400, response.text
+            home_group = db.query(GroupMembership).filter_by(employee_id=ta_id, status="active").one().group_id
+        response = client.put(f"/api/hr/employees/{ta_id}", json={"group_id": led_group, "reason": "归入所代理的小组"})
+        assert response.status_code == 200, response.text
+        assert "暂时无人复核" in response.json()["warnings"][0]
         with SessionLocal() as db:
-            assert db.query(WorkGroup).get(led_group) is not None
+            assert current_leader_for_employee(db, ta_id) is None
+        back = client.put(f"/api/hr/employees/{ta_id}", json={"group_id": home_group, "reason": "回到原小组"})
+        assert back.status_code == 200 and back.json()["warnings"] == []
+        with SessionLocal() as db:
             assert current_leader_for_employee(db, ta_id).employee_no == "SUPTEST01"

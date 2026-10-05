@@ -733,6 +733,8 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
     if existing_role and existing_role.code not in CIRCLE_HR_MANAGED_ROLE_CODES and "SYSTEM_ADMIN" not in user.permissions:
         raise HTTPException(403, "景点圈HR只能编辑LEAD及以下员工")
     before = employee_payload(db, employee)
+    # Groups may run without a leader; such changes are saved with a hint.
+    warnings: list[str] = []
     score_sensitive_fields = {"is_active", "employment_status", "role_code", "attraction_id", "leader_id", "group_id"}
     if score_sensitive_fields & payload.keys():
         current_month = date.today().strftime("%Y-%m")
@@ -939,7 +941,7 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     continue
                 other_type = "acting" if leader_type == "formal" else "formal"
                 if active_group_memberships(db, group.id) and not group_leader_of_type(db, group.id, other_type):
-                    raise HTTPException(400, f"{group.name}还有组员，请先在小组管理中为该组设置新的负责人")
+                    warnings.append(f"{group.name}现在没有负责人，组员的签卡暂时无人复核，请到小组管理设置")
                 assignment.status = "ended"
                 assignment.ends_on = max(assignment.starts_on, today_value)
                 group.revision += 1
@@ -1039,13 +1041,10 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                 if not target_group or target_group.status == "closed" or target_group.attraction_id != employee.attraction_id:
                     raise HTTPException(400, "请选择员工所在景点圈内的小组")
                 formal = group_leader_of_type(db, target_group.id, "formal")
-                acting = group_leader_of_type(db, target_group.id, "acting")
                 if formal and formal.leader_employee_id == employee.id:
                     raise HTTPException(400, "员工不能成为自己所带小组的组员")
                 # A 代理主管 may belong to the group they act for; their own
-                # records are then reviewed by its 主管.
-                if acting and acting.leader_employee_id == employee.id and not formal:
-                    raise HTTPException(400, "该组没有主管，代理主管不能加入自己代理的小组")
+                # records are then reviewed by its 主管 (none: a hint below).
 
             # Returning a former TA主管/主管 to CM/TR restores their latest
             # open historic group in the circle when that choice is unambiguous.
@@ -1078,6 +1077,8 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
                     db.flush()
                     reviewer = current_leader_for_employee(db, employee.id)
                     pending_query.update({RecognitionRecord.assigned_reviewer_id: reviewer.id if reviewer else None}, synchronize_session=False)
+                    if not reviewer:
+                        warnings.append(f"{target_group.name}没有可复核{employee.name}的负责人，其签卡暂时无人复核，请到小组管理设置")
                 write_audit(
                     db,
                     user.employee,
@@ -1095,4 +1096,4 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
         recalculate_attendance(db, employee, date.today().strftime("%Y-%m"))
     write_audit(db, user.employee, "修改员工", "employee", employee.id, before=before, after=employee_payload(db, employee), reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "warnings": warnings}

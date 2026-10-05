@@ -387,20 +387,20 @@ def complete_circle_transfer(db: Session, row: CircleTransferRequest, target_gro
     employee.attraction_id = row.target_attraction_id
     employee.updated_at = datetime.now()
     db.flush()
+    # The target group may have no leader yet: pending reviews then wait
+    # unassigned and follow-ups stay with their current supervisor.
     target_leader = current_leader_for_employee(db, employee.id)
-    if not target_leader:
-        raise HTTPException(400, "目标小组还没有负责人，请先在小组管理中设置主管或代理主管")
     pending_reviews = db.query(RecognitionRecord).filter(
         RecognitionRecord.employee_id == employee.id,
         RecognitionRecord.status == "pending",
-    ).update({RecognitionRecord.assigned_reviewer_id: target_leader.id}, synchronize_session=False)
+    ).update({RecognitionRecord.assigned_reviewer_id: target_leader.id if target_leader else None}, synchronize_session=False)
     pending_follow_ups = db.query(DeductionFollowUp).filter(
         DeductionFollowUp.employee_id == employee.id,
         DeductionFollowUp.status == "pending",
     ).update(
         {DeductionFollowUp.supervisor_id: target_leader.id, DeductionFollowUp.supervisor_name: target_leader.name},
         synchronize_session=False,
-    )
+    ) if target_leader else 0
     recognition_count = db.query(RecognitionRecord).filter(
         RecognitionRecord.employee_id == employee.id,
         RecognitionRecord.recognition_month == current_month,
@@ -431,7 +431,7 @@ def complete_circle_transfer(db: Session, row: CircleTransferRequest, target_gro
         "pending_follow_ups": pending_follow_ups,
     }
     row.target_group_id = target_group.id
-    row.target_leader_id = target_leader.id
+    row.target_leader_id = target_leader.id if target_leader else None
     row.status = "completed"
     row.reviewed_by = reviewer.id
     row.reviewed_by_name = reviewer.name
@@ -445,7 +445,7 @@ def complete_circle_transfer(db: Session, row: CircleTransferRequest, target_gro
         "circle_transfer",
         row.id,
         before={"employee_no": employee.employee_no, "attraction": row.source_attraction_name, "group_id": row.source_group_id},
-        after={"attraction": row.target_attraction_name, "group_id": target_group.id, "group": target_group.name, "reviewer": target_leader.name, "migrated": migrated_counts},
+        after={"attraction": row.target_attraction_name, "group_id": target_group.id, "group": target_group.name, "reviewer": target_leader.name if target_leader else "", "migrated": migrated_counts},
         reason=row.reason,
         ip_address=client_ip(request),
     )
@@ -479,12 +479,11 @@ def review_circle_transfer(transfer_id: int, payload: dict, request: Request, db
     target_group = db.get(WorkGroup, int(payload.get("target_group_id") or 0))
     if not target_group or target_group.status == "closed" or target_group.attraction_id != row.target_attraction_id:
         raise HTTPException(400, "请选择目标景点圈内的小组")
-    if not (group_leader_of_type(db, target_group.id, "formal") or group_leader_of_type(db, target_group.id, "acting")):
-        raise HTTPException(400, "目标小组还没有负责人，请先在小组管理中设置主管或代理主管")
     row.review_note = note or None
     migrated_counts = complete_circle_transfer(db, row, target_group, user, request)
     db.commit()
-    return {"ok": True, "transfer": circle_transfer_payload(db, row), "migrated_record_counts": migrated_counts}
+    warnings = [] if row.target_leader_id else [f"{target_group.name}还没有负责人，{row.employee_name}的签卡暂时无人复核，请到小组管理设置"]
+    return {"ok": True, "transfer": circle_transfer_payload(db, row), "migrated_record_counts": migrated_counts, "warnings": warnings}
 
 
 @router.post("/hr/circle-transfers/{transfer_id}/cancel")
@@ -606,8 +605,6 @@ def apply_group_leaders(db: Session, group: WorkGroup, supervisor_id: int | None
     today_value = date.today().isoformat()
     members = active_group_memberships(db, group.id)
     member_ids = {member.employee_id for member in members}
-    if acting_id and acting_id in member_ids and not supervisor_id:
-        raise HTTPException(400, "代理主管是本组组员时，本组必须有主管复核其本人记录")
     plan = {"formal": supervisor_id, "acting": acting_id}
     changes: dict[str, tuple[GroupLeaderAssignment | None, Employee | None]] = {}
     for leader_type, employee_id in plan.items():
@@ -678,6 +675,20 @@ def apply_group_leaders(db: Session, group: WorkGroup, supervisor_id: int | None
     return after
 
 
+def group_leader_warnings(db: Session, group: WorkGroup) -> list[str]:
+    """Hints for a group allowed to run without a full set of leaders."""
+    member_ids = {member.employee_id for member in active_group_memberships(db, group.id)}
+    if not member_ids:
+        return []
+    formal = group_leader_of_type(db, group.id, "formal")
+    acting = group_leader_of_type(db, group.id, "acting")
+    if not formal and not acting:
+        return [f"{group.name}没有主管和代理主管，组员的签卡暂时无人复核"]
+    if acting and not formal and acting.leader_employee_id in member_ids:
+        return [f"{group.name}没有主管，代理主管{acting.leader.name}本人的签卡暂时无人复核"]
+    return []
+
+
 @router.post("/hr/groups")
 def create_group(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
     """New group with the circle's next letter; 主管/代理主管 are optional."""
@@ -720,9 +731,37 @@ def set_group_leaders(group_id: int, payload: dict, request: Request, db: Sessio
         reason,
         client_ip(request),
     )
+    warnings = group_leader_warnings(db, group)
     db.commit()
     invalidate_data_caches()
-    return {"ok": True, "leaders": after}
+    return {"ok": True, "leaders": after, "warnings": warnings}
+
+
+@router.post("/hr/groups/{group_id}/rename")
+def rename_group(group_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    """HR may rename a group; the letter code and every record stay with the group."""
+    group = db.get(WorkGroup, group_id)
+    if not group or group.status == "closed":
+        raise HTTPException(404, "小组不存在或已关闭")
+    ensure_scoped_hr_attraction(db, user, group.attraction_id)
+    if int(payload.get("revision") or 0) != group.revision:
+        raise HTTPException(409, "小组已被其他操作修改，请刷新后重试")
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "组名不能为空")
+    if len(name) > 30:
+        raise HTTPException(400, "组名最多30个字")
+    if name == group.name:
+        raise HTTPException(400, "组名没有变化")
+    if db.query(WorkGroup.id).filter(WorkGroup.name == name, WorkGroup.status != "closed", WorkGroup.id != group.id).first():
+        raise HTTPException(400, f"已有名为“{name}”的小组")
+    old_name = group.name
+    group.name = name
+    group.revision += 1
+    write_audit(db, user.employee, "修改小组名称", "work_group", group.id, before={"name": old_name}, after={"name": name}, reason=str(payload.get("reason") or "").strip() or "HR修改组名", ip_address=client_ip(request))
+    db.commit()
+    invalidate_data_caches()
+    return {"ok": True, "name": name}
 
 
 @router.post("/hr/groups/{group_id}/close")
@@ -749,13 +788,17 @@ def close_empty_group(group_id: int, payload: dict, request: Request, db: Sessio
         assignment.status = "ended"
         assignment.ends_on = max(assignment.starts_on, today_value)
         ended_leaders.append(assignment.leader.name)
+    # The letter is freed for the next new group; history keeps a marked name.
+    old_name = group.name
     group.status = "closed"
+    group.code = None
+    group.name = f"{old_name}（已关闭）"
     group.revision += 1
     db.query(SystemAlert).filter(SystemAlert.group_id == group.id, SystemAlert.status == "open").update(
         {SystemAlert.status: "handled", SystemAlert.handled_by: user.id, SystemAlert.handled_at: datetime.now()},
         synchronize_session=False,
     )
-    write_audit(db, user.employee, "关闭空小组", "work_group", group.id, before={"name": group.name, "leaders": ended_leaders, "status": "active", "member_count": 0}, after={"status": "closed"}, reason=reason, ip_address=client_ip(request))
+    write_audit(db, user.employee, "关闭空小组", "work_group", group.id, before={"name": old_name, "leaders": ended_leaders, "status": "active", "member_count": 0}, after={"name": group.name, "status": "closed"}, reason=reason, ip_address=client_ip(request))
     db.commit()
     invalidate_data_caches()
     return {"ok": True}

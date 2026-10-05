@@ -361,8 +361,8 @@
 | 字段 | 类型 | 空 | 说明 |
 |---|---|---|---|
 | `id` | INTEGER PK | 否 | 组身份 |
-| `name` | VARCHAR(100) | 否 | 固定组名「景点圈 + 字母 + 组」，如 `热力追踪A组`；换负责人不改名 |
-| `code` | VARCHAR(8) | 是 | 字母代号（A…Z、AA…），同一景点圈内唯一，关闭后不复用 |
+| `name` | VARCHAR(100) | 否 | 组名，新建为「景点圈 + 字母 + 组」，如 `热力追踪A组`；换负责人不改名，HR 可改名；关闭后加「（已关闭）」 |
+| `code` | VARCHAR(8) | 是 | 字母代号（A…Z、AA…），同一景点圈未关闭的组内唯一；新建取最前面空着的字母，关闭时清空 |
 | `attraction_id` | INTEGER | 否 | FK → `attractions.id` |
 | `status` | VARCHAR(20) | 否 | `active` / `pending_takeover` / `closed`，默认 `active` |
 | `revision` | INTEGER | 否 | |

@@ -196,6 +196,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-10-audit-scope-and-appeal-removal", "backfill_audit_scope_and_remove_appeals"),
     ("2026-10-group-leader-types", "ensure_group_leader_types"),
     ("2026-10-group-codes", "ensure_group_codes"),
+    ("2026-10-group-codes-resequence", "resequence_all_group_codes"),
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
 ]
 
@@ -968,6 +969,16 @@ def ensure_group_codes(db) -> None:
                         employee_id=employee_id,
                         group_id=row.group_id,
                     )
+    db.commit()
+
+
+def resequence_all_group_codes(db) -> None:
+    """Re-letter every circle's open groups from A without gaps (one-off)."""
+    from app.v2_models import WorkGroup
+    from app.v2_services import resequence_group_codes
+
+    for (attraction_id,) in db.query(WorkGroup.attraction_id).distinct().all():
+        resequence_group_codes(db, attraction_id, None, "2026-10 小组从A开始重新排列字母")
     db.commit()
 
 

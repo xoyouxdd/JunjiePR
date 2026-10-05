@@ -140,12 +140,33 @@ def test_groups_get_the_next_letter_and_close_only_when_empty() -> None:
         circle = next(row for row in client.get("/api/hr/groups").json()["circles"] if row["id"] == circle_id)
         assert empty_id not in {row["id"] for row in circle["groups"]}
         assert empty_id not in {row["id"] for row in client.get("/api/hr/group-options").json()}
-        # A closed group's letter is not reused.
+        # The closed group frees its letter; the next new group takes the earliest gap.
         again = client.post("/api/hr/groups", json={"attraction_id": circle_id})
         assert again.status_code == 200, again.text
-        assert again.json()["code"] != code
+        assert again.json()["code"] == code and again.json()["name"] == f"热力追踪{code}组"
         with SessionLocal() as db:
-            assert db.get(WorkGroup, empty_id).status == "closed"
+            closed_group = db.get(WorkGroup, empty_id)
+            assert closed_group.status == "closed" and closed_group.code is None
+            assert closed_group.name == f"热力追踪{code}组（已关闭）"
+
+
+def test_hr_renames_a_group_and_members_may_join_a_group_without_leaders() -> None:
+    with TestClient(app) as client:
+        login(client, "HR01", "HR123")
+        circle_id = heat_circle_id(client)
+        created = client.post("/api/hr/groups", json={"attraction_id": circle_id}).json()
+        with SessionLocal() as db:
+            revision = db.get(WorkGroup, created["id"]).revision
+        assert client.post(f"/api/hr/groups/{created['id']}/rename", json={"name": "热力追踪A组", "revision": revision}).status_code == 400
+        renamed = client.post(f"/api/hr/groups/{created['id']}/rename", json={"name": "热力追踪夜班组", "revision": revision})
+        assert renamed.status_code == 200, renamed.text
+        with SessionLocal() as db:
+            group = db.get(WorkGroup, created["id"])
+            assert group.name == "热力追踪夜班组" and group.code == created["code"]
+        # Joining a group without leaders is allowed and returns a hint.
+        joined = client.put(f"/api/hr/employees/{employee_id('CMTEST02')}", json={"group_id": created["id"], "reason": "无负责人小组"})
+        assert joined.status_code == 200, joined.text
+        assert "暂时无人复核" in joined.json()["warnings"][0]
 
 
 def test_acting_leader_inside_the_group_is_reviewed_by_its_formal_leader() -> None:
@@ -165,8 +186,12 @@ def test_acting_leader_inside_the_group_is_reviewed_by_its_formal_leader() -> No
         assert own in {row["id"] for row in client.get("/api/reviews").json()["items"]}
 
         login(client, "HR01", "HR123")
-        # The 主管 must stay while the 代理主管 is a member of the group.
-        assert set_leaders(client, group_id, None, "TATEST01").status_code == 400
+        # A group may lose its 主管; saving succeeds with a hint.
+        removed = set_leaders(client, group_id, None, "TATEST01")
+        assert removed.status_code == 200, removed.text
+        assert "本人的签卡暂时无人复核" in removed.json()["warnings"][0]
+        with SessionLocal() as db:
+            assert current_leader_for_employee(db, ta_id) is None
         ended = set_leaders(client, group_id, "TAGSMTEST01", None)
         assert ended.status_code == 200, ended.text
         with SessionLocal() as db:
