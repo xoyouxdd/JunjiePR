@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+import hashlib
+import json
 from typing import Literal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from sqlalchemy import func, or_, update
+from sqlalchemy import func, or_, update, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
@@ -132,6 +134,15 @@ async def create_recognition(
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
+    return await _create_recognition(request, recognition_date, occurred_attraction_id,
+        recognition_type_id, recognizer_employee_id, content, employee_id,
+        idempotency_key, same_day_duplicate_confirmed, image, db, user)
+
+
+async def _create_recognition(request, recognition_date, occurred_attraction_id,
+    recognition_type_id, recognizer_employee_id, content, employee_id,
+    idempotency_key, same_day_duplicate_confirmed, image, db, user,
+    *, shared_file=None, commit=True):
     request_key = normalize_request_key(idempotency_key)
     payload_digest = submission_payload_digest(
         {
@@ -263,7 +274,7 @@ async def create_recognition(
     ).first():
         raise HTTPException(409, "该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分")
     reviewer = current_leader_for_employee(db, target.id) if is_self else None
-    if is_self and (not image or not image.filename):
+    if is_self and not shared_file and (not image or not image.filename):
         raise HTTPException(400, "CM/TR本人登记必须上传1张认可图片")
     file_row = None
     row = RecognitionRecord(
@@ -316,8 +327,8 @@ async def create_recognition(
                 )
             )
             db.flush()
-        if is_self and image:
-            file_row = await save_image_upload(db, image, user.id)
+        if is_self and (image or shared_file):
+            file_row = shared_file or await save_image_upload(db, image, user.id)
             row.attachments.append(RecognitionAttachment(file_id=file_row.id, attachment_type="evidence", sort_order=1))
             db.flush()
         remember_submission(db, user.id, "recognition", request_key, row.id, payload_digest)
@@ -325,8 +336,11 @@ async def create_recognition(
         if file_row:
             audit_payload["image"] = {"sha256": file_row.sha256, "size": file_row.file_size, "type": file_row.mime_type}
         write_audit(db, user.employee, "登记签卡", "recognition", row.id, after=audit_payload, ip_address=client_ip(request))
-        db.commit()
+        if commit:
+            db.commit()
     except IntegrityError as exc:
+        if not commit:
+            raise
         db.rollback()
         if file_row:
             path = (FILE_DIR / file_row.storage_key).resolve()
@@ -339,13 +353,16 @@ async def create_recognition(
             raise HTTPException(409, "该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分") from exc
         raise
     except Exception:
+        if not commit:
+            raise
         db.rollback()
         if file_row:
             path = (FILE_DIR / file_row.storage_key).resolve()
             if FILE_DIR.resolve() in path.parents:
                 path.unlink(missing_ok=True)
         raise
-    invalidate_data_caches()
+    if commit:
+        invalidate_data_caches()
     response = {"ok": True, "record": recognition_payload(row)}
     if is_self:
         response["encouragement_options"] = encouragement_options(
@@ -355,6 +372,93 @@ async def create_recognition(
             stage="submitted",
         )
     return response
+
+
+@router.post("/recognitions/batch")
+async def create_self_recognition_batch(
+    request: Request, entries: str = Form(...), idempotency_key: str = Form(...),
+    image: UploadFile = File(...), db: Session = Depends(get_db),
+    user: V2User = Depends(current_user),
+):
+    """One upload and one transaction, with ordinary independent recognition rows."""
+    if user.base_role.code not in FRONTLINE_CODES or "SELF_RECOGNITION" not in user.permissions:
+        raise HTTPException(403, "此入口仅供CM/TR及TA主管本人登记")
+    key = normalize_request_key(idempotency_key)
+    if not key:
+        raise HTTPException(400, "缺少提交标识")
+    try:
+        items = json.loads(entries)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "登记字段无法解析，请重新提交")
+    if not isinstance(items, list) or not 1 <= len(items) <= 5:
+        raise HTTPException(400, "一次只能提交1至5条认可")
+    fields = {"recognition_date", "occurred_attraction_id", "recognition_type_id", "recognizer_employee_id", "content", "same_day_duplicate_confirmed"}
+    for index, item in enumerate(items, 1):
+        if not isinstance(item, dict) or set(item) - fields:
+            raise HTTPException(400, f"第{index}条：登记字段无效，不允许指定其他员工")
+        if any(not isinstance(item.get(name), (str, int)) or isinstance(item.get(name), bool) or not str(item[name]).strip() for name in fields - {"same_day_duplicate_confirmed"}):
+            raise HTTPException(400, f"第{index}条：日期、类型、内容、景点和认可人均须填写")
+        if not isinstance(item.get("same_day_duplicate_confirmed", False), bool):
+            raise HTTPException(400, f"第{index}条：重复登记确认字段无效")
+        if not isinstance(item["content"], str) or not isinstance(item["recognition_date"], str):
+            raise HTTPException(400, f"第{index}条：日期和内容必须是文字")
+        try:
+            item["occurred_attraction_id"] = int(item["occurred_attraction_id"])
+            item["recognition_type_id"] = int(item["recognition_type_id"])
+        except (ValueError, TypeError):
+            raise HTTPException(400, f"第{index}条：景点或认可类型无效")
+    digest = hashlib.sha256()
+    size = 0
+    while chunk := await image.read(1024 * 1024):
+        size += len(chunk)
+        if size > 100 * 1024 * 1024:
+            raise HTTPException(413, "认可图片不能超过100MB")
+        digest.update(chunk)
+    await image.seek(0)
+    payload_digest = submission_payload_digest({"entries": items, "image_sha256": digest.hexdigest()})
+    shared = None
+    try:
+        # Finish upload IO before holding the database write reservation.
+        shared = await save_image_upload(db, image, user.id, persist=False)
+        # Authentication reads have already opened a session; acquire a write
+        # reservation before validating quotas and recording the complete batch.
+        db.rollback()
+        db.execute(text("BEGIN IMMEDIATE"))
+        previous = existing_submission(db, user.id, "recognition_batch", key, RecognitionRecord, payload_digest)
+        if previous:
+            records = [existing_submission(db, user.id, "recognition_batch_item", f"{key}:{i}", RecognitionRecord) for i in range(len(items))]
+            result = {"ok": True, "records": [recognition_payload(row) for row in records], "duplicate": True}
+            db.rollback()
+            (FILE_DIR / shared.storage_key).unlink(missing_ok=True)
+            return result
+        db.add(shared)
+        db.flush()
+        results = []
+        for index, item in enumerate(items, 1):
+            try:
+                result = await _create_recognition(request, item["recognition_date"], item["occurred_attraction_id"],
+                    item["recognition_type_id"], str(item["recognizer_employee_id"]), item["content"],
+                    None, None, item.get("same_day_duplicate_confirmed", False), None, db, user,
+                    shared_file=shared, commit=False)
+            except HTTPException as exc:
+                detail = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+                detail["entry_index"] = index
+                detail["message"] = f"第{index}条：{detail.get('message', '登记失败')}"
+                raise HTTPException(exc.status_code, detail) from exc
+            results.append(result)
+            remember_submission(db, user.id, "recognition_batch_item", f"{key}:{index-1}", result["record"]["id"])
+        remember_submission(db, user.id, "recognition_batch", key, results[0]["record"]["id"], payload_digest)
+        db.commit()
+    except Exception:
+        db.rollback()
+        if shared:
+            path = (FILE_DIR / shared.storage_key).resolve()
+            if FILE_DIR.resolve() in path.parents:
+                path.unlink(missing_ok=True)
+        raise
+    invalidate_data_caches()
+    return {"ok": True, "records": [result["record"] for result in results],
+            "encouragement_options": results[0].get("encouragement_options", [])}
 
 
 @router.post("/recognitions/poc")
@@ -401,7 +505,7 @@ def create_poc_recognition(
     if target.id == user.id:
         raise HTTPException(403, "不能为本人开具POC特别贡献")
     if duty_code_at(db, target.id, recognition_date) == "TA_GSM":
-        raise HTTPException(403, "代理TA GSM期间的主管不能由他人开具POC，请其本人登记后由AM复核")
+        raise HTTPException(403, "代理TA GSM期间的主管不能由他人开具POC，请其本人登记后由AM或正式GSM复核")
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.employee_circle:
         raise HTTPException(400, "被认可员工未配置有效景点圈")
@@ -529,12 +633,12 @@ def reviews(
 
 def supervisor_review_query(db: Session, user: V2User):
     """Self-submitted supervisor records: any formal GSM reviews them across
-    circles; records made while acting as TA GSM go to AM only."""
+    circles, including acting TA GSM records; AM reviews acting records only."""
     if "REVIEW_SUPERVISOR" not in user.permissions:
         raise HTTPException(403, "仅正式GSM、AM可以复核主管签卡")
     acting = RecognitionRecord.employee_acting_duty_code == "TA_GSM"
     not_acting = or_(RecognitionRecord.employee_acting_duty_code.is_(None), RecognitionRecord.employee_acting_duty_code != "TA_GSM")
-    scopes = ([not_acting] if user.has_role("GSM") else []) + ([acting] if user.has_role("AM") else [])
+    scopes = ([not_acting, acting] if user.has_role("GSM") else []) + ([acting] if user.has_role("AM") else [])
     return db.query(RecognitionRecord).filter(
         RecognitionRecord.source == "self",
         RecognitionRecord.employee_role_code_snapshot == "SUPERVISOR",
@@ -570,6 +674,8 @@ def supervisor_reviews(
 
 @router.post("/supervisor-reviews/{record_id}")
 def review_supervisor_recognition(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    db.rollback()
+    db.execute(text("BEGIN IMMEDIATE"))
     row = supervisor_review_query(db, user).filter(RecognitionRecord.id == record_id).first()
     if not row:
         raise HTTPException(404, "主管签卡不存在或不在复核范围内")
@@ -578,6 +684,8 @@ def review_supervisor_recognition(record_id: int, payload: dict, request: Reques
 
 @router.post("/reviews/{record_id}")
 def review_recognition(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("REVIEW_DIRECT"))):
+    db.rollback()
+    db.execute(text("BEGIN IMMEDIATE"))
     row = db.get(RecognitionRecord, record_id)
     if not row or row.employee_id not in direct_member_ids(db, user.id):
         raise HTTPException(404, "直属组员签卡不存在")

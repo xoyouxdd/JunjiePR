@@ -1805,6 +1805,9 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
   white-space: nowrap;
 }
 .rotation-entry-heading { display: flex; align-items: center; gap: 10px; }
+[data-batch-entry] { min-width: 0; margin: 0; }
+[data-batch-entry] legend { font-weight: 700; }
+[data-batch-entry] > [data-entry-remove] { justify-self: end; }
 .rotation-entry-heading h2 { margin: 0; }
 .rotation-entry-quick { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 8px; }
 .rotation-entry-quick button { display: grid; gap: 2px; width: auto; min-width: 140px; padding: 8px 14px; text-align: left; }

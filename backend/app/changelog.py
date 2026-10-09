@@ -7,6 +7,35 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.09.1",
+        "date": "2026-10-09",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "本人认可支持一次登记多条",
+                "detail": "CM、TR及本职CM/TR的代理TA主管可在本人登记中一次填写1至5条认可，共用一张照片；每条独立复核、计分和撤回。提交失败整批回滚，重复提交按原请求返回，不放宽同日重复、表扬信配额或每月分类加分上限。",
+                "audiences": ["CM", "TR", "TA_SUPERVISOR"],
+                "permissions": ["SELF_RECOGNITION"],
+            },
+            {
+                "summary": "轮岗测试完善预排与休息规则",
+                "detail": "热力追踪的轮岗测试在有当日班表时04:00生成预排，可在班次开始前调整岗位；到点才开始计时。OP结束后转入休息区，吃饭结束前的剩余休息时间不派岗；大屏点击去轮岗立即进线。测试时钟增加需确认的04:00重置入口，仅清除当天测试调整与记录，不影响正式PR业务。",
+                "audiences": ["TR", "GSM", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "代理TA GSM主管签卡支持正式GSM复核",
+                "detail": "主管本人在代理TA GSM期间提交的签卡，可由AM或任一正式GSM跨圈复核，不含本人；OM仍不能复核。本人登记及其他主管绩效权限不变。",
+                "audiences": ["SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "员工管理隐藏已归档账号的离职员工",
+                "detail": "员工管理树不再显示已离职且登录账号已归档的人员；员工及历史业务记录仍保留，其他查询不受影响。",
+                "audiences": ["HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"],
+                "permissions": ["HR_MANAGE"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.06.2",
         "date": "2026-10-06",
         "status": "candidate",

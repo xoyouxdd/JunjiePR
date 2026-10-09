@@ -729,7 +729,7 @@ def ensure_supervisor_target_allowed(db: Session, user: V2User, target: Employee
     if target.id == user.id:
         raise HTTPException(403, "不能对本人登记")
     if duty_code_at(db, target.id, on_date) == "TA_GSM":
-        raise HTTPException(403, f"代理TA GSM期间的主管不能由他人{action_name}，请其本人登记后由AM复核")
+        raise HTTPException(403, f"代理TA GSM期间的主管不能由他人{action_name}，请其本人登记后由AM或正式GSM复核")
     if user.role.code not in SUPERVISOR_SCORER_CODES:
         raise HTTPException(403, f"只有正式GSM和TA GSM可以为主管{action_name}")
 

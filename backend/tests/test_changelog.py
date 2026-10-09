@@ -76,7 +76,7 @@ def test_current_covered_sick_history_note_is_visible_to_every_role() -> None:
 
 
 def test_changelog_filters_by_role() -> None:
-    cm = visible_releases("CM", set())
+    cm = visible_releases("CM", {"SELF_RECOGNITION"})
     admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN", "DECLARATION_STATS_VIEW", "HR_MONTHLY_REPORT"})
     gsm = visible_releases("GSM", {"POC_ISSUE", "DATA_EXPORT"})
     cm_text = " ".join(item["summary"] for release in cm for item in release["items"])
@@ -88,9 +88,9 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    # 本次升级计分口径与普通员工相关；月报条目仍按原权限过滤。
-    # 2026.10.05.3 之后的版本不面向CM，普通员工看到的最新一版是 2026.10.05.2。
-    assert cm[0]["version"] == "2026.10.05.2" and cm[0]["current"] is False
+    # 本职CM/TR本人登记更新对有对应权限的员工可见。
+    assert cm[0]["current"] is True
+    assert "本人认可支持一次登记多条" in cm_text
     assert "声明升级按考勤类别匹配并修正实际扣分" in cm_text
     assert "手机底部栏按角色放常用功能" in cm_text
     assert "新增HR月报制作与PPTX导出" not in cm_text
@@ -125,18 +125,19 @@ def test_changelog_api_and_navigation_exist() -> None:
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
     with TestClient(app) as client:
-        # The current release is the rotation test entry: TR, GSM and the highest admin see it; CM does not.
+        # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
-        assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
+        cm = client.get("/api/changelog/announcement").json()
+        assert [item["summary"] for item in cm["release"]["items"]] == ["本人认可支持一次登记多条"]
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["新增「轮岗（测试）」入口（测试功能）"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["本人认可支持一次登记多条", "轮岗测试完善预排与休息规则"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in hr["release"]["items"]] == ["新增「轮岗（测试）」入口（测试功能）"]
+        assert [item["summary"] for item in hr["release"]["items"]] == ["轮岗测试完善预排与休息规则", "代理TA GSM主管签卡支持正式GSM复核", "员工管理隐藏已归档账号的离职员工"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()
@@ -147,6 +148,17 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         assert first["release"]["items"] == history[0]["items"]
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.get("/api/changelog/announcement").json()["read"] is True
+
+
+def test_current_release_items_match_roles_and_permissions() -> None:
+    batch, rotation, supervisor, hr = RELEASES[0]["items"]
+    assert item_visible(batch, {"CM", "TA_SUPERVISOR"}, {"SELF_RECOGNITION"})
+    assert not item_visible(batch, "SUPERVISOR", {"SELF_RECOGNITION"})
+    assert not item_visible(batch, "CM", set())
+    assert item_visible(rotation, "TR", set()) and not item_visible(rotation, "CM", set())
+    assert item_visible(supervisor, "GSM", set()) and not item_visible(supervisor, "CM", set())
+    assert item_visible(hr, "HR_CIRCLE", {"HR_MANAGE"})
+    assert not item_visible(hr, "HR_CIRCLE", set())
 
 
 def test_current_monthly_report_fix_requires_role_and_permission() -> None:

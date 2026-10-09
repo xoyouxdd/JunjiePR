@@ -28,6 +28,19 @@ def login(client: TestClient, employee_no: str, password: str) -> None:
     assert response.status_code == 200, response.text
 
 
+def organization_employee_ids(client: TestClient) -> set[int]:
+    response = client.get("/api/hr/organization")
+    assert response.status_code == 200, response.text
+    organization = response.json()
+    employees = list(organization["others"])
+    for circle in organization["circles"]:
+        for key in ("supervisors", "unassigned", "managers", "inactive"):
+            employees.extend(circle[key])
+        for group in circle["groups"]:
+            employees.extend(group["members"])
+    return {employee["id"] for employee in employees}
+
+
 def mark_eligible_with_business_history() -> tuple[int, int]:
     """Create a retained recognition row and an account eligible for removal."""
     with SessionLocal() as db:
@@ -80,6 +93,7 @@ def test_remove_login_after_seven_days_keeps_employee_and_business_archive() -> 
         assert directory.status_code == 200, directory.text
         item = next(row for row in directory.json() if row["id"] == employee_id)
         assert item["account_deletion_eligible"] is True
+        assert employee_id in organization_employee_ids(client)
         removed = client.request(
             "DELETE",
             f"/api/hr/employees/{employee_id}/account",
@@ -101,6 +115,7 @@ def test_remove_login_after_seven_days_keeps_employee_and_business_archive() -> 
         assert item["account_deleted_at"]
         assert item["account_deletion_eligible"] is False
         assert "账号已删除" in item["account_deletion_reason"]
+        assert employee_id not in organization_employee_ids(client)
 
 
 def test_delete_endpoint_enforces_the_full_seven_day_wait() -> None:
@@ -115,8 +130,21 @@ def test_delete_endpoint_enforces_the_full_seven_day_wait() -> None:
         response = client.request("DELETE", f"/api/hr/employees/{employee_id}/account", json={})
         assert response.status_code == 400
         assert "起可删除" in response.json()["detail"]
+        assert employee_id in organization_employee_ids(client)
         with SessionLocal() as db:
             assert db.query(UserAccount).filter_by(employee_id=employee_id).count() == 1
+
+
+def test_active_employee_with_archived_login_remains_in_management_tree() -> None:
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
+            employee.is_active = True
+            employee.account_deleted_at = datetime.now()
+            db.commit()
+            employee_id = employee.id
+        login(client, "HR01", "isolated-admin-only")
+        assert employee_id in organization_employee_ids(client)
 
 
 def test_hr_archive_ui_and_export_marker_are_present() -> None:

@@ -16,8 +16,8 @@ function screenView() {
   const early = (RT.data.settings && RT.data.settings.departEarly) || 1;
   const arrive = ps.filter(p => p.state === 'walkback' || p.state === 'pending').sort((a, b) => (a.walkbackSince || 0) - (b.walkbackSince || 0));
   const ready = ps.filter(p => p.state === 'ready').sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9));
-  const resting = ps.filter(p => p.state === 'rest' || p.state === 'meal').sort((a, b) => a.readyAt - b.readyAt);
-  const heading = ps.filter(p => p.state === 'heading').sort((a, b) => a.arriveAt - b.arriveAt);
+  const resting = ps.filter(p => p.state === 'rest').sort((a, b) => a.readyAt - b.readyAt);
+  const meals = ps.filter(p => p.state === 'meal').sort((a, b) => a.readyAt - b.readyAt);
   const lines = `<div class="rt-lines">${day.lines.filter(L => L.active || L.posts.some(x => x.occ)).map(L => lineCard(L, n, false)).join('')}</div>`;
   let pool = '';
   pool += poolSection('去轮岗', '到出发时间点自己的名字', ready, p => {
@@ -38,12 +38,12 @@ function screenView() {
     if (p.after === 'done') sub = '今天轮岗结束，点击即可下班';
     return `<button type="button" class="rt-chip${mins >= 10 ? ' due' : ''}" data-pid="${esc(p.pid)}" data-act="arrive"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
   });
-  pool += poolSection('休息和吃饭', '', resting, p => {
+  pool += poolSection('吃饭区', '', meals, p => `<div class="rt-chip meal"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">吃饭至 ${hm(p.readyAt)}，剩余 ${Math.max(0, Math.ceil(p.readyAt-n))} 分钟</span>${badges(p)}</div>`);
+  pool += poolSection('休息区', '饭后倒计时结束前不能进线', resting, p => {
     const kind = p.state === 'meal' ? '<span class="rt-badge meal">吃饭</span>' : '<span class="rt-badge rest">休息</span>';
     const next = p.assign ? `${goText(p)} <small>${hm(p.assign.departAt)}</small>` : '';
     return `<div class="rt-chip ${p.state}"><span class="rt-nm">${esc(p.name)} ${kind}</span><span class="rt-sub">至 ${hm(p.readyAt)}，还剩 ${Math.max(0, Math.ceil(p.readyAt - n))} 分钟</span><span class="rt-go">${next}</span>${badges(p)}</div>`;
   });
-  pool += poolSection('前往中', '', heading, p => `<div class="rt-chip"><span class="rt-nm">${esc(p.name)}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">约 ${hm(p.arriveAt)} 到岗</span></div>`);
   return `<div class="rt-board">${lines}<div class="rt-pool">${pool}</div></div>`;
 }
 

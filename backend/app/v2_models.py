@@ -456,7 +456,6 @@ class RecognitionAttachment(Base):
     __tablename__ = "recognition_attachments"
     __table_args__ = (
         UniqueConstraint("recognition_id", "attachment_type", name="uq_recognition_attachment_type"),
-        UniqueConstraint("file_id", name="uq_recognition_attachment_file"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

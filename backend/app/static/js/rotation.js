@@ -38,6 +38,7 @@ function renderClockBar() {
     <datalist id="tcDates">${dates.map(d => `<option value="${esc(d)}">`).join('')}</datalist>
     <label>时间<input type="time" id="tcTime" value="${hm(nowMin())}"></label>
     <button type="button" class="secondary" data-tc="set">设定模拟时间</button>
+    <button type="button" class="danger" data-tc="reset">初始化到04:00（测试）</button>
     ${sim ? `<button type="button" class="secondary" data-tc="${c.paused ? 'resume' : 'pause'}">${c.paused ? '继续' : '暂停'}</button>
     <label>倍速<select id="tcSpeed">${[1, 5, 10, 30, 60].map(s => `<option value="${s}" ${Number(c.speed) === s ? 'selected' : ''}>×${s}</option>`).join('')}</select></label>
     <button type="button" class="secondary" data-tc="jump">快进 10 分钟</button>
@@ -51,6 +52,10 @@ function renderClockBar() {
 }
 
 async function clockAction(action, extra = {}) {
+  if (action === 'reset' && !extra.confirmed) {
+    confirmBox('初始化到04:00', '撤回当天拖拽、加撤岗位及所有运行记录，保留原班表，恢复04:00预排并暂停时钟。仅用于测试。', '确认初始化', () => clockAction('reset', {confirmed: true}), {warn: true});
+    return;
+  }
   const body = { action, ...extra };
   if (action === 'set') {
     body.date = document.getElementById('tcDate').value;
@@ -113,8 +118,8 @@ function poolView(n) {
     return button(p, over >= 0 ? (over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发') : `${hm(p.assign.departAt)} 出发`, '', over >= 2 ? 'late' : over >= 0 ? 'due' : 'wait');
   });
   html += section('待到大屏点去休息', by(['walkback', 'pending']).sort((a, b) => (a.walkbackSince || 0) - (b.walkbackSince || 0)), p => button(p, p.state === 'pending' ? 'OP 结束待定' : `下线 ${Math.max(0, Math.floor(n - (p.walkbackSince || n)))} 分钟（${esc(p.downReason || '推岗')}）`));
-  html += section('休息和吃饭', by(['rest', 'meal']).sort((a, b) => a.readyAt - b.readyAt), p => button(p, `至 ${hm(p.readyAt)}，还剩 ${Math.max(0, Math.ceil(p.readyAt - n))} 分钟`, p.state === 'meal' ? ' <span class="rt-badge meal">吃饭</span>' : ' <span class="rt-badge rest">休息</span>', p.state));
-  html += section('前往中', by(['heading']), p => button(p, `约 ${hm(p.arriveAt)} 到岗`));
+  html += section('吃饭区', by(['meal']).sort((a,b)=>a.readyAt-b.readyAt), p=>button(p, `吃饭至 ${hm(p.readyAt)}，剩余 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟`, '', 'meal'));
+  html += section('休息区', by(['rest']).sort((a,b)=>a.readyAt-b.readyAt), p=>button(p, `${p.breakKind === 'meal_rest' ? '饭后剩余休息时间：' : ''}至 ${hm(p.readyAt)}，剩余 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟`, '', 'rest'));
   html += section('暂离和出圈', by(['away']), p => button(p, `${esc(p.away ? p.away.reason : '')}${p.away && p.away.until !== null && p.away.until !== undefined ? `，${hm(p.away.until)} 回` : ''}`, '', 'dim'));
   const others = by(['op', 'notyet', 'excluded', 'done']).sort((a, b) => a.start - b.start);
   html += `<section class="rt-sect"><h2>其他人员<span class="rt-n">${others.length}</span><span class="rt-hint">OP、未到岗、不轮岗、已下班</span></h2><div class="rt-scroll"><table class="rt-table">${others.map(p => `<tr data-pid="${esc(p.pid)}" tabindex="0"><td>${esc(p.name)}</td><td>${hm(p.start)}-${hm(p.end)}</td><td>${STATE_NAME[p.state] || ''}${p.label ? `：${esc(p.label)}` : ''}</td></tr>`).join('')}</table></div></section>`;
@@ -185,9 +190,9 @@ function postMenu(key) {
         const k = btn.dataset.a;
         if (k === 'person') { personMenu(occ); return; }
         if (k === 'open' || k === 'close') { if (await act('/api/rotation/act', { action: 'post', line: lid, i: Number(idx), open: k === 'open' }, k === 'open' ? '已开岗' : '已撤岗')) closeModal(); return; }
-        const cand = RT.data.day.persons.filter(p => ['walkback', 'pending', 'rest', 'meal', 'ready', 'away'].includes(p.state));
+        const cand = RT.data.day.persons.filter(p => ['walkback', 'pending', 'rest', 'ready', 'away', 'notyet'].includes(p.state) && p.breakKind !== 'meal_rest');
         if (!cand.length) { toast('池子里没有人可以放入', true); return; }
-        formBox(`放入 ${esc(lid)} ${esc(x.name)}`, `<label>人员<select name="pid">${cand.map(p => `<option value="${esc(p.pid)}">${esc(p.name)}（${STATE_NAME[p.state]}）</option>`).join('')}</select></label><label>更正原因（必填）<input type="text" name="reason" maxlength="100" required></label>`, f => act('/api/rotation/act', { action: 'fix_place', pid: f.pid, line: lid, i: Number(idx), reason: f.reason }));
+        formBox(`放入 ${esc(lid)} ${esc(x.name)}`, `<label>人员<select name="pid">${cand.map(p => `<option value="${esc(p.pid)}">${esc(p.name)}（${STATE_NAME[p.state]}）</option>`).join('')}</select></label><label>调整原因<input type="text" name="reason" maxlength="100" required></label>`, f => act('/api/rotation/act', { action: personOf(f.pid)?.state === 'notyet' ? 'plan_place' : 'fix_place', pid: f.pid, line: lid, i: Number(idx), reason: f.reason }));
       };
     });
   });
@@ -210,6 +215,27 @@ $app.addEventListener('click', event => {
 $app.addEventListener('keydown', event => {
   if (event.key === 'Enter' && event.target.matches('[data-post],[data-line],tr[data-pid]')) event.target.click();
 });
+
+// 测试预排拖拽：主管/经理可调整未到班次的人员，已开始计时的人员不参与。
+$app.addEventListener('dragstart', event => {
+  const source = event.target.closest('[data-drag-pid],tr[data-pid]');
+  const pid = source?.dataset.dragPid || source?.dataset.pid;
+  if (!isManager() || tab !== 'board' || personOf(pid)?.state !== 'notyet') {event.preventDefault(); return;}
+  RT.pressing = true;
+  RT.dragging = true;
+  event.dataTransfer.setData('text/plain', pid);
+});
+$app.addEventListener('dragover', event => {
+  if (isManager() && tab === 'board' && event.target.closest('[data-post]')) event.preventDefault();
+});
+$app.addEventListener('drop', async event => {
+  const target = event.target.closest('[data-post]');
+  if (!isManager() || tab !== 'board' || !target) return;
+  event.preventDefault(); RT.pressing = false; RT.dragging = false;
+  const [line, index] = target.dataset.post.split('#');
+  await act('/api/rotation/act', {action:'plan_place', pid:event.dataTransfer.getData('text/plain'), line, i:Number(index)}, '预排已调整，班次开始后计时');
+});
+$app.addEventListener('dragend', () => {RT.pressing = false; RT.dragging = false;});
 
 // ---------------------------------------------------------------- 初始化（草稿）
 
@@ -380,7 +406,7 @@ function bindRecords() {
 const SETTING_LABELS = [
   ['walkMin', '默认路程（分钟）'], ['breakMin', '休息时长（分钟）'], ['mealMin', '吃饭时长（分钟）'], ['mealThreshold', '班次超过多少分钟才有吃饭'],
   ['mealEarliest', '最早安排吃饭时间'], ['mealAfterStart', '上班满多少分钟才开始安排吃饭'], ['mealForceAfterStart', '上班满多少分钟仍未吃饭强制安排'],
-  ['mealReserveLeft', '吃饭剩不到多少分钟算作休息中'], ['mealWarnLeft', '离下班或闭园不到多少分钟未吃饭提醒'], ['offLead', '下班/出圈前多少分钟被推'],
+  ['mealReserveLeft', '吃饭剩余多少分钟转入饭后休息区（仍需等倒计时）'], ['mealWarnLeft', '离下班或闭园不到多少分钟未吃饭提醒'], ['offLead', '下班/出圈前多少分钟被推'],
   ['noBoardBefore', '到岗时距下班/出圈不超过多少分钟不再上岗'], ['endLead', '提前多少分钟开始安排推下班/出圈的人'], ['outWarnAfter', '过了出圈时间多少分钟没人可推提醒'],
   ['departEarly', '可提前几分钟点去轮岗'], ['futureWait', '等定时开岗最多等多少分钟'], ['readyNotify', '超过出发时间多少分钟提醒'],
   ['walkBackWarn', '下线多少分钟未点去休息提醒'], ['unassignedWarn', '待出发多少分钟没有去向提醒'], ['lineOpenAt', '开园岗位开始时间'],
@@ -457,7 +483,7 @@ function memberView() {
 // ---------------------------------------------------------------- 渲染与加载
 
 RT.render = fromTicker => {
-  if (!RT.data || !me) return;
+  if (!RT.data || !me || RT.dragging) return;
   renderClock();
   if (me.kind === 'member') {
     if (fromTicker && $app.querySelector('details[open]')) return;
@@ -471,6 +497,9 @@ RT.render = fromTicker => {
   const html = tab === 'board' ? boardView() : tab === 'draft' ? draftView() : tab === 'roster' ? rosterView() : tab === 'records' ? recordsView() : settingsView();
   const scroll = [...$app.querySelectorAll('.rt-chips, .rt-scroll')].map(el => el.scrollTop);
   $app.innerHTML = html;
+  if (tab === 'board') $app.querySelectorAll('tr[data-pid]').forEach(row => {
+    row.draggable = personOf(row.dataset.pid)?.state === 'notyet';
+  });
   [...$app.querySelectorAll('.rt-chips, .rt-scroll')].forEach((el, i) => { el.scrollTop = scroll[i] || 0; });
   if (tab === 'draft') bindDraft();
   if (tab === 'roster') bindRoster();

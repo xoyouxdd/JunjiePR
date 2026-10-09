@@ -197,6 +197,7 @@ SCHEMA_MIGRATION_STEPS: list[tuple[str, object]] = [
     ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
     ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
     ("2026-10-acting-duties", "ensure_acting_duty_columns_and_migrate"),
+    ("2026-10-recognition-shared-evidence", "ensure_recognition_shared_evidence"),
     ("2026-10-audit-scope-and-appeal-removal", "backfill_audit_scope_and_remove_appeals"),
     ("2026-10-group-leader-types", "ensure_group_leader_types"),
     ("2026-10-group-codes", "ensure_group_codes"),
@@ -222,6 +223,34 @@ def run_schema_migration_steps(db) -> None:
         runner(db)
         db.execute(text("INSERT INTO schema_migration_steps (step) VALUES (:step)"), {"step": step_name})
         db.commit()
+
+
+def ensure_recognition_shared_evidence(db) -> None:
+    """Preserve legacy attachment IDs/data while allowing one file many links."""
+    unique_file = False
+    for index in db.execute(text("PRAGMA index_list(recognition_attachments)")):
+        if index[2]:
+            name = str(index[1]).replace('"', '""')
+            columns = [row[2] for row in db.execute(text(f'PRAGMA index_info("{name}")'))]
+            unique_file = unique_file or columns == ["file_id"]
+    if not unique_file:
+        return
+    db.execute(text("""CREATE TABLE recognition_attachments_shared (
+        id INTEGER PRIMARY KEY, recognition_id INTEGER NOT NULL
+        REFERENCES recognition_records(id) ON DELETE CASCADE,
+        file_id INTEGER NOT NULL REFERENCES stored_files(id),
+        attachment_type VARCHAR(30) NOT NULL, sort_order INTEGER NOT NULL,
+        created_at DATETIME NOT NULL,
+        CONSTRAINT uq_recognition_attachment_type UNIQUE(recognition_id, attachment_type)
+    )"""))
+    db.execute(text("""INSERT INTO recognition_attachments_shared
+        (id, recognition_id, file_id, attachment_type, sort_order, created_at)
+        SELECT id, recognition_id, file_id, attachment_type, sort_order, created_at
+        FROM recognition_attachments"""))
+    db.execute(text("DROP TABLE recognition_attachments"))
+    db.execute(text("ALTER TABLE recognition_attachments_shared RENAME TO recognition_attachments"))
+    db.execute(text("CREATE INDEX ix_recognition_attachments_recognition_id ON recognition_attachments(recognition_id)"))
+    db.execute(text("CREATE INDEX ix_recognition_attachments_file_id ON recognition_attachments(file_id)"))
 
 
 def ensure_void_audit_columns(db) -> None:

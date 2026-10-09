@@ -113,9 +113,10 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
             .filter(Attraction.active.is_(True), Attraction.employee_circle.is_(True))
             .all()
         } if {"DATA_VIEW", "DATA_EXPORT"} & user.permissions else set()
-    recognition_link = db.query(RecognitionAttachment).filter(RecognitionAttachment.file_id == file_id).first()
-    if recognition_link:
-        recognition = db.get(RecognitionRecord, recognition_link.recognition_id)
+    recognition_links = db.query(RecognitionAttachment).filter(RecognitionAttachment.file_id == file_id).all()
+    recognition_link = recognition_links[0] if recognition_links else None
+    for link in recognition_links:
+        recognition = db.get(RecognitionRecord, link.recognition_id)
         authorized = authorized or bool(
             recognition
             and (

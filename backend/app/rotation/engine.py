@@ -213,8 +213,9 @@ class Engine:
         raise ActionError('没有这条线：%s' % lid)
 
     def walk(self, lid):
-        L = self.line(lid)
-        return float(L.get('walk') or self.S['walkMin'])
+        self.line(lid)
+        # 点击去轮岗即进线，不再增加路程等待。
+        return 0.0
 
     def open_posts(self, L):
         return [i for i, x in enumerate(L['posts']) if x.get('open')]
@@ -287,6 +288,13 @@ class Engine:
             if p['pid'] in d['plan']['lost']:
                 p['flags'].append('送失物')
         self.h.log('publish', actor, None, None, None, {'plan': d['plan']})
+        for kind in ('crew', 'seven'):
+            for key, pid in d['plan'][kind].items():
+                if self.P[pid]['start'] > now:
+                    lid, i = key.split('#')
+                    x = self.line(lid)['posts'][int(i)]
+                    if x['open']:
+                        x['occ'] = pid
         self.tick(now)
 
     # -------- 每秒推进
@@ -330,8 +338,14 @@ class Engine:
             elif st == 'heading' and now >= p['arriveAt']:
                 self._arrive_line(p, now)
                 changed = True
+            elif st == 'meal' and now < p['readyAt'] and p['readyAt'] - now <= S['mealReserveLeft']:
+                p['state'] = 'rest'
+                p['breakKind'] = 'meal_rest'
+                p['assign'] = None
+                changed = True
             elif st in ('rest', 'meal') and now >= p['readyAt']:
                 p['state'] = 'ready'
+                p['breakKind'] = 'rest'
                 p['readySince'] = now
                 changed = True
             elif st == 'away' and p['away'].get('until') is not None and now >= p['away']['until']:
@@ -415,7 +429,7 @@ class Engine:
             lid, i = key.split('#')
             L, i = self.line(lid), int(i)
             x = L['posts'][i]
-            if L['active'] and x.get('occ') is None:
+            if L['active'] and x.get('open') and x.get('occ') in (None, p['pid']):
                 x['open'] = True
                 x['occ'] = p['pid']
                 x['since'] = t
@@ -497,7 +511,9 @@ class Engine:
             # 推 7 点：在 7 点岗位直接对换
             x = L['posts'][ti]
             self._push_off(tgt, L, ti, now, '推7点下来')
-            self.P[tgt]['flags'].append('推7点下来')
+            self.P[tgt]['flags'] = [flag for flag in self.P[tgt]['flags'] if flag not in ('7点岗', '推7点下来')]
+            self.P[tgt]['sevenReplaced'] = True
+            p['flags'] = [flag for flag in p['flags'] if flag != '推7点']
             x['occ'] = p['pid']
             x['since'] = now
             self._enter(p, L, depart)
@@ -639,6 +655,8 @@ class Engine:
             for p in self.P.values():
                 if p['state'] not in REST_STATES or p['role'] not in ('rotation', 'op'):
                     continue
+                if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
+                    continue
                 if p.get('assign') and p['assign'].get('mode') in TARGET_MODES:
                     continue
                 ready = self._ready_time(p, now)
@@ -657,7 +675,8 @@ class Engine:
             changed = True
         # 普通分配
         todo = [p for p in self.P.values() if p['state'] in REST_STATES and not p.get('assign')
-                and p['role'] in ('rotation', 'op')]
+                and p['role'] in ('rotation', 'op') and p['state'] != 'meal'
+                and not (p.get('breakKind') == 'meal_rest' and now < p['readyAt'])]
         todo.sort(key=lambda p: (self._ready_time(p, now), p['start']))
         if todo:
             wk = self.h.week_minutes()
@@ -834,10 +853,35 @@ class Engine:
         if now < depart_at - self.S['departEarly'] - 0.01:
             raise ActionError('%s 还没到出发时间（%s）' % (p['name'], fmt(depart_at)))
         L = self.line(p['assign']['line'])
-        p['state'] = 'heading'
         p['departedAt'] = now
-        p['arriveAt'] = now + self.walk(L['id'])
+        p['arriveAt'] = None
         self.h.log('depart', actor, pid, L['id'], None, dict(p['assign']))
+        self._arrive_line(p, now)
+
+    def act_plan_place(self, pid, lid, i, now, actor):
+        """预排拖拽：仅未开始班次，可交换岗位，不产生任何在岗计时。"""
+        p = self.person(pid)
+        if p['state'] != 'notyet' or now >= p['start'] or p['role'] != 'rotation':
+            raise ActionError('只能拖拽尚未开始班次的轮岗人员')
+        L = self.line(lid)
+        if i < 0 or i >= len(L['posts']) or not L['active'] or not L['posts'][i]['open']:
+            raise ActionError('目标岗位未开放')
+        target = L['posts'][i].get('occ')
+        if target and self.P[target]['state'] != 'notyet':
+            raise ActionError('不能交换已开始班次的人员')
+        oldL, oldi = self.find_post(pid)
+        if target and oldL is None:
+            raise ActionError('目标已有预排人员，请先选择空岗')
+        if oldL:
+            oldL['posts'][oldi]['occ'] = target
+        L['posts'][i]['occ'] = pid
+        plan = self.d['plan']
+        for kind in ('crew', 'seven'):
+            plan[kind] = {key: value for key, value in plan[kind].items() if value not in (pid, target)}
+        plan['seven' if p['start'] == 420 else 'crew'][f'{lid}#{i}'] = pid
+        if target:
+            plan['seven' if self.P[target]['start'] == 420 else 'crew'][f"{oldL['id']}#{oldi}"] = target
+        self.h.log('plan_place', actor, pid, lid, L['posts'][i]['name'], {'swapped': target})
 
     # -------- 主管操作
     def act_undo(self, pid, now, actor):
@@ -858,7 +902,11 @@ class Engine:
     def _close_post(self, L, i, now, actor):
         x = L['posts'][i]
         if x.get('occ'):
-            self._push_off(x['occ'], L, i, now, '撤岗')
+            if self.P[x['occ']]['state'] != 'notyet':
+                self._push_off(x['occ'], L, i, now, '撤岗')
+            else:
+                for kind in ('crew', 'seven'):
+                    self.d['plan'][kind].pop(f"{L['id']}#{i}", None)
         x['occ'] = None
         x['open'] = False
         self.h.log('post_close', actor, None, L['id'], x['name'], {})
@@ -927,6 +975,8 @@ class Engine:
 
     def act_reassign(self, pid, lid, now, actor):
         p = self.person(pid)
+        if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
+            raise ActionError('吃饭及饭后休息倒计时未结束，不参与派岗')
         if p['state'] not in REST_STATES:
             raise ActionError('%s 当前不能改派' % p['name'])
         L = self.line(lid)
@@ -976,6 +1026,8 @@ class Engine:
 
     def act_fix_place(self, pid, lid, i, reason, now, actor):
         p = self.person(pid)
+        if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
+            raise ActionError('吃饭及饭后休息倒计时未结束，不能进线')
         L = self.line(lid)
         x = L['posts'][i]
         if not x.get('open'):

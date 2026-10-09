@@ -530,7 +530,7 @@ function renderPasswordPage(){
 function bindWithdraw(root, done){root.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=async()=>{if(!await confirmModal('撤回签卡','<p>撤回后该条记录不再计分，操作记录仅供高级别导出复查，是否撤回？</p>','确认撤回'))return;try{await api('/api/recognitions/'+b.dataset.withdraw,{method:'DELETE'});toast('已撤回');done();}catch(e){toast(e.message,true)}})}
 
 async function renderRegister(){
-  // 正式GSM、TA GSM可为主管加分扣分；代理TA GSM期间的主管只能本人登记，由AM复核。
+  // 正式GSM、TA GSM可为主管加分扣分；代理TA GSM期间的主管只能本人登记，由AM或正式GSM复核。
   const canScoreFrontline=has('EMPLOYEE_ADD');
   const canScoreSupervisors=has('SUPERVISOR_SCORE')&&['GSM','TA_GSM'].includes(state.me.role_code);
   const canProxy=canScoreFrontline||canScoreSupervisors;
@@ -545,7 +545,7 @@ async function renderRegister(){
   const registerModeSwitch=dualRecognition?`<div class="action-center-switch register-mode-switch"><button type="button" class="${selfMode?'secondary':'primary'}" data-register-mode="proxy">为员工登记</button><button type="button" class="${selfMode?'primary':'secondary'}" data-register-mode="self">本人登记</button></div>`:'';
   const registerTargetSwitch=canScoreFrontline&&canScoreSupervisors&&!selfMode?`<div class="action-center-switch register-target-switch"><button type="button" class="${supervisorTarget?'secondary':'primary'}" data-register-target="frontline">登记CM/TR</button><button type="button" class="${supervisorTarget?'primary':'secondary'}" data-register-target="supervisor">登记主管</button></div>`:'';
   const imageField=selfMode?`<fieldset class="evidence-picker"><legend>认可图片（必传1张）</legend><div class="evidence-actions native-file-actions"><label class="secondary native-file-trigger" for="recognitionCameraInput">拍照</label><label class="secondary native-file-trigger" for="recognitionAlbumInput">从相册选择</label></div><input id="recognitionCameraInput" class="native-file-input" name="image_camera" data-evidence-input data-evidence-camera-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" capture="environment"><input id="recognitionAlbumInput" class="native-file-input" name="image_album" data-evidence-input data-evidence-album-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"><span class="field-hint" data-evidence-name>请选择一张JPG、PNG或WebP图片，最大100MB。若入口未打开，请直接点击另一个入口重试。</span></fieldset>`:'';
-  const selfReviewHint=state.me.base_role_code==='SUPERVISOR'?((state.me.duty_role_codes||[]).includes('TA_GSM')?'代理TA GSM期间：本人提交后由AM复核，认可人可选择GSM、AM或OM。':'本人提交后由正式GSM复核，认可人只能选择TA GSM及以上。'):'本人提交后由所在小组的负责人复核（有代理主管时由代理主管复核），认可人不能选择本人。';
+  const selfReviewHint=state.me.base_role_code==='SUPERVISOR'?((state.me.duty_role_codes||[]).includes('TA_GSM')?'代理TA GSM期间：本人提交后由AM或任一正式GSM复核（不限景点圈，不含本人），认可人可选择GSM、AM或OM。':'本人提交后由正式GSM复核，认可人只能选择TA GSM及以上。'):'本人提交后由所在小组的负责人复核（有代理主管时由代理主管复核），认可人不能选择本人。';
   const recognitionPanel=showRecognition?`<section class="panel"><h2>${selfMode?(dualRecognition?'本人登记':'快速登记'):(supervisorTarget?'主管加分登记':'员工加分登记')}</h2>${registerModeSwitch}${registerTargetSwitch}<p>${selfMode?selfReviewHint:'代录后默认通过，签卡人默认为当前账户。'}</p>
     <form id="recognitionForm" class="form-stack" enctype="multipart/form-data">${employeeField}<div class="grid two"><label>认可日期<input name="recognition_date" id="recognitionDate" type="date" value="${today()}" required></label><label>认可类型<select name="recognition_type_id" id="recognitionTypeSelect" required>${opt((state.options.recognition_types||[]).filter(row=>!row.dedicated_entry))}</select></label></div>
     <label>认可内容<input name="content" maxlength="20" required placeholder="请输入20字以内的认可内容"></label>${imageField}<label>发生景点<select name="occurred_attraction_id" id="attractionSelect" required><option value="">请选择</option>${opt(state.options.recognition_venues||[])}</select></label>
@@ -558,7 +558,9 @@ async function renderRegister(){
   app.querySelectorAll('[data-register-mode]').forEach(button=>button.onclick=()=>{state.registerMode=button.dataset.registerMode;renderRegister();});
   app.querySelectorAll('[data-register-target]').forEach(button=>button.onclick=()=>{state.registerTarget=button.dataset.registerTarget;renderRegister();});
   const recognitionForm=document.getElementById('recognitionForm');
-  if(recognitionForm){
+  const batchSelf=selfMode&&['CM','TR'].includes(state.me.base_role_code)&&has('SELF_RECOGNITION');
+  if(recognitionForm&&batchSelf)await bindSelfRecognitionBatch(recognitionForm,imageField);
+  if(recognitionForm&&!batchSelf){
     const evidenceInputs=[...recognitionForm.querySelectorAll('[data-evidence-input]')],evidenceName=recognitionForm.querySelector('[data-evidence-name]');evidenceInputs.forEach(input=>input.onchange=()=>{if(input.files?.length){evidenceInputs.filter(other=>other!==input).forEach(other=>{other.value='';});evidenceName.textContent=`已选择：${input.files[0].name}`;}});
     const attraction=document.getElementById('attractionSelect'), recognizer=document.getElementById('recognizerSelect'),recognitionType=document.getElementById('recognitionTypeSelect'),recognitionDate=document.getElementById('recognitionDate'),target=recognitionForm.querySelector('[name=employee_id]');let recognizerRows=[];
     function recognizerGroups(rows){const groups=new Map([['circle:heat',{label:'热力追踪主管',order:0,rows:[]}],['circle:dwarf',{label:'矮人迷宫主管',order:1,rows:[]}],['circle:bear',{label:'小熊罐子主管',order:2,rows:[]}],['tagsm_plus',{label:'TAGSM及以上',order:3,rows:[]}]]);rows.forEach(row=>{let key=row.group_key||'other';if(key.startsWith('circle:'))key=[...groups].find(([,group])=>group.label===row.group_label||group.label===`${row.group_label}主管`)?.[0]||key;const entry=groups.get(key)||{label:row.group_label||'其他',order:Number(row.group_order||99),rows:[]};entry.rows.push(row);groups.set(key,entry)});return [...groups.values()].sort((a,b)=>a.order-b.order);}
@@ -575,6 +577,55 @@ async function renderRegister(){
   const pocForm=document.getElementById('pocRecognitionForm');
   if(pocForm)pocForm.onsubmit=async event=>{event.preventDefault();if(!requireEmployeeSelection(pocForm))return;await withSubmitLock(pocForm,async()=>{try{const data=submissionData(pocForm);requireSubmittedDate(data,pocForm.querySelector('[name=recognition_date]'),'认可日期');const out=await api('/api/recognitions/poc',{method:'POST',body:data});clearSubmissionKey(pocForm);if(!showPerformanceRegistrationFeedback('recognition',out))toast('POC特别贡献已登记并计分');pocForm.reset();pocForm.querySelector('[name=employee_id]').value='';pocForm.querySelector('.employee-selected').hidden=true;pocForm.querySelector('[data-employee-search]').value='';}catch(error){toast(error.message,true)}})};
   if(document.getElementById('deductionForm')){bindDeductionUpgradeHint();bindDeductionV2244();}
+}
+function selfRecognitionBatchItems(cards){
+  return cards.map((card,i)=>{
+    if(card._isLoading())throw new Error(`第${i+1}条：认可人正在加载，请稍后提交`);
+    const item={};
+    ['recognition_date','recognition_type_id','content','occurred_attraction_id','recognizer_employee_id'].forEach(name=>{
+      const input=card.querySelector(`[name="${name}"]`);
+      item[name]=name==='recognition_date'?submittedDateValue(input):input.value.trim();
+      if(!item[name])throw new Error(`第${i+1}条：请完整填写登记信息`);
+    });
+    if(card.dataset.duplicateConfirmedPayload===JSON.stringify(item))item.same_day_duplicate_confirmed=true;
+    return item;
+  });
+}
+async function bindSelfRecognitionBatch(form,imageField){
+  form.innerHTML=`<p class="field-hint">默认登记1条，最多5条。仅认可照片共用，其余信息逐条填写；全部通过校验后一起提交。</p>${imageField}<div class="section-gap" data-batch-entries></div><div class="action-row"><button type="button" class="secondary" data-batch-add>＋新增一条</button><span data-batch-count></span></div><div class="form-sticky-actions"><button type="submit" class="primary" data-batch-submit>提交认可</button></div>`;
+  const container=form.querySelector('[data-batch-entries]'),add=form.querySelector('[data-batch-add]'),submit=form.querySelector('[data-batch-submit]');
+  const evidenceInputs=[...form.querySelectorAll('[data-evidence-input]')],evidenceName=form.querySelector('[data-evidence-name]');
+  evidenceInputs.forEach(input=>input.onchange=()=>{if(input.files?.length){evidenceInputs.filter(other=>other!==input).forEach(other=>{other.value='';});evidenceName.textContent=`本次全部记录共用：${input.files[0].name}`;}});
+  let sequence=0;
+  function update(){const cards=[...container.children];cards.forEach((card,i)=>{card.querySelector('[data-entry-title]').textContent=`登记 ${i+1}`;card.querySelector('[data-entry-remove]').disabled=cards.length===1;});form.querySelector('[data-batch-count]').textContent=`${cards.length}/5 条`;add.disabled=cards.length>=5;submit.textContent=cards.length===1?'提交认可':`提交 ${cards.length} 条认可`;}
+  async function append(){
+    if(container.children.length>=5||form.dataset.batchSubmitting)return;
+    const id=++sequence,card=document.createElement('fieldset');card.className='form-stack';card.dataset.batchEntry=String(id);
+    card.innerHTML=`<legend data-entry-title></legend><button type="button" class="secondary" data-entry-remove>删除此条</button><div class="grid two"><label>认可日期<input name="recognition_date" type="date" value="${today()}" required></label><label>认可类型<select name="recognition_type_id" required>${opt((state.options.recognition_types||[]).filter(row=>!row.dedicated_entry))}</select></label></div><label>认可内容<input name="content" maxlength="20" required placeholder="请输入20字以内的认可内容"></label><div class="grid two"><label>发生景点<select name="occurred_attraction_id" required><option value="">请选择</option>${opt(state.options.recognition_venues||[])}</select></label><label>认可人 / 签卡人<select name="recognizer_employee_id" required><option value="">正在加载…</option></select></label></div><span class="field-hint" data-entry-score>分值按认可人当日角色自动计算</span>`;
+    container.append(card);bindDateSubmissionFallbacks(card);update();
+    const dateInput=card.querySelector('[name=recognition_date]'),type=card.querySelector('[name=recognition_type_id]'),recognizer=card.querySelector('[name=recognizer_employee_id]'),hint=card.querySelector('[data-entry-score]');let rows=[],requestVersion=0,loading=false;
+    card.querySelector('[data-entry-remove]').onclick=()=>{if(container.children.length>1&&!form.dataset.batchSubmitting){card.remove();update();}};
+    function options(){const selectedType=state.options.recognition_types.find(x=>String(x.id)===type.value),special=selectedType?.fixed_score!=null?selectedType.code:null;const candidates=rows.filter(x=>special?String(x.id)===`special:${special}`:!x.special&&x.id!==state.me.id);recognizer.innerHTML='<option value="">请选择</option>'+opt(candidates,'id',x=>`${x.name} · ${x.role_name} · ${fmt(x.score)}分`);if(special&&candidates.length)recognizer.value=String(candidates[0].id);score();}
+    function score(){const row=rows.find(x=>String(x.id)===recognizer.value);hint.textContent=row?`${row.name} · 当日分值：${fmt(row.score)}分`:'分值按认可人当日角色自动计算';}
+    async function load(){const version=++requestVersion;loading=true;recognizer.innerHTML='<option value="">正在加载…</option>';hint.textContent='正在获取当日认可人…';try{const value=submittedDateValue(dateInput);if(!value)throw new Error('请填写有效认可日期');const result=await api('/api/recognizers?'+new URLSearchParams({attraction_id:state.me.attraction_id,recognition_date:value}));if(version!==requestVersion||!card.isConnected)return;rows=result;options();}catch(error){if(version!==requestVersion)return;rows=[];recognizer.innerHTML='<option value="">请选择日期后重试</option>';hint.textContent=error.message||'认可人加载失败，请重新选择日期';}finally{if(version===requestVersion)loading=false;}}
+    dateInput.addEventListener('change',load);type.onchange=options;recognizer.onchange=score;card._isLoading=()=>loading;await load();
+  }
+  add.onclick=append;await append();
+  form.onsubmit=async event=>{
+    event.preventDefault();if(form.dataset.batchSubmitting)return;
+    try{
+      if(!form.reportValidity())return;
+      const cards=[...container.children],items=selfRecognitionBatchItems(cards);
+      const file=readableEvidenceFile(form);if(!file)throw new Error(recognitionImageIssueMessage(form));
+      if(!form.dataset.submissionKey)form.dataset.submissionKey=newSubmissionKey();
+      const controls=[...form.querySelectorAll('input,select,button')],disabled=controls.map(x=>x.disabled);form.dataset.batchSubmitting='true';controls.forEach(x=>{x.disabled=true;});submit.textContent=`正在提交 ${items.length} 条…`;
+      try{
+        let result;
+        for(;;){const data=new FormData();data.set('entries',JSON.stringify(items));data.set('image',file,file.name);data.set('idempotency_key',form.dataset.submissionKey);try{result=await api('/api/recognitions/batch',{method:'POST',body:data});break;}catch(error){if(error?.detail?.code!=='SAME_DAY_RECOGNITION_DUPLICATE')throw error;const index=Number(error.detail.entry_index)-1;if(index<0||index>=items.length||items[index].same_day_duplicate_confirmed)throw error;const previous=(error.detail.previous_records||[]).map(row=>`<li>${esc(row.submitted_at)}：${esc(row.content)}</li>`).join('');if(!await confirmModal('同类认可登记确认',`<p>${esc(error.message)}</p><ul>${previous}</ul>`,'确认是独立表现，继续登记'))return;cards[index].dataset.duplicateConfirmedPayload=JSON.stringify(items[index]);items[index].same_day_duplicate_confirmed=true;}}
+        clearSubmissionKey(form);container.innerHTML='';evidenceInputs.forEach(x=>{x.value='';});evidenceName.textContent='请选择一张JPG、PNG或WebP图片，最大100MB。';const encouragement=recognitionEncouragement(result.encouragement_options);toast(`已提交 ${result.records.length} 条认可，等待逐条复核${encouragement?'\n'+encouragement:''}`,false,5600,'encouragement');
+      }finally{delete form.dataset.batchSubmitting;controls.forEach((x,i)=>{x.disabled=disabled[i];});if(!container.children.length)await append();update();}
+    }catch(error){if([400,403,409,413,422].includes(error.status)&&error.detail?.code!=='IDEMPOTENCY_PAYLOAD_CONFLICT')clearSubmissionKey(form);toast(recognitionImageFailureMessage(error)||error.message||'提交失败，已保留填写内容',true);}
+  };
 }
 let deductionMaterialPickerSequence=0;
 function deductionMaterialPickerMarkup(){const id=`deductionMaterial${++deductionMaterialPickerSequence}`;return `<fieldset class="deduction-material-picker" data-deduction-material><legend>声明材料（可后补）</legend><p class="field-hint">可直接上传 PDF（最多100MB、6页），或拍照/从相册选择照片（最多6张、单张25MB、合计100MB）。未上传时可先提交，主管可后续补充；材料成功后才扣分。</p><div class="evidence-actions native-file-actions"><label class="secondary native-file-trigger" for="${id}Pdf">上传PDF</label><label class="secondary native-file-trigger" for="${id}Camera">拍照</label><label class="secondary native-file-trigger" for="${id}Album">从相册选择</label></div><input id="${id}Pdf" class="native-file-input" data-material-pdf-input type="file" accept="application/pdf,.pdf"><input id="${id}Camera" class="native-file-input" data-material-camera-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment"><input id="${id}Album" class="native-file-input" data-material-album-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image-heif,.jpg,.jpeg,.png,.webp,.heic,.heif" multiple><div class="deduction-material-summary" data-material-summary aria-live="polite">可先不上传，后续由主管补充材料。</div></fieldset>`;}

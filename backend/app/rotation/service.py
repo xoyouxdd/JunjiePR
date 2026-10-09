@@ -381,6 +381,7 @@ def tick_attraction(attraction_id: int) -> None:
             if cfg is None:
                 return
             day, minute = clock_now(cfg)
+            ensure_prearranged_day(db, cfg, attraction_id, day, minute)
             end_stale_days(db, cfg, attraction_id, day)
             row = day_row(db, attraction_id, day)
             if row and row.status == "live":
@@ -471,8 +472,8 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
         elif st == "pending":
             step = ("arrive", "请到休息室大屏点「去休息」", "OP 阶段结束，点完转入休息区开始轮岗。")
         elif st in ("rest", "meal"):
-            word = "吃饭" if st == "meal" else "休息"
-            body = _go_text(eng, a) if a else "去向安排中，请留意大屏。"
+            word = "吃饭" if st == "meal" else "饭后剩余休息时间" if p.get("breakKind") == "meal_rest" else "休息"
+            body = "倒计时结束后才可轮岗，不提前派岗。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
             step = ("rest", f"{word}至 {fmt(p['readyAt'])}", body)
         elif st == "ready":
             if a and now >= a["departAt"] - early:
@@ -585,9 +586,27 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
     }
 
 
+def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int, day: str, minute: float) -> None:
+    """有班表时04:00生成预排；开始时间前仅展示岗位，不计时。"""
+    with RUNTIME.lock:
+        if minute < 240 or day_row(db, attraction_id, day) or not roster_for(db, attraction_id, day):
+            return
+        do_draft_action(db, attraction_id, 'system', {"action": "draft_generate", "date": day})
+        row = day_row(db, attraction_id, day)
+        state = day_state(row)
+        eng, hooks = engine_for(db, cfg, row, state)
+        hooks.now = 240
+        eng.publish(240, 'system')
+        state["lastTick"] = 240
+        write_duties(db, attraction_id, day, state["plan"])
+        save_day(db, row, state)
+        advance(db, cfg, row, state, minute)
+
+
 def board_payload(db: Session, attraction_id: int) -> dict:
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
+    ensure_prearranged_day(db, cfg, attraction_id, day, minute)
     row = day_row(db, attraction_id, day)
     out = {
         "clock": clock_payload(cfg),
@@ -610,6 +629,7 @@ def board_payload(db: Session, attraction_id: int) -> dict:
 def screen_payload(db: Session, attraction_id: int) -> dict:
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
+    ensure_prearranged_day(db, cfg, attraction_id, day, minute)
     row = day_row(db, attraction_id, day)
     out = {"clock": clock_payload(cfg), "version": RUNTIME.version, "day": None,
            "settings": {"departEarly": settings_of(cfg)["departEarly"]}}
@@ -678,7 +698,7 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
 SCREEN_ACTIONS = {"arrive", "depart"}
 LIVE_ACTIONS = {
     "arrive", "depart", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
-    "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person",
+    "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place",
 }
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
 
@@ -711,6 +731,9 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             raise ActionError("更正需要填写原因")
         if act == "arrive":
             eng.act_arrive(pid, now, actor)
+        elif act == "plan_place":
+            _require(body, "line", "i")
+            eng.act_plan_place(pid, body["line"], int(body["i"]), now, actor)
         elif act == "depart":
             eng.act_depart(pid, now, actor)
         elif act == "undo":
@@ -787,16 +810,16 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             roster = roster_for(db, attraction_id, day)
             if not roster:
                 raise ActionError(f"{day} 还没有上传名单")
+            if row is not None:
+                # 必须先清掉当日计时，避免重新预排仍被刚撤回的本周累计影响。
+                for model in (RotationEvent, RotationSegment, RotationNotice, RotationDuty):
+                    db.query(model).filter(model.attraction_id == attraction_id, model.work_date == day).delete(synchronize_session=False)
             state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
                                   duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
             if row is None:
                 row = RotationDay(attraction_id=attraction_id, work_date=day, status="draft", state_json="{}", version=0)
                 db.add(row)
                 db.flush()
-            else:
-                # 重新生成：清掉这一天原有的运行记录（测试阶段）
-                for model in (RotationEvent, RotationSegment, RotationNotice, RotationDuty):
-                    db.query(model).filter(model.attraction_id == attraction_id, model.work_date == day).delete(synchronize_session=False)
             save_day(db, row, state)
             return
         if not row or row.status != "draft":

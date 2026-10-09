@@ -1050,7 +1050,7 @@ def detect_image_type(content: bytes) -> tuple[str, str] | None:
     return None
 
 
-async def save_image_upload(db: Session, upload: UploadFile, uploader_id: int, *, max_bytes=BUSINESS_ATTACHMENT_MAX_BYTES) -> StoredFile:
+async def save_image_upload(db: Session, upload: UploadFile, uploader_id: int, *, max_bytes=BUSINESS_ATTACHMENT_MAX_BYTES, persist: bool = True) -> StoredFile:
     staging_key = f"{uuid4().hex}.upload"
     staging_path = FILE_DIR / staging_key
     file_size, digest = await _stream_upload_to_path(upload, staging_path, max_bytes=max_bytes, empty_message="认可图片不能为空", label="认可图片")
@@ -1073,6 +1073,8 @@ async def save_image_upload(db: Session, upload: UploadFile, uploader_id: int, *
         uploaded_by=uploader_id,
         status="active",
     )
+    if not persist:
+        return record
     db.add(record)
     try:
         db.flush()

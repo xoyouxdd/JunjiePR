@@ -145,12 +145,12 @@ def test_push_off_shift_enters_from_entrance_and_pushes_the_leaver_out():
     eng.tick(hm("09:00"))
     assign = eng.P["new"]["assign"]
     # 下班前 20 分钟到岗：09:40 到，路程 3 分钟，09:37 出发
-    assert assign == {"line": "A", "mode": "chain", "target": "leaver", "departAt": hm("09:37"), "why": "推下班"}
+    assert assign == {"line": "A", "mode": "chain", "target": "leaver", "departAt": hm("09:40"), "why": "推下班"}
     assert eng.targeted() == {"leaver": "new"}
 
     with pytest.raises(ActionError, match="还没到出发时间"):
         eng.act_depart("new", hm("09:30"), "screen")
-    eng.act_depart("new", hm("09:36"), "screen")  # 可提前 1 分钟
+    eng.act_depart("new", hm("09:39"), "screen")  # 点击即进线，可提前1分钟
     eng.tick(hm("09:39"))
     # 入口岗进，链条后移到要走的人为止；出口岗的人不动
     assert occupants(eng, "A") == ["new", "a0", "a2"]
@@ -173,8 +173,8 @@ def test_push_out_of_circle_for_fixed_absence_then_returns_to_pool():
         seat(eng, p, "B", i, "10:59")
     eng.tick(hm("11:00"))
     assert eng.P["new"]["assign"]["why"] == "推出圈"
-    assert eng.P["new"]["assign"]["departAt"] == hm("11:37")
-    eng.act_depart("new", hm("11:37"), "screen")
+    assert eng.P["new"]["assign"]["departAt"] == hm("11:40")
+    eng.act_depart("new", hm("11:40"), "screen")
     eng.tick(hm("11:40"))
     out = eng.P["out"]
     assert out["state"] == "away" and out["away"]["reason"] == "SSEI" and out["away"]["fixed"]
@@ -241,7 +241,7 @@ def test_stale_replacement_is_cleared_when_target_leaves_the_line():
 
 def test_no_boarding_within_30_minutes_of_shift_end():
     people = [person("a0", "07:00", "21:00"), person("a1", "07:00", "21:00"), person("a2", "07:00", "21:00"),
-              person("short", "07:00", "09:33")]
+                  person("short", "07:00", "09:30")]
     eng, _ = live_day(people, lines=[two_lines()[0]])
     for i, p in enumerate(("a0", "a1", "a2")):
         seat(eng, p, "A", i, "08:00")
@@ -277,7 +277,8 @@ def test_depart_only_from_one_minute_before_planned_time():
     with pytest.raises(ActionError, match="还没到出发时间（09:10）"):
         eng.act_depart("new", hm("09:08"), "screen")
     eng.act_depart("new", hm("09:09"), "screen")
-    assert eng.P["new"]["state"] == "heading"
+    assert eng.P["new"]["state"] == "onpost"
+    assert eng.P["new"]["lineStart"] == hm("09:09")
 
 
 # ---------------------------------------------------------------- 大屏、撤回、下班
@@ -348,9 +349,56 @@ def test_push7_swaps_directly_at_the_seven_post_and_the_early_person_rests():
     eng.tick(hm("07:18"))
     assert occupants(eng, "B2")[1] == pusher
     s1 = eng.P["s1"]
-    assert s1["state"] == "walkback" and "推7点下来" in s1["flags"] and s1["downReason"] == "推7点下来"
+    assert s1["state"] == "walkback" and "7点岗" not in s1["flags"] and "推7点下来" not in s1["flags"] and s1["downReason"] == "推7点下来"
     eng.act_arrive("s1", hm("07:21"), "screen")
     assert s1["state"] == "rest" and s1["readyAt"] == hm("07:36")
+
+
+def test_prearranged_posts_start_counting_only_at_shift_start():
+    eng, hooks = seven_day()
+    assert eng.P['s1']['state'] == 'notyet'
+    assert eng.P['s1']['lineStart'] is None and not hooks.segments
+    eng.act_plan_place('s1', 'B2', 0, hm('06:40'), 'manager')
+    assert occupants(eng, 'B2')[0] == 's1'
+    eng.tick(hm('06:59'))
+    assert eng.P['s1']['lineStart'] is None
+    eng.tick(hm('07:00'))
+    assert eng.P['s1']['lineStart'] == hm('07:00')
+    with pytest.raises(ActionError):
+        eng.act_plan_place('s1', 'B2', 1, hm('07:01'), 'manager')
+
+
+def test_meal_last_twenty_minutes_is_rest_without_dispatch_until_deadline():
+    eng, _ = live_day([person('meal', '07:00', '21:00')], now='11:00')
+    p = eng.P['meal']
+    p.update(state='meal', ate=True, breakKind='meal', readyAt=hm('12:00'), assign=None)
+    eng.tick(hm('11:39'))
+    assert p['state'] == 'meal' and p['assign'] is None
+    eng.tick(hm('11:40'))
+    assert p['state'] == 'rest' and p['breakKind'] == 'meal_rest'
+    assert p['readyAt'] == hm('12:00') and p['assign'] is None
+    eng.tick(hm('11:59'))
+    assert p['assign'] is None
+    with pytest.raises(ActionError):
+        eng.act_depart('meal', hm('11:59'), 'screen')
+    with pytest.raises(ActionError):
+        eng.act_fix_place('meal', 'A', 0, 'test', hm('11:59'), 'manager')
+    eng.tick(hm('12:00'))
+    assert p['state'] == 'ready' and p['assign']
+    eng.act_depart('meal', hm('12:00'), 'screen')
+    assert p['state'] == 'onpost' and p['lineStart'] == hm('12:00')
+
+
+def test_op_release_requires_manual_confirmation():
+    p = person('op', '06:00', '16:00')
+    p['role'] = 'op'
+    eng, _ = live_day([p], now='07:00')
+    eng.tick(hm('07:15'))
+    assert p['state'] == 'pending' and p['assign'] is None
+    eng.tick(hm('07:20'))
+    assert p['state'] == 'pending' and p['assign'] is None
+    eng.act_arrive('op', hm('07:20'), 'screen')
+    assert p['state'] == 'rest'
 
 
 def run(eng, start, end, step=0.25):

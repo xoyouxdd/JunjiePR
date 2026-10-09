@@ -11,6 +11,7 @@
 | [declaration-statistics.md](declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
 | [hr-monthly-report-plan.md](hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
 | [rotation.md](rotation.md) | 轮岗（测试）：入口、模拟账号、规则、待办与测试时钟 |
+| [self-recognition-batch.md](self-recognition-batch.md) | 本人认可多条登记与共用照片 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |
 | [release.md](release.md) | 发布打包 |
 | [deployment.md](deployment.md) | 生产部署：本地构建与人工授权上线 |

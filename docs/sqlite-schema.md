@@ -610,7 +610,7 @@
 | `sort_order` | INTEGER | 否 | |
 | `created_at` | DATETIME | 否 | |
 
-键：PK `id`；UNIQUE `uq_recognition_attachment_type` (`recognition_id`, `attachment_type`)；UNIQUE `uq_recognition_attachment_file` (`file_id`)。
+键：PK `id`；UNIQUE `uq_recognition_attachment_type` (`recognition_id`, `attachment_type`)。`file_id` 可被多条认可引用，用于本人批量登记共用一张照片；旧库通过 `2026-10-recognition-shared-evidence` 一次性迁移去除其单列唯一约束，保留旧附件 ID 和关联。
 
 列级索引：`recognition_id`、`file_id`。
 

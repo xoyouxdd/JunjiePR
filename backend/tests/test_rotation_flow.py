@@ -37,12 +37,12 @@ ROSTER = [
 ]
 
 
-def roster_file() -> BytesIO:
+def roster_file(day=DAY) -> BytesIO:
     wb = Workbook()
     ws = wb.active
     ws.append(["工号", "姓名", "日期", "班次", "备注"])
     for no, name, shift, note in ROSTER:
-        ws.append([no, name, DAY, shift, note])
+        ws.append([no, name, day, shift, note])
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -116,8 +116,8 @@ def test_full_day_flow_through_the_api() -> None:
         ok(screen.post("/api/rotation/screen/act", json={"action": "depart", "pid": "9000007"}))
         assert screen.post("/api/rotation/screen/act", json={"action": "depart", "pid": "9000007"}).status_code == 400
 
-        step = ok(clock(manager, action="next"))
-        assert step["waiting"] == ["早班甲 点「去休息」"]
+        assert clock(manager, action="next").status_code == 400  # 点击即替下，已有去休息待办
+        ok(clock(manager, action="jump", minutes=3))
         board = ok(manager.get("/api/rotation/board"))
         assert person(board, "9000001")["downReason"] == "推7点下来"
         assert person(board, "9000007")["post"] == "迎宾"
@@ -162,3 +162,45 @@ def test_full_day_flow_through_the_api() -> None:
         assert ok(screen.get("/api/rotation/screen/state"))["day"]["status"] == "live"
 
         ok(clock(manager, action="real"))
+
+
+def test_automatic_four_am_prearrangement_and_full_test_reset():
+    day = '2026-10-06'
+    with TestClient(app) as manager, TestClient(app) as screen:
+        login(manager, 'GSMTEST01')
+        enter(manager, '8888888')
+        login(screen, '6666666', '1243')
+        ok(manager.put('/api/rotation/config', json={'lines': LINES}))
+        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', roster_file(day), 'application/octet-stream')}, data={'scope':'day'}))
+        ok(clock(manager, action='set', date=day, time='03:59'))
+        assert ok(manager.get('/api/rotation/board'))['day'] is None
+        ok(clock(manager, action='jump', minutes=1))
+        board = ok(manager.get('/api/rotation/board'))
+        assert board['day']['status'] == 'live'
+        original_plan = board['day']['plan']
+        assert person(board, '9000001')['lineStart'] is None
+        assert board['day']['lines'][0]['posts'][1]['occ'] == '9000001'
+        ok(manager.post('/api/rotation/act', json={'action':'plan_place','pid':'9000001','line':'A','i':0}))
+        ok(manager.post('/api/rotation/act', json={'action':'post','line':'A','i':2,'open':False}))
+        assert screen.post('/api/rotation/test-clock', json={'action':'reset'}).status_code == 403
+        ok(clock(manager, action='reset'))
+        reset = ok(manager.get('/api/rotation/board'))
+        assert reset['clock']['minute'] == 240 and reset['clock']['paused']
+        assert reset['day']['plan'] == original_plan
+        assert reset['day']['lines'][0]['posts'][2]['open']
+        assert all(p['lineStart'] is None for p in reset['day']['persons'])
+        log = ok(manager.get('/api/rotation/log', params={'date':day}))['items']
+        assert [entry['type'] for entry in log] == ['publish']
+        ok(clock(manager, action='jump', minutes=180))
+        started = ok(manager.get('/api/rotation/board'))
+        assert person(started, '9000001')['lineStart'] == 420
+        assert person(started, '9000002')['lineStart'] is None
+        ok(clock(manager, action='jump', minutes=15))
+        ok(screen.post('/api/rotation/screen/act', json={'action':'depart','pid':original_plan['push7'][0]}))
+        before_reset = ok(manager.get('/api/rotation/person', params={'employee_no':'9000001','date':day}))
+        assert any(segment['date'] == day for segment in before_reset['segments'])
+        ok(clock(manager, action='reset'))
+        assert ok(manager.get('/api/rotation/board'))['day']['plan'] == original_plan
+        after_reset = ok(manager.get('/api/rotation/person', params={'employee_no':'9000001','date':day}))
+        assert not any(segment['date'] == day for segment in after_reset['segments'])
+        assert after_reset['segments'] == [segment for segment in before_reset['segments'] if segment['date'] != day]

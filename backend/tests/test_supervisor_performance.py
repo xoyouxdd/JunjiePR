@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.v2_database import SessionLocal  # noqa: E402
-from app.v2_models import Employee, RecognitionRecord  # noqa: E402
+from app.v2_models import Attraction, Employee, RecognitionRecord  # noqa: E402
 
 
 def login(client: TestClient, account: str) -> None:
@@ -116,7 +116,7 @@ def test_supervisor_self_recognition_goes_to_the_formal_gsm_queue() -> None:
         assert client.get("/api/supervisor-reviews").status_code == 403
 
 
-def test_acting_ta_gsm_is_recognized_by_gsm_am_om_and_reviewed_by_am_only() -> None:
+def test_acting_ta_gsm_is_reviewed_by_am_or_formal_gsm_across_circles() -> None:
     with TestClient(app) as client:
         login(client, "TAGSMTEST01")
         # Recognizers: formal GSM, AM or OM; not another TA GSM.
@@ -125,11 +125,26 @@ def test_acting_ta_gsm_is_recognized_by_gsm_am_om_and_reviewed_by_am_only() -> N
         assert created.status_code == 200, created.text
         record_id = created.json()["record"]["id"]
         with SessionLocal() as db:
-            assert db.get(RecognitionRecord, record_id).employee_acting_duty_code == "TA_GSM"
+            row = db.get(RecognitionRecord, record_id)
+            assert row.employee_acting_duty_code == "TA_GSM"
+            gsm = db.query(Employee).filter_by(employee_no="GSMTEST01").one()
+            row.home_attraction_id = db.query(Attraction).filter(Attraction.id != gsm.attraction_id).first().id
+            db.commit()
+
+        # Neither the applicant acting as TA GSM nor OM may review.
+        assert client.get("/api/supervisor-reviews").status_code == 403
+        assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "confirm"}).status_code == 403
+        login(client, "OMTEST01")
+        assert client.get("/api/supervisor-reviews").status_code == 403
+        assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "confirm"}).status_code == 403
 
         login(client, "GSMTEST01")
-        assert record_id not in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
-        assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "confirm"}).status_code == 404
+        assert record_id in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
+        actions = client.get("/api/action-center").json()["items"]
+        assert any(item["type"] == "supervisor_review" for item in actions)
+        assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "confirm"}).status_code == 200
+        assert record_id in {row["id"] for row in client.get("/api/supervisor-reviews", params={"view": "history"}).json()["items"]}
+        assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "restore"}).status_code == 200
         login(client, "AMTEST01")
         assert record_id in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
         assert client.post(f"/api/supervisor-reviews/{record_id}", json={"action": "confirm"}).status_code == 200

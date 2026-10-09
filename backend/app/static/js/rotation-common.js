@@ -22,7 +22,7 @@ function hms(minute) {
 }
 
 const STATE_NAME = {
-  notyet: '未到岗', op: 'OP', pending: '待定', onpost: '在岗', walkback: '下线途中', rest: '休息', meal: '吃饭',
+  notyet: '未到班次', op: 'OP', pending: 'OP结束', onpost: '在岗', walkback: '下线途中', rest: '休息', meal: '吃饭',
   ready: '待出发', heading: '前往中', away: '暂离', done: '已下班', excluded: '不轮岗',
 };
 
@@ -188,6 +188,8 @@ function goText(p) {
 
 function badges(p) {
   const out = [];
+  if (p.mealEligible && !p.ate) out.push('<span class="rt-badge meal">未休饭</span>');
+  if (p.breakKind === 'meal_rest' && p.state === 'rest') out.push('<span class="rt-badge rest">饭后剩余休息时间</span>');
   if (p.preparing) out.push(`<span class="rt-badge prep">准备${p.preparing === '推出圈' ? '出圈' : p.preparing === '推7点' ? '推7点' : '下班'}</span>`);
   if (p.flags.includes('推7点下来')) out.push('<span class="rt-badge p7">推7点下来</span>');
   if (p.flags.includes('推7点') && p.state !== 'onpost') out.push('<span class="rt-badge p7">推7点</span>');
@@ -211,10 +213,11 @@ function lineCard(L, n, ops) {
       who = esc(p ? p.name : x.occ);
       if (p && p.flags.includes('7点岗') && !p.flags.includes('推7点下来')) who += '<span class="rt-badge p7">7点</span>';
       if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">准备${p.preparing === '推出圈' ? '出圈' : '下班'}</span>`; }
-      if (p && p.lineStart !== null && p.lineStart !== undefined) mins = `${Math.max(0, Math.floor(n - p.lineStart))} 分`;
+      if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;
+      else if (p && p.lineStart !== null && p.lineStart !== undefined) mins = `${Math.max(0, Math.floor(n - p.lineStart))} 分`;
     }
     if (i === exitIndex) cls += ' exit';
-    const attrs = ops ? ` data-post="${esc(L.id)}#${i}" tabindex="0" role="button"` : '';
+    const attrs = ops ? ` data-post="${esc(L.id)}#${i}" tabindex="0" role="button"${x.occ && personOf(x.occ)?.state === 'notyet' ? ` draggable="true" data-drag-pid="${esc(x.occ)}"` : ''}` : '';
     return `<div class="${cls}"${attrs}><span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${who}</span><span class="rt-mins">${mins}</span></div>`;
   }).join('');
   const inc = incoming.length ? `<div class="rt-incoming">即将进线：${incoming.slice(0, 3).map(p => `<b>${esc(p.name)}</b> ${p.state === 'heading' ? '前往中' : hm(p.assign.departAt)}`).join('，')}${incoming.length > 3 ? ` 等 ${incoming.length} 人` : ''}</div>` : '';

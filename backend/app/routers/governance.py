@@ -142,7 +142,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
 
         pending_supervisor = supervisor_review_query(db, user).filter(RecognitionRecord.status == "pending").count()
         if pending_supervisor:
-            items.append(action_center_item("supervisor_review", "主管待复核签卡", pending_supervisor, "supervisorReview", "warning", "主管本人提交的签卡，任一正式GSM、AM或OM复核即可。"))
+            items.append(action_center_item("supervisor_review", "主管待复核签卡", pending_supervisor, "supervisorReview", "warning", "主管本人提交的签卡由任一正式GSM复核（不限景点圈）；代理TA GSM期间的签卡也可由AM复核，不含本人，OM不能复核。"))
 
     if role_code in LEADER_CODES:
         member_ids = direct_member_ids(db, user.id)
