@@ -7,6 +7,18 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.09.2",
+        "date": "2026-10-09",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "轮岗测试初始化恢复首次预排",
+                "detail": "热力追踪轮岗测试在生成当天首次预排前先结清更早日期的轮岗计时；初始化到04:00时恢复首次发布前保存的预排与设置，不受后来本周累计或配置变化影响，且可重复初始化。回拨测试时钟不会提前收尾未来日期。旧轮岗日若未保存初始快照，首次初始化仍需按现有数据重新生成。",
+                "audiences": ["TR", "GSM", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.09.1",
         "date": "2026-10-09",
         "status": "candidate",

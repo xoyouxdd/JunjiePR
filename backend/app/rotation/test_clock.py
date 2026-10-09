@@ -48,7 +48,7 @@ def control(db: Session, attraction_id: int, body: dict) -> dict:
         if action == "reset":
             # 测试专用：原班表保留，清除当天所有预排调整和运行结果。
             S.set_sim_clock(cfg, day, 240, speed=1, paused=True)
-            S.do_draft_action(db, attraction_id, 'test-reset', {"action": "draft_generate", "date": day, "force": True})
+            S.do_draft_action(db, attraction_id, 'test-reset', {"action": "draft_generate", "date": day, "force": True, "restore_initial": True})
             S.do_draft_action(db, attraction_id, 'test-reset', {"action": "publish", "date": day})
         elif action == "set":
             new_day = str(body.get("date") or day)

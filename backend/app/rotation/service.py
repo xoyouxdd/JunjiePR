@@ -367,7 +367,7 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
 
 def end_stale_days(db: Session, cfg: RotationConfig, attraction_id: int, today: str) -> None:
     """时钟已经到了新的一天，前面还在运行的轮岗按 24:00 收尾。"""
-    for row in db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id, RotationDay.status == "live", RotationDay.work_date != today).all():
+    for row in db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id, RotationDay.status == "live", RotationDay.work_date < today).all():
         state = day_state(row)
         advance(db, cfg, row, state, DAY_END)
 
@@ -381,8 +381,9 @@ def tick_attraction(attraction_id: int) -> None:
             if cfg is None:
                 return
             day, minute = clock_now(cfg)
-            ensure_prearranged_day(db, cfg, attraction_id, day, minute)
             end_stale_days(db, cfg, attraction_id, day)
+            db.flush()
+            ensure_prearranged_day(db, cfg, attraction_id, day, minute)
             row = day_row(db, attraction_id, day)
             if row and row.status == "live":
                 advance(db, cfg, row, day_state(row), minute)
@@ -594,6 +595,7 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
         do_draft_action(db, attraction_id, 'system', {"action": "draft_generate", "date": day})
         row = day_row(db, attraction_id, day)
         state = day_state(row)
+        remember_initial_draft(state, cfg)
         eng, hooks = engine_for(db, cfg, row, state)
         hooks.now = 240
         eng.publish(240, 'system')
@@ -795,6 +797,13 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
         save_day(db, row, state)
 
 
+def remember_initial_draft(state: dict, cfg: RotationConfig) -> None:
+    """Save the pristine pre-publication state once, without recursive snapshots."""
+    if "initialDraft" not in state:
+        state["initialDraft"] = json.loads(_dumps(state))
+        state["initialSettings"] = settings_of(cfg)
+
+
 def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
     act = body.get("action")
     if act not in DRAFT_ACTIONS:
@@ -814,8 +823,19 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 # 必须先清掉当日计时，避免重新预排仍被刚撤回的本周累计影响。
                 for model in (RotationEvent, RotationSegment, RotationNotice, RotationDuty):
                     db.query(model).filter(model.attraction_id == attraction_id, model.work_date == day).delete(synchronize_session=False)
-            state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
-                                  duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
+            prior = day_state(row) if row is not None else {}
+            if body.get("restore_initial") and prior.get("initialDraft"):
+                state = json.loads(_dumps(prior["initialDraft"]))
+                state["initialDraft"] = json.loads(_dumps(prior["initialDraft"]))
+                state["initialSettings"] = dict(prior.get("initialSettings") or settings_of(cfg))
+            else:
+                # Historical close-out must be visible to the weekly ranking
+                # before generating today's first plan (autoflush is disabled).
+                if day == clock_day:
+                    end_stale_days(db, cfg, attraction_id, day)
+                db.flush()
+                state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
+                                      duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
             if row is None:
                 row = RotationDay(attraction_id=attraction_id, work_date=day, status="draft", state_json="{}", version=0)
                 db.add(row)
@@ -879,7 +899,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 raise ActionError(f"只能发布当天（{clock_day}）的轮岗；测试时请先把测试时钟调到 {day}")
             hooks = DbHooks(db, attraction_id, day)
             hooks.now = now
-            eng = E.Engine(state, settings_of(cfg), hooks)
+            remember_initial_draft(state, cfg)
+            eng = E.Engine(state, state["initialSettings"], hooks)
             eng.publish(now, actor)
             state["lastTick"] = now
             write_duties(db, attraction_id, day, plan)

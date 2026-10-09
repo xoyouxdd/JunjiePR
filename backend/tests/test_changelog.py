@@ -89,7 +89,7 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
     # 本职CM/TR本人登记更新对有对应权限的员工可见。
-    assert cm[0]["current"] is True
+    assert cm[0]["current"] is False
     assert "本人认可支持一次登记多条" in cm_text
     assert "声明升级按考勤类别匹配并修正实际扣分" in cm_text
     assert "手机底部栏按角色放常用功能" in cm_text
@@ -128,16 +128,16 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in cm["release"]["items"]] == ["本人认可支持一次登记多条"]
+        assert cm["release"] is None
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["本人认可支持一次登记多条", "轮岗测试完善预排与休息规则"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["轮岗测试初始化恢复首次预排"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in hr["release"]["items"]] == ["轮岗测试完善预排与休息规则", "代理TA GSM主管签卡支持正式GSM复核", "员工管理隐藏已归档账号的离职员工"]
+        assert [item["summary"] for item in hr["release"]["items"]] == ["轮岗测试初始化恢复首次预排"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()
@@ -151,7 +151,11 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
 
 
 def test_current_release_items_match_roles_and_permissions() -> None:
-    batch, rotation, supervisor, hr = RELEASES[0]["items"]
+    (current_rotation,) = RELEASES[0]["items"]
+    assert item_visible(current_rotation, "TR", set())
+    assert item_visible(current_rotation, "GSM", set())
+    assert not item_visible(current_rotation, "CM", set())
+    batch, rotation, supervisor, hr = RELEASES[1]["items"]
     assert item_visible(batch, {"CM", "TA_SUPERVISOR"}, {"SELF_RECOGNITION"})
     assert not item_visible(batch, "SUPERVISOR", {"SELF_RECOGNITION"})
     assert not item_visible(batch, "CM", set())

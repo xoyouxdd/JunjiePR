@@ -164,7 +164,18 @@ def test_full_day_flow_through_the_api() -> None:
         ok(clock(manager, action="real"))
 
 
-def test_automatic_four_am_prearrangement_and_full_test_reset():
+def test_automatic_four_am_prearrangement_and_full_test_reset(monkeypatch):
+    from app.rotation import service
+    original_action = service.do_live_action
+
+    def tick_before_drag(db, attraction_id, actor, body):
+        # Force the previously flaky scheduling: the background ticker runs
+        # after capturing the original plan, but before the first manual edit.
+        if body.get('action') == 'plan_place':
+            service.tick_attraction(attraction_id)
+        return original_action(db, attraction_id, actor, body)
+
+    monkeypatch.setattr(service, 'do_live_action', tick_before_drag)
     day = '2026-10-06'
     with TestClient(app) as manager, TestClient(app) as screen:
         login(manager, 'GSMTEST01')
@@ -178,6 +189,12 @@ def test_automatic_four_am_prearrangement_and_full_test_reset():
         board = ok(manager.get('/api/rotation/board'))
         assert board['day']['status'] == 'live'
         original_plan = board['day']['plan']
+        from app.v2_database import SessionLocal
+        from app.rotation.models import RotationDay
+        with SessionLocal() as db:
+            previous = db.query(RotationDay).filter(RotationDay.work_date == DAY).first()
+            if previous:
+                assert previous.status == 'ended'
         assert person(board, '9000001')['lineStart'] is None
         assert board['day']['lines'][0]['posts'][1]['occ'] == '9000001'
         ok(manager.post('/api/rotation/act', json={'action':'plan_place','pid':'9000001','line':'A','i':0}))
@@ -204,3 +221,43 @@ def test_automatic_four_am_prearrangement_and_full_test_reset():
         after_reset = ok(manager.get('/api/rotation/person', params={'employee_no':'9000001','date':day}))
         assert not any(segment['date'] == day for segment in after_reset['segments'])
         assert after_reset['segments'] == [segment for segment in before_reset['segments'] if segment['date'] != day]
+
+
+def test_reset_restores_persisted_snapshot_not_new_week_or_configuration(monkeypatch):
+    from app.rotation import service
+    from app.rotation.models import RotationSegment
+    from app.v2_database import SessionLocal
+    from app.v2_models import Attraction
+
+    day = '2026-10-07'
+    with TestClient(app) as manager:
+        login(manager, 'GSMTEST01')
+        enter(manager, '8888888')
+        ok(clock(manager, action='set', date=day, time='03:59'))
+        ok(manager.put('/api/rotation/config', json={'lines': LINES}))
+        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', roster_file(day), 'application/octet-stream')}, data={'scope':'day'}))
+        ok(clock(manager, action='jump', minutes=1))
+        original_plan = ok(manager.get('/api/rotation/board'))['day']['plan']
+        with SessionLocal() as db:
+            attraction_id = db.query(Attraction).filter_by(name='热力追踪').one().id
+            db.add(RotationSegment(attraction_id=attraction_id, work_date='2026-10-05',
+                employee_no='9000007', line='A', start_min=420,
+                end_min=1020, minutes=600))
+            db.commit()
+        ok(manager.put('/api/rotation/config', json={'lines': list(reversed(LINES))}))
+        service.RUNTIME.cache.clear()  # Prove recovery uses the database snapshot.
+
+        def no_recalculation(*args, **kwargs):
+            raise AssertionError('reset must not recalculate the initial plan')
+
+        monkeypatch.setattr(service.E, 'build_draft', no_recalculation)
+        ok(clock(manager, action='reset'))
+        first = ok(manager.get('/api/rotation/board'))
+        assert first['day']['plan'] == original_plan
+        assert [line['id'] for line in first['day']['lines']] == ['A', 'B']
+        assert [line['id'] for line in first['lines']] == ['B', 'A']
+        ok(clock(manager, action='reset'))
+        assert ok(manager.get('/api/rotation/board'))['day']['plan'] == original_plan
+        with SessionLocal() as db:
+            assert db.query(RotationSegment).filter_by(attraction_id=attraction_id,
+                work_date='2026-10-05', employee_no='9000007', minutes=600).count() == 1
