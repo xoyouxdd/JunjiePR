@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import stat
 import subprocess
 import sys
 import zipfile
@@ -22,6 +23,8 @@ EXCLUDED_NAMES = {".env", "secrets.json", ".coverage"}
 BACKEND_TOP_LEVEL = {"app", "requirements.txt"}
 SCRIPT_FILES = {
     "Deploy-RecognitionRelease.ps1",
+    "server_release.py",
+    "deployment_runtime.py",
 }
 
 
@@ -106,25 +109,49 @@ def should_include(path: Path, root: Path | None = None) -> bool:
     return True
 
 
+def checked_source(path: Path):
+    """Check ancestors before following or descending into a Windows junction."""
+    path = path.absolute()
+    for entry in reversed((path, *path.parents)):
+        info = entry.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            raise RuntimeError(f"release source must not contain symlinks or reparse points: {entry}")
+    return info
+
+
+def source_files(path: Path, root: Path):
+    """Walk only approved source roots, checking entries before recursion."""
+    info = checked_source(path)
+    if not should_include(path, root):
+        return
+    if stat.S_ISDIR(info.st_mode):
+        for child in sorted(path.iterdir()):
+            yield from source_files(child, root)
+    elif stat.S_ISREG(info.st_mode):
+        yield path
+    else:
+        raise RuntimeError(f"unsupported release source type: {path}")
+
+
 def release_sources() -> list[tuple[Path, str]]:
-    """Return an explicit, reviewable package whitelist."""
+    """Return an explicit whitelist without traversing unrelated runtime trees."""
+    checked_source(BACKEND_ROOT)
+    checked_source(SCRIPTS_ROOT)
     sources: list[tuple[Path, str]] = []
-    for path in sorted(BACKEND_ROOT.rglob("*")):
-        if path.is_symlink():
-            raise RuntimeError(f"release source must not contain symlinks: {path}")
-        if not path.is_file() or not should_include(path, BACKEND_ROOT):
+    missing_scripts = {f"scripts/{name}" for name in SCRIPT_FILES if not (SCRIPTS_ROOT / name).exists()}
+    if missing_scripts:
+        raise RuntimeError("required deployment scripts missing: " + ", ".join(sorted(missing_scripts)))
+    for name in sorted(BACKEND_TOP_LEVEL):
+        source_root = BACKEND_ROOT / name
+        if not source_root.exists() and not source_root.is_symlink():
             continue
-        relative = path.relative_to(BACKEND_ROOT)
-        if relative.parts[0] in BACKEND_TOP_LEVEL:
-            sources.append((path, (Path("backend") / relative).as_posix()))
-    for path in sorted(SCRIPTS_ROOT.rglob("*")):
-        if path.is_symlink():
-            raise RuntimeError(f"release source must not contain symlinks: {path}")
-        if not path.is_file() or not should_include(path, SCRIPTS_ROOT):
-            continue
-        relative = path.relative_to(SCRIPTS_ROOT)
-        if relative.parts[0] in SCRIPT_FILES:
-            sources.append((path, (Path("scripts") / relative).as_posix()))
+        for path in source_files(source_root, BACKEND_ROOT):
+            sources.append((path, (Path("backend") / path.relative_to(BACKEND_ROOT)).as_posix()))
+    for name in sorted(SCRIPT_FILES):
+        path = SCRIPTS_ROOT / name
+        if not stat.S_ISREG(checked_source(path).st_mode):
+            raise RuntimeError(f"deployment script must be a regular file: {path}")
+        sources.append((path, f"scripts/{name}"))
     return sources
 
 

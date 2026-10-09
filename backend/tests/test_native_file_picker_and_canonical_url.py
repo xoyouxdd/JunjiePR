@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 from pathlib import Path
 
@@ -7,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_file_selection_uses_native_labels_without_hidden_input_clicks() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     stylesheet = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
 
     # Native label/input activation stays inside the browser's trusted gesture
@@ -29,7 +30,7 @@ def test_file_selection_uses_native_labels_without_hidden_input_clicks() -> None
 
 
 def test_portal_navigation_keeps_the_recognition_prefix() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     login_script = (ROOT / "app" / "static" / "js" / "login.js").read_text(encoding="utf-8")
     index = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     login = (ROOT / "app" / "static" / "login.html").read_text(encoding="utf-8")

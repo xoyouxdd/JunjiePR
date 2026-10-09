@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import os
 from datetime import date, timedelta
@@ -53,7 +54,7 @@ def test_attendance_upgrade_categories_do_not_mix() -> None:
 
 
 def test_deduction_picker_labels_upgrade_groups_without_changing_type_ids() -> None:
-    source = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    source = read_frontend_source()
     assert "${opt(types,'id',deductionUpgradeOptionName)}" in source
     assert "${row.name}（${group.category}3个月内第2次触发升级）" in source
     assert "['ATT_EARLY_CLOCK','ATT_LATE_CLOCK']" in source

@@ -22,7 +22,8 @@ def main() -> int:
     if args.data_dir:
         os.environ["RECOGNITION_V2_DATA_DIR"] = str(Path(args.data_dir).resolve())
     sys.path.insert(0, str(ROOT / "backend"))
-    from app.v2_database import SessionLocal, purge_legacy_attendance
+    from app.database.connection import SessionLocal
+    from app.maintenance.legacy_attendance import purge_legacy_attendance
 
     with SessionLocal() as db:
         result = purge_legacy_attendance(db, apply=args.apply)

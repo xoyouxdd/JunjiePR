@@ -17,10 +17,12 @@
 - `Reset-NeverLoggedInInitialPasswords.py`：一次性恢复从未登录过的测试账号的初始密码（七位工号后四位）。只处理启用中、在职、且没有成功登录记录的账号，必须显式 `--apply`，不输出密码、姓名、工号或哈希。
 - `Start-LocalJunjiePR.ps1`：本地开发启动脚本，使用 `backend/.venv`。本地运行说明见 [../docs/getting-started.md](../docs/getting-started.md)。
 - `seed_level_accounts.py`：初始化本地演示登录账号，仅供本地使用，不进入正式包，不要在生产运行。
-- `Deploy-RecognitionRelease.ps1`：在生产服务器上线一个已核验的发布包。必须传入经批准的完整 git commit，并逐个文件核对 `release-manifest.json` 里的 SHA-256 清单；核验通过后先做一次在线 SQLite 备份，再只替换 `app/` 与 `requirements.txt`，`data_v2/`、上传文件和 `.venv/` 保持不动。任一步失败会自动还原上一版并重启服务。它只在人工明确授权后执行，完整流程和前置检查见 [../docs/deployment.md](../docs/deployment.md)。
 - `Publish-RecognitionRelease.ps1`：本机一键发布入口，固定连接当前生产服务器，从干净提交跑测试、打包、上传、预检、部署和独立读回。专用私钥存于当前用户 `.ssh`，不在仓库。
-- `server_release.py`：当前生产目录布局的服务器端部署事务，由本机入口上传并调用；只接受 `.deploy-incoming` 中且哈希、提交号、清单均匹配的包。
-- `Deploy-RecognitionRelease.ps1`：保留在正式包中的 PowerShell 部署合同；当前生产目录布局使用上面的 Python 部署事务。它只在人工明确授权后执行，完整流程见 [../docs/deployment.md](../docs/deployment.md)。
+- `server_release.py`：当前布局的服务器端部署事务，保持原 CLI；核对完整包、运行源码及 helper 的哈希配对，取得独占发布锁，备份、停任务、切换、健康检查并处理回滚。仅在人工明确授权后由发布入口调用。
+- `deployment_runtime.py`：离线保存、恢复并验证 `.venv` 文件集合；依赖变化时安装前快照，pip 部分失败也可恢复。环境保持原路径，回滚不依赖联网安装；损坏快照或恢复失败会明确拒绝成功。快照和事务记录位于应用根目录 `.deploy-rollbacks/<stamp>/`。
+- `Deploy-RecognitionRelease.ps1`：保留在正式包中的历史 PowerShell 部署合同与测试留档。当前布局使用 `Publish-RecognitionRelease.ps1` 调用 Python 事务，离线依赖快照和恢复属于该事务。
+
+三个部署脚本均在发布包白名单及 SHA-256 清单内，缺文件即拒绝打包。入口将两个 Python 脚本上传到提交号与包哈希命名的独立目录并读回哈希，ZIP 使用含包哈希的文件名。预检核验包和源码配对，不操作任务、数据库或依赖；实际上线必须能确认既有应用及看门狗任务存在且状态可读，看门狗当前实例须结束。原禁用状态会保留，回滚失败不会强行恢复看门狗。这里只提供实现和本地离线验证，真实 Task Scheduler、文件锁和公网健康检查仍需上线授权后的环境验证。
 
 最高管理员在「待办」展开备份异常后，可删除**当前巡检报告**对应的待办提示（最多隐藏24小时，新报告异常会重新出现），或发起一次后台手动 SQLite 备份。手动备份使用应用配置的备份目录，复用数据库在线备份、`quick_check` 和 SHA-256 清单口径；不清理旧备份，也不创建缺失的每日计划任务。进行中的任务不可重复启动，成功后10分钟内也不可重复触发；超过2小时仍显示运行的任务可重新尝试。执行结果可在同一待办明细查看，失败时须检查服务器日志、备份目录权限和磁盘空间。网页服务账号需对备份目录有写入权限；此权限应限定在该目录。
 
@@ -96,6 +98,16 @@ Get-ChildItem C:\Server\zhaojunjie\backups\recognition-card-system-sqlite | Sort
 ```
 
 ## 隔离测试模式
+
+发布打包器统一调用以下验证入口；本机发布脚本不再重复执行全量测试。默认包含逐文件隔离的 Python 测试、纯 Node 前端回归，以及 Playwright/Edge 本地 DOM 夹具：
+
+```powershell
+.\backend\.venv\Scripts\python.exe backend\tests\run_all.py
+```
+
+定向验证可使用 `--suite python`、`--suite node` 或 `--suite browser`。`node` 执行批量认可字段、未封顶分数展示、页面生命周期等 `backend/tests/*.cjs` 回归；`browser` 执行 `deduction_type_picker_ui.cjs`，只打开本地 DOM 夹具，不启动应用服务，也不访问生产环境。
+
+前端验证要求 `node` 在 PATH 中；浏览器夹具还要求 Node 能从 `backend/` 解析 `playwright`，且 Microsoft Edge 已安装（`channel: msedge`）。可在项目根目录准备开发依赖 `npm install --no-save --package-lock=false playwright`，或由开发环境通过 `NODE_PATH` 指向现有的开发依赖目录。验证入口不会自动安装依赖；缺少必需运行时或任意回归失败都会返回非零退出码并阻止打包。定向验证通过不代表默认全量入口通过。
 
 `TestMode` 只能用于临时测试。所有运行、备份和演练目录都必须是 `TestRoot` 的子目录，防止测试触碰生产。例如：
 

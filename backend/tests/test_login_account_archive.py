@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import os
 from datetime import date, datetime, timedelta
@@ -105,6 +106,7 @@ def test_remove_login_after_seven_days_keeps_employee_and_business_archive() -> 
             employee = db.get(Employee, employee_id)
             assert employee is not None
             assert employee.account_deleted_at is not None
+            archived_at = employee.account_deleted_at.strftime("%Y-%m-%d %H:%M:%S")
             assert db.get(UserAccount, account_id) is None
             assert db.query(RecognitionRecord).filter_by(employee_id=employee_id).count() == 1
             assert db.query(AuditLog).filter_by(action="删除停用登录账号", entity_id=str(employee_id)).count() == 1
@@ -112,7 +114,7 @@ def test_remove_login_after_seven_days_keeps_employee_and_business_archive() -> 
         assert rejected_login.status_code == 401
         refreshed = client.get("/api/hr/employees")
         item = next(row for row in refreshed.json() if row["id"] == employee_id)
-        assert item["account_deleted_at"]
+        assert item["account_deleted_at"] == archived_at
         assert item["account_deletion_eligible"] is False
         assert "账号已删除" in item["account_deletion_reason"]
         assert employee_id not in organization_employee_ids(client)
@@ -148,11 +150,12 @@ def test_active_employee_with_archived_login_remains_in_management_tree() -> Non
 
 
 def test_hr_archive_ui_and_export_marker_are_present() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((ROOT / "app" / "routers").glob("*.py")))
     assert "data-delete-login-account" in script
     assert "删除登录账号" in script
     assert "账号已删除·留档" in script
     assert '"/hr/employees/{employee_id}/account"' in router
     assert "business_history_retained" in router
-    assert '"account_deleted_at": employee.account_deleted_at' in router
+    # The archive timestamp is verified through the directory API above;
+    # its projection may live outside the HTTP routing module.

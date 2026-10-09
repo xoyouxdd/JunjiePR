@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import asyncio
 import json
@@ -25,7 +26,7 @@ def test_uc_is_classified_before_chromium_user_agents() -> None:
 
 
 def test_recognition_rebuilds_file_payload_and_has_browser_compatibility_fallback() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "function readableEvidenceFile(form)" in script
     assert "function evidenceSelectionAttempted(form)" in script

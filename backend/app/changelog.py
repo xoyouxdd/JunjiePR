@@ -7,6 +7,33 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.09.3",
+        "date": "2026-10-09",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "LOA月份成绩与登记规则统一",
+                "detail": "首页、组员成绩及PR综合排名统一排除与LOA相交月份的分数，跨月查询保留其余月份成绩，历史记录和材料仍保留。HR员工编辑与LOA登记共用日期冲突、月结检查和月份重算规则，可在一次保存中更改为CM/TR并设置LOA；离职人员原小组未变时可保存其他字段，新增归组仍须先复职。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "声明升级审核防止重复生效",
+                "detail": "同时审批、拒绝或转交同一声明升级工单时，仅一个当前操作生效；已处理或转交的工单须刷新后查看，避免重复生成处分。",
+                "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "轮岗测试操作提交与参数检查修复",
+                "detail": "修复操作失败后残留轮岗状态，以及多人操作时覆盖前一次修改的问题；岗位索引、线路标识、时间和数值配置在执行或保存前检查。测试初始化及既有轮岗规则保持不变。",
+                "audiences": ["TR", "GSM", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "提交后刷新跟随当前页面",
+                "detail": "提交期间切换页面后，已经发出的操作照常完成，旧页面不再覆盖新页面；仍停留在来源页面时正常刷新并显示操作结果。",
+                "audiences": ["all"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.09.2",
         "date": "2026-10-09",
         "status": "candidate",

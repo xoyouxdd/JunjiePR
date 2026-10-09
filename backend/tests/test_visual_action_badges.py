@@ -1,3 +1,4 @@
+from frontend_source import read_frontend_source
 from pathlib import Path
 
 
@@ -5,7 +6,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_visual_badge_reuses_existing_action_center_contract_only() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "data-action-center-badge" in script
     assert "refreshActionBadge" in script

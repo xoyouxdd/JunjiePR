@@ -6,11 +6,12 @@ from datetime import datetime
 from fastapi import HTTPException
 from sqlalchemy import or_
 
-from app.routers.statistics import statistics_payload, trend_month_keys
-from app.routers.declaration_statistics import declaration_payload, checked_month
-from app.routers._shared import month_closure_scope
+from app.services.monthly_statistics import statistics_payload
+from app.services.statistics_trends import trend_month_keys
+from app.services.declaration_statistics import declaration_payload, checked_month
+from app.month_closure import month_closure_scope
 from app.v2_models import Attraction, RecognitionRecord, DeductionRecord, EmployeeMonthOrganizationSnapshot, GroupMembership, WorkGroup, Role
-from app.v2_services import base_roles_at
+from app.services.identity import base_roles_at
 
 REPORT_ROLES = frozenset({"GSM", "AM", "OM", "SYSTEM_ADMIN"})
 TEMPLATES = {"forest": "森林都市", "minimal": "简约汇报", "warm": "温暖团队"}

@@ -8,6 +8,8 @@
 
 打包脚本在工作区干净检查之后会**自动跑一次全量测试**，任一模块失败即拒绝出包——本项目不使用 CI，这里是最后一道自动关卡。也可以先单独跑一遍看失败详情：`.\backend\.venv\Scripts\python.exe backend\tests\run_all.py`。
 
+完整验证包含 Python、纯 Node.js 回归及 Playwright/Edge 本地 DOM 夹具，运行时要求见 [getting-started.md](getting-started.md)。发布入口只调用打包器，由打包器统一执行完整验证，避免连续重复运行同一套测试；任一模块失败或运行时缺失均不能出包。
+
 包名从 `backend/app/version.py` 的 `APP_VERSION` 生成，写成 `recognition-v年.月.日.第几版.zip`，放在仓库根目录。打包只允许从干净的 Git 工作区执行；未提交改动会直接阻止打包。
 
 包内使用明确白名单：`backend/app/`、`backend/requirements.txt` 和服务器部署脚本。白名单按 `backend/` 下第一层名字精确匹配，所以只有生产依赖 `requirements.txt` 入包，测试依赖 `backend/requirements-dev.txt` 不进正式包，生产服务器不会装上 `pytest`、`httpx`。`backend/tests/`、`scripts/tests/`、开发文档、演示账号脚本、运行数据、上传文件、凭据和本地配置也都不进入正式包。`release-manifest.json` 记录版本、完整 Git commit，以及每个文件的大小和 SHA-256，供发布前后读回核对；`RELEASE-NOTES.md` 会从 `backend/app/changelog.py` 的最新版本条目自动生成，作为本次发布留档。
@@ -33,3 +35,5 @@
 改静态资源时把 `APP_VERSION` 进一版（`STATIC_CACHE_VERSION` 跟它走），否则浏览器可能继续用旧 CSS/JS。用户可见的功能变更还要写入 `backend/app/changelog.py`，规则见 [changelog.md](changelog.md)。
 
 解包核验时至少确认 `backend/app/main.py`、`release-manifest.json` 和 `RELEASE-NOTES.md` 存在，并逐项复算清单中的 SHA-256。清单 commit 必须等于本次批准发布的提交。
+
+部署器和离线环境回滚 helper 与 PowerShell 合同脚本一并进入明确白名单及哈希清单；缺任一部署依赖即拒绝出包。只遍历白名单源码根目录，并在递归前拒绝符号链接、junction 和 reparse point，避免将包外文件收入发布包。

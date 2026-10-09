@@ -1,9 +1,14 @@
 # SQLite 表、键、索引
 
-对照当前程序 `2026.09.10.10`。权威定义在代码里，本文件只记录现在落地的结构：
+对照当前本地候选程序 `2026.10.09.3`。权威定义在代码里，本文件只记录现在落地的结构：
 
 - 表与字段：`backend/app/v2_models.py`；轮岗模块的表在 `backend/app/rotation/models.py`
-- 启动建库、一次性补丁、额外索引、月度分值视图：`backend/app/v2_database.py`
+- 连接、Base 与会话：`backend/app/database/connection.py`
+- 启动建库与每次启动保障：`backend/app/database/bootstrap.py`、`reference_data.py`、`accounts.py`
+- 一次性补丁与额外索引：`backend/app/database/migrations/`（schema、sick_leave、organization），按 `registry.py` 的有序 callable 执行
+- 月度分值视图：`backend/app/database/score_view.py`；旧 `v2_database.py` 导入入口保留兼容
+
+此次职责拆分不改变表、列、约束、索引、视图内容或已有迁移 step key；历史迁移函数内部提交及执行器登记提交保持原样，不将其描述为一个整体可回滚事务。
 
 改模型或迁移后，同步改本文件。不要对着生产库手改结构。
 

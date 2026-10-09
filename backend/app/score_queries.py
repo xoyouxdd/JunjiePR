@@ -5,6 +5,9 @@ from collections.abc import Iterable
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.score_policy import loa_month_exclusion
+from app.v2_models import Employee
+
 
 def _employee_filter(employee_ids: Iterable[int]) -> tuple[str, dict[str, object]]:
     unique_ids = list(dict.fromkeys(int(employee_id) for employee_id in employee_ids))
@@ -70,4 +73,19 @@ def employee_month_scores(db: Session, month: str, employee_ids: Iterable[int]) 
         LEFT JOIN attendance_totals a ON a.employee_id=m.employee_id
         LEFT JOIN deduction_totals d ON d.employee_id=m.employee_id
     """
-    return [dict(row) for row in db.execute(text(sql), {"month": month, **id_params}).mappings().all()]
+    rows = [dict(row) for row in db.execute(text(sql), {"month": month, **id_params}).mappings().all()]
+    if not rows:
+        return rows
+    # One scoped lookup for all employees, rather than a per-employee query.
+    excluded_ids = {
+        employee_id for (employee_id,) in db.query(Employee.id).filter(
+            Employee.id.in_([row["employee_id"] for row in rows]),
+            loa_month_exclusion(Employee.id, month),
+        ).all()
+    }
+    for row in rows:
+        row["loa_excluded"] = row["employee_id"] in excluded_ids
+        if row["loa_excluded"]:
+            for field in ("recognition_score", "attendance_score", "deduction_score", "total_score"):
+                row[field] = 0
+    return rows

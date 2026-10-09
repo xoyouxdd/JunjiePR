@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 from datetime import date
 from decimal import Decimal
@@ -116,7 +117,7 @@ def test_authorized_inline_preview_is_cached_and_member_ui_uses_it() -> None:
             assert db.query(StoredFile).filter_by(id=file_id).count() == 1
             assert db.query(AuditLog).filter_by(entity_type="recognition", entity_id=str(file_id), action="查看带水印材料").count() == 3
 
-    script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).parents[1] / "app" / "routers").glob("*.py")))
     assert "preview=1" in script
     assert "function memberAttachment(record)" in script

@@ -1,3 +1,4 @@
+from frontend_source import read_frontend_source
 from pathlib import Path
 
 
@@ -5,7 +6,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_visual_theme_uses_existing_identity_only():
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     assert "const circleTheme" in script
     assert "state.me?.attraction_name" in script
     assert "applyCircleTheme();" in script
@@ -43,7 +44,7 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert "passwordInput.focus()" in login_js
     assert "panel.classList.add('is-error')" in login_js
     assert "input:focus" not in css.split('.login-panel input:focus')[0].split('input, select, textarea')[1][:400]
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     assert "内部资料 ·" in script
     assert "CONFIDENTIAL" not in script
     assert "installPageBindHint" in script
@@ -58,7 +59,7 @@ def test_visual_theme_css_and_login_marker_are_present():
 
 
 def test_hr_new_employee_form_has_responsive_field_and_action_layout() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
 
     assert "hr-create-panel" in script
@@ -71,7 +72,7 @@ def test_hr_new_employee_form_has_responsive_field_and_action_layout() -> None:
 
 
 def test_desktop_sidebar_keeps_mobile_bottom_nav() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
     index = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
 

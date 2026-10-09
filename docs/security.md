@@ -12,6 +12,8 @@
 
 ## 上传解析
 
+主页面的原生模块仍受 `script-src 'self'` 限制。HTML 渲染器在注入静态版本后，对 import map 的精确文本生成 SHA-256 授权；缓存命中复用同一 HTML 内容与策略，其他页面不增加该授权。不会使用 `unsafe-inline` 放开任意内联代码。
+
 业务材料上限是 100MB。服务端锁定 FastAPI 0.120.2 + Starlette 0.49.3：大文件滚到磁盘时不再堵住事件循环；1MB 限制只作用于非文件表单字段。Starlette 0.49.1 起修复了 FileResponse/StaticFiles 多 Range 解析的 CPU 耗尽问题（GHSA-7f5h-v6xp-fcq8 / CVE-2025-62727）。不要把 Starlette 单独升到 FastAPI 约束之外。生产锁定清单 `backend/requirements.txt` 解析后还传递引入 annotated-doc 0.0.5、anyio 4.15.1、pydantic 2.13.5（分别来自 fastapi 与 starlette，不是测试依赖带进来的）；这只说明当前锁定组合，不代表已扫过此后所有公告。
 
 ## 打包

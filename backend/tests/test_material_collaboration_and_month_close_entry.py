@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import os
 import tempfile
@@ -157,7 +158,7 @@ def test_violation_sick_leave_without_statement_material_enters_the_same_collabo
 
 
 def test_material_scope_ui_and_month_close_copy_are_present() -> None:
-    source = (Path(__file__).resolve().parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    source = read_frontend_source()
     assert "data-pending-material-scope" in source
     assert "我的景点圈" in source
     assert "全部景点圈" in source

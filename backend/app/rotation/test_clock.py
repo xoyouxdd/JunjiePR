@@ -6,10 +6,12 @@
 """
 from __future__ import annotations
 
+import math
+
 from sqlalchemy.orm import Session
 
 from app.rotation import service as S
-from app.rotation.roster import fmt, hm
+from app.rotation.roster import fmt
 
 
 MAX_SPEED = 120
@@ -18,6 +20,16 @@ MAX_SPEED = 120
 def _require_sim(cfg) -> None:
     if S.clock_state(cfg).get("mode") != "sim":
         raise S.ActionError("请先开启模拟时间")
+
+
+def _number(value, *, maximum: float, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise S.ActionError(f"{label}必须是数字") from exc
+    if isinstance(value, bool) or not math.isfinite(number) or not 0 < number <= maximum:
+        raise S.ActionError(f"{label}需大于 0 且不超过 {maximum:g}")
+    return number
 
 
 def pending_actions(state: dict, now: float, depart_early: float) -> list[str]:
@@ -39,6 +51,7 @@ def _live(db: Session, attraction_id: int, day: str):
     return None, None
 
 
+@S.transactional
 def control(db: Session, attraction_id: int, body: dict) -> dict:
     action = body.get("action")
     with S.RUNTIME.lock:
@@ -52,9 +65,13 @@ def control(db: Session, attraction_id: int, body: dict) -> dict:
             S.do_draft_action(db, attraction_id, 'test-reset', {"action": "publish", "date": day})
         elif action == "set":
             new_day = str(body.get("date") or day)
-            S.Date.fromisoformat(new_day)
-            new_minute = hm(str(body.get("time") or fmt(minute)))
-            S.set_sim_clock(cfg, new_day, new_minute, speed=float(body.get("speed") or 1), paused=True)
+            try:
+                S.Date.fromisoformat(new_day)
+            except ValueError as exc:
+                raise S.ActionError("日期格式需为 YYYY-MM-DD") from exc
+            new_minute = S.action_time(body.get("time") or fmt(minute))
+            speed = _number(body.get("speed", 1), maximum=MAX_SPEED, label="倍速")
+            S.set_sim_clock(cfg, new_day, new_minute, speed=speed, paused=True)
         elif action == "real":
             cfg.clock_json = S._dumps({"mode": "real"})
         elif action in ("pause", "resume"):
@@ -62,15 +79,11 @@ def control(db: Session, attraction_id: int, body: dict) -> dict:
             S.set_sim_clock(cfg, day, minute, paused=action == "pause")
         elif action == "speed":
             _require_sim(cfg)
-            speed = float(body.get("speed") or 1)
-            if not 0 < speed <= MAX_SPEED:
-                raise S.ActionError(f"倍速需在 1 到 {MAX_SPEED} 之间")
+            speed = _number(body.get("speed", 1), maximum=MAX_SPEED, label="倍速")
             S.set_sim_clock(cfg, day, minute, speed=speed)
         elif action == "jump":
             _require_sim(cfg)
-            minutes = float(body.get("minutes") or 10)
-            if not 0 < minutes <= 240:
-                raise S.ActionError("快进时长需在 1 到 240 分钟之间")
+            minutes = _number(body.get("minutes", 10), maximum=240, label="快进时长")
             target = min(minute + minutes, S.DAY_END)
             row, state = _live(db, attraction_id, day)
             if row:
@@ -97,7 +110,6 @@ def control(db: Session, attraction_id: int, body: dict) -> dict:
             result["waiting"] = waiting
         else:
             raise S.ActionError("不支持的测试时钟操作")
-        S.RUNTIME.bump()
-        db.commit()
+        S.mark_changed(db)
         result["clock"] = S.clock_payload(cfg)
         return result

@@ -1,3 +1,4 @@
+from frontend_source import frontend_function_source, read_frontend_source
 from pathlib import Path
 import json
 import shutil
@@ -7,15 +8,13 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'app/static/js/app.js'
 
 
 def test_feedback_uses_server_status_and_neutral_deduction_copy():
     node = shutil.which('node')
     if not node:
         pytest.skip('Node is unavailable')
-    source = SCRIPT.read_text(encoding='utf-8')
-    helper = source.split('function performanceFeedbackData', 1)[1].split('function showPerformanceRegistrationFeedback', 1)[0]
+    helper = frontend_function_source('performanceFeedbackData')
     cases = [
         ['recognition', {'status': 'confirmed', 'fraction': 1, 'credited_fraction': .5}],
         ['recognition', {'status': 'pending', 'fraction': 1}],
@@ -24,7 +23,7 @@ def test_feedback_uses_server_status_and_neutral_deduction_copy():
         ['deduction', {'status': 'material_processing', 'material_status': 'processing'}],
         ['upgrade', {'status': 'pending_upgrade', 'points': 0}],
     ]
-    code = 'function performanceFeedbackData' + helper + '\nconsole.log(JSON.stringify(' + json.dumps(cases) + '.map(x=>performanceFeedbackData(...x))))'
+    code = helper + '\nconsole.log(JSON.stringify(' + json.dumps(cases) + '.map(x=>performanceFeedbackData(...x))))'
     result = subprocess.run([node, '-e', code], check=True, capture_output=True, text=True, encoding='utf-8')
     rows = json.loads(result.stdout)
     assert rows[0]['score'] == '+0.50 分'
@@ -38,11 +37,11 @@ def test_feedback_uses_server_status_and_neutral_deduction_copy():
 
 
 def test_feedback_is_scoped_and_reuses_accessible_dialog():
-    source = SCRIPT.read_text(encoding='utf-8')
+    source = read_frontend_source()
     assert "showPerformanceRegistrationFeedback('recognition',result)" in source
     assert "showPerformanceRegistrationFeedback('deduction',out)" in source
     assert "showPerformanceRegistrationFeedback('upgrade',out)" in source
-    helper = source.split('function showPerformanceRegistrationFeedback', 1)[1].split('\nfunction ', 1)[0]
+    helper = frontend_function_source('showPerformanceRegistrationFeedback')
     assert "state.me?.role_code" in helper
     assert "result?.duplicate" in helper
     assert 'bindDialogLayer' in helper

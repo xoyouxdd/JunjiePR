@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import os
 import tempfile
@@ -93,7 +94,7 @@ def test_active_sick_leave_date_overlap_is_visible_and_blocked_until_voided() ->
 
 
 def test_mobile_form_contains_overlap_guard_and_chinese_message() -> None:
-    script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     assert "bindSickLeaveOverlapGuard(form)" in script
     assert "/api/sick-leaves/overlap-check" in script
     assert "已有缺勤登记" in script

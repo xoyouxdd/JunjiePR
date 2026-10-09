@@ -1,13 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const vm = require('node:vm');
-const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '../app/static/js/app.js'), 'utf8');
-const start = source.indexOf('function selfRecognitionBatchItems(');
-const end = source.indexOf('async function bindSelfRecognitionBatch(', start);
+const {readFrontendSource, frontendFunctionSource} = require('./frontend_source.js');
+const source = readFrontendSource();
 const context = {submittedDateValue: input => input.value || input.dataset.submitDate || ''};
 vm.createContext(context);
-vm.runInContext(source.slice(start, end), context);
+vm.runInContext(frontendFunctionSource('selfRecognitionBatchItems'), context);
 function card(index) {
   const values = {recognition_date: `2026-10-0${index}`, recognition_type_id: String(index),
     content: `内容${index}`, occurred_attraction_id: String(index), recognizer_employee_id: String(index)};

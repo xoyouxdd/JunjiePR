@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import json
 import hashlib
@@ -203,7 +204,7 @@ def test_readiness_check_is_read_only_and_reports_aggregate_counts_only() -> Non
 
 
 def test_action_center_and_operations_views_are_present_in_the_app_shell() -> None:
-    script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     assert "['actionCenter','待办']" in script
     assert "renderActionCenter" in script
     assert "待办中心" in script

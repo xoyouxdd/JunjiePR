@@ -7,16 +7,22 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
-from sqlalchemy import func, or_
+from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_crypto import default_initial_password, hash_password
-from app.v2_database import get_db, synchronize_gsm_management_scope
-from app.v2_models import Attraction, AttendanceMonthlyScore, Employee, EmployeeActingDuty, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, GroupMembership, RecognitionRecord, Role, UserAccount, UserSession, WorkGroup
-from app.v2_services import DUTY_BASE_CODES, DUTY_ROLE_CODES, FRONTLINE_CODES, LEADER_CODES, active_group_memberships, base_role_at, current_leader_for_employee, duties_at_bulk, group_leader_of_type, groups_assigned_to, recalculate_attendance, resolve_acting_duty_migration_alerts, role_at, sync_pending_reviewers, write_audit
+from app.v2_database import get_db
+from app.services.management_scopes import synchronize_gsm_management_scope
+from app.v2_models import Attraction, Employee, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, Role, UserAccount, UserSession
+from app.role_constants import FRONTLINE_CODES, LEADER_CODES
+from app.services.audit import write_audit
+from app.services.identity import base_role_at, duties_at_bulk, role_at
+from app.services.employee_commands import EmployeeEditContext, apply_employee_edit
+from app.services.employee_status import employee_circle_id
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
+from app.services import loa_commands
 from app.routers._shared import (
     CIRCLE_HR_MANAGED_ROLE_CODES,
     EMPLOYEE_TARGET_PERMISSIONS,
@@ -28,7 +34,6 @@ from app.routers._shared import (
     ensure_scoped_hr_employee,
     invalidate_data_caches,
     like_escaped_pattern,
-    months_between,
     parse_iso_date,
     scoped_hr_attraction_ids,
     search_employee_targets,
@@ -61,19 +66,6 @@ def ensure_hr_role_allowed(user: V2User, role_code: str, label: str = "角色") 
 
 def employee_payload(db: Session, employee: Employee) -> dict:
     return employee_payloads(db, [employee])[employee.id]
-
-
-def employee_circle_id(db: Session, value: object) -> int | None:
-    if value in (None, ""):
-        return None
-    try:
-        attraction_id = int(value)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(400, "员工景点圈无效") from exc
-    circle = db.get(Attraction, attraction_id)
-    if not circle or not circle.active or not circle.employee_circle:
-        raise HTTPException(400, "员工只能归属有效景点圈")
-    return circle.id
 
 
 @router.get("/frontline-employees")
@@ -218,30 +210,6 @@ def loa_today() -> date:
     return date.today()
 
 
-def loa_open_horizon(db: Session, employee_id: int, starts_on: date, *extra_dates: date) -> date:
-    """Return the first day of the last month an open-ended LOA must cover.
-
-    An open LOA excludes every month from its start onward.  Only months that
-    can already hold attendance rows need recalculation, so the horizon is the
-    latest of the start month, the current month, the employee's latest stored
-    attendance month and any extra dates supplied by the caller.
-    """
-    latest_month = (
-        db.query(func.max(AttendanceMonthlyScore.attendance_month))
-        .filter(AttendanceMonthlyScore.employee_id == employee_id)
-        .scalar()
-    )
-    candidates = [starts_on, loa_today(), *extra_dates]
-    if latest_month:
-        candidates.append(date.fromisoformat(f"{latest_month}-01"))
-    return max(candidates).replace(day=1)
-
-
-def loa_excluded_months(starts_on: date, ends_on: date | None, horizon: date) -> set[str]:
-    """Months an LOA excludes from scoring; open LOAs run up to ``horizon``."""
-    return set(months_between(starts_on, ends_on or horizon))
-
-
 @router.get("/loa-periods")
 def list_loa_periods(month: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
     query = db.query(EmployeeLOAPeriod).filter(EmployeeLOAPeriod.status != "cancelled")
@@ -257,6 +225,18 @@ def list_loa_periods(month: str | None = None, db: Session = Depends(get_db), us
 
 @router.post("/loa-periods")
 def create_loa_period(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
+    try:
+        # Authentication may have opened a read transaction.  Reserve the
+        # SQLite writer before reading the employee or testing date conflicts.
+        db.rollback()
+        db.execute(text("BEGIN IMMEDIATE"))
+        return _create_loa_period(payload, request, db, user)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _create_loa_period(payload: dict, request: Request, db: Session, user: V2User):
     if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
         raise HTTPException(403, "仅TA GSM、GSM、AM、OM、景点圈HR可以登记LOA")
     try:
@@ -271,85 +251,46 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
     starts_on = parse_iso_date(str(payload.get("starts_on") or ""), "LOA进入日期")
     ends_value = str(payload.get("ends_on") or "").strip()
     ends_on = parse_iso_date(ends_value, "LOA结束日期") if ends_value else None
-    open_period = (
-        db.query(EmployeeLOAPeriod)
-        .filter(EmployeeLOAPeriod.employee_id == employee.id, EmployeeLOAPeriod.status == "active", EmployeeLOAPeriod.ends_on.is_(None))
-        .order_by(EmployeeLOAPeriod.starts_on.desc(), EmployeeLOAPeriod.id.desc())
-        .first()
-    )
-    if open_period:
-        if not ends_on:
-            raise HTTPException(409, "该员工已处于LOA，请填写结束日期完成登记")
-        starts_on = parse_iso_date(open_period.starts_on, "LOA进入日期")
-        if ends_on < starts_on:
-            raise HTTPException(400, "LOA结束日期不能早于进入日期")
-        # Closing an open LOA only changes months after the end month that the
-        # open period used to exclude; start..end stays excluded either way, so
-        # a closed start month must not block the completion.
-        horizon = loa_open_horizon(db, employee.id, starts_on, ends_on)
-        excluded_months = loa_excluded_months(starts_on, ends_on, horizon)
-        changed_months = sorted(loa_excluded_months(starts_on, None, horizon) ^ excluded_months)
-        for month in changed_months:
-            ensure_month_open(db, month, employee.attraction_id, "登记LOA结束")
-        try:
-            before = loa_period_payload(open_period, employee)
-            open_period.ends_on = ends_on.isoformat()
-            open_period.ended_by = user.id
-            open_period.ended_by_name = user.name
-            open_period.ended_at = datetime.now()
-            if str(payload.get("note") or "").strip():
-                open_period.note = str(payload.get("note")).strip()
-            # The session does not autoflush; recalculation must see the new end date.
-            db.flush()
-            for month in changed_months:
-                recalculate_attendance(db, employee, month)
-            write_audit(db, user.employee, "登记LOA结束", "employee_loa_period", open_period.id, before=before, after=loa_period_payload(open_period, employee), ip_address=client_ip(request))
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        invalidate_data_caches()
-        return {"ok": True, "record": loa_period_payload(open_period, employee), "excluded_months": sorted(excluded_months), "completed": True}
-    if ends_on and ends_on < starts_on:
-        raise HTTPException(400, "LOA结束日期不能早于进入日期")
-    # A new LOA changes every month it excludes; an open one reaches every
-    # already-materialized month after its start as well.
-    affected_months = sorted(loa_excluded_months(starts_on, ends_on, loa_open_horizon(db, employee.id, starts_on)))
-    for month in affected_months:
-        ensure_month_open(db, month, employee.attraction_id, "登记LOA")
-    overlap = db.query(EmployeeLOAPeriod).filter(
-        EmployeeLOAPeriod.employee_id == employee.id,
-        EmployeeLOAPeriod.status != "cancelled",
-        EmployeeLOAPeriod.starts_on <= (ends_on or starts_on).isoformat(),
-        or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= starts_on.isoformat()),
-    ).first()
-    if overlap:
-        raise HTTPException(409, "该员工在所选日期内已有LOA记录，请先修改或撤销原记录")
-    row = EmployeeLOAPeriod(
-        employee_id=employee.id,
-        starts_on=starts_on.isoformat(),
-        ends_on=ends_on.isoformat() if ends_on else None,
-        status="active",
-        note=str(payload.get("note") or "").strip() or None,
-        created_by=user.id,
-        created_by_name=user.name,
-    )
     try:
-        db.add(row)
-        db.flush()
-        for month in affected_months:
-            recalculate_attendance(db, employee, month)
-        write_audit(db, user.employee, "登记LOA", "employee_loa_period", row.id, after=loa_period_payload(row, employee), ip_address=client_ip(request))
+        open_period = loa_commands.current_open_period(db, employee.id)
+        note = str(payload.get("note") or "").strip() or None
+        before = None
+        if open_period:
+            if not ends_on:
+                raise HTTPException(409, "该员工已处于LOA，请填写结束日期完成登记")
+            before = loa_period_payload(open_period, employee)
+            change = loa_commands.close_period(
+                db, employee, open_period, ends_on, actor_id=user.id, actor_name=user.name,
+                today=loa_today(), gate=ensure_month_open, note=note,
+            )
+        else:
+            change = loa_commands.create_period(
+                db, employee, starts_on, ends_on, actor_id=user.id, actor_name=user.name,
+                note=note, today=loa_today(), gate=ensure_month_open,
+            )
+        row = change.period
+        loa_commands.recalculate_changed_months(db, employee, change.changed_months)
+        write_audit(db, user.employee, "登记LOA结束" if open_period else "登记LOA", "employee_loa_period", row.id, before=before, after=loa_period_payload(row, employee), ip_address=client_ip(request))
         db.commit()
     except Exception:
         db.rollback()
         raise
     invalidate_data_caches()
-    return {"ok": True, "record": loa_period_payload(row, employee), "excluded_months": affected_months, "completed": bool(ends_on)}
+    return {"ok": True, "record": loa_period_payload(row, employee), "excluded_months": list(change.excluded_months), "completed": bool(ends_on)}
 
 
 @router.delete("/loa-periods/{period_id}")
 def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
+    try:
+        db.rollback()
+        db.execute(text("BEGIN IMMEDIATE"))
+        return _cancel_loa_period(period_id, payload, request, db, user)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _cancel_loa_period(period_id: int, payload: dict, request: Request, db: Session, user: V2User):
     if user.role.code not in LOA_REGISTRAR_ROLE_CODES:
         raise HTTPException(403, "仅TA GSM、GSM、AM、OM、景点圈HR可以撤销LOA")
     row = db.get(EmployeeLOAPeriod, period_id)
@@ -360,25 +301,14 @@ def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Sessi
         raise HTTPException(404, "员工不存在")
     if employee.id == user.id:
         raise HTTPException(403, "不能撤销本人的LOA")
-    starts_on = parse_iso_date(row.starts_on, "LOA开始日期")
-    ends_on = parse_iso_date(row.ends_on, "LOA结束日期") if row.ends_on else None
-    # Cancelling restores every month the period excluded.
-    changed_months = sorted(loa_excluded_months(starts_on, ends_on, loa_open_horizon(db, employee.id, starts_on)))
-    for month in changed_months:
-        ensure_month_open(db, month, employee.attraction_id, "撤销LOA")
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "请填写撤销原因")
     try:
         before = loa_period_payload(row, employee)
-        # ended_* keeps whoever registered the end date; the canceller is
-        # recorded by the audit entry below.
-        row.status = "cancelled"
-        row.note = f"{row.note or ''}\n撤销原因：{reason}".strip()
-        # The session does not autoflush; recalculation must see the cancellation.
-        db.flush()
-        for month in changed_months:
-            recalculate_attendance(db, employee, month)
+        # ended_* keeps the end registrar; cancellation is recorded in audit.
+        change = loa_commands.cancel_period(db, employee, row, today=loa_today(), gate=ensure_month_open, reason=reason)
+        loa_commands.recalculate_changed_months(db, employee, change.changed_months)
         write_audit(db, user.employee, "撤销LOA", "employee_loa_period", row.id, before=before, after=loa_period_payload(row, employee), reason=reason, ip_address=client_ip(request))
         db.commit()
     except Exception:
@@ -722,6 +652,19 @@ def change_employee_number(
 
 @router.put("/hr/employees/{employee_id}")
 def update_employee(employee_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    try:
+        db.rollback()
+        db.execute(text("BEGIN IMMEDIATE"))
+        result = _update_employee(employee_id, payload, request, db, user)
+    except Exception:
+        # LOA and the surrounding employee/account/group changes are one unit.
+        db.rollback()
+        raise
+    invalidate_data_caches()
+    return result
+
+
+def _update_employee(employee_id: int, payload: dict, request: Request, db: Session, user: V2User):
     employee = db.get(Employee, employee_id)
     if not employee:
         raise HTTPException(404, "员工不存在")
@@ -731,367 +674,17 @@ def update_employee(employee_id: int, payload: dict, request: Request, db: Sessi
     if existing_role and existing_role.code not in CIRCLE_HR_MANAGED_ROLE_CODES and "SYSTEM_ADMIN" not in user.permissions:
         raise HTTPException(403, "景点圈HR只能编辑LEAD及以下员工")
     before = employee_payload(db, employee)
-    # Groups may run without a leader; such changes are saved with a hint.
-    warnings: list[str] = []
-    score_sensitive_fields = {"is_active", "employment_status", "role_code", "attraction_id", "leader_id", "group_id"}
-    if score_sensitive_fields & payload.keys():
-        current_month = date.today().strftime("%Y-%m")
-        ensure_month_open(db, current_month, employee.attraction_id, "修改当月人员计分状态")
-        if "attraction_id" in payload and payload.get("attraction_id") not in (None, ""):
-            requested_attraction_id = employee_circle_id(db, payload.get("attraction_id"))
-            if requested_attraction_id != employee.attraction_id:
-                ensure_month_open(db, current_month, requested_attraction_id, "调入员工")
-        if str(payload.get("employment_status") or "").strip().lower() == "loa":
-            loa_start = parse_iso_date(str(payload.get("loa_start_date") or date.today().isoformat()), "LOA开始日期")
-            for loa_month in months_between(loa_start.replace(day=1), date.today().replace(day=1)):
-                ensure_month_open(db, loa_month, employee.attraction_id, "设置LOA")
-    attendance_state_changed = "is_active" in payload or "employment_status" in payload
-    if "name" in payload:
-        employee.name = str(payload["name"]).strip()
-    if "attraction_id" in payload:
-        employee.attraction_id = employee_circle_id(db, payload["attraction_id"])
-        ensure_scoped_hr_attraction(db, user, employee.attraction_id)
-    requested_employment_status = str(payload.get("employment_status") or "").strip().lower()
-    if requested_employment_status:
-        if requested_employment_status not in {"active", "loa", "terminated"}:
-            raise HTTPException(400, "人员状态无效")
-        current_loa = (
-            db.query(EmployeeLOAPeriod)
-            .filter(
-                EmployeeLOAPeriod.employee_id == employee.id,
-                EmployeeLOAPeriod.status == "active",
-                EmployeeLOAPeriod.ends_on.is_(None),
-            )
-            .order_by(EmployeeLOAPeriod.starts_on.desc(), EmployeeLOAPeriod.id.desc())
-            .first()
-        )
-        if requested_employment_status == "loa":
-            if not existing_base_role or existing_base_role.code not in FRONTLINE_CODES:
-                raise HTTPException(400, "仅可将CM/TR演职人员设置为LOA")
-            starts_on = str(payload.get("loa_start_date") or date.today().isoformat())
-            parse_iso_date(starts_on, "LOA开始日期")
-            if not current_loa:
-                employee.is_active = True
-                employee.terminated_on = None
-                db.add(
-                    EmployeeLOAPeriod(
-                        employee_id=employee.id,
-                        starts_on=starts_on,
-                        status="active",
-                        note=str(payload.get("reason") or "HR设置LOA").strip() or None,
-                        created_by=user.id,
-                        created_by_name=user.name,
-                    )
-                )
-                write_audit(
-                    db,
-                    user.employee,
-                    "设置LOA（长期病假）",
-                    "employee_loa",
-                    employee.id,
-                    after={"starts_on": starts_on, "status": "LOA（长期病假）"},
-                    reason=str(payload.get("reason") or ""),
-                    ip_address=client_ip(request),
-                )
-        else:
-            if current_loa:
-                end_value = date.today() - timedelta(days=1)
-                if end_value.isoformat() < current_loa.starts_on:
-                    current_loa.status = "cancelled"
-                    current_loa.ends_on = current_loa.starts_on
-                else:
-                    current_loa.status = "ended"
-                    current_loa.ends_on = end_value.isoformat()
-                current_loa.ended_by = user.id
-                current_loa.ended_by_name = user.name
-                current_loa.ended_at = datetime.now()
-                write_audit(
-                    db,
-                    user.employee,
-                    "结束LOA（长期病假）",
-                    "employee_loa",
-                    employee.id,
-                    after={"ends_on": current_loa.ends_on, "next_status": requested_employment_status},
-                    reason=str(payload.get("reason") or ""),
-                    ip_address=client_ip(request),
-                )
-            if requested_employment_status == "terminated" and groups_assigned_to(db, employee.id):
-                raise HTTPException(400, "该员工仍是小组负责人，请先在小组管理中更换")
-            employee.is_active = requested_employment_status == "active"
-            employee.terminated_on = None if employee.is_active else date.today().isoformat()
-    elif "is_active" in payload:
-        if not bool(payload["is_active"]) and groups_assigned_to(db, employee.id):
-            raise HTTPException(400, "该员工仍是小组负责人，请先在小组管理中更换")
-        employee.is_active = bool(payload["is_active"])
-        employee.terminated_on = None if employee.is_active else date.today().isoformat()
-    account = db.query(UserAccount).filter(UserAccount.employee_id == employee.id).first()
-    if account and "account_enabled" in payload:
-        next_enabled = bool(payload["account_enabled"])
-        if next_enabled != account.enabled:
-            account.enabled = next_enabled
-            account.disabled_at = None if next_enabled else datetime.now()
-    new_role_code = str(payload.get("role_code") or "")
-    current_role = existing_role
-    resulting_role = current_role
-    resulting_base_role = existing_base_role
-    today_value = date.today().isoformat()
-    active_duty = (
-        db.query(EmployeeActingDuty)
-        .filter(
-            EmployeeActingDuty.employee_id == employee.id,
-            EmployeeActingDuty.status == "active",
-            EmployeeActingDuty.starts_on <= today_value,
-            or_(EmployeeActingDuty.ends_on.is_(None), EmployeeActingDuty.ends_on >= today_value),
-        )
-        .order_by(EmployeeActingDuty.starts_on.desc(), EmployeeActingDuty.id.desc())
-        .first()
+    context = EmployeeEditContext(
+        db=db, employee=employee, payload=payload, user=user,
+        existing_role=existing_role, existing_base_role=existing_base_role,
+        today=date.today(), loa_today=loa_today(), month_gate=ensure_month_open,
+        ip_address=client_ip(request),
     )
-    duty_ends_on = str(payload.get("role_ends_on") or "").strip() or None
-    if duty_ends_on:
-        parse_iso_date(duty_ends_on, "代理职务结束日期")
-        if duty_ends_on < today_value:
-            raise HTTPException(400, "代理职务结束日期不能早于今天")
-    if (
-        new_role_code in DUTY_ROLE_CODES
-        and active_duty
-        and active_duty.role.code == new_role_code
-        and duty_ends_on != active_duty.ends_on
-    ):
-        # Same duty, new term end: only the window changes.
-        before_end = active_duty.ends_on
-        active_duty.ends_on = duty_ends_on
-        write_audit(db, user.employee, "调整代理职务期限", "acting_duty", active_duty.id, before={"ends_on": before_end}, after={"ends_on": duty_ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
-    # A legacy TA主管/TA GSM row whose base identity could not be inferred by
-    # the migration: choosing the real base (CM/TR, or 主管 for TA GSM) records
-    # base + continuing duty from today, keeping led groups and members.
-    legacy_duty_role = existing_base_role if existing_base_role and existing_base_role.code in DUTY_ROLE_CODES else None
-    resolves_legacy = bool(legacy_duty_role and new_role_code in DUTY_BASE_CODES[legacy_duty_role.code])
-    if resolves_legacy:
-        attendance_state_changed = True
-        new_role = db.query(Role).filter(Role.code == new_role_code).first()
-        ensure_hr_role_allowed(user, new_role.code)
-        legacy_assignment = (
-            db.query(EmployeeRoleAssignment)
-            .filter(
-                EmployeeRoleAssignment.employee_id == employee.id,
-                EmployeeRoleAssignment.role_id == legacy_duty_role.id,
-                EmployeeRoleAssignment.status != "cancelled",
-                EmployeeRoleAssignment.starts_on <= today_value,
-                or_(EmployeeRoleAssignment.ends_on.is_(None), EmployeeRoleAssignment.ends_on >= today_value),
-            )
-            .order_by(EmployeeRoleAssignment.starts_on.desc(), EmployeeRoleAssignment.id.desc())
-            .first()
-        )
-        legacy_end = legacy_assignment.ends_on if legacy_assignment else None
-        if legacy_assignment:
-            if legacy_assignment.starts_on >= today_value:
-                legacy_assignment.status = "cancelled"
-            else:
-                legacy_assignment.ends_on = (date.today() - timedelta(days=1)).isoformat()
-                legacy_assignment.status = "expired"
-            legacy_assignment.return_role_id = None
-        db.add(
-            EmployeeRoleAssignment(
-                employee_id=employee.id,
-                role_id=new_role.id,
-                starts_on=today_value,
-                assignment_type="permanent",
-                status="active",
-                reason=str(payload.get("reason") or "HR确认旧代理记录的本职"),
-                created_by=user.id,
-            )
-        )
-        duty = EmployeeActingDuty(
-            employee_id=employee.id,
-            role_id=legacy_duty_role.id,
-            starts_on=today_value,
-            ends_on=duty_ends_on or (legacy_end if legacy_end and legacy_end >= today_value else None),
-            status="active",
-            reason="HR确认本职后延续原代理职务",
-            created_by=user.id,
-        )
-        db.add(duty)
-        db.flush()
-        write_audit(db, user.employee, "确认旧代理记录的本职", "acting_duty", duty.id, before={"role": legacy_duty_role.name}, after={"base_role": new_role.name, "duty": legacy_duty_role.name, "ends_on": duty.ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
-        resolve_acting_duty_migration_alerts(db, employee.id)
-        resulting_role = legacy_duty_role
-        resulting_base_role = new_role
-    if not resolves_legacy and new_role_code and current_role and new_role_code != current_role.code:
-        attendance_state_changed = True
-        new_role = db.query(Role).filter(Role.code == new_role_code).first()
-        if not new_role:
-            raise HTTPException(400, "角色不存在")
-        ensure_hr_role_allowed(user, new_role.code)
-        is_duty_change = new_role.code in DUTY_ROLE_CODES
-        if is_duty_change and (not existing_base_role or existing_base_role.code not in DUTY_BASE_CODES[new_role.code]):
-            allowed_names = "CM/TR" if new_role.code == "TA_SUPERVISOR" else "主管"
-            raise HTTPException(400, f"代理{new_role.name}的本职必须是{allowed_names}，请先调整本职身份")
-        # A duty keeps the base identity; choosing a base role ends any duty.
-        next_base_code = existing_base_role.code if is_duty_change else new_role.code
-        # 主管 of a group needs a base 主管 (a 主管 acting as TA GSM keeps it);
-        # 代理主管 needs the TA主管 duty.  Groups outlive their leaders: a
-        # leader who no longer qualifies steps down, the group and members stay.
-        keeps = {"formal": next_base_code == "SUPERVISOR", "acting": new_role.code == "TA_SUPERVISOR"}
-        for group in groups_assigned_to(db, employee.id):
-            for leader_type in ("formal", "acting"):
-                assignment = group_leader_of_type(db, group.id, leader_type)
-                if not assignment or assignment.leader_employee_id != employee.id or keeps[leader_type]:
-                    continue
-                other_type = "acting" if leader_type == "formal" else "formal"
-                if active_group_memberships(db, group.id) and not group_leader_of_type(db, group.id, other_type):
-                    warnings.append(f"{group.name}现在没有负责人，组员的签卡暂时无人复核，请到小组管理设置")
-                assignment.status = "ended"
-                assignment.ends_on = max(assignment.starts_on, today_value)
-                group.revision += 1
-                db.flush()
-                sync_pending_reviewers(db, group.id)
-                label = "主管" if leader_type == "formal" else "代理主管"
-                write_audit(db, user.employee, f"卸任小组{label}", "work_group", group.id, before={label: employee.name}, after={label: "无"}, reason=f"身份由{current_role.name}变更为{new_role.name}", ip_address=client_ip(request))
-        if active_duty:
-            # A duty started today leaves no history worth keeping.
-            if active_duty.starts_on >= today_value:
-                active_duty.status = "cancelled"
-            else:
-                active_duty.status = "ended"
-                active_duty.ends_on = (date.today() - timedelta(days=1)).isoformat()
-            write_audit(db, user.employee, "结束代理职务", "acting_duty", active_duty.id, after={"role": active_duty.role.name, "status": active_duty.status, "ends_on": active_duty.ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
-        if is_duty_change:
-            duty = EmployeeActingDuty(
-                employee_id=employee.id,
-                role_id=new_role.id,
-                starts_on=today_value,
-                ends_on=duty_ends_on,
-                status="active",
-                reason=str(payload.get("reason") or "HR设置代理职务"),
-                created_by=user.id,
-            )
-            db.add(duty)
-            db.flush()
-            write_audit(db, user.employee, "设置代理职务", "acting_duty", duty.id, after={"role": new_role.name, "base_role": existing_base_role.name, "starts_on": today_value, "ends_on": duty_ends_on}, reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
-        elif not existing_base_role or new_role.code != existing_base_role.code:
-            current_assignment = (
-                db.query(EmployeeRoleAssignment)
-                .filter(EmployeeRoleAssignment.employee_id == employee.id, EmployeeRoleAssignment.status == "active")
-                .order_by(EmployeeRoleAssignment.starts_on.desc())
-                .first()
-            )
-            if current_assignment:
-                current_assignment.ends_on = today_value
-                current_assignment.status = "expired"
-            ends_on = duty_ends_on
-            return_role = db.query(Role).filter(Role.code == str(payload.get("return_role_code") or "")).first() if ends_on else None
-            if ends_on:
-                if not return_role:
-                    raise HTTPException(400, "临时角色必须选择有效的到期恢复角色")
-                ensure_hr_role_allowed(user, return_role.code, "到期恢复角色")
-            db.add(
-                EmployeeRoleAssignment(
-                    employee_id=employee.id,
-                    role_id=new_role.id,
-                    starts_on=today_value,
-                    ends_on=ends_on,
-                    assignment_type="temporary" if ends_on else "permanent",
-                    return_role_id=return_role.id if return_role else None,
-                    status="active",
-                    reason=str(payload.get("reason") or "HR变更角色"),
-                    created_by=user.id,
-                )
-            )
-            resulting_base_role = new_role
-        resulting_role = new_role
-
-    synchronize_gsm_management_scope(db, employee, resulting_role.code if resulting_role else None)
-
-    if "group_id" in payload:
-        requested_group_id = int(payload["group_id"]) if payload.get("group_id") else None
-        today_text = date.today().isoformat()
-        current_membership = (
-            db.query(GroupMembership)
-            .filter(
-                GroupMembership.employee_id == employee.id,
-                GroupMembership.status == "active",
-                GroupMembership.starts_on <= today_text,
-                or_(GroupMembership.ends_on.is_(None), GroupMembership.ends_on >= today_text),
-            )
-            .order_by(GroupMembership.starts_on.desc(), GroupMembership.id.desc())
-            .first()
-        )
-        keeps_membership_unchanged = (
-            resulting_role is not None
-            and resulting_role.code in DUTY_ROLE_CODES
-            and not requested_group_id
-            and not (current_membership and current_membership.group.attraction_id != employee.attraction_id)
-        )
-        if keeps_membership_unchanged:
-            # Taking up an acting duty never moves the employee out of their group.
-            pass
-        elif not resulting_base_role or resulting_base_role.code not in FRONTLINE_CODES:
-            if requested_group_id:
-                raise HTTPException(400, "只有CM/TR可以加入小组")
-            if current_membership:
-                current_membership.status = "ended"
-                current_membership.ends_on = today_text
-        else:
-            target_group = db.get(WorkGroup, requested_group_id) if requested_group_id else None
-            if requested_group_id:
-                if not employee.is_active:
-                    raise HTTPException(400, "离职员工不能加入小组")
-                if not target_group or target_group.status == "closed" or target_group.attraction_id != employee.attraction_id:
-                    raise HTTPException(400, "请选择员工所在景点圈内的小组")
-                formal = group_leader_of_type(db, target_group.id, "formal")
-                if formal and formal.leader_employee_id == employee.id:
-                    raise HTTPException(400, "员工不能成为自己所带小组的组员")
-                # A 代理主管 may belong to the group they act for; their own
-                # records are then reviewed by its 主管 (none: a hint below).
-
-            # Returning a former TA主管/主管 to CM/TR restores their latest
-            # open historic group in the circle when that choice is unambiguous.
-            if not target_group and new_role_code and existing_base_role and existing_base_role.code in LEADER_CODES:
-                candidates: list[WorkGroup] = []
-                history = db.query(GroupMembership).filter(
-                    GroupMembership.employee_id == employee.id,
-                    GroupMembership.status.in_(("ended", "active")),
-                ).order_by(GroupMembership.starts_on.desc(), GroupMembership.id.desc()).all()
-                for historic in history:
-                    group = historic.group
-                    if group and group.status != "closed" and group.attraction_id == employee.attraction_id and group not in candidates:
-                        candidates.append(group)
-                if len(candidates) == 1:
-                    target_group = candidates[0]
-                elif len(candidates) > 1:
-                    raise HTTPException(409, "该员工在本景点圈有多个历史小组，请选择小组后再保存")
-
-            pending_query = db.query(RecognitionRecord).filter(RecognitionRecord.employee_id == employee.id, RecognitionRecord.status == "pending")
-            current_group = current_membership.group if current_membership else None
-            if (target_group.id if target_group else None) != (current_group.id if current_group else None):
-                if not target_group and pending_query.count():
-                    raise HTTPException(400, "该员工还有待复核记录，必须选择小组")
-                if current_membership:
-                    current_membership.status = "ended"
-                    current_membership.ends_on = today_text
-                reviewer = None
-                if target_group:
-                    db.add(GroupMembership(group_id=target_group.id, employee_id=employee.id, starts_on=today_text, status="active", reason=str(payload.get("reason") or "HR调整小组")))
-                    db.flush()
-                    reviewer = current_leader_for_employee(db, employee.id)
-                    pending_query.update({RecognitionRecord.assigned_reviewer_id: reviewer.id if reviewer else None}, synchronize_session=False)
-                    if not reviewer:
-                        warnings.append(f"{target_group.name}没有可复核{employee.name}的负责人，其签卡暂时无人复核，请到小组管理设置")
-                write_audit(
-                    db,
-                    user.employee,
-                    "调整员工小组",
-                    "employee_group",
-                    employee.id,
-                    before={"group_id": current_group.id if current_group else None, "group_name": current_group.name if current_group else "未分组"},
-                    after={"group_id": target_group.id if target_group else None, "group_name": target_group.name if target_group else "未分组", "reviewer": reviewer.name if reviewer else ""},
-                    reason=str(payload.get("reason") or "HR员工管理页面调整"),
-                    ip_address=client_ip(request),
-                )
-    employee.updated_at = datetime.now()
-    db.flush()
-    if attendance_state_changed:
-        recalculate_attendance(db, employee, date.today().strftime("%Y-%m"))
-    write_audit(db, user.employee, "修改员工", "employee", employee.id, before=before, after=employee_payload(db, employee), reason=str(payload.get("reason") or ""), ip_address=client_ip(request))
+    warnings = apply_employee_edit(context)
+    write_audit(
+        db, user.employee, "修改员工", "employee", employee.id,
+        before=before, after=employee_payload(db, employee),
+        reason=str(payload.get("reason") or ""), ip_address=client_ip(request),
+    )
     db.commit()
     return {"ok": True, "warnings": warnings}

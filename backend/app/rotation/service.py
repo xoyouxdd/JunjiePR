@@ -7,9 +7,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
+from contextlib import contextmanager
+from copy import deepcopy
 from datetime import date as Date, datetime, timedelta
+from functools import wraps
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -48,6 +52,57 @@ class Runtime:
 
 RUNTIME = Runtime()
 
+_TRANSACTION_KEY = "rotation_transaction"
+
+
+@contextmanager
+def transaction(db: Session):
+    """Serialize a complete rotation transaction, including commit and cache publication.
+
+    Nested operations (prearrangement and test reset) share the outer commit. A
+    failed operation rolls back its events, duties, notices and private state;
+    no uncommitted state or version is ever exposed to another request.
+    """
+    with RUNTIME.lock:
+        if _TRANSACTION_KEY in db.info:
+            yield
+            return
+        pending = {"days": {}, "changed": False}
+        db.info[_TRANSACTION_KEY] = pending
+        try:
+            yield
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        else:
+            for key, saved in pending["days"].items():
+                if saved is None:
+                    RUNTIME.cache.pop(key, None)
+                else:
+                    version, serialized = saved
+                    RUNTIME.cache[key] = (version, json.loads(serialized))
+            if pending["changed"]:
+                RUNTIME.bump()
+        finally:
+            db.info.pop(_TRANSACTION_KEY, None)
+
+
+def transactional(fn):
+    @wraps(fn)
+    def wrapped(db: Session, *args, **kwargs):
+        with RUNTIME.lock:
+            with transaction(db):
+                result = fn(db, *args, **kwargs)
+            if isinstance(result, dict) and "version" in result:
+                result["version"] = RUNTIME.version
+        return result
+    return wrapped
+
+
+def mark_changed(db: Session) -> None:
+    db.info[_TRANSACTION_KEY]["changed"] = True
+
 
 def _dumps(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -66,6 +121,9 @@ def load_config(db: Session, attraction_id: int) -> RotationConfig:
         )
         db.add(cfg)
         db.flush()
+    elif cfg not in db.dirty:
+        # Dependencies or a caller may have loaded this row before taking the lock.
+        db.refresh(cfg)
     return cfg
 
 
@@ -163,6 +221,7 @@ def roster_for(db: Session, attraction_id: int, day: str) -> dict | None:
     }
 
 
+@transactional
 def save_roster(db: Session, attraction_id: int, parsed: dict, *, scope: str, file_name: str, uploader_id: int | None, uploader_name: str, only_date: str | None = None) -> RotationRosterUpload:
     if scope not in ("week", "day"):
         raise ActionError("上传范围只能是按周或按天")
@@ -205,6 +264,7 @@ def save_roster(db: Session, attraction_id: int, parsed: dict, *, scope: str, fi
             ))
             count += 1
     upload.entry_count = count
+    mark_changed(db)
     return upload
 
 
@@ -312,26 +372,29 @@ class DbHooks:
 # ---------------------------------------------------------------- 当天状态
 
 def day_row(db: Session, attraction_id: int, day: str) -> RotationDay | None:
-    return db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id, RotationDay.work_date == day).first()
+    row = db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id, RotationDay.work_date == day).first()
+    if row is not None and row not in db.dirty:
+        db.refresh(row)
+    return row
 
 
 def day_state(row: RotationDay) -> dict:
+    """Return a private copy; engines must never mutate the committed cache."""
     key = (row.attraction_id, row.work_date)
     cached = RUNTIME.cache.get(key)
     if cached and cached[0] == row.version:
-        return cached[1]
-    state = json.loads(row.state_json)
-    RUNTIME.cache[key] = (row.version, state)
-    return state
+        return deepcopy(cached[1])
+    return json.loads(row.state_json)
 
 
-def save_day(db: Session, row: RotationDay, state: dict) -> None:
+def save_day(db: Session, row: RotationDay, state: dict, *, notify: bool = True) -> None:
     row.state_json = _dumps(state)
     row.status = state["status"]
     row.version += 1
     row.updated_at = datetime.now()
-    RUNTIME.cache[(row.attraction_id, row.work_date)] = (row.version, state)
-    RUNTIME.bump()
+    pending = db.info[_TRANSACTION_KEY]
+    pending["days"][(row.attraction_id, row.work_date)] = (row.version, row.state_json)
+    pending["changed"] = pending["changed"] or notify
 
 
 def engine_for(db: Session, cfg: RotationConfig, row: RotationDay, state: dict) -> tuple[E.Engine, DbHooks]:
@@ -344,7 +407,8 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
     if state.get("status") != "live":
         return False
     eng, hooks = engine_for(db, cfg, row, state)
-    t = float(state.get("lastTick", target))
+    previous_tick = float(state.get("lastTick", target))
+    t = previous_tick
     if t > target:
         t = target
     changed = False
@@ -361,7 +425,10 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
     state["lastTick"] = t
     if changed:
         sync_notices(db, row.attraction_id, state, eng, t)
-        save_day(db, row, state)
+    if changed or t != previous_tick:
+        # Even a quiet tick must retain its cursor once private copies replace
+        # the former shared mutable cache; only visible changes notify clients.
+        save_day(db, row, state, notify=changed)
     return changed
 
 
@@ -374,9 +441,8 @@ def end_stale_days(db: Session, cfg: RotationConfig, attraction_id: int, today: 
 
 def tick_attraction(attraction_id: int) -> None:
     """后台每秒调用。没有运行中的轮岗时只读不写，避免和其他请求的写入冲突。"""
-    with RUNTIME.lock:
-        db = SessionLocal()
-        try:
+    with SessionLocal() as db:
+        with transaction(db):
             cfg = db.query(RotationConfig).filter(RotationConfig.attraction_id == attraction_id).first()
             if cfg is None:
                 return
@@ -387,9 +453,6 @@ def tick_attraction(attraction_id: int) -> None:
             row = day_row(db, attraction_id, day)
             if row and row.status == "live":
                 advance(db, cfg, row, day_state(row), minute)
-            db.commit()
-        finally:
-            db.close()
 
 
 _ticker_started = False
@@ -587,6 +650,7 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
     }
 
 
+@transactional
 def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int, day: str, minute: float) -> None:
     """有班表时04:00生成预排；开始时间前仅展示岗位，不计时。"""
     with RUNTIME.lock:
@@ -605,6 +669,7 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
         advance(db, cfg, row, state, minute)
 
 
+@transactional
 def board_payload(db: Session, attraction_id: int) -> dict:
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
@@ -628,6 +693,7 @@ def board_payload(db: Session, attraction_id: int) -> dict:
     return out
 
 
+@transactional
 def screen_payload(db: Session, attraction_id: int) -> dict:
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
@@ -644,6 +710,7 @@ def screen_payload(db: Session, attraction_id: int) -> dict:
     return out
 
 
+@transactional
 def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
@@ -711,10 +778,33 @@ def _require(body: dict, *keys):
             raise ActionError(f"缺少参数：{key}")
 
 
+def action_boolean(body: dict, key: str) -> bool:
+    value = body.get(key)
+    if not isinstance(value, bool):
+        raise ActionError(f"参数 {key} 必须是布尔值")
+    return value
+
+
+def action_time(value) -> int:
+    try:
+        hours, minutes = str(value).split(":")
+        h, m = int(hours), int(minutes)
+        if not hours.isdecimal() or not minutes.isdecimal() or not 0 <= h <= 24 or not 0 <= m < 60 or (h == 24 and m != 0):
+            raise ValueError()
+        return h * 60 + m
+    except (ValueError, TypeError) as exc:
+        raise ActionError("时间格式需为 HH:MM") from exc
+
+
+@transactional
 def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
     act = body.get("action")
-    if act not in LIVE_ACTIONS:
+    if not isinstance(act, str) or act not in LIVE_ACTIONS:
         raise ActionError("不支持的操作")
+    if act not in {"post", "line", "set_close"}:
+        _require(body, "pid")
+        if not isinstance(body["pid"], str):
+            raise ActionError("工号必须是字符串")
     with RUNTIME.lock:
         cfg = load_config(db, attraction_id)
         day, now = clock_now(cfg)
@@ -735,17 +825,17 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             eng.act_arrive(pid, now, actor)
         elif act == "plan_place":
             _require(body, "line", "i")
-            eng.act_plan_place(pid, body["line"], int(body["i"]), now, actor)
+            eng.act_plan_place(pid, body["line"], body["i"], now, actor)
         elif act == "depart":
             eng.act_depart(pid, now, actor)
         elif act == "undo":
             eng.act_undo(pid, now, actor)
         elif act == "post":
             _require(body, "line", "i")
-            eng.act_post(body["line"], int(body["i"]), bool(body.get("open")), now, actor)
+            eng.act_post(body["line"], body["i"], action_boolean(body, "open"), now, actor)
         elif act == "line":
             _require(body, "line")
-            eng.act_line(body["line"], bool(body.get("active")), now, actor)
+            eng.act_line(body["line"], action_boolean(body, "active"), now, actor)
         elif act == "away":
             eng.act_away(pid, reason or None, now, actor)
         elif act == "back":
@@ -760,7 +850,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             flag = body["flag"]
             if flag not in ("送失物",):
                 raise ActionError("只能标记送失物")
-            on = bool(body.get("on"))
+            on = action_boolean(body, "on")
             eng.act_flag(pid, flag, on, actor)
             lost = state["plan"]["lost"]
             if on and pid not in lost:
@@ -770,7 +860,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             write_duties(db, attraction_id, day, state["plan"])
         elif act == "set_close":
             _require(body, "close")
-            hm(str(body["close"]))
+            action_time(body["close"])
             eng.act_set_close(str(body["close"]), now, actor)
         elif act == "fix_undo_depart":
             eng.act_fix_undo_depart(pid, reason, now, actor)
@@ -778,7 +868,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             eng.act_fix_remove(pid, reason, now, actor)
         elif act == "fix_place":
             _require(body, "line", "i")
-            eng.act_fix_place(pid, body["line"], int(body["i"]), reason, now, actor)
+            eng.act_fix_place(pid, body["line"], body["i"], reason, now, actor)
         elif act == "add_person":
             _require(body, "pid", "start", "end")
             upload = roster_upload_for(db, attraction_id, day)
@@ -787,7 +877,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 entry = db.query(RotationRosterEntry).filter(RotationRosterEntry.upload_id == upload.id, RotationRosterEntry.employee_no == pid).first()
             if not entry:
                 raise ActionError("名单里没有这个工号")
-            start, end = hm(str(body["start"])), hm(str(body["end"]))
+            start, end = action_time(body["start"]), action_time(body["end"])
             if end <= start:
                 end += DAY_END
             eng.act_add_person({"pid": pid, "name": entry.name, "type": entry.person_type, "mark": entry.mark, "start": start, "end": end}, now, actor)
@@ -804,14 +894,19 @@ def remember_initial_draft(state: dict, cfg: RotationConfig) -> None:
         state["initialSettings"] = settings_of(cfg)
 
 
+@transactional
 def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
     act = body.get("action")
-    if act not in DRAFT_ACTIONS:
+    if not isinstance(act, str) or act not in DRAFT_ACTIONS:
         raise ActionError("不支持的操作")
     with RUNTIME.lock:
         cfg = load_config(db, attraction_id)
         clock_day, now = clock_now(cfg)
         day = str(body.get("date") or clock_day)
+        try:
+            Date.fromisoformat(day)
+        except ValueError as exc:
+            raise ActionError("日期格式需为 YYYY-MM-DD") from exc
         row = day_row(db, attraction_id, day)
         if act == "draft_generate":
             if row and row.status in ("live", "ended") and not body.get("force"):
@@ -851,6 +946,9 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             kind, key, pid = body["kind"], body["key"], body.get("pid") or None
             if kind not in ("crew", "seven"):
                 raise ActionError("只能设置开园岗位或 7 点岗位")
+            E.Engine(state, settings_of(cfg), None).plan_post(key)
+            if pid is not None and not isinstance(pid, str):
+                raise ActionError("工号必须是字符串")
             if pid and pid not in state["persons"]:
                 raise ActionError("名单里没有这个人")
             for k in ("crew", "seven"):
@@ -867,17 +965,23 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             _require(body, "kind")
             if body["kind"] not in ("push7", "lost"):
                 raise ActionError("只能设置推 7 点或送失物")
-            pids = [x for x in body.get("pids", []) if x]
+            if not isinstance(body.get("pids", []), list):
+                raise ActionError("人员名单必须是列表")
+            pids = list(dict.fromkeys(x for x in body.get("pids", []) if isinstance(x, str) and x))
+            if any(not isinstance(x, str) for x in body.get("pids", [])):
+                raise ActionError("工号必须是字符串")
             for x in pids:
                 if x not in state["persons"]:
                     raise ActionError("名单里没有这个人")
             plan[body["kind"]] = pids
         elif act == "draft_close":
             _require(body, "close")
-            hm(str(body["close"]))
+            action_time(body["close"])
             state["closeAt"] = str(body["close"])
         elif act == "draft_role":
             _require(body, "pid", "role")
+            if not isinstance(body["pid"], str):
+                raise ActionError("工号必须是字符串")
             if body["role"] not in ("rotation", "op", "excluded"):
                 raise ActionError("角色只能是轮岗、OP 或不轮岗")
             p = state["persons"].get(body["pid"])
@@ -891,8 +995,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                             del plan[k][kk]
         elif act == "draft_discard":
             db.delete(row)
-            RUNTIME.cache.pop((attraction_id, day), None)
-            RUNTIME.bump()
+            db.info[_TRANSACTION_KEY]["days"][(attraction_id, day)] = None
+            mark_changed(db)
             return
         elif act == "publish":
             if day != clock_day:
@@ -973,15 +1077,30 @@ def update_config(cfg: RotationConfig, lines, settings, employee_id: int | None)
         for L in lines:
             if not isinstance(L, dict) or not L.get("id") or not isinstance(L.get("posts"), list) or not L["posts"]:
                 raise ActionError("每条线需要 id 和至少一个岗位")
+            if not isinstance(L["id"], str) or L["id"] != L["id"].strip() or "#" in L["id"] or len(L["id"]) > 20:
+                raise ActionError("线 id 必须是不含 # 的非空字符串，最多 20 字")
             if L["id"] in seen:
                 raise ActionError(f"线 {L['id']} 重复")
             seen.add(L["id"])
+            if L.get("walk") is not None:
+                try:
+                    walk = float(L["walk"])
+                except (TypeError, ValueError) as exc:
+                    raise ActionError("路程必须是非负数字") from exc
+                if isinstance(L["walk"], bool) or not math.isfinite(walk) or walk < 0:
+                    raise ActionError("路程必须是非负数字")
+            if "standby" in L and not isinstance(L["standby"], bool):
+                raise ActionError("备用线标记必须是布尔值")
             for x in L["posts"]:
                 if not isinstance(x, dict) or not x.get("name"):
                     raise ActionError(f"{L['id']} 线有岗位缺少名称")
+                if not isinstance(x["name"], str) or not x["name"].strip() or len(x["name"]) > 50:
+                    raise ActionError("岗位名称必须是非空字符串，最多 50 字")
+                if x.get("seven") is not None and (isinstance(x["seven"], bool) or not isinstance(x["seven"], int) or x["seven"] < 1):
+                    raise ActionError("7 点岗顺序必须是正整数")
                 for key in ("openAt", "closeAt"):
                     if x.get(key):
-                        hm(str(x[key]))
+                        action_time(x[key])
         cfg.lines_json = _dumps(lines)
     if settings is not None:
         if not isinstance(settings, dict):
@@ -992,14 +1111,16 @@ def update_config(cfg: RotationConfig, lines, settings, employee_id: int | None)
                 continue
             default = E.DEFAULT_SETTINGS[key]
             if isinstance(default, str):
-                hm(str(value))
+                action_time(value)
                 merged[key] = str(value)
             else:
                 try:
-                    merged[key] = type(default)(value)
-                except (TypeError, ValueError) as exc:
-                    raise ActionError(f"参数 {key} 必须是数字") from exc
+                    number = float(value)
+                    if isinstance(value, bool) or not math.isfinite(number) or number < 0 or not number.is_integer():
+                        raise ValueError()
+                    merged[key] = type(default)(number)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ActionError(f"参数 {key} 必须是非负整数") from exc
         cfg.settings_json = _dumps({k: v for k, v in merged.items() if v != E.DEFAULT_SETTINGS[k]})
     cfg.updated_by_id = employee_id
     cfg.updated_at = datetime.now()
-    RUNTIME.bump()

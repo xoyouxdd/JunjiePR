@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import os
+import base64
+import hashlib
+import json
+import re
 from pathlib import Path
 import tempfile
 from datetime import datetime, timedelta
@@ -25,6 +29,7 @@ from app.version import APP_VERSION, STATIC_CACHE_VERSION  # noqa: E402
 from app.v2_crypto import hash_password, verify_password  # noqa: E402
 from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal, disable_test_accounts, ensure_highest_admin_account  # noqa: E402
 from app.v2_models import Employee, UserAccount, UserSession  # noqa: E402
+from frontend_source import STATIC_ROOT, frontend_sources  # noqa: E402
 
 
 def login(client: TestClient, login_account: str, password: str = "1234"):
@@ -312,9 +317,24 @@ def test_versions_come_from_a_single_source() -> None:
         assert client.get("/health").json()["version"] == APP_VERSION
 
         login_page = client.get("/login").text
-        app_page = client.get("/").text
+        app_response = client.get("/")
+        app_page = app_response.text
         assert login_page.count(f"v={STATIC_CACHE_VERSION}") == 4
-        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 4
+        importmap = re.search(r'<script\b[^>]*type="importmap"[^>]*>(.*?)</script>', app_page, re.DOTALL)
+        assert importmap is not None
+        imports = json.loads(importmap.group(1))["imports"]
+        app_root = Path(__file__).resolve().parents[1] / "app"
+        reachable = {"./" + path.relative_to(app_root).as_posix() for path in frontend_sources() if path != STATIC_ROOT.resolve() / "js" / "app.js"}
+        assert set(imports) == reachable
+        assert all(target == f"{specifier}?v={STATIC_CACHE_VERSION}" for specifier, target in imports.items())
+        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 4 + len(imports)
+        assert f'static/css/style.css?v={STATIC_CACHE_VERSION}' in app_page
+        assert f'src="static/js/app.js?v={STATIC_CACHE_VERSION}"' in app_page
+        assert 'type="module"' in app_page
+        digest = base64.b64encode(hashlib.sha256(importmap.group(1).encode("utf-8")).digest()).decode("ascii")
+        policy = app_response.headers["content-security-policy"]
+        assert f"'sha256-{digest}'" in policy
+        assert "'unsafe-inline'" not in policy
         assert f'static/manifest.json?v={STATIC_CACHE_VERSION}' in login_page
         assert f'static/images/fzpr-icon.png?v={STATIC_CACHE_VERSION}' in login_page
         assert f'static/manifest.json?v={STATIC_CACHE_VERSION}' in app_page

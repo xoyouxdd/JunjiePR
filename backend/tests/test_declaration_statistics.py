@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 from datetime import date
 from decimal import Decimal
@@ -141,7 +142,7 @@ def test_event_snapshot_status_upgrade_and_export_match() -> None:
 
 def test_ui_keeps_level_text_and_mobile_cards() -> None:
     root = Path(__file__).resolve().parents[1] / "app" / "static"
-    script = (root / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     css = (root / "css" / "style.css").read_text(encoding="utf-8")
     assert "声明登记统计" in script
     assert "${esc(row.level_name)}" in script

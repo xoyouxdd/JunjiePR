@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import STATIC_ROOT, frontend_function_source, frontend_sources, read_frontend_source
 
 import os
 import re
@@ -88,8 +89,9 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    # 本职CM/TR本人登记更新对有对应权限的员工可见。
-    assert cm[0]["current"] is False
+    # 当前修复公告面向所有角色，CM应看到本版与历史本人登记更新。
+    assert cm[0]["current"] is True
+    assert cm[0]["version"] == APP_VERSION
     assert "本人认可支持一次登记多条" in cm_text
     assert "声明升级按考勤类别匹配并修正实际扣分" in cm_text
     assert "手机底部栏按角色放常用功能" in cm_text
@@ -117,10 +119,18 @@ def test_changelog_api_and_navigation_exist() -> None:
         summaries = [item["summary"] for release in body["releases"] for item in release["items"]]
         assert any("更新记录" in row for row in summaries)
         assert all("全局月结" not in row for row in summaries)
-    source = (Path(__file__).resolve().parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    source = read_frontend_source()
     assert "items.push(['changelog','更新记录']);" in source
-    assert "changelog:renderChangelog" in source
-    assert "async function renderChangelog" in source
+    sources = frontend_sources()
+    entry = sources[STATIC_ROOT.resolve() / "js" / "app.js"]
+    registered = re.search(r"\bconfigureViews\s*\(\s*\{(.*?)\}\s*\)", entry, re.DOTALL)
+    assert registered is not None
+    assert re.findall(r"^\s*changelog\s*:\s*([\w$]+)\s*,?\s*$", registered.group(1), re.MULTILINE) == ["renderChangelog"]
+    owner = STATIC_ROOT.resolve() / "js" / "app" / "operations.js"
+    assert owner in sources
+    assert re.search(r"^import\s*\{[^}]*\brenderChangelog\b[^}]*\}\s*from\s*['\"]\./app/operations\.js['\"]", entry, re.MULTILINE)
+    assert re.search(r"\bexport\s*\{[^}]*\brenderChangelog\b[^}]*\}", sources[owner])
+    assert frontend_function_source("renderChangelog").startswith("async function renderChangelog")
 
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
@@ -128,16 +138,16 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert cm["release"] is None
+        assert [item["summary"] for item in cm["release"]["items"]] == ["LOA月份成绩与登记规则统一", "提交后刷新跟随当前页面"]
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["轮岗测试初始化恢复首次预排"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["LOA月份成绩与登记规则统一", "轮岗测试操作提交与参数检查修复", "提交后刷新跟随当前页面"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in hr["release"]["items"]] == ["轮岗测试初始化恢复首次预排"]
+        assert [item["summary"] for item in hr["release"]["items"]] == ["LOA月份成绩与登记规则统一", "声明升级审核防止重复生效", "轮岗测试操作提交与参数检查修复", "提交后刷新跟随当前页面"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()
@@ -151,11 +161,15 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
 
 
 def test_current_release_items_match_roles_and_permissions() -> None:
-    (current_rotation,) = RELEASES[0]["items"]
+    loa, upgrade, rotation_fix, navigation = RELEASES[0]["items"]
+    assert item_visible(loa, "CM", set()) and item_visible(navigation, "HR_CIRCLE", set())
+    assert item_visible(upgrade, "GSM", set()) and not item_visible(upgrade, "CM", set())
+    assert item_visible(rotation_fix, "TR", set()) and not item_visible(rotation_fix, "CM", set())
+    (current_rotation,) = next(release for release in RELEASES if release["version"] == "2026.10.09.2")["items"]
     assert item_visible(current_rotation, "TR", set())
     assert item_visible(current_rotation, "GSM", set())
     assert not item_visible(current_rotation, "CM", set())
-    batch, rotation, supervisor, hr = RELEASES[1]["items"]
+    batch, rotation, supervisor, hr = next(release for release in RELEASES if release["version"] == "2026.10.09.1")["items"]
     assert item_visible(batch, {"CM", "TA_SUPERVISOR"}, {"SELF_RECOGNITION"})
     assert not item_visible(batch, "SUPERVISOR", {"SELF_RECOGNITION"})
     assert not item_visible(batch, "CM", set())
@@ -193,7 +207,7 @@ def test_current_sick_leave_notes_require_import_permission() -> None:
 
 def test_release_announcement_is_role_filtered_and_read_once_per_account() -> None:
     # 复用旧公告（announcement_items_from）的行为：临时给当前版本加上复用设置来验证。
-    # 当前版本只面向HR，借用上一版的条目让各角色都能看到当前版本。
+    # 借用历史条目验证不同角色看到的复用公告与当前版本阅读回执。
     current = RELEASES[0]
     assert "announcement_items_from" not in current
     own_items = current["items"]

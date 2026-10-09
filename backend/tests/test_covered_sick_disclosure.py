@@ -1,4 +1,5 @@
 """Covered sick leave is only hidden visually, never removed from API results."""
+from frontend_source import frontend_function_source, read_frontend_source
 from pathlib import Path
 import shutil
 import subprocess
@@ -6,14 +7,12 @@ import subprocess
 import pytest
 
 
-APP_JS = Path(__file__).parents[1] / "app" / "static" / "js" / "app.js"
 STYLE_CSS = Path(__file__).parents[1] / "app" / "static" / "css" / "style.css"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
 def test_covered_sick_group_only_collects_covered_sick_leave_and_is_closed_by_default():
-    source = APP_JS.read_text(encoding="utf-8")
-    functions = source[source.index("function splitCoveredSickRecords(rows){"):source.index("const sameDayDuplicateBadge")]
+    functions = "\n".join(frontend_function_source(name) for name in ("splitCoveredSickRecords", "coveredSickDisclosure"))
     checks = """
 const rows = [
   {record_type:'sick_leave', status:'active'},
@@ -32,7 +31,7 @@ if (coveredSickDisclosure([], 'unused') !== '') process.exit(3);
 
 
 def test_all_sick_leave_list_surfaces_use_the_same_disclosure():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = read_frontend_source()
     css = STYLE_CSS.read_text(encoding="utf-8")
     assert "coveredSickDisclosure(covered,importTable(covered))" in source
     assert "coveredSickDisclosure(covered,coveredContent)" in source

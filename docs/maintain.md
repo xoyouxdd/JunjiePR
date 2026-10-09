@@ -26,6 +26,8 @@
 | `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.py` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |
 | 本地依赖或测试命令 | 统一使用 `backend/.venv`，见 `docs/getting-started.md`；不要默认使用系统 Python |
 
+主前端新增模块时，在 `static/index.html` 的 import map 添加带 `__STATIC_CACHE_VERSION__` 的 URL，并按职责显式导入；新增页面在组合入口注册，不能反向导入入口或复制原大脚本。测试源码读取通过 `tests/frontend_source.py` / `.js` 沿实际入口依赖查找所属模块，行为回归直接执行实际模块。
+
 ## 上线前收口
 
 每次上线前必须确认：

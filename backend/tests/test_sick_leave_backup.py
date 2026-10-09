@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import frontend_function_source, read_frontend_source
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -230,9 +231,8 @@ def test_missing_fields_have_readable_validation_messages(client):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
 def test_backup_form_reuses_global_picker_and_has_no_proof_field():
-    source = (Path(__file__).parents[1] / "app/static/js/app.js").read_text(encoding="utf-8")
-    picker = source[source.index("function employeePicker("):source.index("function circleTransferEmployeePicker(")]
-    markup = source[source.index("function singleSickLeaveForm(){"):source.index("function bindSingleSickLeave(")]
+    picker = frontend_function_source('employeePicker')
+    markup = frontend_function_source('singleSickLeaveForm')
     checks = """
 const state = {options:{attractions:[]}, me:{role_code:'HR_CIRCLE'}};
 const esc = value => String(value);

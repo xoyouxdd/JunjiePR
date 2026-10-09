@@ -1,0 +1,99 @@
+// Groups, cross-circle transfers, month close, score rules and audit logs.
+import { api, json } from './api.js';
+import { beginViewRequest, render } from './context.js';
+import { confirmModal, formModal, promptModal, showSaveWarnings } from './dialogs.js';
+import { bindEmployeeSearches, circleTransferEmployeePicker, requireEmployeeSelection } from './employee-picker.js';
+import { esc, fmt, today } from './format.js';
+import { hrGroupShortName, hrTag } from './hr-employees.js';
+import { gotoTab, menuItems, renderTabs } from './navigation.js';
+import { opt } from './records.js';
+import { app, state } from './state.js';
+import { toast } from './toast.js';
+
+async function renderCircleTransfers(){
+  const request=beginViewRequest();
+  const [data,groupOptions]=await Promise.all([api('/api/hr/circle-transfers'),api('/api/hr/group-options')]);
+  if(!request.isCurrent())return;
+  const canActFor=(attractionId)=>state.me.role_code!=='HR_CIRCLE'||Number(state.me.attraction_id)===Number(attractionId);
+  const transferRows=data.items.map(row=>{const incoming=row.status==='pending'&&canActFor(row.target_attraction_id),outgoing=row.status==='pending'&&canActFor(row.source_attraction_id),groups=groupOptions.filter(item=>Number(item.attraction_id)===Number(row.target_attraction_id));return `<article class="group-card"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge ${row.status==='completed'?'ok':row.status==='pending'?'warn':'danger'}">${esc(row.status_name)}</span></div><p>${esc(row.source_attraction_name)} → ${esc(row.target_attraction_name)} · 原小组：${esc(row.source_group_name)}</p><p>原因：${esc(row.reason)} · 发起人：${esc(row.requested_by_name)} · ${esc(row.requested_at)}</p>${row.status==='completed'?`<p>已分配：${esc(row.target_group_name)}${row.target_leader_name?`（复核人 ${esc(row.target_leader_name)}）`:''}；迁移当月认可 ${row.migrated_record_counts.recognitions||0} 条、扣分 ${row.migrated_record_counts.deductions||0} 条、病假 ${row.migrated_record_counts.sick_leaves||0} 条。</p>`:''}${incoming?`<form data-circle-transfer-review="${row.id}" class="grid two"><label>目标小组<select name="target_group_id"><option value="">请选择</option>${groups.map(item=>`<option value="${item.id}">${esc(item.name)}（${esc(item.leader_label||'无负责人')}）</option>`).join('')}</select><span class="field-hint">没有合适的小组时，请先到小组管理新建。选择无负责人的小组时，该员工的签卡暂时无人复核。</span></label><label>审批说明<input name="review_note" placeholder="接受可选，拒绝必填"></label><div class="actions"><button type="button" class="secondary" data-transfer-reject>拒绝</button><button type="submit" class="primary">接受并立即生效</button></div></form>`:''}${outgoing?`<div class="actions"><button type="button" class="secondary" data-transfer-cancel="${row.id}">撤回申请</button></div>`:''}${row.review_note?`<p>审批说明：${esc(row.review_note)}</p>`:''}</article>`}).join('');
+  app.innerHTML=`<div class="section-gap"><section class="panel"><h2>发起跨景点圈调动</h2><p>原景点圈HR发起，目标景点圈HR确认并选择目标小组；确认后员工、当月数据和待办事项立即同步迁移。</p><form id="circleTransferCreate" class="circle-transfer-form">${circleTransferEmployeePicker()}<div class="circle-transfer-details"><label>目标景点圈<select name="target_attraction_id" required><option value="">请选择</option>${opt(data.target_circles)}</select></label><label>调动原因<input name="reason" required maxlength="200"></label><div class="circle-transfer-submit"><button class="primary">提交目标HR确认</button></div></div></form></section><section class="panel"><h2>调动记录</h2>${transferRows||'<div class="empty">暂无跨景点圈调动记录</div>'}</section></div>`;
+  bindEmployeeSearches(app);document.getElementById('circleTransferCreate').onsubmit=async event=>{event.preventDefault();if(!requireEmployeeSelection(event.target))return;try{await api('/api/hr/circle-transfers',json('POST',Object.fromEntries(new FormData(event.target))));toast('调动申请已提交目标HR');request.refresh(renderCircleTransfers)}catch(error){toast(error.message,true)}};
+  app.querySelectorAll('[data-circle-transfer-review]').forEach(form=>{form.onsubmit=async event=>{event.preventDefault();const groupId=form.elements.target_group_id.value;if(!groupId){toast('请选择目标小组',true);return}const confirmed=await confirmModal('确认立即转圈',`<p>确认后员工归属、小组关系、当月数据和待办将立即迁移。</p>`,'接受并生效');if(!confirmed)return;try{const result=await api('/api/hr/circle-transfers/'+form.dataset.circleTransferReview+'/review',json('POST',{action:'accept',target_group_id:groupId,review_note:form.elements.review_note.value}));toast('跨圈调动已立即生效');if(request.isCurrent())showSaveWarnings(result);request.refresh(renderCircleTransfers)}catch(error){toast(error.message,true)}};form.querySelector('[data-transfer-reject]').onclick=async()=>{const note=form.elements.review_note.value.trim();if(!note){toast('拒绝原因必填',true);form.elements.review_note.focus();return}try{await api('/api/hr/circle-transfers/'+form.dataset.circleTransferReview+'/review',json('POST',{action:'reject',review_note:note}));toast('已拒绝调动申请');request.refresh(renderCircleTransfers)}catch(error){toast(error.message,true)}}});
+  app.querySelectorAll('[data-transfer-cancel]').forEach(button=>button.onclick=async()=>{if(!await confirmModal('撤回调动申请','<p>确认撤回这条跨圈调动申请？</p>','确认撤回'))return;try{await api('/api/hr/circle-transfers/'+button.dataset.transferCancel+'/cancel',{method:'POST'});toast('申请已撤回');request.refresh(renderCircleTransfers)}catch(error){toast(error.message,true)}});
+}
+
+function previousScoreMonth(){const value=new Date();value.setDate(1);value.setMonth(value.getMonth()-1);return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}`;}
+
+async function renderMonthClose(){
+  const request=beginViewRequest();
+  const circles=(state.options.employee_circles||state.options.attractions||[]).filter(row=>row.employee_circle!==false);
+  const isCircleHr=state.me.role_code==='HR_CIRCLE';
+  const ownId=Number(state.me.attraction_id||0);
+  const available=isCircleHr?circles.filter(row=>Number(row.id)===ownId):circles;
+  if(!available.length){app.innerHTML='<section class="panel"><h2>月结</h2><p class="error">当前账号没有可月结的景点圈。</p></section>';return;}
+  app.innerHTML=`<div class="section-gap"><section class="panel"><h2>月结</h2><p>仅可关闭上月数据。关闭前须完成所选范围内所有待办与待跟进事项；最高管理员关闭全部景点圈时，待办检查覆盖所有圈。如确需更正，可填写原因后临时开放，所有操作均会写入审计。</p><form id="monthCloseForm" class="hr-filter"><label>结算月份<input name="month" type="month" value="${previousScoreMonth()}" required></label><label>景点圈<select name="attraction_id" ${isCircleHr?'disabled':''}>${state.me.role_code==='SYSTEM_ADMIN'?'<option value="">全部景点圈</option>':''}${opt(available)}</select></label><div class="actions form-sticky-actions"><button type="submit" class="primary">查询月结状态</button></div></form></section><section class="panel" id="monthCloseResult"><div class="empty">请选择月份并查询状态</div></section></div>`;
+  const form=document.getElementById('monthCloseForm'),result=document.getElementById('monthCloseResult');
+  let sequence=0;
+  const show=async()=>{if(!request.isCurrent())return;const requestId=++sequence;const month=form.elements.month.value,rawAttraction=isCircleHr?String(ownId):form.elements.attraction_id.value,attractionId=rawAttraction===''||rawAttraction==null?null:Number(rawAttraction);if(!/^\d{4}-\d{2}$/.test(month)){toast('请选择结算月份',true);return;}const data=await api(attractionId==null?`/api/month-closes/${month}`:`/api/month-closes/${month}?attraction_id=${attractionId}`);if(!request.isCurrent()||requestId!==sequence)return;const checklist=(data.checklist||[]);const blocking=checklist.filter(row=>Number(row.count)>0);const allowedTabs=new Set(menuItems().map(([id])=>id));const checklistRows=checklist.map(row=>{const blocked=Number(row.count)>0,targetAvailable=row.target&&allowedTabs.has(row.target);return `<li class="${blocked?'notice danger':'notice'}"><strong>${esc(row.name)}</strong><span>${Number(row.count)} 项</span>${blocked?(targetAvailable?` <button type="button" class="secondary" data-month-target="${esc(row.target)}">去处理</button>`:` <small>${esc(row.responsible||'请联系对应业务负责人处理')}</small>`):' 已完成'}</li>`;}).join('')||'<li>暂无待核对项目</li>';const status=data.is_closed?`<span class="badge danger">已月结</span> ${esc(data.closed_by_name||'')} · ${esc(data.closed_at||'')}`:'<span class="badge ok">可月结</span>';result.innerHTML=`<h2>${esc(data.attraction_name)} · ${esc(data.month)} 月结</h2><p>${status}</p>${data.is_closed?`<p>关闭原因：${esc(data.close_reason||'未填写')}</p>`:`<p>以下项目全部为 0 后才可关闭月结。</p>`}<h3>月结检查清单</h3><ul class="month-close-checklist">${checklistRows}</ul><div class="actions">${!data.is_closed&&data.can_close?'<button type="button" class="primary" data-month-close>确认关闭月结</button>':''}${data.is_closed&&data.can_reopen?'<button type="button" class="warn" data-month-reopen>临时开放月结</button>':''}</div>`;result.querySelectorAll('[data-month-target]').forEach(button=>button.onclick=()=>{state.tab=button.dataset.monthTarget;renderTabs();render();});const reasonPrompt=async(title,action)=>{const reason=await promptModal(`${title}原因`,'将写入审计。','请填写原因','确认');if(reason===null)return;if(!reason.trim()){toast('原因必填',true);return;}try{await api(`/api/month-closes/${month}/${action}`,json('POST',{attraction_id:attractionId,reason:reason.trim()}));toast(action==='close'?'月结已关闭':'月结已临时开放');request.refresh(show);}catch(error){const items=error?.detail?.items||[];toast(items.length?`${error.message}：${items.map(row=>`${row.name}${row.count}项`).join('；')}`:error.message,true);}};result.querySelector('[data-month-close]')?.addEventListener('click',()=>reasonPrompt('确认关闭月结','close'));result.querySelector('[data-month-reopen]')?.addEventListener('click',()=>reasonPrompt('临时开放月结','reopen'));};
+  form.onsubmit=async event=>{event.preventDefault();try{await show();}catch(error){toast(error.message,true);}};
+  await show();
+}
+
+// 小组管理：只管组本身和负责人（主管/代理主管）；组员在员工管理中调整。
+function groupLeaderOptions(people,currentId,groupId,leaderType){
+  const verb=leaderType==='formal'?'带':'代理';
+  const label=person=>{
+    if(person.group_id&&person.group_id!==groupId)return `${person.name}（已${verb} ${person.group_name}）`;
+    if(groupId&&person.group_id===groupId)return `${person.name}（${person.role_label} · 当前）`;
+    return `${person.name}（${person.role_label}${leaderType==='formal'?' · 暂未带组':''}）`;
+  };
+  return `<option value="">不设置</option>${people.map(person=>`<option value="${person.id}" ${person.id===currentId?'selected':''} ${person.group_id&&person.group_id!==groupId?'disabled':''}>${esc(label(person))}</option>`).join('')}`;
+}
+
+function groupLeaderFields(circle,group,reasonRequired){
+  const groupId=group?group.id:null;
+  return `<label>主管<select name="supervisor_id">${groupLeaderOptions(circle.supervisors,group?.formal_leader?.id||null,groupId,'formal')}</select></label><p class="field-hint">只列本景点圈、本职为主管的人；已带其他组的不可选。可留空。</p><label>代理主管<select name="acting_id">${groupLeaderOptions(circle.acting_candidates,group?.acting_leader?.id||null,groupId,'acting')}</select></label><p class="field-hint">只列本景点圈、有代理TA主管职务的人；已代理其他组的不可选。有代理主管时由代理主管复核组员，主管可查看。可留空。</p><label>原因<input name="reason" maxlength="200" ${reasonRequired?'required':''} placeholder="${reasonRequired?'例如：奚志成接手B组':'选填'}"></label>`;
+}
+
+async function renderHrGroups(){
+  const request=beginViewRequest();
+  const [data,alerts]=await Promise.all([api('/api/hr/groups'),api('/api/hr/alerts')]);
+  if(!request.isCurrent())return;
+  const circles=data.circles||[];
+  if(!circles.length){request.write('<section class="panel"><h2>小组管理</h2><div class="empty">当前账号没有可管理的景点圈</div></section>');return;}
+  const circle=circles.find(row=>String(row.id)===String(state.hrGroupsCircle))||circles[0];
+  state.hrGroupsCircle=circle.id;
+  const groups=circle.groups,missingSupervisor=groups.filter(group=>!group.formal_leader).length,idleSupervisors=circle.supervisors.filter(person=>!person.group_id).length;
+  const metrics=[['小组',groups.length,''],['未设置主管',missingSupervisor,missingSupervisor?'warn':''],['暂未带组的主管',idleSupervisors,''],['未分组员工',circle.unassigned_count,circle.unassigned_count?'warn':'']];
+  const circlePicker=circles.length>1?`<label class="group-circle-picker">景点圈<select id="groupCircle">${circles.map(row=>`<option value="${row.id}" ${row.id===circle.id?'selected':''}>${esc(row.name)}</option>`).join('')}</select></label>`:`<strong class="group-circle-name">${esc(circle.name)}</strong>`;
+  const managerTags=`${circle.gsm_names.length?hrTag(`<b>景点GSM</b>${esc(circle.gsm_names.join('、'))}`):hrTag('未配置GSM','warn')}${circle.ta_gsm_names.length?hrTag(`<b>代理GSM</b>${esc(circle.ta_gsm_names.join('、'))}`,'accent'):''}`;
+  const rows=groups.map(group=>{
+    const formal=group.formal_leader,acting=group.acting_leader;
+    const formalCell=formal?`${esc(formal.name)}${String(formal.role_label||'').includes('代理')?hrTag('代理GSM','accent'):''}`:hrTag('未设置主管','warn');
+    return `<div class="group-row" data-group-row="${group.id}"><button type="button" class="group-name link-button" data-group-toggle="${group.id}" aria-expanded="false" title="${esc(group.name)}">${esc(hrGroupShortName(group,circle.name))}</button>${!formal&&!acting&&group.member_count?hrTag('无负责人','warn'):''}<div data-label="主管">${formalCell}</div><div data-label="代理主管">${acting?hrTag(esc(acting.name),'accent'):'<span class="muted-text">无</span>'}</div><div data-label="人数">${group.member_count}</div><div class="actions compact-actions"><button type="button" class="secondary" data-set-leaders="${group.id}">设置负责人</button><button type="button" class="secondary" data-rename-group="${group.id}">改名</button>${group.member_count===0?`<button type="button" class="danger" data-close-group="${group.id}">关闭</button>`:''}</div><div class="group-members" data-group-members="${group.id}" hidden>${group.members.map(member=>`<span>${esc(member.name)}<small>${esc(member.role_label)}</small></span>`).join('')||'<span class="muted-text">暂无组员</span>'}<p class="field-hint">组员只能查看；调整组员请到员工管理。</p></div></div>`;
+  }).join('');
+  if(!request.write(`<div class="section-gap"><section class="panel"><h2>小组管理</h2><p>改组在这里：新建小组、设置主管和代理主管、关闭空小组。新建小组按“景点圈 + 字母”命名，换负责人不改名，需要时可点“改名”；组员归属请在<button type="button" class="link-button" data-goto-employees>员工管理</button>中调整。</p><div class="group-toolbar">${circlePicker}${managerTags}<span class="toolbar-spacer"></span><button type="button" class="primary" id="createGroup">新建小组（${esc(circle.next_code)}组）</button></div><div class="group-metrics">${metrics.map(([label,value,tone])=>`<div class="group-metric ${tone}"><span>${label}</span><strong>${value}</strong></div>`).join('')}</div><div class="group-table"><div class="group-row group-head" aria-hidden="true"><span>小组</span><span>主管</span><span>代理主管</span><span>人数</span><span></span></div>${rows||'<div class="empty">该景点圈还没有小组</div>'}</div><p class="field-hint">点组名可展开查看组员。</p></section><section class="panel"><h2>组织提醒</h2>${alerts.filter(alert=>alert.status==='open').map(alert=>`<div class="notice">${esc(alert.message)} ${alert.due_date?`· ${alert.due_date}`:''}</div>`).join('')||'<div class="empty">无提醒</div>'}</section></div>`))return;
+  document.getElementById('groupCircle')?.addEventListener('change',event=>{state.hrGroupsCircle=event.target.value;renderHrGroups()});
+  app.querySelector('[data-goto-employees]').onclick=()=>gotoTab('hrEmployees');
+  app.querySelectorAll('[data-group-toggle]').forEach(button=>button.onclick=()=>{const panel=app.querySelector(`[data-group-members="${button.dataset.groupToggle}"]`),open=panel.hidden;panel.hidden=!open;button.setAttribute('aria-expanded',String(open))});
+  const leaderBody=form=>({supervisor_id:form.elements.supervisor_id.value||null,acting_id:form.elements.acting_id.value||null,reason:form.elements.reason.value.trim()});
+  app.querySelectorAll('[data-set-leaders]').forEach(button=>button.onclick=()=>{
+    const group=groups.find(row=>String(row.id)===button.dataset.setLeaders);
+    formModal(`设置负责人 · ${group.name}`,`${group.member_count}名组员不受影响`,groupLeaderFields(circle,group,true),'保存',{onSubmit:async form=>{const body=leaderBody(form);if(!body.reason)throw new Error('请填写调整原因');const result=await api('/api/hr/groups/'+group.id+'/leaders',json('POST',{...body,revision:group.revision}));toast('负责人已更新');if(request.isCurrent())showSaveWarnings(result);request.refresh(renderHrGroups)}});
+  });
+  document.getElementById('createGroup').onclick=()=>formModal(`新建小组 · ${circle.name}${circle.next_code}组`,'组名按景点圈 + 下一个字母自动生成，之后可以改名。主管和代理主管可以稍后再设置，没有负责人时组员的签卡暂时无人复核。',groupLeaderFields(circle,null,false),'新建',{onSubmit:async form=>{const result=await api('/api/hr/groups',json('POST',{attraction_id:circle.id,...leaderBody(form)}));toast(`已新建${result.name}`);request.refresh(renderHrGroups)}});
+  app.querySelectorAll('[data-rename-group]').forEach(button=>button.onclick=async()=>{
+    const group=groups.find(row=>String(row.id)===button.dataset.renameGroup);
+    const name=(await promptModal(`修改组名 · ${group.name}`,`<p>当前组名：<strong>${esc(group.name)}</strong></p><p>改名后，组员、负责人和历史记录都不变，排名、统计和导出改显示新组名。</p>`,'请输入新组名','下一步')||'').trim();
+    if(!name||name===group.name)return;
+    if(!await confirmModal('确认修改组名',`<p>确认将“${esc(group.name)}”改为“${esc(name)}”？</p><p>修改会写入审计日志。</p>`,'确认修改'))return;
+    try{await api('/api/hr/groups/'+group.id+'/rename',json('POST',{name,revision:group.revision}));toast('组名已修改');request.refresh(renderHrGroups)}catch(error){toast(error.message,true)}
+  });
+  app.querySelectorAll('[data-close-group]').forEach(button=>button.onclick=async()=>{const group=groups.find(row=>String(row.id)===button.dataset.closeGroup);const reason=await promptModal(`关闭 ${group.name}`,'该组没有组员。关闭后不再出现在小组选项中，历史记录保留并标注“已关闭”；空出的字母会在下次新建小组时优先使用。请输入关闭原因（必填）：','关闭原因');if(!reason)return;try{await api('/api/hr/groups/'+group.id+'/close',json('POST',{reason,revision:group.revision}));toast('小组已关闭');request.refresh(renderHrGroups)}catch(error){toast(error.message,true)}});
+}
+
+async function renderHrScores(){const request=beginViewRequest();const rows=await api('/api/hr/score-rules');if(!request.isCurrent())return;const canEdit=state.me.role_code==='SYSTEM_ADMIN',editable=canEdit?rows:[],readOnly=canEdit?[]:rows,scopeHint=canEdit?'<div class="notice">这是全系统统一分值规则，修改后会影响所有景点圈后续新登记的认可；历史签卡不追溯改分。</div>':'<div class="notice">当前显示全系统统一分值规则，仅最高管理员可调整；本页面为只读。</div>';if(!request.write(`<section class="panel"><h2>认可人角色默认分值</h2><p>分值按角色和生效日期保留历史，已登记签卡不追溯改分。</p>${scopeHint}<div class="table-wrap sticky-col"><table><thead><tr><th>角色</th><th>当前分值</th><th>新分值</th><th>生效日期</th><th>操作</th></tr></thead><tbody>${editable.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td><input name="score" type="number" min="0" step="0.01" value="${r.score}"></td><td><input name="date" type="date" value="${today()}"></td><td><button class="primary" data-score-role="${r.role_code}">生效</button></td></tr>`).join('')}${readOnly.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td colspan="3"><span class="not-applicable">全局规则只读</span></td></tr>`).join('')}</tbody></table></div></section>`))return;app.querySelectorAll('[data-score-role]').forEach(b=>b.onclick=async()=>{const tr=b.closest('tr');try{await api('/api/hr/score-rules',json('POST',{role_code:b.dataset.scoreRole,score:tr.querySelector('[name=score]').value,effective_date:tr.querySelector('[name=date]').value}));toast('新分值规则已生效');request.refresh(render)}catch(x){toast(x.message,true)}})}
+
+async function renderLogs(){const request=beginViewRequest();const rows=await api('/api/admin/logs');if(!request.isCurrent())return;if(!request.write(`<section class="panel"><h2>审计日志</h2><div class="table-wrap sticky-col"><table><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>对象</th><th>原因</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${r.time}</td><td>${esc(r.operator)}</td><td>${esc(r.action)}</td><td>${esc(r.entity)}</td><td>${esc(r.reason)}</td></tr>`).join('')}</tbody></table></div></section>`))return;}
+
+export { renderCircleTransfers, renderHrGroups, renderHrScores, renderLogs, renderMonthClose };

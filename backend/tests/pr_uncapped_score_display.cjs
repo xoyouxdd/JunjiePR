@@ -1,9 +1,7 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
-const script = fs.readFileSync(path.join(__dirname, '../app/static/js/app.js'), 'utf8');
-const helper = script.split('\n').find(line => line.startsWith('function prRecognitionCount('));
+const {frontendFunctionSource} = require('./frontend_source.js');
+const helper = frontendFunctionSource('prRecognitionCount');
 const context = vm.createContext({esc: String, fmt: value => Number(value).toFixed(2)});
 vm.runInContext(helper, context);
 const render = (score, enabled = true) => context.prRecognitionCount(

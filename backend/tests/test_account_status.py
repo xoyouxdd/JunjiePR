@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import os
 from pathlib import Path
@@ -90,7 +91,7 @@ def test_password_change_and_reset_are_reflected_without_disclosing_password() -
 
 
 def test_account_status_panel_is_lazy_collapsed_at_the_bottom_with_circle_filter() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
 
     assert "api('/api/hr/account-status')" in script

@@ -179,7 +179,6 @@ def _action_error(exc: service.ActionError) -> HTTPException:
 @router.get("/board")
 def rotation_board(db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
     payload = service.board_payload(db, rotation_attraction_id(db))
-    db.commit()
     payload["me"] = {"kind": actor.kind, "name": actor.name}
     return payload
 
@@ -187,28 +186,26 @@ def rotation_board(db: Session = Depends(get_db), actor: RotationActor = Depends
 @router.get("/screen/state")
 def rotation_screen_state(db: Session = Depends(get_db), actor: RotationActor = Depends(require_screen)):
     payload = service.screen_payload(db, rotation_attraction_id(db))
-    db.commit()
     return payload
 
 
 @router.post("/screen/act")
 def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_screen)):
     """大屏只能点「去休息」（到达）和「去轮岗」（出发）。"""
-    if payload.get("action") not in service.SCREEN_ACTIONS:
+    if not isinstance(payload.get("action"), str):
+        raise HTTPException(400, "操作类型必须是字符串")
+    if payload["action"] not in service.SCREEN_ACTIONS:
         raise HTTPException(403, "大屏只能点去休息和去轮岗")
     try:
         service.do_live_action(db, rotation_attraction_id(db), actor, {"action": payload["action"], "pid": payload.get("pid")})
     except service.ActionError as exc:
-        db.rollback()
         raise _action_error(exc) from exc
-    db.commit()
     return {"ok": True}
 
 
 @router.get("/me")
 def rotation_me(db: Session = Depends(get_db), actor: RotationActor = Depends(require_member)):
     payload = service.member_payload(db, rotation_attraction_id(db), actor.member_employee_no)
-    db.commit()
     payload["test_mode"] = True
     return payload
 
@@ -218,9 +215,7 @@ def rotation_act(payload: dict, db: Session = Depends(get_db), actor: RotationAc
     try:
         service.do_live_action(db, rotation_attraction_id(db), actor, payload)
     except service.ActionError as exc:
-        db.rollback()
         raise _action_error(exc) from exc
-    db.commit()
     return {"ok": True}
 
 
@@ -229,9 +224,7 @@ def rotation_draft(payload: dict, db: Session = Depends(get_db), actor: Rotation
     try:
         service.do_draft_action(db, rotation_attraction_id(db), actor, payload)
     except service.ActionError as exc:
-        db.rollback()
         raise _action_error(exc) from exc
-    db.commit()
     return {"ok": True}
 
 
@@ -264,10 +257,7 @@ async def rotation_roster_upload(
             only_date=date or None,
         )
     except service.ActionError as exc:
-        db.rollback()
         raise _action_error(exc) from exc
-    db.commit()
-    service.RUNTIME.bump()
     return {"ok": True, "scope": upload.scope, "start_date": upload.start_date, "end_date": upload.end_date, "entry_count": upload.entry_count}
 
 
@@ -288,21 +278,21 @@ def rotation_person(employee_no: str, date: str, db: Session = Depends(get_db), 
 
 @router.get("/config")
 def rotation_config(db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
-    cfg = service.load_config(db, rotation_attraction_id(db))
-    db.commit()
-    return {"lines": service.lines_of(cfg), "settings": service.settings_of(cfg), "defaults": service.E.DEFAULT_SETTINGS}
+    with service.transaction(db):
+        cfg = service.load_config(db, rotation_attraction_id(db))
+        payload = {"lines": service.lines_of(cfg), "settings": service.settings_of(cfg), "defaults": service.E.DEFAULT_SETTINGS}
+    return payload
 
 
 @router.put("/config")
 def rotation_config_update(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
-    with service.RUNTIME.lock:
-        cfg = service.load_config(db, rotation_attraction_id(db))
-        try:
+    try:
+        with service.transaction(db):
+            cfg = service.load_config(db, rotation_attraction_id(db))
             service.update_config(cfg, payload.get("lines"), payload.get("settings"), actor.entered_by.id if actor.entered_by else None)
-        except service.ActionError as exc:
-            db.rollback()
-            raise _action_error(exc) from exc
-        db.commit()
+            service.mark_changed(db)
+    except service.ActionError as exc:
+        raise _action_error(exc) from exc
     return {"ok": True}
 
 

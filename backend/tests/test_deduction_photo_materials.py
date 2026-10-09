@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 import os
 import tempfile
@@ -116,7 +117,7 @@ def test_overpage_pdf_is_rejected_without_orphan_source_files() -> None:
 
 
 def test_photo_picker_keeps_camera_and_album_as_distinct_mobile_entries() -> None:
-    source = (Path(__file__).resolve().parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    source = read_frontend_source()
     assert "data-material-camera-input" in source
     assert "data-material-album-input" in source
     camera_fragment = source.split("data-material-camera-input", 1)[1][:180]
@@ -126,7 +127,7 @@ def test_photo_picker_keeps_camera_and_album_as_distinct_mobile_entries() -> Non
 
 
 def test_photo_picker_supports_pre_submission_delete_replace_and_local_thumbnails() -> None:
-    source = (Path(__file__).resolve().parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    source = read_frontend_source()
     for marker in (
         "data-material-remove-photo",
         "data-material-replace-photos",
@@ -309,7 +310,7 @@ def test_pending_material_is_visible_and_repairable_by_another_supervisor() -> N
 
 
 def test_no_material_submission_shows_follow_up_material_reminder() -> None:
-    source = (Path(__file__).resolve().parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    source = read_frontend_source()
     assert "声明已登记" in source
     assert "请在“待办”或“我的登记记录”中点击“补充材料”完成上传。" in source
     assert "handlePendingMaterialConflict" in source

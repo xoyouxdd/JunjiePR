@@ -1,4 +1,5 @@
 from __future__ import annotations
+from frontend_source import read_frontend_source
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -82,7 +83,7 @@ def test_sick_leave_validation_returns_field_message_and_writes_metadata_audit()
 
 
 def test_baidu_absence_submission_explicitly_sets_all_critical_multipart_fields() -> None:
-    script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     for field in ("employee_id", "leave_start_date", "leave_end_date", "leave_days", "note"):
         assert f"data.set('{field}'" in script
     assert "data.set('proof',file,file.name)" in script
@@ -1228,7 +1229,7 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
         assert created.status_code == 200, created.text
         assert created.json()["record"]["recognizer_name"] == "矮人测试TALEAD"
 
-    script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     assert "const r=state.me.role_code, items=[];" in script
     assert "if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记']);" in script
     assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);" in script
@@ -1307,7 +1308,7 @@ def test_v2234_imported_recognizers_are_available_from_policy_start() -> None:
         assert created.status_code == 200, created.text
         assert created.json()["record"]["recognizer_name"] == "生效日TALEAD"
 
-    script = (Path(__file__).parents[1] / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
     assert 'data-evidence-camera' in script
     assert 'data-evidence-album' in script
     assert 'data-evidence-camera-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" capture="environment"' in script

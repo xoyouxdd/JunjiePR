@@ -207,10 +207,29 @@ class Engine:
         return self.d['persons']
 
     def line(self, lid):
+        if not isinstance(lid, str) or not lid:
+            raise ActionError('线 id 必须是非空字符串')
         for L in self.d['lines']:
             if L['id'] == lid:
                 return L
         raise ActionError('没有这条线：%s' % lid)
+
+    def post(self, lid, index):
+        L = self.line(lid)
+        if isinstance(index, str) and index.strip().isdecimal():
+            index = int(index)
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(L['posts']):
+            raise ActionError('岗位索引超出范围，必须是有效的非负整数')
+        return L, index, L['posts'][index]
+
+    def plan_post(self, key):
+        if not isinstance(key, str) or key.count('#') != 1:
+            raise ActionError('岗位标识格式需为 线id#岗位索引')
+        lid, index = key.split('#')
+        result = self.post(lid, index)
+        if key != f'{lid}#{result[1]}':
+            raise ActionError('岗位标识必须使用标准的非负整数索引')
+        return result
 
     def walk(self, lid):
         self.line(lid)
@@ -232,6 +251,8 @@ class Engine:
         return _m(c) if c else None
 
     def person(self, pid):
+        if not isinstance(pid, str):
+            raise ActionError('工号必须是字符串')
         p = self.P.get(pid)
         if p is None:
             raise ActionError('今天的名单里没有这个人')
@@ -266,6 +287,10 @@ class Engine:
     # -------- 发布
     def publish(self, now, actor):
         d = self.d
+        for kind in ('crew', 'seven'):
+            for key, pid in d['plan'][kind].items():
+                self.plan_post(key)
+                self.person(pid)
         d['status'] = 'live'
         for L in d['lines']:
             L['active'] = not L['standby']
@@ -291,8 +316,7 @@ class Engine:
         for kind in ('crew', 'seven'):
             for key, pid in d['plan'][kind].items():
                 if self.P[pid]['start'] > now:
-                    lid, i = key.split('#')
-                    x = self.line(lid)['posts'][int(i)]
+                    _, _, x = self.plan_post(key)
                     if x['open']:
                         x['occ'] = pid
         self.tick(now)
@@ -863,8 +887,8 @@ class Engine:
         p = self.person(pid)
         if p['state'] != 'notyet' or now >= p['start'] or p['role'] != 'rotation':
             raise ActionError('只能拖拽尚未开始班次的轮岗人员')
-        L = self.line(lid)
-        if i < 0 or i >= len(L['posts']) or not L['active'] or not L['posts'][i]['open']:
+        L, i, post = self.post(lid, i)
+        if not L['active'] or not post['open']:
             raise ActionError('目标岗位未开放')
         target = L['posts'][i].get('occ')
         if target and self.P[target]['state'] != 'notyet':
@@ -912,8 +936,7 @@ class Engine:
         self.h.log('post_close', actor, None, L['id'], x['name'], {})
 
     def act_post(self, lid, i, open_, now, actor):
-        L = self.line(lid)
-        x = L['posts'][i]
+        L, i, x = self.post(lid, i)
         x['manual'] = True
         x['opened'] = True
         if open_:
@@ -1028,8 +1051,7 @@ class Engine:
         p = self.person(pid)
         if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
             raise ActionError('吃饭及饭后休息倒计时未结束，不能进线')
-        L = self.line(lid)
-        x = L['posts'][i]
+        L, i, x = self.post(lid, i)
         if not x.get('open'):
             raise ActionError('%s 未开放' % x['name'])
         if x.get('occ'):

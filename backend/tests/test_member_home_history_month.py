@@ -1,3 +1,4 @@
+from frontend_source import read_frontend_source
 from pathlib import Path
 
 
@@ -5,7 +6,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_member_home_offers_current_and_previous_two_months_only() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "function memberHomeMonths()" in script
     assert "return [0,1,2].map(offset=>" in script
@@ -14,7 +15,7 @@ def test_member_home_offers_current_and_previous_two_months_only() -> None:
 
 
 def test_historical_member_home_is_read_only_in_the_interface() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "home-read-only" in script
     assert "recognitionCard(r,i,readOnly=false)" in script

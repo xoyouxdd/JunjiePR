@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from urllib.parse import urlsplit
+import base64
+import hashlib
+import re
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -43,7 +46,16 @@ def render_static_page(path) -> HTMLResponse:
         _STATIC_PAGE_CACHE[str(path)] = (stat.st_mtime, html)
     else:
         html = cached[1]
-    return HTMLResponse(content=html, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    headers = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+    import_map = re.search(rb'<script\s+type="importmap"\s*>(.*?)</script\s*>', html, re.DOTALL)
+    if import_map:
+        # CSP hashes use the parsed script text: HTML normalizes CR/CRLF to LF.
+        content = import_map.group(1).replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        digest = base64.b64encode(hashlib.sha256(content).digest()).decode("ascii")
+        headers["Content-Security-Policy"] = SECURITY_HEADERS["Content-Security-Policy"].replace(
+            "script-src 'self'", f"script-src 'self' 'sha256-{digest}'", 1,
+        )
+    return HTMLResponse(content=html, headers=headers)
 
 
 SICK_LEAVE_VALIDATION_MESSAGES = {

@@ -6,7 +6,7 @@ from decimal import Decimal
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.v2_database import Base
+from app.database.connection import Base
 
 
 class Role(Base):

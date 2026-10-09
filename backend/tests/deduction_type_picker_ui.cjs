@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const {frontendFunctionSource} = require('./frontend_source.js');
 
 (async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../app/static/js/app.js'), 'utf8');
   const css = fs.readFileSync(path.join(__dirname, '../app/static/css/style.css'), 'utf8');
-  const functions = source.slice(source.indexOf('function deductionUpgradeGroup('), source.indexOf('function deductionForm('));
+  const functions = ['deductionUpgradeGroup', 'deductionUpgradeOptionName', 'deductionUpgradeOptionMarkup', 'bindDeductionTypePicker'].map(frontendFunctionSource).join('\n');
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });

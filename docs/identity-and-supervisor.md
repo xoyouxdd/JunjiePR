@@ -2,6 +2,10 @@
 
 本页说明本职身份与代理职务的关系、主管绩效的登记与复核规则，以及对应的统计口径。表结构见 [sqlite-schema.md](sqlite-schema.md)。
 
+日期身份查询实现在 `backend/app/services/identity.py`，组员与负责人查询在 `services/organization.py`，全勤在 `services/attendance.py`，角色到期由 `services/role_lifecycle.py` 编排。旧 `v2_services.py` 导入入口保留兼容；计分、权限和历史身份规则保持相同。
+
+HR 员工编辑按本次保存后的本职判断 LOA 资格，支持主管同次改为 CM/TR 并设置 LOA；改为主管时不能保留或新设不符合资格的 LOA 状态。离职人员完整表单保留原小组时可保存其他字段，新增或更换组员关系仍须先复职。人员、账号、本职、代理、小组与全勤在同一事务中保存，后续校验失败会整体回滚。
+
 ## 本职身份与代理职务
 
 - **本职身份**记在 `employee_role_assignments`，每人同一天只有一个：CM、TR、主管、GSM、AM、OM、HR 或管理员。本职决定计分类别、小组组员关系、排名人群和全勤。

@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime
 from decimal import Decimal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from sqlalchemy import or_, update
+from sqlalchemy import or_, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
@@ -576,64 +576,99 @@ def deduction_upgrade_reviewers(db: Session = Depends(get_db), user: V2User = De
 
 @router.post("/deduction-upgrades/{request_id}/transfer")
 def transfer_deduction_upgrade(request_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    row = db.get(DeductionUpgradeRequest, request_id)
-    if not row or row.status != "pending" or row.reviewer_id != user.id or user.role.code not in UPGRADE_REVIEWER_CODES:
-        raise HTTPException(404, "待审核工单不存在或已转交")
-    target_id = int(payload.get("reviewer_id") or 0)
-    reason = str(payload.get("reason") or "").strip()
-    target = db.get(Employee, target_id)
-    target_role = role_at(db, target.id) if target else None
-    if not reason:
-        raise HTTPException(400, "转交说明必填")
-    if not target or not target.is_active or not target_role or target_role.code not in UPGRADE_REVIEWER_CODES or not db.query(UserAccount).filter_by(employee_id=target.id, enabled=True).first():
-        raise HTTPException(400, "请选择在职且账号启用的GSM或TA GSM")
-    db.add(DeductionUpgradeTransfer(request_id=row.id, from_reviewer_id=user.id, from_reviewer_name=user.name, to_reviewer_id=target.id, to_reviewer_name=target.name, reason=reason))
-    row.reviewer_id, row.reviewer_name = target.id, target.name
-    write_audit(db, user.employee, "转交声明升级工单", "deduction_upgrade", row.id, after={"to": target.name, "reason": reason}, ip_address=client_ip(request))
-    db.commit()
+    try:
+        row = pending_upgrade_for_update(db, request_id, user, "待审核工单不存在或已转交")
+        target_id = int(payload.get("reviewer_id") or 0)
+        reason = str(payload.get("reason") or "").strip()
+        target = db.get(Employee, target_id)
+        target_role = role_at(db, target.id) if target else None
+        if not reason:
+            raise HTTPException(400, "转交说明必填")
+        if not target or not target.is_active or not target_role or target_role.code not in UPGRADE_REVIEWER_CODES or not db.query(UserAccount).filter_by(employee_id=target.id, enabled=True).first():
+            raise HTTPException(400, "请选择在职且账号启用的GSM或TA GSM")
+        claimed = db.execute(
+            update(DeductionUpgradeRequest)
+            .where(DeductionUpgradeRequest.id == row.id, DeductionUpgradeRequest.status == "pending", DeductionUpgradeRequest.reviewer_id == user.id)
+            .values(reviewer_id=target.id, reviewer_name=target.name)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(404, "待审核工单不存在或已转交")
+        db.refresh(row)
+        db.add(DeductionUpgradeTransfer(request_id=row.id, from_reviewer_id=user.id, from_reviewer_name=user.name, to_reviewer_id=target.id, to_reviewer_name=target.name, reason=reason))
+        write_audit(db, user.employee, "转交声明升级工单", "deduction_upgrade", row.id, after={"to": target.name, "reason": reason}, ip_address=client_ip(request))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {"ok": True}
+
+
+def pending_upgrade_for_update(db: Session, request_id: int, user: V2User, unavailable_message: str) -> DeductionUpgradeRequest:
+    # Authentication can leave a read transaction (and cached pending rows).
+    # Acquire SQLite's writer lock before checking the current status/assignee,
+    # so concurrent resolution and transfer use the same committed state.
+    db.rollback()
+    db.execute(text("BEGIN IMMEDIATE"))
+    row = db.get(DeductionUpgradeRequest, request_id, populate_existing=True)
+    if not row or row.status != "pending" or row.reviewer_id != user.id or user.role.code not in UPGRADE_REVIEWER_CODES:
+        raise HTTPException(404, unavailable_message)
+    return row
 
 
 @router.post("/deduction-upgrades/{request_id}/resolve")
 def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    row = db.get(DeductionUpgradeRequest, request_id)
-    if not row or row.status != "pending" or row.reviewer_id != user.id or user.role.code not in UPGRADE_REVIEWER_CODES:
-        raise HTTPException(404, "待审核工单不存在或已被处理")
-    decision = str(payload.get("decision") or "")
-    note = str(payload.get("handling_note") or "").strip()
-    if not note:
-        raise HTTPException(400, "处理说明必填")
-    first, second = db.get(DeductionRecord, row.first_deduction_id), db.get(DeductionRecord, row.second_deduction_id)
-    if not first or not second:
-        raise HTTPException(409, "来源声明不存在")
-    ensure_month_open(db, second.deduction_month, second.attraction_id_snapshot, "处理声明升级工单")
-    if decision == "reject":
-        second.status, second.upgrade_state = "void", "rejected"
-        second.void_reason = "声明升级审核不通过：" + note
-        first.upgrade_request_id, first.upgrade_role, first.upgrade_state = None, None, "eligible"
-        row.status, row.handling_note, row.resolved_by, row.resolved_by_name, row.resolved_at = "rejected", note, user.id, user.name, datetime.now()
-    elif decision == "approve":
-        level_id = int(payload.get("result_level_id") or 0)
-        confirmed = bool(payload.get("issued_confirmed"))
-        level = db.get(DeductionLevel, level_id)
-        if not confirmed:
-            raise HTTPException(400, "请先确认已完成真实备忘录或一级警告开具")
-        if not level or level.code not in {"MEMO", "WARNING_1"}:
-            raise HTTPException(400, "升级结果仅可选择备忘录或一级警告")
-        placeholder = StoredFile(storage_key=f"system/no-document-{secrets.token_hex(12)}", original_filename="无需上传正式文书", extension=".none", mime_type="application/octet-stream", file_size=0, sha256="0" * 64, uploaded_by=user.id, status="not_required")
-        db.add(placeholder)
-        db.flush()
-        result = DeductionRecord(employee_id=second.employee_id, employee_no=second.employee_no, employee_name=second.employee_name, employee_role_snapshot=second.employee_role_snapshot, employee_group_id_snapshot=second.employee_group_id_snapshot, attraction_id_snapshot=second.attraction_id_snapshot, deduction_type_id=second.deduction_type_id, deduction_type_name=second.deduction_type_name, deduction_level_id=level.id, deduction_level_name=level.name, points=level.points, occurred_on=second.occurred_on, deduction_month=second.deduction_month, description=note, document_file_id=placeholder.id, submitter_id=user.id, submitter_name=user.name, submitter_role_snapshot=user.role.name, permission_scope_snapshot="声明升级审核", status="active", upgrade_role="result", upgrade_state="result")
-        db.add(result)
-        db.flush()
-        first.upgrade_role, first.upgrade_state = "source_first", "source_first"
-        second.status, second.upgrade_role, second.upgrade_state = "active", "source_second", "source_second"
-        row.status, row.result_level_id, row.result_deduction_id, row.handling_note, row.issued_confirmed = "approved", level.id, result.id, note, True
-        row.resolved_by, row.resolved_by_name, row.resolved_at = user.id, user.name, datetime.now()
-    else:
-        raise HTTPException(400, "无效处理结论")
-    write_audit(db, user.employee, "处理声明升级工单", "deduction_upgrade", row.id, after={"decision": decision, "note": note}, ip_address=client_ip(request))
-    db.commit()
+    try:
+        row = pending_upgrade_for_update(db, request_id, user, "待审核工单不存在或已被处理")
+        decision = str(payload.get("decision") or "")
+        note = str(payload.get("handling_note") or "").strip()
+        if not note:
+            raise HTTPException(400, "处理说明必填")
+        first, second = db.get(DeductionRecord, row.first_deduction_id), db.get(DeductionRecord, row.second_deduction_id)
+        if not first or not second:
+            raise HTTPException(409, "来源声明不存在")
+        ensure_month_open(db, second.deduction_month, second.attraction_id_snapshot, "处理声明升级工单")
+        if decision not in {"approve", "reject"}:
+            raise HTTPException(400, "无效处理结论")
+        level = None
+        if decision == "approve":
+            level_id = int(payload.get("result_level_id") or 0)
+            confirmed = bool(payload.get("issued_confirmed"))
+            level = db.get(DeductionLevel, level_id)
+            if not confirmed:
+                raise HTTPException(400, "请先确认已完成真实备忘录或一级警告开具")
+            if not level or level.code not in {"MEMO", "WARNING_1"}:
+                raise HTTPException(400, "升级结果仅可选择备忘录或一级警告")
+        claimed = db.execute(
+            update(DeductionUpgradeRequest)
+            .where(DeductionUpgradeRequest.id == row.id, DeductionUpgradeRequest.status == "pending", DeductionUpgradeRequest.reviewer_id == user.id)
+            .values(status="approved" if decision == "approve" else "rejected")
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(404, "待审核工单不存在或已被处理")
+        db.refresh(row)
+        if decision == "reject":
+            second.status, second.upgrade_state = "void", "rejected"
+            second.void_reason = "声明升级审核不通过：" + note
+            first.upgrade_request_id, first.upgrade_role, first.upgrade_state = None, None, "eligible"
+            row.handling_note, row.resolved_by, row.resolved_by_name, row.resolved_at = note, user.id, user.name, datetime.now()
+        else:
+            placeholder = StoredFile(storage_key=f"system/no-document-{secrets.token_hex(12)}", original_filename="无需上传正式文书", extension=".none", mime_type="application/octet-stream", file_size=0, sha256="0" * 64, uploaded_by=user.id, status="not_required")
+            db.add(placeholder)
+            db.flush()
+            result = DeductionRecord(employee_id=second.employee_id, employee_no=second.employee_no, employee_name=second.employee_name, employee_role_snapshot=second.employee_role_snapshot, employee_group_id_snapshot=second.employee_group_id_snapshot, attraction_id_snapshot=second.attraction_id_snapshot, deduction_type_id=second.deduction_type_id, deduction_type_name=second.deduction_type_name, deduction_level_id=level.id, deduction_level_name=level.name, points=level.points, occurred_on=second.occurred_on, deduction_month=second.deduction_month, description=note, document_file_id=placeholder.id, submitter_id=user.id, submitter_name=user.name, submitter_role_snapshot=user.role.name, permission_scope_snapshot="声明升级审核", status="active", upgrade_role="result", upgrade_state="result")
+            db.add(result)
+            db.flush()
+            first.upgrade_role, first.upgrade_state = "source_first", "source_first"
+            second.status, second.upgrade_role, second.upgrade_state = "active", "source_second", "source_second"
+            row.result_level_id, row.result_deduction_id, row.handling_note, row.issued_confirmed = level.id, result.id, note, True
+            row.resolved_by, row.resolved_by_name, row.resolved_at = user.id, user.name, datetime.now()
+        write_audit(db, user.employee, "处理声明升级工单", "deduction_upgrade", row.id, after={"decision": decision, "note": note}, ip_address=client_ip(request))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     invalidate_data_caches()
     return {"ok": True, "request": deduction_upgrade_payload(db, row)}
 

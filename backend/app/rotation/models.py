@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.v2_database import Base
+from app.database.connection import Base
 
 
 class RotationAccount(Base):

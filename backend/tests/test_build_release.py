@@ -2,10 +2,29 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import os
+import subprocess
 from pathlib import Path
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("missing", ["Deploy-RecognitionRelease.ps1", "server_release.py", "deployment_runtime.py"])
+def test_missing_deployment_dependency_refuses_source_collection(tmp_path, monkeypatch, missing):
+    mod = load_build_release()
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in mod.SCRIPT_FILES:
+        (scripts / name).write_text("deployment source", encoding="utf-8")
+    (scripts / missing).unlink()
+    monkeypatch.setattr(mod, "BACKEND_ROOT", backend)
+    monkeypatch.setattr(mod, "SCRIPTS_ROOT", scripts)
+    with pytest.raises(RuntimeError, match="required deployment scripts missing"):
+        mod.release_sources()
 
 
 def load_build_release():
@@ -14,6 +33,44 @@ def load_build_release():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("linked_root", [False, True])
+def test_release_source_reparse_is_rejected_before_traversing_external_tree(tmp_path, monkeypatch, linked_root):
+    mod = load_build_release()
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    for name in mod.SCRIPT_FILES:
+        (scripts / name).write_text("deployment source", encoding="utf-8")
+    outside = tmp_path / "private"
+    outside.mkdir()
+    sentinel = outside / "sentinel-private.txt"
+    sentinel.write_text("must not enter release", encoding="utf-8")
+    if linked_root:
+        link = backend / "app"
+    else:
+        app = backend / "app"
+        app.mkdir()
+        link = app / "linked-outside"
+    if os.name == "nt":
+        result = subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+    else:
+        link.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(mod, "BACKEND_ROOT", backend)
+    monkeypatch.setattr(mod, "SCRIPTS_ROOT", scripts)
+    try:
+        with pytest.raises(RuntimeError, match="symlinks or reparse points"):
+            mod.release_sources()
+        assert sentinel.read_text(encoding="utf-8") == "must not enter release"
+    finally:
+        # Remove only this link; the target's sentinel remains untouched.
+        if os.name == "nt":
+            link.rmdir()
+        else:
+            link.unlink()
 
 
 def test_release_package_excludes_local_secrets_and_uses_app_version(tmp_path: Path) -> None:
@@ -52,6 +109,7 @@ def test_release_whitelist_excludes_tests_and_docs() -> None:
 
     assert "backend/app/main.py" in names
     assert "backend/requirements.txt" in names
+    assert {"scripts/Deploy-RecognitionRelease.ps1", "scripts/server_release.py", "scripts/deployment_runtime.py"} <= names
     # Test-only dependencies must never reach a production server.
     assert "backend/requirements-dev.txt" not in names
     assert not any("requirements-dev" in name for name in names)

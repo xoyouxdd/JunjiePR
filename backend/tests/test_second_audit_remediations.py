@@ -1,3 +1,4 @@
+from frontend_source import read_frontend_source
 import os
 import tempfile
 from datetime import date, datetime, timedelta
@@ -43,12 +44,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_render_navigation_cancels_stale_read_requests_without_recursive_redraw() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "let renderAbortController=null;" in script
     assert "renderAbortController?.abort();" in script
     assert "renderAbortController=controller;" in script
-    assert "requestOptions.signal=renderAbortController.signal" in script
+    assert "requestOptions.signal=getViewSignal()" in script
     assert "clearPageResources();" in script
     assert "pageTimeout(poll,1500)" in script
     assert "if(generation!==renderGeneration) return render();" not in script
@@ -58,7 +59,7 @@ def test_render_navigation_cancels_stale_read_requests_without_recursive_redraw(
 
 
 def test_manager_recognition_can_submit_without_a_self_evidence_control() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "function recognitionSubmissionData(form,imageRequired=true)" in script
     assert "if(imageRequired&&!file)" in script
@@ -66,7 +67,7 @@ def test_manager_recognition_can_submit_without_a_self_evidence_control() -> Non
 
 
 def test_hr_member_group_is_the_only_inline_control() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "data-hr-group-select" in script
     assert "hrBatchLeaderSave" not in script
@@ -74,7 +75,7 @@ def test_hr_member_group_is_the_only_inline_control() -> None:
 
 
 def test_score_rule_ui_describes_global_scope_and_is_read_only_for_circle_hr() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "const canEdit=state.me.role_code==='SYSTEM_ADMIN'" in script
     assert "这是全系统统一分值规则" in script
@@ -83,7 +84,7 @@ def test_score_rule_ui_describes_global_scope_and_is_read_only_for_circle_hr() -
 
 
 def test_required_recognition_fields_are_not_hidden_as_more_options() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     recognition_panel = script[script.index("const recognitionPanel="):script.index("const recognitionSection=")]
     assert 'name="occurred_attraction_id"' in recognition_panel
@@ -92,7 +93,7 @@ def test_required_recognition_fields_are_not_hidden_as_more_options() -> None:
 
 
 def test_mobile_review_and_material_status_keep_decision_fields_distinct() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "function recognitionScoreText(r)" in script
     assert "认可人：${esc(r.recognizer_name)} · ${recognitionScoreText(r)}" in script
@@ -101,19 +102,21 @@ def test_mobile_review_and_material_status_keep_decision_fields_distinct() -> No
     assert ".filter(row=>!row.dedicated_entry)" in script
     assert "businessActive=businessStatus==='active'" in script
     assert "是否计分以业务状态为准" in script
-    assert "if(error?.name==='AbortError'||!container?.isConnected)return" in script
+    # Old-page errors also need the captured page context, not only a DOM check.
+    # The actual navigation/late-result timing is exercised in view_lifecycle.cjs.
+    assert "if(error?.name==='AbortError'||!page.isCurrent()||!container?.isConnected)return" in script
 
 
 def test_mobile_fixed_actions_and_motion_preferences_have_shared_rules() -> None:
     css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert "behavior:prefersReducedMotion()?'auto':'smooth'" in script
 
 
 def test_role_navigation_only_exposes_supported_month_close_and_statistics_entries() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "else if (r==='HR_CIRCLE')" in script
     assert "else if (r==='HR_ADMIN')" in script
@@ -213,6 +216,7 @@ def test_scoped_month_score_query_matches_the_legacy_view_business_rules() -> No
             "CREATE TABLE recognition_records (employee_id INTEGER, recognition_month TEXT, recognition_date TEXT, status TEXT, fraction NUMERIC, credited_fraction NUMERIC)",
             "CREATE TABLE attendance_monthly_scores (employee_id INTEGER, attendance_month TEXT, eligible INTEGER, final_score NUMERIC)",
             "CREATE TABLE deduction_records (employee_id INTEGER, deduction_month TEXT, status TEXT, points NUMERIC, upgrade_role TEXT)",
+            "CREATE TABLE employee_loa_periods (employee_id INTEGER, starts_on TEXT, ends_on TEXT, status TEXT)",
         ):
             connection.execute(text(statement))
         connection.execute(text("INSERT INTO employees VALUES (1,'0000001','甲'),(2,'0000002','乙')"))
@@ -421,7 +425,7 @@ def test_circle_hr_alerts_are_filtered_before_the_page_limit() -> None:
 
 
 def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
-    script = (ROOT / "app" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    script = read_frontend_source()
 
     assert "function bindDialogLayer(" in script
     assert "function isNativePickerControl(" in script

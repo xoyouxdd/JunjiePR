@@ -36,6 +36,12 @@ $env:RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD = "由负责人现场设置的初始�
 
 `run_all.py` 用当前解释器逐个文件起子进程，工作目录固定为 `backend/`，所以在仓库根目录直接执行即可。
 
+默认入口同时执行 Python、纯 Node.js 回归和 Playwright/Edge 本地 DOM 夹具；Node.js 须在 PATH 中，Playwright 须能由 `backend/` 解析，Microsoft Edge 须已安装。可配置 `NODE_PATH` 指向已有 Playwright 模块目录。运行器不自动安装依赖，缺少必需运行时会明确失败；浏览器夹具不启动应用服务器，也不连接部署环境。
+
+定向检查可追加 `--suite python`、`--suite node` 或 `--suite browser`；它们只证明相应范围通过，不能替代默认完整验证。新增 Python 回归继续使用 `test_*.py`，前端回归使用 `.cjs`。
+
+`frontend_modules.cjs` 在本地 HTTP 静态夹具中加载真实 HTML、import map 和全部 ES 模块，模拟 API 验证菜单、页面生命周期、路径前缀、缓存版本、CSP 及手机提交，不启动业务后端。`view_lifecycle.cjs` 通过 Node 的真实 ES 模块执行请求竞态，运行器为它追加 `--experimental-vm-modules`；其他纯 Node 回归保持常规启动。源码读取 helper 使用 `.py` / `.js`，不会被识别为独立 CJS 回归。
+
 中文 Windows 默认按 GBK 读取子进程输出，`test_audit_score_rules.py` 会因此报 `UnicodeDecodeError`。跑测试前先在同一个 PowerShell 里执行 `$env:PYTHONUTF8 = "1"`。
 
 不要用一次 `pytest tests` 代替。单文件可以：
