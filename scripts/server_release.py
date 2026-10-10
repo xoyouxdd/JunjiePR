@@ -291,11 +291,38 @@ def task_enabled(task_name):
     try:
         document = ET.fromstring(result.stdout)
         enabled = document.find(".//{*}Settings/{*}Enabled")
-        if enabled is None or enabled.text not in {"true", "false"}:
-            raise ValueError("Task Settings.Enabled is missing or invalid")
+        if enabled is not None and enabled.text not in {"true", "false"}:
+            raise ValueError("Task Settings.Enabled is invalid")
     except (ET.ParseError, ValueError) as exc:
         raise RuntimeError(f"Cannot establish scheduled task enabled state: {task_name}") from exc
-    return enabled.text == "true"
+    if enabled is not None:
+        return enabled.text == "true"
+
+    # Task Scheduler can omit default-valued settings from exported XML.
+    # Read the registered task's actual flag, not its localized/running state.
+    quoted_name = task_name.replace("'", "''")
+    command = (
+        "$ErrorActionPreference='Stop';try {"
+        "$scheduler=New-Object -ComObject Schedule.Service;$scheduler.Connect();"
+        f"$task=$scheduler.GetFolder('\\').GetTask('{quoted_name}');"
+        "$enabled=$task.Enabled;"
+        "if ($enabled -isnot [bool]) {throw 'Task Enabled is not boolean'};"
+        "[pscustomobject]@{task=$task.Path;enabled=$enabled}|ConvertTo-Json -Compress"
+        "} catch {Write-Error $_;exit 1}"
+    )
+    actual = run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command, check=False)
+    try:
+        if actual.returncode:
+            raise ValueError(f"Task Scheduler API failed: {actual.stdout} {actual.stderr}")
+        state = json.loads(actual.stdout)
+        expected_path = "\\" + task_name.lstrip("\\")
+        if (not isinstance(state, dict) or state.get("task") != expected_path
+                or type(state.get("enabled")) is not bool):
+            raise ValueError("Task Scheduler API returned an invalid task or Enabled value")
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(f"Cannot establish scheduled task enabled state: {task_name}") from exc
+    log("TASK_STATE_VERIFIED", task_name, "source=TaskSchedulerAPI", f"enabled={state['enabled']}")
+    return state["enabled"]
 
 
 class DeploymentActions:

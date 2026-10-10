@@ -150,7 +150,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
         assert {item["summary"] for item in hr["release"]["items"]} == {
-            "新增公告中心与版本查收", "公告发布、交接与签收导出", "公告授权和管理员兜底交接", "公告支持平台内制图和附件", "轮岗休息与待出发显示修复"}
+            "新增公告中心与版本查收", "公告发布、交接与签收导出", "公告授权和管理员兜底交接", "公告支持平台内制图和附件", "轮岗休息与待出发显示修复", "部署任务状态校验兼容性修复"}
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()
@@ -168,7 +168,10 @@ def test_current_release_items_match_roles_and_permissions() -> None:
     assert item_visible(loa, "CM", set()) and item_visible(navigation, "HR_CIRCLE", set())
     assert item_visible(upgrade, "GSM", set()) and not item_visible(upgrade, "CM", set())
     assert item_visible(rotation_fix, "TR", set()) and not item_visible(rotation_fix, "CM", set())
-    common, publish, lead, admin, artwork, rotation_status = RELEASES[0]["items"]
+    common, publish, lead, admin, artwork, rotation_status, deployment_fix = RELEASES[0]["items"]
+    assert item_visible(deployment_fix, "SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
+    assert not item_visible(deployment_fix, "SYSTEM_ADMIN", set())
+    assert not item_visible(deployment_fix, "GSM", {"SYSTEM_ADMIN"})
     assert item_visible(rotation_status, "GSM", set())
     assert item_visible(rotation_status, "TR", set())
     assert not item_visible(rotation_status, "CM", set())

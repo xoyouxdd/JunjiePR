@@ -499,8 +499,90 @@ def test_unknown_or_missing_watchdog_state_fails_closed(live, monkeypatch, resul
 @pytest.mark.parametrize("enabled", ["true", "false"])
 def test_watchdog_xml_parses_exact_enabled_state(monkeypatch, enabled):
     xml = f'<Task xmlns="urn:task"><Settings><Enabled>{enabled}</Enabled></Settings></Task>'
-    monkeypatch.setattr(release, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=xml, stderr=""))
+    def command(*args, **kwargs):
+        assert args == ("schtasks.exe", "/Query", "/TN", release.WATCHDOG, "/XML")
+        return SimpleNamespace(returncode=0, stdout=xml, stderr="")
+    monkeypatch.setattr(release, "run", command)
     assert release.DeploymentActions().watchdog_enabled() is (enabled == "true")
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("task_name", [release.TASK, release.WATCHDOG])
+def test_missing_xml_enabled_reads_registered_task_boolean(monkeypatch, enabled, task_name):
+    commands = []
+
+    def command(*args, **kwargs):
+        commands.append(args)
+        assert kwargs == {"check": False}
+        if args[0] == "schtasks.exe":
+            assert args == ("schtasks.exe", "/Query", "/TN", task_name, "/XML")
+            return SimpleNamespace(returncode=0, stdout='<Task xmlns="urn:task"><Settings/></Task>', stderr="")
+        assert args[:4] == ("powershell.exe", "-NoProfile", "-NonInteractive", "-Command")
+        assert f"GetTask('{task_name}')" in args[4]
+        assert "$task.Enabled" in args[4] and "$task.State" not in args[4]
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"task": "\\" + task_name, "enabled": enabled}), stderr="")
+
+    monkeypatch.setattr(release, "run", command)
+    assert release.task_enabled(task_name) is enabled
+    assert len(commands) == 2
+
+
+@pytest.mark.parametrize("actual", [
+    SimpleNamespace(returncode=1, stdout="", stderr="access denied"),
+    SimpleNamespace(returncode=0, stdout="", stderr=""),
+    SimpleNamespace(returncode=0, stdout="not JSON", stderr=""),
+    SimpleNamespace(returncode=0, stdout="null", stderr=""),
+    SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+    *[SimpleNamespace(returncode=0, stdout=json.dumps(state), stderr="") for state in [
+        {"task": "\\" + release.WATCHDOG},
+        {"task": "\\" + release.WATCHDOG, "enabled": None},
+        {"task": "\\" + release.WATCHDOG, "enabled": "true"},
+        {"task": "\\" + release.WATCHDOG, "enabled": 1},
+        {"task": "\\different-task", "enabled": True},
+    ]],
+])
+def test_unreadable_registered_task_state_prevents_app_stop(live, monkeypatch, actual):
+    def command(*args, **kwargs):
+        if args[0] == "schtasks.exe":
+            return SimpleNamespace(returncode=0, stdout="<Task><Settings/></Task>", stderr="")
+        return actual
+
+    monkeypatch.setattr(release, "run", command)
+    actions = OfflineActions(live)
+    actions.watchdog_enabled = release.DeploymentActions.watchdog_enabled.__get__(actions)
+    with pytest.raises(release.DeploymentError) as raised:
+        deploy(live, actions)
+    assert_old_release(live)
+    assert "stop" not in actions.events and "watchdog_disable" not in actions.events
+    assert "watchdog_enable" not in actions.events and "pip" not in actions.events
+    assert release.WATCHDOG in str(raised.value.original_error)
+
+
+def test_disabled_application_from_registered_task_api_blocks_watchdog_changes(live, monkeypatch):
+    def command(*args, **kwargs):
+        if args[0] == "schtasks.exe":
+            return SimpleNamespace(returncode=0, stdout="<Task><Settings/></Task>", stderr="")
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"task": "\\" + release.TASK, "enabled": False}), stderr="")
+
+    monkeypatch.setattr(release, "run", command)
+    actions = OfflineActions(live)
+    actions.validate_service_task = release.DeploymentActions.validate_service_task.__get__(actions)
+    with pytest.raises(release.DeploymentError) as raised:
+        deploy(live, actions)
+    assert_old_release(live)
+    assert "disabled" in str(raised.value.original_error)
+    assert "watchdog_query" not in actions.events and "watchdog_disable" not in actions.events
+    assert "stop" not in actions.events
+
+
+@pytest.mark.parametrize("xml", ["not XML", "<Task><Settings><Enabled>unknown</Enabled></Settings></Task>"])
+def test_invalid_task_xml_never_falls_back_to_api(monkeypatch, xml):
+    def command(*args, **kwargs):
+        assert args[0] == "schtasks.exe"
+        return SimpleNamespace(returncode=0, stdout=xml, stderr="")
+    monkeypatch.setattr(release, "run", command)
+    with pytest.raises(RuntimeError, match="Cannot establish"):
+        release.task_enabled(release.TASK)
 
 
 def test_disable_watchdog_waits_for_running_instance_to_end(monkeypatch):
