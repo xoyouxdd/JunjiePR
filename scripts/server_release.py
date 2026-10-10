@@ -346,8 +346,11 @@ class DeploymentActions:
             "$ErrorActionPreference='Stop';"
             "$scheduler=New-Object -ComObject Schedule.Service;$scheduler.Connect();"
             f"$task=$scheduler.GetFolder('\\').GetTask('{WATCHDOG}');"
-            "$running=@($scheduler.GetRunningTasks(0)|Where-Object{"
-            f"$_.Path -eq '\\{WATCHDOG}'" + "}).Count;"
+            f"if($task.Path -ne '\\{WATCHDOG}'){{throw 'Unexpected watchdog task path'}};"
+            # Windows PowerShell can fail while enumerating a COM collection.
+            # Query this registered task directly and read Count without enumeration.
+            "$instances=$task.GetInstances(0);$running=$instances.Count;"
+            "if($running -isnot [int] -or $running -lt 0){throw 'Invalid watchdog instance count'};"
             # TASK_STATE_QUEUED=2 and TASK_STATE_RUNNING=4 must both be absent.
             "if($task.Enabled -or $task.State -eq 2 -or $task.State -eq 4 -or $running -ne 0){exit 3};'WATCHDOG_QUIESCED'"
         )

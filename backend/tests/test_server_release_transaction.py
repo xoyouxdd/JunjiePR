@@ -602,10 +602,30 @@ def test_disable_watchdog_waits_for_running_instance_to_end(monkeypatch):
     assert commands[1][0] == ("schtasks.exe", "/End", "/TN", release.WATCHDOG)
     checks = [args[-1] for args, _ in commands if args[0] == "powershell.exe"]
     assert len(checks) == 2
-    assert "GetRunningTasks(0)" in checks[0]
+    assert "$task.GetInstances(0)" in checks[0]
+    assert "$instances.Count" in checks[0]
+    assert "GetRunningTasks" not in checks[0] and "Where-Object" not in checks[0]
     assert "$task.Enabled" in checks[0]
     assert "$task.State -eq 2" in checks[0] and "$task.State -eq 4" in checks[0]
     assert "\\RecognitionCardSystemWatchdog" in checks[0]
+
+
+def test_unreadable_watchdog_instance_count_prevents_app_stop(live, monkeypatch):
+    def command(*args, **kwargs):
+        if args[0] == "powershell.exe":
+            return SimpleNamespace(returncode=1, stdout="", stderr="Invalid watchdog instance count")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(release, "run", command)
+    actions = OfflineActions(live)
+    actions.disable_watchdog = release.DeploymentActions.disable_watchdog.__get__(actions)
+    with pytest.raises(release.DeploymentError) as raised:
+        deploy(live, actions)
+    assert_old_release(live)
+    assert "stop" not in actions.events and "pip" not in actions.events
+    assert "watchdog_enable" not in actions.events
+    assert "Invalid watchdog instance count" in str(raised.value.original_error)
+    assert raised.value.rollback_errors[0][0] == "watchdog_disable"
 
 
 def test_watchdog_that_never_quiesces_prevents_app_stop(live, monkeypatch):

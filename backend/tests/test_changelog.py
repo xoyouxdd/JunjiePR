@@ -150,7 +150,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
         assert {item["summary"] for item in hr["release"]["items"]} == {
-            "新增公告中心与版本查收", "公告发布、交接与签收导出", "公告授权和管理员兜底交接", "公告支持平台内制图和附件", "轮岗休息与待出发显示修复", "部署任务状态校验兼容性修复"}
+            "新增公告中心与版本查收", "公告发布、交接与签收导出", "公告授权和管理员兜底交接", "公告支持平台内制图和附件", "轮岗休息与待出发显示修复", "部署任务状态与看门狗停止核验修复"}
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()
