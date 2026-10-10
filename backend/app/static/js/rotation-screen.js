@@ -13,10 +13,10 @@ function screenView() {
   if (day.status === 'ended') return '<section class="panel rt-empty"><h2>今天的轮岗已结束</h2></section>';
   const n = nowMin();
   const ps = day.persons;
-  const early = (RT.data.settings && RT.data.settings.departEarly) || 1;
+  const early = departureEarly();
   const arrive = ps.filter(p => p.state === 'walkback' || p.state === 'pending').sort((a, b) => (a.walkbackSince || 0) - (b.walkbackSince || 0));
-  const ready = ps.filter(p => p.state === 'ready').sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9));
-  const resting = ps.filter(p => p.state === 'rest').sort((a, b) => a.readyAt - b.readyAt);
+  const ready = ps.filter(p => poolState(p, n) === 'ready').sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9));
+  const resting = ps.filter(p => poolState(p, n) === 'rest').sort((a, b) => restUntil(a) - restUntil(b));
   const meals = ps.filter(p => p.state === 'meal').sort((a, b) => a.readyAt - b.readyAt);
   const lines = `<div class="rt-lines">${day.lines.filter(L => L.active || L.posts.some(x => x.occ)).map(L => lineCard(L, n, false)).join('')}</div>`;
   let pool = '';
@@ -29,7 +29,7 @@ function screenView() {
       if (over >= 2) cls = 'rt-chip late'; else if (over >= -early) cls = 'rt-chip due';
       sub = over >= -early ? (over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发') : `${hm(a.departAt)} 出发`;
     }
-    const can = a && n >= a.departAt - early - 0.01;
+    const can = canDepartNow(p, n);
     return `<button type="button" class="${cls}" data-pid="${esc(p.pid)}" data-act="depart" ${can ? '' : 'aria-disabled="true"'}><span class="rt-nm">${esc(p.name)}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
   }, 'rt-ready');
   pool += poolSection('去休息 / 吃饭', '下线回到休息室点自己的名字', arrive, p => {
@@ -42,7 +42,7 @@ function screenView() {
   pool += poolSection('休息区', '饭后倒计时结束前不能进线', resting, p => {
     const kind = p.state === 'meal' ? '<span class="rt-badge meal">吃饭</span>' : '<span class="rt-badge rest">休息</span>';
     const next = p.assign ? `${goText(p)} <small>${hm(p.assign.departAt)}</small>` : '';
-    return `<div class="rt-chip ${p.state}"><span class="rt-nm">${esc(p.name)} ${kind}</span><span class="rt-sub">至 ${hm(p.readyAt)}，还剩 ${Math.max(0, Math.ceil(p.readyAt - n))} 分钟</span><span class="rt-go">${next}</span>${badges(p)}</div>`;
+    return `<div class="rt-chip rest"><span class="rt-nm">${esc(p.name)} ${kind}</span><span class="rt-sub">至 ${hm(restUntil(p))}，还剩 ${Math.max(0, Math.ceil(restUntil(p) - n))} 分钟</span><span class="rt-go">${next}</span>${badges(p)}</div>`;
   });
   return `<div class="rt-board">${lines}<div class="rt-pool">${pool}</div></div>`;
 }

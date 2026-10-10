@@ -540,7 +540,7 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
             body = "倒计时结束后才可轮岗，不提前派岗。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
             step = ("rest", f"{word}至 {fmt(p['readyAt'])}", body)
         elif st == "ready":
-            if a and now >= a["departAt"] - early:
+            if a and now >= max(a["departAt"] - early, a.get("notBefore", 0)):
                 step = ("depart", f"现在出发去 {a['line']} 线", _go_text(eng, a) + "。到休息室大屏点「去轮岗」。")
             elif a:
                 step = ("rest", f"{fmt(a['departAt'])} 出发去 {a['line']} 线", _go_text(eng, a))
@@ -620,7 +620,9 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "mealEligible": eng.meal_eligible(p), "downReason": p.get("downReason"), "after": p.get("after"),
         "visited": p.get("visited", []), "mark": p.get("mark", ""), "absences": p.get("absences", []),
         "preparing": preparing,
-        "canDepart": bool(p.get("state") == "ready" and a and now >= a["departAt"] - eng.S["departEarly"] - 0.01),
+        "canDepart": bool(p.get("state") == "ready" and a and now >= (p.get("readyAt") or now) - 0.01
+                          and now >= a.get("notBefore", 0) - 0.01
+                          and now >= a["departAt"] - eng.S["departEarly"] - 0.01),
     }
 
 
@@ -727,6 +729,7 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
         "clock": clock_payload(cfg),
         "version": RUNTIME.version,
         "employee_no": employee_no,
+        "settings": {"departEarly": settings_of(cfg)["departEarly"]},
         "person": None,
         "line": None,
         "week_minutes": week,
@@ -832,7 +835,9 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             eng.act_undo(pid, now, actor)
         elif act == "post":
             _require(body, "line", "i")
-            eng.act_post(body["line"], body["i"], action_boolean(body, "open"), now, actor)
+            open_ = action_boolean(body, "open")
+            open_at = action_time(body["openAt"]) if open_ and "openAt" in body else None
+            eng.act_post(body["line"], body["i"], open_, now, actor, open_at=open_at)
         elif act == "line":
             _require(body, "line")
             eng.act_line(body["line"], action_boolean(body, "active"), now, actor)

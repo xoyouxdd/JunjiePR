@@ -616,6 +616,9 @@ class Engine:
             if not stale and a.get('mode') in TARGET_MODES:
                 t = self.P.get(a.get('target'))
                 stale = not t or t['state'] != 'onpost' or t.get('line') != a['line']
+            if not stale and a.get('mode') == 'opening':
+                _, _, post = self.post(a['line'], a['post'])
+                stale = not post.get('openRequest') or bool(post.get('occ'))
             if stale:
                 q['assign'] = None
                 self.h.log('assign_cleared', 'system', q['pid'], a.get('line'), None, {'mode': a.get('mode'), 'target': a.get('target')})
@@ -698,6 +701,8 @@ class Engine:
                               'why': '推出圈' if kind == 'out' else '推下班'}
             changed = True
         # 普通分配
+        if self._assign_openings(now):
+            changed = True
         todo = [p for p in self.P.values() if p['state'] in REST_STATES and not p.get('assign')
                 and p['role'] in ('rotation', 'op') and p['state'] != 'meal'
                 and not (p.get('breakKind') == 'meal_rest' and now < p['readyAt'])]
@@ -709,6 +714,43 @@ class Engine:
                 if a:
                     p['assign'] = a
                     changed = True
+        return changed
+
+    def _assign_openings(self, now):
+        """人工加岗优先预留下一位可轮岗人员，从入口推进补空岗。"""
+        changed = False
+        requests = [(L, i, x) for L in self.d['lines'] if L.get('active')
+                    for i, x in enumerate(L['posts']) if x.get('openRequest')]
+        requests.sort(key=lambda req: _m(req[2]['openAt']))
+        for L, i, x in requests:
+            if x.get('occ'):
+                x['openRequest'] = False
+                changed = True
+                continue
+            at = _m(x['openAt'])
+            if at - now > self.S['futureWait']:
+                continue
+            if any(p.get('assign') and p['assign'].get('mode') == 'opening'
+                   and p['assign']['line'] == L['id'] and p['assign']['post'] == i for p in self.P.values()):
+                continue
+            candidates = []
+            for p in self.P.values():
+                a = p.get('assign') or {}
+                if p['state'] not in ('rest', 'ready') or p['role'] not in ('rotation', 'op'):
+                    continue
+                if (p.get('breakKind') == 'meal_rest' and now < p['readyAt']) or a.get('mode') in TARGET_MODES \
+                        or a.get('mode') == 'opening' or a.get('manual'):
+                    continue
+                ready = self._ready_time(p, now)
+                depart = max(at, ready, now)
+                if self.can_board(p, depart, now):
+                    candidates.append((depart, ready, p['start'], p['pid'], p))
+            if not candidates:
+                continue
+            depart, _, _, _, p = min(candidates, key=lambda c: c[:4])
+            p['assign'] = {'line': L['id'], 'mode': 'opening', 'post': i, 'departAt': depart, 'notBefore': at}
+            self.h.log('opening_assign', 'system', p['pid'], L['id'], x['name'], {'departAt': depart})
+            changed = True
         return changed
 
     def _push7_substitute(self, now):
@@ -750,7 +792,7 @@ class Engine:
             walk = self.walk(L['id'])
             arrive0 = ready + walk
             res = sorted([q for q in self.P.values() if q.get('assign') and q['assign']['line'] == L['id']
-                          and q['assign'].get('mode') == 'push'],
+                          and q['assign'].get('mode') in ('push', 'opening')],
                          key=lambda q: q['assign']['departAt'])
             k = len(res)
             vac = [i for i in idx if L['posts'][i].get('occ') is None]
@@ -874,6 +916,8 @@ class Engine:
         if not p.get('assign'):
             raise ActionError('%s 还没有分配去向' % p['name'])
         depart_at = p['assign']['departAt']
+        if now < p['assign'].get('notBefore', 0) - 0.01:
+            raise ActionError('%s 还没到加岗时间（%s）' % (p['name'], fmt(p['assign']['notBefore'])))
         if now < depart_at - self.S['departEarly'] - 0.01:
             raise ActionError('%s 还没到出发时间（%s）' % (p['name'], fmt(depart_at)))
         L = self.line(p['assign']['line'])
@@ -935,16 +979,22 @@ class Engine:
         x['open'] = False
         self.h.log('post_close', actor, None, L['id'], x['name'], {})
 
-    def act_post(self, lid, i, open_, now, actor):
+    def act_post(self, lid, i, open_, now, actor, open_at=None):
         L, i, x = self.post(lid, i)
-        x['manual'] = True
-        x['opened'] = True
         if open_:
             if not L.get('active'):
                 raise ActionError('%s 线未启用，请先启用该线' % lid)
-            x['open'] = True
-            self.h.log('post_open', actor, None, lid, x['name'], {})
+            if x.get('occ'):
+                raise ActionError('岗位已有人，不能修改加岗时间')
+            at = math.ceil(now + 3) if open_at is None else open_at
+            if at < now - 0.01 or at >= 1440:
+                raise ActionError('加岗时间不得早于当前时间，且须在当天24:00前')
+            if self.d.get('closed') or (self.close_min() is not None and at >= self.close_min()):
+                raise ActionError('加岗时间必须在闭园前')
+            x.update(manual=False, opened=at <= now, open=at <= now, openAt=fmt(at), openRequest=True)
+            self.h.log('post_schedule', actor, None, lid, x['name'], {'openAt': fmt(at)})
         else:
+            x.update(manual=True, opened=True, openRequest=False)
             self._close_post(L, i, now, actor)
         self._reset_line_plans(lid)
 
@@ -969,7 +1019,7 @@ class Engine:
     def _reset_line_plans(self, lid):
         for q in self.P.values():
             if q.get('assign') and q['assign']['line'] == lid and q['state'] != 'heading' \
-                    and q['assign'].get('mode') == 'push':
+                    and q['assign'].get('mode') in ('push', 'opening'):
                 q['assign'] = None
 
     def act_away(self, pid, reason, now, actor):

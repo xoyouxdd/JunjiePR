@@ -39,7 +39,7 @@ def pending_actions(state: dict, now: float, depart_early: float) -> list[str]:
         st, a = p.get("state"), p.get("assign")
         if st in ("walkback", "pending"):
             out.append(f"{p['name']} 点「去休息」")
-        elif st == "ready" and a and now >= a["departAt"] - depart_early - 0.01:
+        elif st == "ready" and a and now >= max(a["departAt"] - depart_early, a.get("notBefore", 0), p.get("readyAt") or now) - 0.01:
             out.append(f"{p['name']} 点「去轮岗」（{a['line']} 线）")
     return out
 

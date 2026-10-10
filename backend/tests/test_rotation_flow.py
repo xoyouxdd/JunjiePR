@@ -72,6 +72,89 @@ def person(board: dict, no: str) -> dict:
     return next(p for p in board["day"]["persons"] if p["pid"] == no)
 
 
+def test_future_opening_waits_for_departure_window_in_every_api():
+    day = '2026-10-08'
+    wb = Workbook()
+    wb.active.append(['工号', '姓名', '日期', '班次', '备注'])
+    wb.active.append(['9100001', '定时开岗员工', day, '07:15-16:15', ''])
+    buf = BytesIO()
+    wb.save(buf)
+    with TestClient(app) as manager, TestClient(app) as screen, TestClient(app) as member:
+        login(manager, 'GSMTEST01')
+        enter(manager, '7777777')
+        login(screen, '6666666', '1243')
+        login(member, 'TRTEST01')
+        ok(clock(manager, action='set', date=day, time='03:59'))
+        ok(manager.put('/api/rotation/config', json={'lines': [{'id': 'C2', 'group': 'C',
+            'posts': [{'name': '单人迎宾', 'openAt': '08:15'}]}], 'settings': {'departEarly': 1}}))
+        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', buf.getvalue(),
+            'application/octet-stream')}, data={'scope': 'day'}))
+        enter(member, '9100001')
+        ok(clock(manager, action='jump', minutes=240))
+        ok(clock(manager, action='jump', minutes=6))
+        for client, path in ((manager, '/api/rotation/board'), (screen, '/api/rotation/screen/state')):
+            p = person(ok(client.get(path)), '9100001')
+            assert p['assign']['departAt'] == 495 and p['readyAt'] <= 485
+            assert p['canDepart'] is False
+        me = ok(member.get('/api/rotation/me'))
+        assert me['settings']['departEarly'] == 1 and me['person']['canDepart'] is False
+        assert any(n['kind'] == 'rest' and '08:15' in n['title'] for n in me['notices'] if n['status'] == 'open')
+        for client, path in ((manager, '/api/rotation/act'), (screen, '/api/rotation/screen/act')):
+            response = client.post(path, json={'action': 'depart', 'pid': '9100001'})
+            assert response.status_code == 400 and '还没到出发时间' in response.text
+        ok(clock(manager, action='jump', minutes=9))
+        assert person(ok(manager.get('/api/rotation/board')), '9100001')['canDepart'] is True
+        ok(manager.put('/api/rotation/config', json={'settings': {'departEarly': 0}}))
+        assert person(ok(screen.get('/api/rotation/screen/state')), '9100001')['canDepart'] is False
+        assert ok(member.get('/api/rotation/me'))['settings']['departEarly'] == 0
+        ok(clock(manager, action='jump', minutes=1))
+        assert person(ok(manager.get('/api/rotation/board')), '9100001')['canDepart'] is True
+        ok(screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9100001'}))
+        assert person(ok(manager.get('/api/rotation/board')), '9100001')['state'] == 'onpost'
+
+
+def test_manual_opening_default_edit_cancel_and_screen_departure():
+    day = '2026-10-09'
+    wb = Workbook()
+    wb.active.append(['工号', '姓名', '日期', '班次', '备注'])
+    wb.active.append(['9200001', '加岗演示', day, '07:15-16:15', ''])
+    buf = BytesIO()
+    wb.save(buf)
+    with TestClient(app) as manager, TestClient(app) as screen:
+        login(manager, 'GSMTEST01')
+        enter(manager, '7777777')
+        login(screen, '6666666', '1243')
+        ok(clock(manager, action='set', date=day, time='03:59'))
+        ok(manager.put('/api/rotation/config', json={'lines': [{'id': 'C1', 'group': 'C',
+            'posts': [{'name': '单人队末', 'openAt': '09:00'}]}], 'settings': {'departEarly': 1}}))
+        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', buf.getvalue(),
+            'application/octet-stream')}, data={'scope': 'day'}))
+        ok(clock(manager, action='jump', minutes=240))
+        ok(clock(manager, action='jump', minutes=6))
+        request = {'action': 'post', 'line': 'C1', 'i': 0, 'open': True}
+        assert ok(manager.get('/api/rotation/board'))['day']['status'] == 'live'
+        ok(manager.post('/api/rotation/act', json=request))
+        board = ok(manager.get('/api/rotation/board'))
+        assert board['day']['lines'][0]['posts'][0]['openAt'] == '08:08'
+        assert person(board, '9200001')['assign']['mode'] == 'opening'
+        ok(manager.post('/api/rotation/act', json={**request, 'openAt': '08:12'}))
+        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign']['departAt'] == 492
+        for value in ('08:04', '24:00', 'no-time'):
+            assert manager.post('/api/rotation/act', json={**request, 'openAt': value}).status_code == 400
+        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign']['departAt'] == 492
+        ok(manager.post('/api/rotation/act', json={**request, 'open': False}))
+        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign'] is None
+        ok(manager.post('/api/rotation/act', json=request))
+        ok(clock(manager, action='jump', minutes=2))
+        assert person(ok(screen.get('/api/rotation/screen/state')), '9200001')['canDepart'] is False
+        assert screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9200001'}).status_code == 400
+        next_step = ok(clock(manager, action='next'))
+        assert next_step['clock']['minute'] == 488 and next_step['waiting']
+        ok(screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9200001'}))
+        assert person(ok(manager.get('/api/rotation/board')), '9200001')['state'] == 'onpost'
+        assert manager.post('/api/rotation/act', json={**request, 'openAt': '08:12'}).status_code == 400
+
+
 def test_full_day_flow_through_the_api() -> None:
     with TestClient(app) as manager, TestClient(app) as screen, TestClient(app) as member:
         login(manager, "GSMTEST01")

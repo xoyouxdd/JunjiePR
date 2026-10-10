@@ -77,6 +77,72 @@ def occupants(eng, line):
     return [x["occ"] for x in eng.line(line)["posts"]]
 
 
+def test_manual_opening_reserves_next_person_after_three_minutes_and_pushes_from_entry():
+    eng, _ = live_day([person(p, '07:00', '21:00') for p in ('first', 'second', 'next')], lines=[two_lines()[0]])
+    seat(eng, 'first', 'A', 0, '08:00')
+    seat(eng, 'second', 'A', 1, '08:00')
+    eng.act_post('A', 2, False, hm('09:00'), 'test')
+    eng.act_post('A', 2, True, hm('09:00'), 'test')
+    eng.tick(hm('09:00'))
+    post = eng.line('A')['posts'][2]
+    assert post['openAt'] == '09:03' and not post['open']
+    assert eng.P['next']['assign'] == {'line': 'A', 'mode': 'opening', 'post': 2,
+        'departAt': hm('09:03'), 'notBefore': hm('09:03')}
+    eng.tick(hm('09:02'))
+    with pytest.raises(ActionError, match='还没到加岗时间'):
+        eng.act_depart('next', hm('09:02'), 'screen')
+    eng.tick(hm('09:03'))
+    eng.act_depart('next', hm('09:03'), 'screen')
+    assert occupants(eng, 'A') == ['next', 'first', 'second']
+    assert all(eng.P[p]['state'] == 'onpost' for p in ('first', 'second', 'next'))
+    eng.tick(hm('09:03'))
+    assert not post['openRequest']
+
+
+def test_opening_time_edit_releases_reservation_and_does_not_cut_rest():
+    eng, _ = live_day([person(p, '07:00', '21:00') for p in ('first', 'second', 'next')], lines=[two_lines()[0]])
+    seat(eng, 'first', 'A', 0, '08:00')
+    seat(eng, 'second', 'A', 1, '08:00')
+    eng.P['next'].update(state='rest', readyAt=hm('09:10'), breakKind='rest')
+    eng.act_post('A', 2, False, hm('09:00'), 'test')
+    eng.act_post('A', 2, True, hm('09:00'), 'test')
+    eng.tick(hm('09:00'))
+    assert eng.P['next']['assign']['departAt'] == hm('09:10')
+    eng.act_post('A', 2, True, hm('09:01'), 'test', open_at=hm('09:12'))
+    eng.tick(hm('09:01'))
+    assert eng.P['next']['assign']['departAt'] == hm('09:12')
+    assert eng.P['next']['assign']['notBefore'] == hm('09:12')
+    assert eng.P['next']['readyAt'] == hm('09:10')
+    eng.act_post('A', 2, False, hm('09:02'), 'test')
+    eng.tick(hm('09:02'))
+    assert not eng.line('A')['posts'][2]['openRequest']
+    assert not eng.P['next'].get('assign') or eng.P['next']['assign']['mode'] != 'opening'
+
+
+def test_opening_keeps_urgent_replacement_and_does_not_reserve_far_future():
+    eng, _ = live_day([person(p, '07:00', '21:00') for p in ('first', 'second', 'urgent', 'next')], lines=[two_lines()[0]])
+    seat(eng, 'first', 'A', 0, '08:00')
+    seat(eng, 'second', 'A', 1, '08:00')
+    eng.P['urgent']['assign'] = {'line': 'A', 'mode': 'chain', 'target': 'first', 'departAt': hm('09:15'), 'why': '推下班'}
+    eng.act_post('A', 2, False, hm('09:00'), 'test')
+    eng.act_post('A', 2, True, hm('09:00'), 'test', open_at=hm('10:00'))
+    eng.tick(hm('09:00'))
+    assert eng.P['urgent']['assign']['mode'] == 'chain'
+    assert not any(p.get('assign') and p['assign']['mode'] == 'opening' for p in eng.P.values())
+    eng.act_post('A', 2, True, hm('09:00'), 'test')
+    eng.tick(hm('09:00'))
+    assert eng.P['urgent']['assign']['mode'] == 'chain'
+    assert eng.P['next']['assign']['mode'] == 'opening'
+
+
+@pytest.mark.parametrize('at', [hm('08:59'), 1440])
+def test_opening_rejects_invalid_time(at):
+    eng, _ = live_day([person('first', '07:00', '21:00')], lines=[two_lines()[0]])
+    eng.act_post('A', 2, False, hm('09:00'), 'test')
+    with pytest.raises(ActionError, match='加岗时间'):
+        eng.act_post('A', 2, True, hm('09:00'), 'test', open_at=at)
+
+
 # ---------------------------------------------------------------- 派人顺序
 
 def test_longest_standing_exit_is_pushed_first_without_minimum_online_time():

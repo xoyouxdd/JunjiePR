@@ -108,18 +108,18 @@ function boardView() {
 
 function poolView(n) {
   const ps = RT.data.day.persons;
-  const by = states => ps.filter(p => states.includes(p.state));
+  const by = states => ps.filter(p => states.includes(poolState(p, n)));
   const section = (title, list, chip) => `<section class="rt-sect"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? list.map(chip).join('') : '暂无'}</div></section>`;
   const button = (p, sub, extra = '', cls = '') => `<button type="button" class="rt-chip ${cls}" data-pid="${esc(p.pid)}"><span class="rt-nm">${esc(p.name)}${extra}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
   let html = '';
   html += section('待出发', by(['ready']).sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9)), p => {
     if (!p.assign) return button(p, '等待分配', '', 'dim');
     const over = n - p.assign.departAt;
-    return button(p, over >= 0 ? (over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发') : `${hm(p.assign.departAt)} 出发`, '', over >= 2 ? 'late' : over >= 0 ? 'due' : 'wait');
+    return button(p, over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发', '', over >= 2 ? 'late' : 'due');
   });
   html += section('待到大屏点去休息', by(['walkback', 'pending']).sort((a, b) => (a.walkbackSince || 0) - (b.walkbackSince || 0)), p => button(p, p.state === 'pending' ? 'OP 结束待定' : `下线 ${Math.max(0, Math.floor(n - (p.walkbackSince || n)))} 分钟（${esc(p.downReason || '推岗')}）`));
   html += section('吃饭区', by(['meal']).sort((a,b)=>a.readyAt-b.readyAt), p=>button(p, `吃饭至 ${hm(p.readyAt)}，剩余 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟`, '', 'meal'));
-  html += section('休息区', by(['rest']).sort((a,b)=>a.readyAt-b.readyAt), p=>button(p, `${p.breakKind === 'meal_rest' ? '饭后剩余休息时间：' : ''}至 ${hm(p.readyAt)}，剩余 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟`, '', 'rest'));
+  html += section('休息区', by(['rest']).sort((a,b)=>restUntil(a)-restUntil(b)), p=>button(p, `${p.breakKind === 'meal_rest' ? '饭后剩余休息时间：' : ''}至 ${hm(restUntil(p))}，剩余 ${Math.max(0,Math.ceil(restUntil(p)-n))} 分钟`, '', 'rest'));
   html += section('暂离和出圈', by(['away']), p => button(p, `${esc(p.away ? p.away.reason : '')}${p.away && p.away.until !== null && p.away.until !== undefined ? `，${hm(p.away.until)} 回` : ''}`, '', 'dim'));
   const others = by(['op', 'notyet', 'excluded', 'done']).sort((a, b) => a.start - b.start);
   html += `<section class="rt-sect"><h2>其他人员<span class="rt-n">${others.length}</span><span class="rt-hint">OP、未到岗、不轮岗、已下班</span></h2><div class="rt-scroll"><table class="rt-table">${others.map(p => `<tr data-pid="${esc(p.pid)}" tabindex="0"><td>${esc(p.name)}</td><td>${hm(p.start)}-${hm(p.end)}</td><td>${STATE_NAME[p.state] || ''}${p.label ? `：${esc(p.label)}` : ''}</td></tr>`).join('')}</table></div></section>`;
@@ -128,17 +128,18 @@ function poolView(n) {
 
 function personMenu(p) {
   const active = RT.data.day.lines.filter(L => L.active);
+  const state = poolState(p, nowMin());
   const info = `<dl class="rt-kv">
     <dt>工号</dt><dd>${esc(p.pid)}</dd>
     <dt>班次</dt><dd>${hm(p.start)}-${hm(p.end)}${p.mealEligible ? '（有吃饭）' : '（只休息）'}${p.ate ? '，已吃饭' : ''}</dd>
-    <dt>状态</dt><dd>${STATE_NAME[p.state] || ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（${preparingText(p.preparing)}）` : ''}</dd>
+    <dt>状态</dt><dd>${STATE_NAME[state] || ''}${state === 'rest' ? `至 ${hm(restUntil(p))}` : ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（${preparingText(p.preparing)}）` : ''}</dd>
     <dt>去向</dt><dd>${p.assign ? `${goText(p)}，${hm(p.assign.departAt)} 出发` : '无'}</dd>
     <dt>今天去过</dt><dd>${esc(p.visited.join('、') || '无')}</dd>
     ${p.absences.length ? `<dt>固定暂离</dt><dd>${p.absences.map(a => `${hm(a.start)}-${hm(a.end)} ${esc(a.label)}${a.missed ? '（错过）' : ''}`).join('；')}</dd>` : ''}
     ${p.note ? `<dt>备注</dt><dd>${esc(p.note)}</dd>` : ''}</dl>`;
   const actions = [];
   if (p.state === 'walkback' || p.state === 'pending') actions.push(['arrive', '代点去休息', 'primary']);
-  if (p.state === 'ready' && p.assign) actions.push(['depart', '代点去轮岗', 'primary']);
+  if (canDepartNow(p, nowMin())) actions.push(['depart', '代点去轮岗', 'primary']);
   if (['rest', 'meal', 'ready'].includes(p.state) && p.state !== 'ready') actions.push(['undo', '撤回去休息', 'secondary']);
   if (['rest', 'meal', 'ready'].includes(p.state)) actions.push(['reassign', '改派去向', 'secondary']);
   if (['walkback', 'pending', 'rest', 'meal', 'ready', 'heading', 'onpost'].includes(p.state)) actions.push(['away', '标记暂离（专项任务）', 'secondary']);
@@ -182,20 +183,34 @@ function postMenu(key) {
   if (x.open) {
     if (occ) actions.push(['person', `查看 ${esc(occ.name)}`, 'secondary']);
     actions.push(['close', `撤岗${occ ? '（在岗的人下线）' : ''}`, 'danger']);
-    if (!occ) actions.push(['place', '更正：放入一个人', 'secondary']);
-  } else actions.push(['open', '开岗', 'primary']);
+    if (!occ) {
+      actions.unshift(['open', '安排补岗', 'primary']);
+      actions.push(['place', '更正：放入一个人', 'secondary']);
+    }
+  } else {
+    actions.push(['open', '加岗（默认3分钟后）', 'primary']);
+    if (x.openAt && !x.opened) actions.push(['time', '修改加岗时间', 'secondary']);
+  }
   openModal(`<h3>${esc(lid)} ${esc(x.name)}</h3><p class="modal-message">${x.open ? (occ ? `在岗：${esc(occ.name)}` : '空岗') : '未开放'}</p><div class="rt-actions">${actions.map(([k, t, c]) => `<button type="button" class="${c}" data-a="${k}">${t}</button>`).join('')}<button type="button" class="ghost" data-close>关闭</button></div>`, host => {
     host.querySelectorAll('[data-a]').forEach(btn => {
       btn.onclick = async () => {
         const k = btn.dataset.a;
         if (k === 'person') { personMenu(occ); return; }
-        if (k === 'open' || k === 'close') { if (await act('/api/rotation/act', { action: 'post', line: lid, i: Number(idx), open: k === 'open' }, k === 'open' ? '已开岗' : '已撤岗')) closeModal(); return; }
+        if (k === 'open' || k === 'time') { postScheduleForm(lid, Number(idx), x, k === 'time'); return; }
+        if (k === 'close') { if (await act('/api/rotation/act', { action: 'post', line: lid, i: Number(idx), open: false }, '已撤岗')) closeModal(); return; }
         const cand = RT.data.day.persons.filter(p => ['walkback', 'pending', 'rest', 'ready', 'away', 'notyet'].includes(p.state) && p.breakKind !== 'meal_rest');
         if (!cand.length) { toast('池子里没有人可以放入', true); return; }
         formBox(`放入 ${esc(lid)} ${esc(x.name)}`, `<label>人员<select name="pid">${cand.map(p => `<option value="${esc(p.pid)}">${esc(p.name)}（${STATE_NAME[p.state]}）</option>`).join('')}</select></label><label>调整原因<input type="text" name="reason" maxlength="100" required></label>`, f => act('/api/rotation/act', { action: personOf(f.pid)?.state === 'notyet' ? 'plan_place' : 'fix_place', pid: f.pid, line: lid, i: Number(idx), reason: f.reason }));
       };
     });
   });
+}
+
+function postScheduleForm(lid, index, post, editingTime = false) {
+  const time = editingTime ? post.openAt : hm(Math.ceil(nowMin() + 3));
+  formBox(`${editingTime ? '修改加岗时间' : '安排加岗'} · ${esc(lid)} ${esc(post.name)}`,
+    `<label>加岗时间<input type="time" name="openAt" value="${esc(time)}" required></label><p class="field-hint">默认3分钟后；安排下一位可上岗人员，从入口依次推进补岗。</p>`,
+    f => act('/api/rotation/act', { action: 'post', line: lid, i: index, open: true, openAt: f.openAt }, '加岗时间已保存，系统自动安排人员'));
 }
 
 function lineMenu(lid) {
@@ -467,9 +482,13 @@ function memberView() {
     ${open.length ? open.map(x => `<article class="rt-notice ${esc(x.kind)}"><strong>${esc(x.title)}</strong>${x.body ? `<p>${esc(x.body)}</p>` : ''}</article>`).join('') : '<p class="field-hint">当前没有轮岗待办。</p>'}
     ${done.length ? `<details><summary>已完成 ${done.length} 项</summary>${done.map(x => `<p class="rt-notice-done">${esc(x.updated_at || '')} ${esc(x.title)}</p>`).join('')}</details>` : ''}</section>`;
   if (!p) return `${todo}<section class="panel rt-empty"><h2>今天没有你的轮岗</h2><p>名单发布后这里会显示你的状态和所在线。</p></section>`;
-  let status = STATE_NAME[p.state] || '';
+  const state = poolState(p, n);
+  let status = STATE_NAME[state] || '';
   if (p.state === 'onpost') status = `在 ${esc(p.line)} 线 ${esc(p.post || '')}，已站 ${Math.max(0, Math.floor(n - (p.lineStart || n)))} 分钟`;
-  if (p.state === 'rest' || p.state === 'meal') status = `${p.state === 'meal' ? '吃饭' : '休息'}至 ${hm(p.readyAt)}，还剩 ${Math.max(0, Math.ceil(p.readyAt - n))} 分钟`;
+  if (state === 'rest' || state === 'meal') {
+    const until = state === 'meal' ? p.readyAt : restUntil(p);
+    status = `${state === 'meal' ? '吃饭' : '休息'}至 ${hm(until)}，还剩 ${Math.max(0, Math.ceil(until - n))} 分钟`;
+  }
   if (p.state === 'heading') status = `前往 ${esc(p.assign ? p.assign.line : '')} 线，约 ${hm(p.arriveAt)} 到岗`;
   if (p.state === 'away' && p.away) status = `暂离：${esc(p.away.reason)}${p.away.until !== null && p.away.until !== undefined ? `，${hm(p.away.until)} 回` : ''}`;
   const next = p.assign ? `<p>下一步：${goText(p)}，${hm(p.assign.departAt)} 出发</p>` : '';

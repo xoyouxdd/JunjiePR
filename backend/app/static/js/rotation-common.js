@@ -37,6 +37,26 @@ const RT = {
   load: async () => {},
 };
 
+function departureEarly() {
+  return RT.data?.settings?.departEarly ?? 1;
+}
+
+function canDepartNow(p, n) {
+  return p.state === 'ready' && !!p.assign && n >= (p.readyAt ?? n) - 0.01
+    && n >= (p.assign.notBefore ?? 0) - 0.01
+    && n >= p.assign.departAt - departureEarly() - 0.01;
+}
+
+// 基础休息结束后，等待定时开岗的人员仍显示在休息区。
+function poolState(p, n) {
+  if (p.state === 'ready' && ((p.readyAt ?? n) > n + 0.01 || (p.assign && !canDepartNow(p, n)))) return 'rest';
+  return p.state;
+}
+
+function restUntil(p) {
+  return Math.max(p.readyAt ?? 0, p.assign?.departAt ?? 0);
+}
+
 async function rtApi(path, options = {}) {
   let res;
   try {
