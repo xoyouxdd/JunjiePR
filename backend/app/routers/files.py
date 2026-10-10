@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.v2_database import EMPLOYEE_CIRCLES, FILE_DIR, LEGACY_CIRCLE_BY_VENUE, RECOGNITION_VENUES, get_db
-from app.v2_models import Attraction, DeductionLevel, DeductionRecord, DeductionType, Employee, RecognitionRecord, RecognitionAttachment, RecognitionType, Role, SickLeaveRecord, StoredFile
+from app.v2_models import AnnouncementAsset, AnnouncementDelivery, AnnouncementMedia, Attraction, DeductionLevel, DeductionRecord, DeductionType, Employee, RecognitionRecord, RecognitionAttachment, RecognitionType, Role, SickLeaveRecord, StoredFile
 from app.v2_services import direct_member_ids, write_audit
 from app.v2_watermark import watermark_image, watermark_pdf
 from app.v2_preview_cache import watermarked_preview_cache
@@ -103,7 +103,18 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
     row = db.get(StoredFile, file_id)
     if not row or row.status != "active":
         raise HTTPException(404, "文件不存在")
+    media = db.query(AnnouncementMedia).filter_by(file_id=file_id).first()
+    asset = db.query(AnnouncementAsset).filter_by(file_id=file_id).first()
+    signature = db.query(AnnouncementDelivery).filter_by(signature_file_id=file_id).first()
+    announcement_authorized = False
+    if media or asset or signature:
+        from app.announcements import attachment_allowed, signature_allowed
+        announcement_authorized = signature_allowed(db, user, signature) if signature else (
+            (media.owner_id if media else asset.owner_id) == user.id or attachment_allowed(db, user, file_id))
+        if not announcement_authorized:
+            raise HTTPException(404, "文件不存在")
     authorized = row.uploaded_by == user.id or "SYSTEM_ADMIN" in user.permissions
+    authorized = authorized or announcement_authorized
     if user.role.code == SCOPED_HR_ROLE_CODE:
         managed_attractions = scoped_hr_attraction_ids(db, user) or set()
     else:

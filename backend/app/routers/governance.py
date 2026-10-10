@@ -133,6 +133,14 @@ def action_center_recognition_details(db: Session, rows: list[RecognitionRecord]
 def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     """A read-only queue built from existing workflow records and role scopes."""
     items: list[dict] = []
+    from app.announcements import summary as announcement_summary
+    announcement_counts = announcement_summary(db, user)
+    if announcement_counts["pending"]:
+        items.append(action_center_item("announcement_receipt", "公告待查收", announcement_counts["pending"], "announcements", "warning", "查看适用公告并完成确认。"))
+    if announcement_counts["messages"]:
+        items.append(action_center_item("announcement_message", "公告消息", announcement_counts["messages"], "announcements", "info", "公告更新、撤下及交接提醒。"))
+    if announcement_counts["handovers"]:
+        items.append(action_center_item("announcement_handover", "公告待交接", announcement_counts["handovers"], "announcements", "warning", "确认继任者交接申请。"))
     role_code = user.role.code
     current_month = date.today().strftime("%Y-%m")
     month_to_close = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
@@ -224,7 +232,8 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
 
     order = {"critical": 0, "warning": 1, "info": 2}
     items.sort(key=lambda row: (order.get(row["severity"], 9), row["title"]))
-    return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month}
+    return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month,
+            "announcement_counts": announcement_counts}
 
 
 @router.post("/admin/backup-health/dismiss")

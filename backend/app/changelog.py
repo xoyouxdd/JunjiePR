@@ -7,6 +7,44 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.10.3",
+        "date": "2026-10-10",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "新增公告中心与版本查收",
+                "detail": "公告中心支持阅读、明确确认或手写签字，查收后按月份归档，可搜索与收藏。有效要求持续适用，新人、转入及返岗人员自动补收当前适用版本；更新标黄并重新通知，撤下保留历史记录。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "公告发布、交接与签收导出",
+                "detail": "GSM默认本圈、TA GSM与AM默认三个圈发布，接收层级可独立或跨层选择。负责人可更新、撤下及发起继任交接；签收管理按小组折叠、筛选及排序，支持范围内提醒和PDF/Excel导出；交接单独展示负责人、状态与历史。项目POC需独立授权。",
+                "audiences": ["GSM", "TA_GSM", "AM", "SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "Lead支持公告签收跟进",
+                "detail": "Lead及TA Lead可查收公告，并查看当前直接管理或代管小组的签收、提醒与导出；不自动获得圈公告发布权。",
+                "audiences": ["SUPERVISOR", "TA_SUPERVISOR"],
+            },
+            {
+                "summary": "公告授权和管理员兜底交接",
+                "detail": "最高管理权限可限定GSM等发布者的景点圈、层级、板块及日期，配置项目成员与POC；原岗位未完成交接时，可填写原因直接指定合格继任者，操作保留审计。",
+                "audiences": ["SYSTEM_ADMIN"],
+                "permissions": ["SYSTEM_ADMIN"],
+            },
+            {
+                "summary": "公告支持平台内制图和附件",
+                "detail": "具有公告发布授权的人员可在发布/更新页面内选8套预制插画和基础版式制作海报，或上传图片、照片及PDF/Office附件。模板排版在平台服务器完成，日常使用不消耗AI额度；未配置在线AI生图服务。",
+                "audiences": ["all"],
+            },
+            {
+                "summary": "轮岗推7点显示准备休息",
+                "detail": "07:00早班岗待推7点替换时，岗位卡片、状态标签和人员详情统一显示准备休息，避免误显示准备下班；实际下班和出圈仍按原状态提示。",
+                "audiences": ["TR", "SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM", "AM", "OM", "SYSTEM_ADMIN"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.09.3",
         "date": "2026-10-09",
         "status": "candidate",

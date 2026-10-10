@@ -4,7 +4,7 @@
 
 `backend/` 是唯一业务系统：
 
-- 接口：FastAPI + SQLAlchemy。路由按业务域分在 `backend/app/routers/` 下（`auth`、`accounts`、`employees`、`organization`、`hr_admin`、`deductions`、`recognitions`、`sick_leaves`、`sick_leave_import`、`statistics`、`governance`、`files`、`rotation`）。统计路由负责参数、权限、缓存及响应，查询和明细装配交给应用服务；`v2.py` 只挂载各域。`_shared.py` 保留显式兼容导出，公共实现由各职责模块拥有
+- 接口：FastAPI + SQLAlchemy。路由按业务域分在 `backend/app/routers/` 下（`auth`、`accounts`、`employees`、`organization`、`hr_admin`、`deductions`、`recognitions`、`sick_leaves`、`sick_leave_import`、`statistics`、`governance`、`files`、`rotation`、`announcements`、`announcement_media`）。统计路由负责参数、权限、缓存及响应，查询和明细装配交给应用服务；`v2.py` 只挂载各域。`_shared.py` 保留显式兼容导出，公共实现由各职责模块拥有
 - 数据：SQLite（默认 `backend/data_v2/`）+ 独立附件目录；表、键、索引见 [sqlite-schema.md](sqlite-schema.md)
 - 数据库职责：`database/connection.py` 唯一持有路径、Base、engine 和 SessionLocal；模型直接依赖该基础层。`database/bootstrap.py` 串行执行建表、一次性迁移及每次启动保障；种子、账号保障、分值视图与历史迁移各有所属模块。`v2_database.py` 保留显式兼容导出
 - 页面：`backend/app/static/` 原生 HTML/JS/CSS，由 `backend/app/main.py` 直接提供。配色集中在 `style.css` 的 `:root` 变量，语义色成对命名（如 `--btn-secondary-bg` / `--btn-secondary-text`、`--readonly-bg` / `--readonly-text`）；状态色只从 danger / warn / ok / info 四组变量里取（各组有 `-text`、`-bg`、`-border` 等档位）。新增样式优先复用变量，不要再写硬编码色值。确认弹窗统一用 `confirmModal` / `noticeModal`，不用浏览器原生 `confirm` / `alert`；弹层关闭走 `bindDialogLayer`，由它负责 `.is-leaving` 退场动画。断点只用三档：≤760px 为手机（底部栏为待办加 `MOBILE_PRIMARY_TABS` 按角色指定的常用入口，其余进「更多」；「更多」顶部显示完整身份、底部为退出登录，顶部栏只显示系统简称和「姓名 · 景点圈」），761–1199px 为带短标签的图标栏，≥1200px 为完整的左侧分组导航（待办置顶，更新记录/密码在底部）。内容区最宽 1440px；761–1279px 下多列筛选表单自动换行

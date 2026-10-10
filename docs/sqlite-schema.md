@@ -43,6 +43,17 @@
 | `user_accounts` | 登录账号 |
 | `user_sessions` | 会话 |
 | `release_announcement_reads` | 更新公告已读状态 |
+| `announcement_media` | 公告个人待用图片：归属、文件、请求键及制图来源 |
+| `announcement_projects` | 公告项目 |
+| `announcement_project_members` | 公告项目成员 |
+| `announcement_grants` | 圈/项目发布授权 |
+| `announcements` | 业务公告与当前负责人 |
+| `announcement_versions` | 不可覆盖的公告版本 |
+| `announcement_deliveries` | 版本人员签收与签名 |
+| `announcement_notifications` | 公告平台内消息 |
+| `announcement_favorites` | 公告收藏 |
+| `announcement_assets` | 公告文档附件归属 |
+| `announcement_handovers` | 公告负责人交接 |
 | `submission_requests` | 提交幂等 |
 | `management_scopes` | GSM/TA GSM 管理范围 |
 | `work_groups` | 小组 |
@@ -673,6 +684,25 @@
 
 ## 缺勤、全勤、月结、治理
 
+### `announcement_media`
+
+公告制图的个人待用图片，当前尚未绑定已发布公告。文件保存在 `stored_files`；归属者外的账号不能通过素材接口或通用文件接口访问。
+
+| 字段 | 类型 | 可空 | 含义 |
+|---|---|---|---|
+| `id` | INTEGER | 否 | 主键 |
+| `owner_id` | INTEGER | 否 | FK employees.id，素材归属员工 |
+| `file_id` | INTEGER | 否 | FK stored_files.id，唯一 |
+| `title` | VARCHAR(120) | 否 | 素材标题 |
+| `alt_text` | VARCHAR(500) | 否 | 图片说明，默认空字符串 |
+| `source` | VARCHAR(30) | 否 | template / photo / illustration / external_ai |
+| `request_key` | VARCHAR(96) | 否 | 本次提交标识 |
+| `payload_digest` | VARCHAR(64) | 否 | 内容摘要，用于幂等冲突校验 |
+| `width` / `height` | INTEGER | 否 | 图片像素宽高 |
+| `created_at` | DATETIME | 否 | 创建时间 |
+
+索引：`owner_id`、`created_at`；唯一约束：`owner_id + request_key`、`file_id`。模板预览只返回PNG，不创建记录；采用“保存为待用素材”才写入此表。
+
 ### `attendance_rules`
 
 | 字段 | 类型 | 空 | 说明 |
@@ -1135,6 +1165,25 @@
 ---
 
 ## 关系要点
+
+### 业务公告
+
+启动时由 `Base.metadata.create_all` 幂等创建，与应用更新提醒 `release_announcement_reads` 相互独立。
+
+| 表 | 键与约束 | 索引 |
+|---|---|---|
+| `announcement_projects` | 项目名称唯一；创建人 → `employees` | 名称 |
+| `announcement_project_members` | 项目 → `announcement_projects`；员工 → `employees`；项目/员工唯一；成员软停用 | 项目、员工 |
+| `announcement_grants` | 员工/范围类型/项目唯一；圈授权的项目ID为0；圈、层级、板块以JSON保存；改动人 → `employees` | 员工 |
+| `announcements` | 原发布人、现负责人 → `employees`；原发布人/请求键唯一；保存当前版本号、发布/撤下状态及原因 | 发布人、负责人、状态、发布时间 |
+| `announcement_versions` | 公告/版本号唯一；项目 → `announcement_projects`（可空）；作者 → `employees`；正文、范围、层级、附件、确认方式、日期、变更说明和请求摘要不可原地覆盖 | 公告、生效日 |
+| `announcement_deliveries` | 版本/员工唯一；版本 → `announcement_versions`；员工 → `employees`；签名 → `stored_files`（可空）；保存人员快照、状态、个人期限、阅读/确认时间和声明 | 版本、员工、圈ID、状态 |
+| `announcement_notifications` | 员工/事件键唯一；公告 → `announcements`；平台内消息、读取时间 | 员工、公告、创建时间 |
+| `announcement_favorites` | 公告/员工唯一 | 公告、员工 |
+| `announcement_assets` | 文件ID唯一 → `stored_files`；归属人 → `employees` | 归属人 |
+| `announcement_handovers` | 公告、原负责人、接任人、申请人外键；记录待接受、接受、兜底及取消状态 | 公告、状态 |
+
+图片素材表 `announcement_media` 见其既有条目。图片、附件和签名均继续使用 `stored_files`，访问须满足素材归属或相应公告/签收管理范围。撤下公告保留所有版本与凭据；不存在业务物理删除入口。详情见 [announcements.md](announcements.md)。
 
 ```
 employees.id  ← 几乎所有业务表的员工外键

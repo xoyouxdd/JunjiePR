@@ -9,6 +9,8 @@ from fastapi import APIRouter
 
 from app.routers import (
     accounts,
+    announcement_media,
+    announcements,
     auth,
     deductions,
     declaration_statistics,
@@ -33,6 +35,8 @@ router = APIRouter(prefix="/api", tags=["v2"])
 
 for _module in (
     accounts,
+    announcement_media,
+    announcements,
     auth,
     deductions,
     declaration_statistics,

@@ -22,6 +22,7 @@
 | 发布构建与生产部署流程 | `docs/deployment.md` |
 | 前端样式、配色或弹窗 | 复用 `style.css` 的 `:root` 变量与 `confirmModal`，约定见 `docs/architecture.md` |
 | 密码/打包/仓库边界约定 | `docs/security.md` |
+| 公告权限、签收、版本、补收或交接 | `docs/announcements.md`，制图/上传同步 `docs/announcement-image-generation.md` |
 | 用户能看见的功能 | `backend/app/changelog.py`（见 [changelog.md](changelog.md)） |
 | `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.py` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |
 | 本地依赖或测试命令 | 统一使用 `backend/.venv`，见 `docs/getting-started.md`；不要默认使用系统 Python |

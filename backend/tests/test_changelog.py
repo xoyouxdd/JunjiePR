@@ -89,9 +89,10 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    # 当前修复公告面向所有角色，CM应看到本版与历史本人登记更新。
+    # 本职CM/TR本人登记更新对有对应权限的员工可见。
     assert cm[0]["current"] is True
-    assert cm[0]["version"] == APP_VERSION
+    assert "新增公告中心与版本查收" in cm_text
+    assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
     assert "声明升级按考勤类别匹配并修正实际扣分" in cm_text
     assert "手机底部栏按角色放常用功能" in cm_text
@@ -138,16 +139,18 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in cm["release"]["items"]] == ["LOA月份成绩与登记规则统一", "提交后刷新跟随当前页面"]
+        assert [item["summary"] for item in cm["release"]["items"]] == ["新增公告中心与版本查收", "公告支持平台内制图和附件"]
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["LOA月份成绩与登记规则统一", "轮岗测试操作提交与参数检查修复", "提交后刷新跟随当前页面"]
+        assert tr["release"]["items"][:-1] == cm["release"]["items"]
+        assert tr["release"]["items"][-1]["summary"] == "轮岗推7点显示准备休息"
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert hr["release"]["version"] == APP_VERSION
-        assert [item["summary"] for item in hr["release"]["items"]] == ["LOA月份成绩与登记规则统一", "声明升级审核防止重复生效", "轮岗测试操作提交与参数检查修复", "提交后刷新跟随当前页面"]
+        assert {item["summary"] for item in hr["release"]["items"]} == {
+            "新增公告中心与版本查收", "公告发布、交接与签收导出", "公告授权和管理员兜底交接", "公告支持平台内制图和附件", "轮岗推7点显示准备休息"}
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         first = client.get("/api/changelog/announcement").json()
@@ -161,15 +164,27 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
 
 
 def test_current_release_items_match_roles_and_permissions() -> None:
-    loa, upgrade, rotation_fix, navigation = RELEASES[0]["items"]
+    loa, upgrade, rotation_fix, navigation = next(r for r in RELEASES if r["version"] == "2026.10.09.3")["items"]
     assert item_visible(loa, "CM", set()) and item_visible(navigation, "HR_CIRCLE", set())
     assert item_visible(upgrade, "GSM", set()) and not item_visible(upgrade, "CM", set())
     assert item_visible(rotation_fix, "TR", set()) and not item_visible(rotation_fix, "CM", set())
-    (current_rotation,) = next(release for release in RELEASES if release["version"] == "2026.10.09.2")["items"]
+    common, publish, lead, admin, artwork, rotation_status = RELEASES[0]["items"]
+    assert item_visible(rotation_status, "GSM", set())
+    assert item_visible(rotation_status, "TR", set())
+    assert not item_visible(rotation_status, "CM", set())
+    for role in ("CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM", "AM", "OM", "HR_CIRCLE", "SYSTEM_ADMIN"):
+        assert item_visible(common, role, set())
+        assert item_visible(artwork, role, set())
+    assert item_visible(publish, "TA_GSM", set()) and not item_visible(publish, "CM", set())
+    assert item_visible(lead, "SUPERVISOR", set()) and not item_visible(lead, "GSM", set())
+    assert item_visible(admin, "SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
+    assert not item_visible(admin, "SYSTEM_ADMIN", set())
+    assert not item_visible(admin, "HR_ADMIN", {"SYSTEM_ADMIN"})
+    (current_rotation,) = next(r for r in RELEASES if r["version"] == "2026.10.09.2")["items"]
     assert item_visible(current_rotation, "TR", set())
     assert item_visible(current_rotation, "GSM", set())
     assert not item_visible(current_rotation, "CM", set())
-    batch, rotation, supervisor, hr = next(release for release in RELEASES if release["version"] == "2026.10.09.1")["items"]
+    batch, rotation, supervisor, hr = next(r for r in RELEASES if r["version"] == "2026.10.09.1")["items"]
     assert item_visible(batch, {"CM", "TA_SUPERVISOR"}, {"SELF_RECOGNITION"})
     assert not item_visible(batch, "SUPERVISOR", {"SELF_RECOGNITION"})
     assert not item_visible(batch, "CM", set())

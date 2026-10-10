@@ -131,7 +131,7 @@ function personMenu(p) {
   const info = `<dl class="rt-kv">
     <dt>工号</dt><dd>${esc(p.pid)}</dd>
     <dt>班次</dt><dd>${hm(p.start)}-${hm(p.end)}${p.mealEligible ? '（有吃饭）' : '（只休息）'}${p.ate ? '，已吃饭' : ''}</dd>
-    <dt>状态</dt><dd>${STATE_NAME[p.state] || ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（准备${p.preparing === '推出圈' ? '出圈' : '下班'}）` : ''}</dd>
+    <dt>状态</dt><dd>${STATE_NAME[p.state] || ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（${preparingText(p.preparing)}）` : ''}</dd>
     <dt>去向</dt><dd>${p.assign ? `${goText(p)}，${hm(p.assign.departAt)} 出发` : '无'}</dd>
     <dt>今天去过</dt><dd>${esc(p.visited.join('、') || '无')}</dd>
     ${p.absences.length ? `<dt>固定暂离</dt><dd>${p.absences.map(a => `${hm(a.start)}-${hm(a.end)} ${esc(a.label)}${a.missed ? '（错过）' : ''}`).join('；')}</dd>` : ''}

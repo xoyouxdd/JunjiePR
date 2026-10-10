@@ -186,11 +186,15 @@ function goText(p) {
   return `→ ${esc(a.line)}`;
 }
 
+function preparingText(kind) {
+  return kind === '推7点' ? '准备休息' : kind === '推出圈' ? '准备出圈' : kind ? '准备下班' : '';
+}
+
 function badges(p) {
   const out = [];
   if (p.mealEligible && !p.ate) out.push('<span class="rt-badge meal">未休饭</span>');
   if (p.breakKind === 'meal_rest' && p.state === 'rest') out.push('<span class="rt-badge rest">饭后剩余休息时间</span>');
-  if (p.preparing) out.push(`<span class="rt-badge prep">准备${p.preparing === '推出圈' ? '出圈' : p.preparing === '推7点' ? '推7点' : '下班'}</span>`);
+  if (p.preparing) out.push(`<span class="rt-badge prep">${preparingText(p.preparing)}</span>`);
   if (p.flags.includes('推7点下来')) out.push('<span class="rt-badge p7">推7点下来</span>');
   if (p.flags.includes('推7点') && p.state !== 'onpost') out.push('<span class="rt-badge p7">推7点</span>');
   if (p.flags.includes('送失物')) out.push('<span class="rt-badge lost">送失物</span>');
@@ -212,7 +216,7 @@ function lineCard(L, n, ops) {
       const p = personOf(x.occ);
       who = esc(p ? p.name : x.occ);
       if (p && p.flags.includes('7点岗') && !p.flags.includes('推7点下来')) who += '<span class="rt-badge p7">7点</span>';
-      if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">准备${p.preparing === '推出圈' ? '出圈' : '下班'}</span>`; }
+      if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">${preparingText(p.preparing)}</span>`; }
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;
       else if (p && p.lineStart !== null && p.lineStart !== undefined) mins = `${Math.max(0, Math.floor(n - p.lineStart))} 分`;
     }

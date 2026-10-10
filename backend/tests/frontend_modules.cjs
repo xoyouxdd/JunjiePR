@@ -86,6 +86,10 @@ async function fixtureRequest(request, response) {
       role_name: 'CM', permissions: ['SELF_RECOGNITION']} : {...user, must_change_password: mode === 'password'});
   } else if (route === '/api/options') sendJson(response, options);
   else if (route === '/api/action-center') sendJson(response, {month: '2026-10', items: [], total: 0});
+  else if (route === '/api/announcements/options') sendJson(response, {can_publish: false, can_follow: false,
+    can_admin: false, counts: {pending: 0, messages: 0, handovers: 0}, categories: ['通用']});
+  else if (route === '/api/announcements') sendJson(response, {items: [], page: 1, pages: 1, total: 0});
+  else if (route === '/api/announcement-media/options') sendJson(response, {templates: [], categories: ['通用']});
   else if (route === '/api/changelog/announcement') sendJson(response, {read: true});
   else if (route === '/api/admin/circle-hr-accounts') sendJson(response, {items: [{employee_id: 7,
     login_account: 'HR0001', name: 'HR测试员', attraction_name: '热力追踪', account_enabled: true, password_status: '已修改'}]});
@@ -139,6 +143,22 @@ async function main() {
       await page.goto(`${origin}${pagePath}`);
       await page.locator('#app h2').filter({hasText: '待办中心'}).waitFor();
       assert.equal(await page.locator('#tabs [data-tab="register"]').count(), 0, 'Admin registration is permission-gated');
+      await page.locator('.tabs-desktop [data-tab="announcements"]').click();
+      await page.locator('#announcementContent .empty').filter({hasText: '暂无公告'}).waitFor();
+      assert.equal(await page.locator('#pageHeading h1').textContent(), '公告中心');
+      await page.evaluate(async () => {
+        const entryUrl = new URL(document.querySelector('script[type="module"][src]').src);
+        const editor = await import(new URL('./app/announcement-media.js', entryUrl));
+        const container = document.createElement('div');
+        document.getElementById('announcementContent').append(container);
+        await editor.renderAnnouncementPosterEditor({container, isCurrent: () => container.isConnected,
+          seed: {title: '模块合并测试', summary: '公告配图测试', category: '通用', scope: '热力追踪', effective_on: '2026-10-10'},
+          onUse: () => {}, onClose: () => container.remove()});
+      });
+      await page.locator('#announcementPosterForm').waitFor();
+      assert.equal(await page.locator('#announcementPosterForm [name="title"]').inputValue(), '模块合并测试');
+      await page.locator('[data-poster-back]').click();
+      await page.locator('#announcementPosterForm').waitFor({state: 'detached'});
       await page.locator('.tabs-desktop [data-tab="hrEmployees"]').click();
       await page.locator('#app h2').filter({hasText: '员工管理'}).waitFor();
       await page.locator('.tabs-desktop [data-tab="circleHrAccounts"]').click();

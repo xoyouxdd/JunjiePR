@@ -108,6 +108,9 @@ def test_full_day_flow_through_the_api() -> None:
         assert step["clock"]["paused"] is True
         assert step["waiting"] == ["推七甲 点「去轮岗」（A 线）"]
         assert step["clock"]["minute"] == 7 * 60 + 15
+        early = person(ok(manager.get("/api/rotation/board")), "9000001")
+        assert early["state"] == "onpost" and early["preparing"] == "推7点"
+        assert "7点岗" in early["flags"] and early["lineStart"] == 7 * 60
         assert clock(manager, action="next").status_code == 400  # 还没处理，不能下一步
 
         # 大屏只能点去休息、去轮岗

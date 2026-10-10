@@ -19,6 +19,7 @@ from app.v2_crypto import token_hash
 from app.v2_services import process_role_expirations, write_audit
 from app.deduction_materials import start_deduction_material_worker
 from app.rotation.service import start_rotation_ticker
+from app.announcement_worker import start_worker as start_announcement_worker, stop_worker as stop_announcement_worker
 from app.v2_database import SessionLocal
 from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 
@@ -200,11 +201,17 @@ def startup() -> None:
     init_db()
     start_deduction_material_worker()
     start_rotation_ticker()
+    start_announcement_worker()
     db = SessionLocal()
     try:
         process_role_expirations(db)
     finally:
         db.close()
+
+
+@app.on_event("shutdown")
+def shutdown_announcements():
+    stop_announcement_worker()
 
 
 app.include_router(v2.router)

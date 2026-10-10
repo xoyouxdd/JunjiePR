@@ -2,6 +2,7 @@
 import { renderAbsence, renderLoa, renderSickLeaveImport } from './app/absence.js';
 import { renderAccountReset, renderCircleHrAccounts, renderPasswordChangeRequired, renderPasswordPage } from './app/accounts.js';
 import { showReleaseAnnouncement } from './app/announcement.js';
+import { renderAnnouncements } from './app/announcements.js';
 import { api } from './app/api.js';
 import { logout } from './app/auth.js';
 import { configureViews, render } from './app/context.js';
@@ -53,6 +54,7 @@ configureViews({
   loa: renderLoa,
   hrMonthlyReport: renderHrMonthlyReport,
   rotationTest: renderRotationTest,
+  announcements: renderAnnouncements,
 });
 
 installSecurityEvents();

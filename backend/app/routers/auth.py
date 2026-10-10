@@ -21,6 +21,9 @@ router = APIRouter()
 
 
 def user_payload(db: Session, user: V2User) -> dict:
+    from app.announcements import grant_config, summary as announcement_summary
+    announcement_access = grant_config(db, user.id)
+    announcement_counts = announcement_summary(db, user)
     leader = current_leader_for_employee(db, user.id)
     group = current_group_for_employee(db, user.id)
     led = groups_assigned_to(db, user.id)
@@ -53,6 +56,8 @@ def user_payload(db: Session, user: V2User) -> dict:
             for row in led
         ],
         "permissions": sorted(user.permissions),
+        "announcement_publisher": bool(announcement_access["circles"] or announcement_access["projects"]),
+        "announcement_counts": announcement_counts,
         "member_count": len(direct_member_ids(db, user.id)),
         "must_change_password": user.account.must_change_password,
         # 「轮岗（测试）」入口：热力追踪的 TR 和 GSM。

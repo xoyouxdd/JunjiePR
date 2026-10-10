@@ -1,5 +1,6 @@
 // Role-aware navigation, identity display and action badges. Pages are composed through context.render().
 import { api } from './api.js';
+import { setAnnouncementBadge, startAnnouncementNotifications } from './announcement-state.js';
 import { logout } from './auth.js';
 import { render } from './context.js';
 import { bindDialogLayer, leaveLayer } from './dialogs.js';
@@ -29,6 +30,7 @@ function menuItems() {
   if(isActingFrontline())items.unshift(['home','我的成绩']);
   items.splice(['CM','TR'].includes(r)?1:0,0,['actionCenter','待办']);
   if(state.me.rotation_entry)items.push(['rotationTest','轮岗（测试）']);
+  items.splice(Math.min(items.length,1),0,['announcements','公告中心']);
   items.push(['changelog','更新记录']);
   items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);
   return items;
@@ -58,6 +60,7 @@ const MOBILE_SHORT_LABELS={'景点数据与导出':'景点数据','景点数据�
 function mobilePrimaryIds(items){
   const available=new Set(items.map(([id])=>id));
   const ids=((['CM','TR'].includes(state.me.base_role_code)&&isActingFrontline()?MOBILE_PRIMARY_TABS.ACTING_FRONTLINE:MOBILE_PRIMARY_TABS[state.me.role_code])||['actionCenter']).filter(id=>available.has(id));
+  if(available.has('announcements')&&!ids.includes('announcements'))ids.splice(1,0,'announcements');
   for(const [id] of items){ if(ids.length>=MOBILE_PRIMARY_COUNT) break; if(!ids.includes(id)&&!NAV_FOOTER_IDS.includes(id)) ids.push(id); }
   return ids.slice(0,MOBILE_PRIMARY_COUNT);
 }
@@ -87,7 +90,7 @@ function mobileIdentityCard(){
 const NAV_FOOTER_IDS=['changelog','password'];
 
 const NAV_GROUP_DEFS=[
-  {id:'work',label:'工作',ids:['home','review','supervisorReview','register','absence','members','entries']},
+  {id:'work',label:'工作',ids:['announcements','home','review','supervisorReview','register','absence','members','entries']},
   {id:'data',label:'数据',ids:['statistics','prRankings','declarationStatistics','sickLeaveImport','hrMonthlyReport']},
   {id:'people',label:'人事',ids:['hrEmployees','circleHrAccounts','hrGroups','circleTransfers','loa']},
   {id:'close',label:'结算',ids:['monthClose','hrScores']},
@@ -100,6 +103,7 @@ function navIcon(id){
   const inner={
     home:'<path d="M4 11 12 4l8 7"/><path d="M6 10.5V20h4.5v-6h3V20H18v-9.5"/>',
     actionCenter:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8M8 14h5"/>',
+    announcements:'<path d="M4 10v5h4l9 4V6L8 10H4zM8 15l2 5M20 9v7"/>',
     register:'<circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/>',
     review:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12.5 10.5 15l5.5-6"/>',
     supervisorReview:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12.5 10.5 15l5.5-6"/>',
@@ -190,20 +194,24 @@ function setActionBadge(total){
 
 async function refreshActionBadge(){
   if(!state.me||!menuItems().some(([id])=>id==='actionCenter'))return;
+  const employeeId=state.me.id;
   const isUpgradeReviewer=['TA_GSM','GSM'].includes(state.me.role_code);
   try{
     const [data,upgradeData]=await Promise.all([
       api('/api/action-center'),
       isUpgradeReviewer?api('/api/deduction-upgrades/pending'):Promise.resolve({items:[]}),
     ]);
+    if(state.me?.id!==employeeId)return;
     setActionBadge(Number(data.total||0)+(upgradeData.items||[]).length);
+    if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
   }catch(_){/* A badge refresh must never interrupt the existing page workflow. */}
 }
 
 function renderTabs() {
+  startAnnouncementNotifications(refreshActionBadge);
   const items=menuItems();
   if (!state.tab || (!items.some(i=>i[0]===state.tab) && state.tab!=='statisticsDetail')) state.tab=items[0]?.[0];
-  const tabButton=([id,name],extraClass='')=>`<button type="button" data-tab="${id}" class="${isTabActive(id)?'active':''} ${extraClass}" ${isTabActive(id)?'aria-current="page"':''} title="${esc(name)}" aria-label="${esc(name)}">${navIcon(id)}<span class="nav-label">${esc(name)}</span>${id==='actionCenter'?`<b class="nav-count-badge" data-action-center-badge ${state.actionBadgeTotal?'':'hidden'}>${state.actionBadgeTotal>99?'99+':state.actionBadgeTotal}</b>`:''}</button>`;
+  const tabButton=([id,name],extraClass='')=>`<button type="button" data-tab="${id}" class="${isTabActive(id)?'active':''} ${extraClass}" ${isTabActive(id)?'aria-current="page"':''} title="${esc(name)}" aria-label="${esc(name)}">${navIcon(id)}<span class="nav-label">${esc(name)}</span>${id==='announcements'?`<b class="nav-count-badge" data-announcement-badge ${(state.me.announcement_counts?.pending||0)?'':'hidden'}>${(state.me.announcement_counts?.pending||0)>99?'99+':(state.me.announcement_counts?.pending||0)}</b>`:id==='actionCenter'?`<b class="nav-count-badge" data-action-center-badge ${state.actionBadgeTotal?'':'hidden'}>${state.actionBadgeTotal>99?'99+':state.actionBadgeTotal}</b>`:''}</button>`;
   const grouped=groupedMenu(items);
   const desktopPin=grouped.pin?`<div class="nav-pin">${tabButton(grouped.pin)}</div>`:'';
   const desktopGroups=grouped.groups.map(group=>{

@@ -29,4 +29,4 @@ async function api(url, options={}) {
 
 const json = (method, body) => ({method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 
-export { api, json };
+export { api, apiFallbackMessage, json, readApiBody };

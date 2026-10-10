@@ -186,6 +186,147 @@ class UserAccount(Base):
     employee = relationship("Employee")
 
 
+class AnnouncementProject(Base):
+    __tablename__ = "announcement_projects"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnnouncementProjectMember(Base):
+    __tablename__ = "announcement_project_members"
+    __table_args__ = (UniqueConstraint("project_id", "employee_id", name="uq_announcement_project_member"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("announcement_projects.id"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AnnouncementGrant(Base):
+    __tablename__ = "announcement_grants"
+    __table_args__ = (UniqueConstraint("employee_id", "scope_kind", "project_id", name="uq_announcement_grant"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    scope_kind: Mapped[str] = mapped_column(String(20), default="circle")
+    # Zero is the circle grant sentinel, avoiding SQLite NULL-unique ambiguity.
+    project_id: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    attraction_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    tiers_json: Mapped[str] = mapped_column(Text, default="[]")
+    categories_json: Mapped[str] = mapped_column(Text, default="[]")
+    starts_on: Mapped[str] = mapped_column(String(10))
+    ends_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    changed_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    reason: Mapped[str] = mapped_column(Text)
+
+
+class Announcement(Base):
+    __tablename__ = "announcements"
+    __table_args__ = (UniqueConstraint("publisher_id", "request_key", name="uq_announcement_submission"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    publisher_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    current_version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(20), default="published", index=True)
+    request_key: Mapped[str] = mapped_column(String(96))
+    payload_digest: Mapped[str] = mapped_column(String(64))
+    published_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    withdrawn_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AnnouncementVersion(Base):
+    __tablename__ = "announcement_versions"
+    __table_args__ = (UniqueConstraint("announcement_id", "number", name="uq_announcement_version"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    announcement_id: Mapped[int] = mapped_column(ForeignKey("announcements.id"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(120))
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    body: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(30))
+    scope_kind: Mapped[str] = mapped_column(String(20))
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("announcement_projects.id"), nullable=True)
+    attraction_ids_json: Mapped[str] = mapped_column(Text)
+    tiers_json: Mapped[str] = mapped_column(Text)
+    confirmation_level: Mapped[int] = mapped_column(Integer)
+    effective_on: Mapped[str] = mapped_column(String(10), index=True)
+    expires_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    due_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    attachments_json: Mapped[str] = mapped_column(Text, default="[]")
+    change_summary: Mapped[str] = mapped_column(Text, default="")
+    request_key: Mapped[str] = mapped_column(String(96))
+    payload_digest: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnnouncementDelivery(Base):
+    __tablename__ = "announcement_deliveries"
+    __table_args__ = (UniqueConstraint("version_id", "employee_id", name="uq_announcement_delivery"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("announcement_versions.id"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    employee_no: Mapped[str] = mapped_column(String(50))
+    employee_name: Mapped[str] = mapped_column(String(100))
+    attraction_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    role_label: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    reason: Mapped[str] = mapped_column(String(100), default="首次接收")
+    due_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    delivered_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    signature_file_id: Mapped[int | None] = mapped_column(ForeignKey("stored_files.id"), nullable=True)
+    signing_statement: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AnnouncementNotification(Base):
+    __tablename__ = "announcement_notifications"
+    __table_args__ = (UniqueConstraint("employee_id", "event_key", name="uq_announcement_notification"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    announcement_id: Mapped[int] = mapped_column(ForeignKey("announcements.id"), index=True)
+    event_key: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(30))
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AnnouncementFavorite(Base):
+    __tablename__ = "announcement_favorites"
+    __table_args__ = (UniqueConstraint("announcement_id", "employee_id", name="uq_announcement_favorite"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    announcement_id: Mapped[int] = mapped_column(ForeignKey("announcements.id"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+
+
+class AnnouncementAsset(Base):
+    __tablename__ = "announcement_assets"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    file_id: Mapped[int] = mapped_column(ForeignKey("stored_files.id"), unique=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnnouncementHandover(Base):
+    __tablename__ = "announcement_handovers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    announcement_id: Mapped[int] = mapped_column(ForeignKey("announcements.id"), index=True)
+    from_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    to_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    reason: Mapped[str] = mapped_column(Text)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ReleaseAnnouncementRead(Base):
     __tablename__ = "release_announcement_reads"
     __table_args__ = (UniqueConstraint("account_id", "version", "role_code", name="uq_release_announcement_read"),)
@@ -512,6 +653,25 @@ class StoredFile(Base):
     uploaded_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
     status: Mapped[str] = mapped_column(String(20), default="active")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnnouncementMedia(Base):
+    """Private, unpublished artwork prepared for the future announcement module."""
+
+    __tablename__ = "announcement_media"
+    __table_args__ = (UniqueConstraint("owner_id", "request_key", name="uq_announcement_media_request"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    file_id: Mapped[int] = mapped_column(ForeignKey("stored_files.id"), unique=True)
+    title: Mapped[str] = mapped_column(String(120))
+    alt_text: Mapped[str] = mapped_column(String(500), default="")
+    source: Mapped[str] = mapped_column(String(30))
+    request_key: Mapped[str] = mapped_column(String(96))
+    payload_digest: Mapped[str] = mapped_column(String(64))
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
 class AttendanceRule(Base):

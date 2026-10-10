@@ -1,0 +1,63 @@
+{
+  "mode": "builtin_imagegen",
+  "generated_on": "2026-10-09/10",
+  "reuse": "Local template composition; no model calls on daily use",
+  "templates": [
+    {
+      "id": "safety-rain",
+      "name": "雨天守护",
+      "category": "安全 & 合规",
+      "prompt": "Create one premium reusable announcement poster illustration asset. A rainy theme park walkway, a thoughtful uniformed staff member placing a yellow caution cone on the wet path, umbrella, puddle reflections, lush trees, teal and amber, premium cinematic editorial illustration, reassuring mood. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "safety-rain.png"
+    },
+    {
+      "id": "safety-shield",
+      "name": "合规守护",
+      "category": "安全 & 合规",
+      "prompt": "Create one premium reusable announcement poster illustration asset. Sophisticated sculptural still life: a translucent teal shield surrounding a neatly arranged clipboard with blank paper, safety helmet, small amber check symbols, soft architectural shadows, premium 3D clay and frosted glass illustration. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "safety-shield.png"
+    },
+    {
+      "id": "show-stage",
+      "name": "舞台就绪",
+      "category": "演出 & 5S",
+      "prompt": "Create one premium reusable announcement poster illustration asset. Beautiful empty outdoor entertainment stage ready for performance, violet curtains, warm theatrical spotlights, elegant arcs, neatly aligned props, premium detailed painterly editorial illustration, magical and organized. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "show-stage.png"
+    },
+    {
+      "id": "efficiency-plan",
+      "name": "有序协作",
+      "category": "排班 & 效率",
+      "prompt": "Create one premium reusable announcement poster illustration asset. Premium isometric miniature operations workspace with blank scheduling boards, elegant clock without lettering, color coded blocks, three staff collaborating, soft blue palette, precise clean 3D architectural illustration. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "efficiency-plan.png"
+    },
+    {
+      "id": "service-welcome",
+      "name": "暖心迎宾",
+      "category": "礼仪 & MM",
+      "prompt": "Create one premium reusable announcement poster illustration asset. Two friendly professional theme park staff in elegant green uniforms warmly greeting a visiting family, respectful natural gestures, lush garden entrance and warm sunshine, polished editorial illustration with diverse adults, teal and sage. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "service-welcome.png"
+    },
+    {
+      "id": "hr-festival",
+      "name": "活力相聚",
+      "category": "HR & 活动",
+      "prompt": "Create one premium reusable announcement poster illustration asset. Joyful staff celebration in a garden courtyard, warm coral and peach, sophisticated festive ribbons and orange balloons, small group of smiling adults, golden sunset, premium editorial illustration, tasteful rather than childish. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "hr-festival.png"
+    },
+    {
+      "id": "hr-growth",
+      "name": "一起成长",
+      "category": "HR & 活动",
+      "prompt": "Create one premium reusable announcement poster illustration asset. Beautiful editorial 3D paper sculpture illustration of a gently ascending staircase with plants and small diverse colleagues helping each other, warm terracotta and cream, professional staff development concept, sophisticated soft shadows. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "hr-growth.png"
+    },
+    {
+      "id": "universal-garden",
+      "name": "园区晨光",
+      "category": "通用",
+      "prompt": "Create one premium reusable announcement poster illustration asset. A beautiful tranquil theme park garden at sunrise, curving walkway, lush foliage, elegant distant abstract pavilion, sunlit peach sky, teal trees, premium cinematic painterly illustration, no people, serene optimistic atmosphere. Landscape composition, approximately 3:2 aspect ratio, full bleed. Strong carefully balanced focal composition readable at thumbnail size, rich refined lighting and coherent shapes, production quality, high detail but uncluttered, visually attractive to adult frontline staff. This is artwork for the image panel of a poster; all real text is added separately by our app. Absolutely no text, letters, numbers, logos, watermark, labels, readable signage or fake UI. One scene only, no collage, no mockup, no poster border.",
+      "file": "universal-garden.png"
+    }
+  ]
+}

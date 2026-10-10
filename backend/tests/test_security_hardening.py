@@ -331,7 +331,8 @@ def test_versions_come_from_a_single_source() -> None:
         assert f'static/css/style.css?v={STATIC_CACHE_VERSION}' in app_page
         assert f'src="static/js/app.js?v={STATIC_CACHE_VERSION}"' in app_page
         assert 'type="module"' in app_page
-        digest = base64.b64encode(hashlib.sha256(importmap.group(1).encode("utf-8")).digest()).decode("ascii")
+        normalized_map = importmap.group(1).replace("\r\n", "\n").replace("\r", "\n")
+        digest = base64.b64encode(hashlib.sha256(normalized_map.encode("utf-8")).digest()).decode("ascii")
         policy = app_response.headers["content-security-policy"]
         assert f"'sha256-{digest}'" in policy
         assert "'unsafe-inline'" not in policy
