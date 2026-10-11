@@ -160,6 +160,8 @@ def sync_current(db, initial_id=None):
     """Idempotent lazy reconciliation, also invoked by the existing scheduler."""
     if not db.connection().connection.driver_connection.in_transaction:
         lock(db)
+    from app import announcement_training as training
+    training.reconcile(db)
     today = date.today().isoformat()
     context, memberships = audience_context(db)
     def grace(version):
@@ -242,8 +244,9 @@ def record_ids(db, user, announcement, version):
 
 
 def can_read_version(db, user, announcement, version):
+    from app import announcement_training as training
     ids = record_ids(db, user, announcement, version)
-    return admin(user) or user.id in {announcement.owner_id, announcement.publisher_id} or bool(
+    return training.authorized(db, version.id, user.id) or admin(user) or user.id in {announcement.owner_id, announcement.publisher_id} or bool(
         db.query(AnnouncementDelivery.id).filter_by(version_id=version.id, employee_id=user.id).first()) or ids is None or bool(ids) or bool(
         db.query(AnnouncementHandover.id).filter_by(announcement_id=announcement.id, to_id=user.id, status="pending").first())
 
@@ -277,13 +280,15 @@ def validate_attachments(db, user, attachments, previous=None):
 
 
 def delivery_payload(db, row):
+    from app import announcement_training as training
     circles = live_circles(db)
     return {"id": row.id, "employee_id": row.employee_id, "employee_no": row.employee_no, "employee_name": row.employee_name,
             "role_label": row.role_label, "attraction_id": row.attraction_id, "attraction_name": circles.get(row.attraction_id, ""),
             "status": row.status, "reason": row.reason, "due_on": row.due_on, "seen_at": row.seen_at,
             "confirmed_at": row.confirmed_at, "delivered_at": row.delivered_at,
             "signature_url": f"/api/files/{row.signature_file_id}?preview=true" if row.signature_file_id else None,
-            "signing_statement": row.signing_statement}
+            "signing_statement": row.signing_statement, **training.receipt_fields(db, row.id),
+            "overdue": row.status == "pending" and bool(row.due_on and row.due_on < date.today().isoformat())}
 
 
 def grouped_records(db, rows):
@@ -340,6 +345,7 @@ def handover_overview(db, announcement, user):
 
 
 def payload(db, user, announcement, version, detail=False):
+    from app import announcement_training as training
     receipt = db.query(AnnouncementDelivery).filter_by(version_id=version.id, employee_id=user.id).first()
     favorite = db.query(AnnouncementFavorite.id).filter_by(announcement_id=announcement.id, employee_id=user.id).first()
     circles = live_circles(db)
@@ -358,7 +364,9 @@ def payload(db, user, announcement, version, detail=False):
         "status": announcement.status, "effective": effective, "favorite": bool(favorite), "change_summary": version.change_summary,
         "receipt": delivery_payload(db, receipt) if receipt else None, "attachments": attachments,
         "can_edit": announcement.owner_id == user.id, "can_manage": record_ids(db, user, announcement, version) != set(),
-        "withdrawn_reason": announcement.withdrawn_reason, "withdrawn_at": announcement.withdrawn_at}
+        "withdrawn_reason": announcement.withdrawn_reason, "withdrawn_at": announcement.withdrawn_at,
+        **training.settings(db, version.id), "can_train": effective and training.authorized(db, version.id, user.id),
+        "can_followup_export": user.id in {announcement.publisher_id, announcement.owner_id} or admin(user)}
     if detail:
         previous = db.query(AnnouncementVersion).filter_by(announcement_id=announcement.id, number=version.number-1).first()
         old_lines = previous.body.splitlines() if previous else []

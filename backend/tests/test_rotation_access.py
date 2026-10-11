@@ -92,10 +92,10 @@ def test_entry_is_only_for_heat_circle_tr_and_gsm() -> None:
     with TestClient(app) as client:
         add_employee("矮人迷宫", "TRDWARF01", "TR")
         add_employee("矮人迷宫", "GSMDWARF01", "GSM")
-        for account in ("TRTEST01", "GSMTEST01"):
+        for account in ("TRTEST01", "GSMTEST01", "TATEST01", "SUPTEST01"):
             relogin(client, account)
             assert client.get("/api/rotation/access").json()["can_enter"] is True, account
-        for account in ("CMTEST01", "TATEST01", "SUPTEST01", "TAGSMTEST01", "AMTEST01", "OMTEST01", "TRDWARF01", "GSMDWARF01"):
+        for account in ("CMTEST01", "TAGSMTEST01", "AMTEST01", "OMTEST01", "TRDWARF01", "GSMDWARF01"):
             relogin(client, account)
             assert client.get("/api/rotation/access").json()["can_enter"] is False, account
             assert enter(client, "7777777").status_code == 403, account
@@ -110,7 +110,7 @@ def test_entry_is_only_for_heat_circle_tr_and_gsm() -> None:
 def test_temporary_gsm_duty_cannot_grant_test_entry():
     with TestClient(app), SessionLocal() as db:
         heat = db.query(Attraction).filter_by(name='热力追踪').one()
-        user = SimpleNamespace(base_role=SimpleNamespace(code='SUPERVISOR'),
+        user = SimpleNamespace(base_role=SimpleNamespace(code='CM'),
                                employee=SimpleNamespace(attraction_id=heat.id), id=0,
                                has_role=lambda *codes: 'GSM' in codes)
         assert can_enter(db, user) is False
@@ -119,7 +119,7 @@ def test_temporary_gsm_duty_cannot_grant_test_entry():
 def test_entry_switches_between_simulated_accounts_without_password() -> None:
     with TestClient(app) as client:
         add_roster_member(MEMBER_NO, "模拟员工甲")
-        login(client, "TRTEST01")
+        login(client, "GSMTEST01")
         assert enter(client, "").status_code == 400
         assert enter(client, "0000000").status_code == 404
 

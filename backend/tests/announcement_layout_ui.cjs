@@ -1,0 +1,87 @@
+'use strict';
+// Real app modules and stylesheet, synthetic role-scoped API data only.
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
+const {chromium}=require('playwright');
+const root=path.resolve(__dirname,'../app/static'),out=path.resolve(__dirname,'../../.handover_review/announcement-ui');
+fs.mkdirSync(out,{recursive:true});
+const categories=['安全 & 合规','演出 & 5S','排班 & 效率','礼仪 & MM','HR & 活动'];
+const tiers={frontline:'CM / TR',lead:'TA LEAD / LEAD',gsm:'TA GSM / GSM',am:'AM',hr:'HR'};
+const circles=[{id:1,name:'热力追踪'},{id:2,name:'矮人迷宫'},{id:3,name:'小熊罐子'}];
+const roles=[['CM','CM'],['TR','TR'],['TA_SUPERVISOR','TA LEAD'],['SUPERVISOR','LEAD'],['TA_GSM','TA GSM'],['GSM','GSM'],['AM','AM'],['HR_CIRCLE','HR'],['SYSTEM_ADMIN','系统管理员'],['POC','项目POC'],['GSM_ADMIN','最高管理员1'],['AM_ADMIN','最高管理员2']];
+let role=roles[0],level=3,training=true;
+const adminRoles=new Set(['SYSTEM_ADMIN','GSM_ADMIN','AM_ADMIN']);
+const publishRoles=new Set(['TA_GSM','GSM','AM','POC','GSM_ADMIN','AM_ADMIN']),followRoles=new Set(['TA_SUPERVISOR','SUPERVISOR','TA_GSM','GSM','AM','GSM_ADMIN','AM_ADMIN']);
+const people=Array.from({length:24},(_,i)=>({id:100+i,name:i===0?'较长姓名的培训师示例':'测试培训师'+(i+1),employee_no:String(1000000+i),attraction_id:i%3+1,role_codes:['TR'],publisher:{circles:[],projects:[],tiers:Object.keys(tiers),categories}}));
+people.push({id:1,name:'UI验收模拟管理员',employee_no:'1999999',attraction_id:1,role_codes:['GSM'],publisher:{circles:[1],projects:[],tiers:Object.keys(tiers),categories}});
+const receipt={status:'pending',confirmed_at:null,seen_at:'2026-10-11T09:00:00'};
+const group={key:'group:1',id:1,name:'A1 · 较长的小组名称示例',attraction_id:1,attraction_name:'热力追踪',total:2,required:2,completed:1,pending:1,suspended:0,exited:0};
+const items=[{id:1,employee_id:12,employee_name:'一线签收人员示例',employee_no:'1000012',role_label:'CM',group_key:group.key,group_name:group.name,attraction_name:'热力追踪',status:'completed',reason:'首次接收',seen_at:'2026-10-11T08:30:00',confirmed_at:'2026-10-11T09:00:00',due_on:'2026-10-13',trainer_id:100,trainer_name:'较长姓名的培训师示例',trainer_no:'1000000',training_session_id:19,training_verified_at:'2026-10-11T08:59:00'},
+  {id:2,employee_id:13,employee_name:'待培训验码人员示例',employee_no:'1000013',role_label:'TR / TA LEAD',group_key:group.key,group_name:group.name,attraction_name:'热力追踪',status:'pending',reason:'返岗补收',due_on:'2026-10-09',overdue:true}];
+function announcement(){return {id:51,version:2,current_version:2,title:'UI验收模拟公告：安全要求与培训签收',summary:'此页面仅用于各角色与屏幕尺寸的布局检查。',body:'此页面使用模拟资料，不是实际发布的公告。\n培训完成后核对要求并本人签字。',body_lines:[{text:'此页面使用模拟资料，不是实际发布的公告。',changed:false},{text:'培训完成后核对要求并本人签字。',changed:true}],category:categories[0],scope_kind:role[0]==='POC'?'project':'circle',scope_label:role[0]==='POC'?'暑期活动项目':'热力追踪、矮人迷宫、小熊罐子',attraction_ids:[1],project_id:role[0]==='POC'?1:null,tiers:Object.keys(tiers),confirmation_level:level,training_required:level===3&&training,trainer_scope:'all',trainer_ids:[100,101],trainer_circle_id:1,status:'published',effective:true,effective_on:'2026-10-01',due_on:'2026-10-13',expires_on:null,published_at:'2026-10-11T08:00:00',updated_at:'2026-10-11T08:00:00',author:'UI验收模拟发布者',change_summary:'补充培训签字要求',versions:[{number:1,accessible:true},{number:2,accessible:true}],attachments:[{file_id:4,kind:'cover',caption:'模拟配图',filename:'配图.png',url:'/static/images/fzpr-icon.png'},{file_id:5,kind:'attachment',filename:'较长名称的公告培训与工作要求文件.pdf',url:'/static/images/fzpr-icon.png'}],receipt:{...receipt},can_manage:followRoles.has(role[0])||adminRoles.has(role[0])||role[0]==='POC',can_edit:publishRoles.has(role[0]),can_train:role[0]==='TR',can_followup_export:publishRoles.has(role[0])||adminRoles.has(role[0])};}
+function json(res,data){res.writeHead(200,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));}
+const missing=[];
+async function handler(req,res){const url=new URL(req.url,'http://fixture'),r=url.pathname;
+  if(r==='/'){res.writeHead(200,{'Content-Type':'text/html'});res.end(fs.readFileSync(path.join(root,'index.html'),'utf8').replaceAll('__STATIC_CACHE_VERSION__','layout-fixture'));return;}
+  if(r.startsWith('/static/')){const p=path.resolve(root,'.'+r.slice(7));if(!p.startsWith(root+path.sep)||!fs.existsSync(p)){res.writeHead(404);res.end();return;}res.writeHead(200,{'Content-Type':{'.js':'text/javascript','.css':'text/css','.png':'image/png'}[path.extname(p)]||'application/octet-stream'});res.end(fs.readFileSync(p));return;}
+  if(r==='/favicon.ico'){res.writeHead(204);res.end();return;}
+  const publisher={circles:role[0]==='POC'?[]:[1,2,3],projects:role[0]==='POC'?[{id:1,name:'暑期活动项目',tiers:Object.keys(tiers),categories}]:[],tiers:Object.keys(tiers),categories};
+  if(r==='/api/me'){const base={TA_SUPERVISOR:'CM',TA_GSM:'SUPERVISOR',POC:'CM',GSM_ADMIN:'GSM',AM_ADMIN:'AM'}[role[0]]||role[0];json(res,{id:1,name:'UI验收模拟用户',employee_no:'1999999',role_name:role[1],role_code:role[0]==='POC'?'CM':role[0],base_role_code:base,role_codes:[base,...(role[0]==='POC'?[]:[role[0]])],attraction_id:1,attraction_name:'热力追踪',permissions:adminRoles.has(role[0])?['SYSTEM_ADMIN']:[],must_change_password:false});}
+  else if(r==='/api/rotation/adjust/mine')json(res,{items:[]});
+  else if(r==='/api/options')json(res,{roles:[],attractions:circles,employee_circles:circles,recognition_venues:circles,recognition_types:[],deduction_types:[]});
+  else if(r==='/api/dashboard')json(res,{records:[],attendance_score:12,total_score:12});
+  else if(r==='/api/action-center'||r==='/api/deduction-upgrades/pending')json(res,{items:[],total:0});
+  else if(r==='/api/changelog/announcement')json(res,{read:true});
+  else if(r==='/api/announcements/options')json(res,{can_publish:publishRoles.has(role[0]),can_follow:followRoles.has(role[0]),can_train:role[0]==='TR',can_admin:adminRoles.has(role[0]),circles,tiers,categories,publisher,counts:{pending:2,messages:2,handovers:0}});
+  else if(r==='/api/announcements/summary')json(res,{pending:2,messages:2,handovers:0});
+  else if(r==='/api/announcements')json(res,{items:[announcement()],total:1,page:1,pages:1});
+  else if(r==='/api/announcements/51')json(res,announcement());
+  else if(r==='/api/announcements/51/receipt')json(res,receipt);
+  else if(r==='/api/announcements/51/records')json(res,{announcement:announcement(),items,groups:[group],group_basis:'当前小组',counts:{required:2,completed:1,pending:1,suspended:0,exited:0},handover:{owner:{name:'UI验收模拟负责人',employee_no:'1999999'},history:[{id:1,status:'accepted',from:people[0],to:people[1],requested_by:people[0],reason:'模拟正式项目交接，核对正文、培训要求及待签人员。',requested_at:'2026-10-10T09:00:00',completed_at:'2026-10-10T10:00:00'}]}});
+  else if(r==='/api/announcements/51/training')json(res,{title:announcement().title,version:2,items,groups:[group],sessions:[{id:19,active:true,created_at:'2026-10-11T08:00:00',expires_at:'2026-10-11T14:00:00'}]});
+  else if(r==='/api/announcements/51/training/verify')json(res,{ok:true,trainer_name:people[0].name,expires_at:'2026-10-11T14:00:00'});
+  else if(r==='/api/announcements/training-options')json(res,{items:people.filter(e=>e.role_codes.includes('TR')),own_circle_id:1});
+  else if(r==='/api/announcements/notifications')json(res,{items:[{id:1,announcement_id:51,message:'模拟更新提醒：培训签字要求已更新，请查收。',created_at:'2026-10-11T08:00:00',read_at:null}],total:1,page:1});
+  else if(r==='/api/announcements/handovers')json(res,[]);
+  else if(r==='/api/announcements/successors/51')json(res,[people[0]]);
+  else if(r==='/api/announcements/admin/config')json(res,{employees:people,grants:[],projects:[{id:1,name:'暑期活动项目',active:true,employee_ids:[100]}]});
+  else if(r==='/api/announcement-media/options')json(res,{templates:[],categories});
+  else{missing.push(r);res.writeHead(404,{'Content-Type':'application/json'});res.end(JSON.stringify({detail:'Unmocked '+r}));}
+}
+const server=http.createServer((req,res)=>handler(req,res).catch(e=>{res.writeHead(500);res.end(String(e));}));
+const results=[];
+async function capture(page,options){await page.evaluate(()=>{document.querySelectorAll('main, .main-content, .content').forEach(e=>e.scrollTop=0);window.scrollTo(0,0);});await page.screenshot(options);}
+async function measure(page,view,width){
+  const result=await page.evaluate(()=>{const center=document.querySelector('.announcement-center'),panel=center.querySelector('.panel'),box=panel.getBoundingClientRect();const fields=[...center.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=file]),select:not([multiple])')].filter(e=>e.getBoundingClientRect().height>0);return {overflow:document.documentElement.scrollWidth>innerWidth+1,panelWidth:box.width,padding:getComputedStyle(panel).paddingLeft,fieldHeights:fields.map(e=>Math.round(e.getBoundingClientRect().height)),fieldFonts:fields.map(e=>parseFloat(getComputedStyle(e).fontSize)),tabRows:new Set([...center.querySelectorAll('[data-ann-view]')].map(e=>Math.round(e.getBoundingClientRect().top))).size,smallButtons:[...center.querySelectorAll('button:not(.announcement-image-button),.announcement-tool-link')].filter(e=>e.getBoundingClientRect().height>0&&e.getBoundingClientRect().height<43).map(e=>e.textContent.trim()),signatureWidth:center.querySelector('canvas')?.getBoundingClientRect().width||0,formWidth:center.querySelector('form.form-stack')?.getBoundingClientRect().width||0};});
+  results.push({role:role[1],width,view,...result});
+  assert.equal(result.overflow,false,`${role[1]} ${width} ${view}: page overflow`);
+  if(process.env.ANNOUNCEMENT_UI_STRICT!=='0'){
+    assert.equal(result.tabRows,1,`${role[1]} ${width} ${view}: navigation wraps`);
+    assert.deepEqual(result.smallButtons,[],`${role[1]} ${width} ${view}: touch targets <44px`);
+    assert(result.fieldHeights.every(h=>h>=44));
+    if(width<=760)assert(result.fieldFonts.every(f=>f>=16),`${role[1]} ${width} ${view}: phone input zoom risk`);
+    if(width>=1280&&result.formWidth)assert(result.formWidth<=860,`${view}: excessively wide form`);
+  }
+}
+async function main(){await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const browser=await chromium.launch({channel:'msedge',headless:true});
+  try{for(const spec of roles){role=spec;for(const width of [320,390,768,1280,1440]){level=3;training=true;const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.locator('#tabs [data-tab=announcements]').first().waitFor({state:'attached'});
+    await page.evaluate(async()=>{const url=new URL(document.querySelector('script[type=module][src]').src);const {state}=await import(new URL('./app/state.js',url));state.tab='announcements';const context=await import(new URL('./app/context.js',url));context.clearPageResources();const module=await import(new URL('./app/announcements.js',url));await module.renderAnnouncements();});
+    await measure(page,'list',width);
+    assert.equal(await page.locator('[data-ann-new]').count(),publishRoles.has(role[0])?1:0);
+    assert.equal(await page.locator('[data-ann-view=admin]').count(),adminRoles.has(role[0])?1:0);
+    assert.equal(await page.locator('[data-ann-view=training]').count(),role[0]==='TR'?1:0);
+    if(width===390||width===1440)await capture(page,{path:path.join(out,`${role[0]}-${width}-list.png`),fullPage:true});
+    await page.locator('[data-ann-open]').click();await page.locator('#announcementReceiptForm').waitFor();await measure(page,'detail',width);
+    await page.locator('[name=training_code]').fill('123456');await page.locator('[data-ann-verify-code]').click();await page.locator('#announcementSignature').waitFor({state:'visible'});await measure(page,'signature',width);
+    if(width===390&&role[0]==='CM')await capture(page,{path:path.join(out,'CM-390-signature.png'),fullPage:true});
+    await page.locator('[data-ann-back]').click();await page.locator('[data-ann-open]').waitFor();
+    for(const setting of [[1,false],[2,false],[3,false]]){[level,training]=setting;await page.locator('[data-ann-open]').click();await page.locator('.announcement-detail').waitFor();await measure(page,'confirmation-'+level,width);await page.locator('[data-ann-back]').click();await page.locator('[data-ann-open]').waitFor();}level=3;training=true;
+    for(const view of ['history','favorites','messages']){await page.locator(`[data-ann-view=${view}]`).click();await page.locator(view==='messages'?'.announcement-message':'.announcement-card').waitFor();await measure(page,view,width);}
+    if(followRoles.has(role[0])||publishRoles.has(role[0])||adminRoles.has(role[0])){await page.locator('[data-ann-view=manage]').click();await page.locator('[data-ann-records]').click();await page.locator('.announcement-handover').waitFor();await measure(page,'records-folded',width);await page.locator('.announcement-record-group>summary').click();await measure(page,'records-expanded',width);if(publishRoles.has(role[0])||adminRoles.has(role[0])){await page.locator('[data-ann-handover]').click();await page.locator('.announcement-handover-form').waitFor();await measure(page,'handover',width);await page.locator('[data-ann-handover-cancel]').click();}if(publishRoles.has(role[0])){await page.locator('[data-ann-trainers]').click();await page.locator('[data-ann-trainers-form]').waitFor();await measure(page,'trainer-authorization',width);}if(width===390||width===1440)await capture(page,{path:path.join(out,`${role[0]}-${width}-records.png`),fullPage:true});}
+    if(publishRoles.has(role[0])){await page.locator('[data-ann-new]').click();await page.locator('#announcementPublishForm').waitFor();await page.locator('[name=confirmation_level]').selectOption('3');await page.locator('[name=training_required]').check();await page.locator('[name=trainer_scope]').selectOption('all');await measure(page,'publish',width);if(width===390||width===1440)await capture(page,{path:path.join(out,`${role[0]}-${width}-publish.png`),fullPage:true});await page.locator('#announcementPublishForm .announcement-extra>summary').click();await page.locator('[data-ann-poster]').click();await page.locator('#announcementPosterForm').waitFor();await measure(page,'poster',width);}
+    if(role[0]==='TR'){await page.locator('[data-ann-view=training]').click();await page.locator('[data-ann-training]').click();await page.locator('[data-ann-code-form]').waitFor();await measure(page,'training',width);await page.locator('.announcement-record-group>summary').click();await measure(page,'training-expanded',width);if(width===390)await capture(page,{path:path.join(out,'TR-390-training.png'),fullPage:true});}
+    if(adminRoles.has(role[0])){await page.locator('[data-ann-view=admin]').click();await page.locator('#announcementGrantForm').waitFor();await measure(page,'authorization',width);await page.getByText('项目与成员',{exact:true}).click();await measure(page,'projects',width);if(width===390)await capture(page,{path:path.join(out,'ADMIN-390-authorization.png'),fullPage:true});}
+    assert.deepEqual(errors,[],`${role[1]} ${width}: console errors`);await page.close();
+  }}assert.deepEqual(missing,[]);fs.writeFileSync(path.join(out,'audit.json'),JSON.stringify(results,null,2));console.log(JSON.stringify({roles:roles.length,viewports:5,views:results.length,strict:process.env.ANNOUNCEMENT_UI_STRICT!=='0',warnings:results.filter(r=>r.tabRows>1||r.smallButtons.length||r.fieldHeights.some(h=>h<44)||r.width<=760&&r.fieldFonts.some(f=>f<16)).length}));
+  }finally{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+}
+main().catch(e=>{console.error(e);fs.writeFileSync(path.join(out,'audit.json'),JSON.stringify(results,null,2));process.exitCode=1;});

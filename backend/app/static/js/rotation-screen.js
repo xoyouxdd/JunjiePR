@@ -4,7 +4,7 @@
 const $app = document.getElementById('rtApp');
 
 function poolSection(title, hint, list, chip, extraClass = '') {
-  return `<section class="rt-sect ${extraClass}"><h2>${title}<span class="rt-n">${list.length}</span><span class="rt-hint">${hint}</span></h2><div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? list.map(chip).join('') : '暂无'}</div></section>`;
+  return `<section class="rt-sect ${extraClass}${list.length ? '' : ' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2>${hint&&list.length?`<p class="rt-pool-hint">${hint}</p>`:''}<div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? list.map(chip).join('') : '暂无'}</div></section>`;
 }
 
 function screenView() {
@@ -18,9 +18,9 @@ function screenView() {
   const ready = ps.filter(p => poolState(p, n) === 'ready').sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9));
   const resting = ps.filter(p => poolState(p, n) === 'rest').sort((a, b) => restUntil(a) - restUntil(b));
   const meals = ps.filter(p => p.state === 'meal').sort((a, b) => a.readyAt - b.readyAt);
-  const lines = `<div class="rt-lines">${day.lines.filter(L => L.active || L.posts.some(x => x.occ)).map(L => lineCard(L, n, false)).join('')}</div>`;
+  const lines = `<div class="rt-lines">${day.lines.filter(L => L.active || L.posts.some(x => x.occ)).map(L => lineCard(L, n, typeof adjustmentState !== 'undefined' && !!adjustmentState)).join('')}</div>`;
   let pool = '';
-  pool += poolSection('去轮岗', '到出发时间点自己的名字', ready, p => {
+  pool += poolSection('待出发', '点本人姓名确认进线', ready, p => {
     const a = p.assign;
     let cls = 'rt-chip wait', sub;
     if (!a) { cls = 'rt-chip dim'; sub = '去向安排中'; }
@@ -32,27 +32,27 @@ function screenView() {
     const can = canDepartNow(p, n) && !confirmationBlocked();
     return `<button type="button" class="${cls}" data-pid="${esc(p.pid)}" data-act="depart" ${can ? '' : 'aria-disabled="true"'}><span class="rt-nm">${esc(p.name)}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
   }, 'rt-ready');
-  pool += poolSection('去休息 / 吃饭', '下线回到休息室点自己的名字', arrive, p => {
+  pool += poolSection('到休息室确认', '到达后点本人姓名', arrive, p => {
     const mins = p.walkbackSince !== null && p.walkbackSince !== undefined ? Math.max(0, Math.floor(n - p.walkbackSince)) : 0;
     let sub = p.state === 'pending' ? 'OP 结束，点击转入休息区' : `下线 ${mins} 分钟`;
     if (p.after === 'done') sub = '今天轮岗结束，点击即可下班';
     return `<button type="button" class="rt-chip${mins >= 10 ? ' due' : ''}" data-pid="${esc(p.pid)}" data-act="arrive"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
-  });
-  pool += poolSection('吃饭区', '', meals, p => `<div class="rt-chip meal"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">吃饭至 ${hm(p.readyAt)}，剩余 ${Math.max(0, Math.ceil(p.readyAt-n))} 分钟</span>${badges(p)}</div>`);
+  }, 'rt-arrivals');
   pool += poolSection('休息区', '饭后倒计时结束前不能进线', resting, p => {
     const kind = p.state === 'meal' ? '<span class="rt-badge meal">吃饭</span>' : '<span class="rt-badge rest">休息</span>';
     const next = p.assign ? `${goText(p)} <small>${hm(p.assign.departAt)}</small>` : '';
     return `<div class="rt-chip rest"><span class="rt-nm">${esc(p.name)} ${kind}</span><span class="rt-sub">至 ${hm(restUntil(p))}，还剩 ${Math.max(0, Math.ceil(restUntil(p) - n))} 分钟</span><span class="rt-go">${next}</span>${badges(p)}</div>`;
-  });
-  return `<div class="rt-board">${lines}<div class="rt-pool">${pool}</div></div>`;
+  }, 'rt-resting');
+  pool += poolSection('吃饭区', '', meals, p => `<div class="rt-chip meal"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0, Math.ceil(p.readyAt-n))} 分钟</span>${badges(p)}</div>`, 'rt-meals');
+  return `<div class="rt-board"><section class="rt-line-area" aria-label="轮岗线路"><div class="rt-area-heading"><h1>轮岗线路</h1><span>${day.lines.filter(L=>L.active).length}条启用 <span class="rt-schedule-key"><i class="add"></i>待加 <i class="remove"></i>待撤</span></span></div>${lines}</section><div class="rt-pool" aria-label="休息室人员">${pool}</div></div>`;
 }
 
 RT.render = () => {
   if (!RT.data) return;
   renderClock();
-  const scroll = [...$app.querySelectorAll('.rt-chips')].map(el => el.scrollTop);
+  const scroll = [...$app.querySelectorAll('.rt-lines,.rt-chips')].map(el => el.scrollTop);
   $app.innerHTML = screenView();
-  [...$app.querySelectorAll('.rt-chips')].forEach((el, i) => { el.scrollTop = scroll[i] || 0; });
+  [...$app.querySelectorAll('.rt-lines,.rt-chips')].forEach((el, i) => { el.scrollTop = scroll[i] || 0; });
 };
 
 RT.load = async () => {
@@ -60,10 +60,14 @@ RT.load = async () => {
 };
 
 $app.addEventListener('click', event => {
+  if(typeof adjustmentState !== 'undefined' && adjustmentState && event.target.closest('[data-post]')) {
+    const [line,i]=event.target.closest('[data-post]').dataset.post.split('#');adjustPostMenu(line,Number(i));return;
+  }
   const chip = event.target.closest('[data-pid][data-act]');
   if (!chip) return;
   const p = personOf(chip.dataset.pid);
   if (!p) return;
+  if(typeof adjustmentState !== 'undefined' && adjustmentState) {adjustPersonMenu(p);return;}
   if (chip.dataset.act === 'arrive') {
     confirmRotation(p, 'arrive', '/api/rotation/screen/act');
   } else if (chip.dataset.act === 'depart') {

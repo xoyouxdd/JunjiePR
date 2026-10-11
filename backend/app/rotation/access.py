@@ -1,7 +1,7 @@
 """轮岗的身份与权限（测试阶段）。
 
 轮岗目前是独立的测试环境，数据全部为模拟数据，不影响任何真实员工：
-- PR 员工账号只决定能否打开「轮岗（测试）」入口：热力追踪范围内的 TR 和正式 GSM；
+- PR 员工账号只决定能否打开「轮岗（测试）」入口：热力追踪范围内的 TR、LEAD、TA LEAD 和正式 GSM；
 - 进入后选择模拟账号操作：大屏（只能点到达和出发）、轮岗主管、轮岗经理，或名单中某个 CM/TR 的工号；
 - 休息室大屏设备不登录员工账号，在登录页直接用大屏账号和密码登录。
 专用账号不对应员工，只能访问轮岗接口。
@@ -60,9 +60,9 @@ def rotation_attraction_id(db: Session) -> int:
 
 
 def can_enter(db: Session, user: V2User) -> bool:
-    """「轮岗（测试）」入口：本职 TR 和正式 GSM，限定热力追踪范围。"""
+    """「轮岗（测试）」入口：TR、LEAD、TA LEAD 和正式 GSM，限定热力追踪范围。"""
     attraction_id = rotation_attraction_id(db)
-    if user.base_role.code == "TR":
+    if user.base_role.code == "TR" or user.base_role.code == "SUPERVISOR" and not user.has_role("TA_GSM") or user.has_role("TA_SUPERVISOR"):
         return user.employee.attraction_id == attraction_id
     if user.base_role.code == "GSM":
         return user.employee.attraction_id == attraction_id or attraction_id in managed_attraction_ids(db, user.id)
@@ -78,9 +78,16 @@ class RotationActor:
     account: RotationAccount | None = None
     member_employee_no: str | None = None
     entered_by: Employee | None = None
+    adjustment: bool = False
+    temporary: bool = False
+    expires_at: datetime | None = None
+    can_authorize: bool = True
+    adjustment_session_id: int | None = None
 
     @property
     def actor_id(self) -> int | None:
+        if self.adjustment and self.entered_by:
+            return self.entered_by.id
         return self.account.id if self.account else None
 
 
@@ -213,13 +220,22 @@ def require_entry(db: Session = Depends(get_db), user: V2User = Depends(current_
 
 
 def require_actor(request: Request, db: Session = Depends(get_db)) -> RotationActor:
+    from app.rotation.adjustment import COOKIE, staff_actor
+    if request.cookies.get(COOKIE):
+        actor = staff_actor(request, db)
+        if not actor:
+            raise HTTPException(401, "调整登录已失效，请退出调整或重新登录")
+        return actor
     actor = session_actor(request, db)
     if not actor:
         raise HTTPException(401, "请先选择轮岗模拟账号")
     return actor
 
 
-def require_screen(actor: RotationActor = Depends(require_actor)) -> RotationActor:
+def require_screen(request: Request, db: Session = Depends(get_db)) -> RotationActor:
+    actor = session_actor(request, db)
+    if not actor:
+        raise HTTPException(401, "请先登录休息室大屏")
     if actor.kind != KIND_SCREEN:
         raise HTTPException(403, "只有休息室大屏可以操作")
     return actor
@@ -234,4 +250,10 @@ def require_manager(actor: RotationActor = Depends(require_actor)) -> RotationAc
 def require_member(actor: RotationActor = Depends(require_actor)) -> RotationActor:
     if actor.kind != KIND_MEMBER:
         raise HTTPException(403, "请先选择要模拟的 CM/TR 工号")
+    return actor
+
+
+def require_controller(actor: RotationActor = Depends(require_manager)) -> RotationActor:
+    if actor.adjustment:
+        raise HTTPException(403, "现场调整不能修改凭据、导入名单、初始化或清空测试数据")
     return actor

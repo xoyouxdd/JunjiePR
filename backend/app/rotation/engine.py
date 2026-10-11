@@ -7,7 +7,7 @@
   链条后移到要走的人为止把他推出来；被推出的人直接转为已下班/出圈中，不需要到大屏确认；
 - 推 7 点：07:15 班的人直接在 7 点岗位对换 07:00 班的人，被替下的人照常休息后轮岗；
 - 到出圈时间仍没人替：继续在岗并保持准备出圈，一直找人来推，超过 outWarnAfter 分钟提醒主管；
-- 吃饭：休息中、待出发和吃饭剩不到 mealReserveLeft 分钟的人，够开着的线数时才安排吃饭，不设同时吃饭上限；
+- 吃饭：休息中、待出发和吃饭/饭后休息剩余15分钟及以内的人数达到开放线数时，可自选休息或吃饭；默认休息，保留强制饭点；
   离下班或闭园不到 mealWarnLeft 分钟仍没吃饭的，提醒主管；
 - 到岗时距下班/出圈不超过 noBoardBefore 分钟就不再上岗；
 - 出发只能在计划出发时间前 departEarly 分钟以内点。
@@ -342,7 +342,7 @@ class Engine:
                     changed = True
                 if x.get('closeAt') and x['open'] and now >= _m(x['closeAt']) and not x.get('closedAuto'):
                     x['closedAuto'] = True
-                    self._close_post(L, i, now, 'system')
+                    self._close_post(L, i, now, 'system', x.get('closeMode', 'direct'))
                     changed = True
         cm = self.close_min()
         if cm is not None and not d.get('closed') and now >= cm + S.get('closeDelay', 0):
@@ -835,7 +835,7 @@ class Engine:
             return ('away' if kind == 'out' else 'done'), kind
         return None, kind
 
-    def act_arrive(self, pid, now, actor):
+    def act_arrive(self, pid, now, actor, meal_choice=None):
         p = self.person(pid)
         if p['state'] not in ('walkback', 'pending'):
             raise ActionError('%s 当前不是待到达状态，可能已经处理过' % p['name'])
@@ -857,7 +857,14 @@ class Engine:
             self._go_out(p, a, now, actor)
             return
         anchor = p.get('arriveAnchor') or now
-        kind = self._meal_decision(p, now)
+        menu = self.meal_options(p, now)
+        if meal_choice not in (None, 'rest', 'meal'):
+            raise ActionError('请选择休息或吃饭')
+        if meal_choice == 'meal' and not menu['canChoose'] and not menu['forced']:
+            raise ActionError('当前不满足吃饭条件或轮岗储备不足，请重新查看')
+        kind = 'meal' if menu['forced'] or menu['canChoose'] and meal_choice == 'meal' else 'rest'
+        if not first:
+            kind = p.get('breakKind') or kind
         p['arriveAnchor'] = anchor
         p['breakKind'] = kind
         p['breakStart'] = anchor
@@ -879,18 +886,23 @@ class Engine:
         return min(p['end'], cm) if cm is not None else p['end']
 
     def _meal_decision(self, p, now):
+        return 'meal' if self.meal_options(p, now)['forced'] else 'rest'
+
+    def meal_options(self, p, now):
         S = self.S
+        result = {'canChoose': False, 'forced': False, 'supply': 0, 'lines': sum(1 for L in self.d['lines'] if L.get('active') and any(x.get('open') for x in L['posts']))}
         if not self.meal_eligible(p) or p.get('ate'):
-            return 'rest'
+            return result
         if now < max(_m(S['mealEarliest']), p['start'] + S['mealAfterStart']):
-            return 'rest'
+            return result
         left = self.meal_deadline(p) - now
         # 吃完后剩余时间太少也不安排
         if left < S['mealMin'] + 30:
-            return 'rest'
-        if self.rest_supply(now, exclude=p['pid']) >= self.active_line_count() or now >= p['start'] + S['mealForceAfterStart']:
-            return 'meal'
-        return 'rest'
+            return result
+        result['forced'] = now >= p['start'] + S['mealForceAfterStart']
+        result['supply'] = sum(1 for q in self.P.values() if q['pid'] != p['pid'] and q['role'] in ('rotation','op') and (q['state'] in ('rest','ready') and (q.get('breakKind')!='meal_rest' or q['readyAt']-now<=15) or q['state']=='meal' and q['readyAt']-now<=15))
+        result['canChoose'] = not result['forced'] and result['supply'] >= result['lines']
+        return result
 
     def active_line_count(self):
         return sum(1 for L in self.d['lines'] if L.get('active'))
@@ -967,8 +979,27 @@ class Engine:
         p['breakKind'] = None
         self.h.log('undo_arrive', actor, pid, None, None, {})
 
-    def _close_post(self, L, i, now, actor):
+    def _close_post(self, L, i, now, actor, mode='direct'):
         x = L['posts'][i]
+        if mode not in ('direct', 'push'):
+            raise ActionError('撤岗方式不正确')
+        if mode == 'push' and x.get('occ') and self.P[x['occ']]['state'] != 'notyet':
+            carry = x['occ']
+            last_index = i
+            for j in range(i+1, len(L['posts'])):
+                target = L['posts'][j]
+                if not target.get('open'):
+                    continue
+                if target.get('occ') and self.P[target['occ']]['state']=='notyet':
+                    raise ActionError('尚未到班次的岗位不能参与运行中顺推')
+                last_index = j
+                target['occ'], carry = carry, target.get('occ')
+                target['since'] = now
+                if not carry:
+                    break
+            if carry:
+                self._push_off(carry, L, last_index, now, '撤岗顺推')
+            x['occ'] = None
         if x.get('occ'):
             if self.P[x['occ']]['state'] != 'notyet':
                 self._push_off(x['occ'], L, i, now, '撤岗')
@@ -977,10 +1008,15 @@ class Engine:
                     self.d['plan'][kind].pop(f"{L['id']}#{i}", None)
         x['occ'] = None
         x['open'] = False
-        self.h.log('post_close', actor, None, L['id'], x['name'], {})
+        self.h.log('post_close', actor, None, L['id'], x['name'], {'mode':mode})
 
-    def act_post(self, lid, i, open_, now, actor, open_at=None):
+    def act_post(self, lid, i, open_, now, actor, open_at=None, close_at=None, close_mode='direct', cancel_close=False):
         L, i, x = self.post(lid, i)
+        if cancel_close:
+            if not x.get('open') or not x.get('closeAt') or hm(x['closeAt'])<=now:raise ActionError('没有待撤岗计划')
+            x.update(closeAt=None,closeMode='direct',closedAuto=False)
+            self.h.log('post_cancel_close',actor,None,lid,x['name'],{})
+            return
         if open_:
             if not L.get('active'):
                 raise ActionError('%s 线未启用，请先启用该线' % lid)
@@ -991,12 +1027,63 @@ class Engine:
                 raise ActionError('加岗时间不得早于当前时间，且须在当天24:00前')
             if self.d.get('closed') or (self.close_min() is not None and at >= self.close_min()):
                 raise ActionError('加岗时间必须在闭园前')
+            if x.get('closeAt') and hm(x['closeAt'])<=now:x.update(closeAt=None,closedAuto=False)
             x.update(manual=False, opened=at <= now, open=at <= now, openAt=fmt(at), openRequest=True)
             self.h.log('post_schedule', actor, None, lid, x['name'], {'openAt': fmt(at)})
         else:
+            if close_mode not in ('direct','push'):
+                raise ActionError('撤岗方式不正确')
+            if close_at is not None and close_at > now:
+                if not x.get('open') or close_at >= 1440 or close_at >= (self.close_min() or 1440):
+                    raise ActionError('撤岗时间应在已开岗后、闭园前')
+                x.update(closeAt=fmt(close_at), closeMode=close_mode, closedAuto=False)
+                self.h.log('post_schedule_close',actor,None,lid,x['name'],{'closeAt':fmt(close_at),'mode':close_mode})
+                return
+            if close_at is not None and close_at < now:
+                raise ActionError('撤岗时间不得早于当前时间')
             x.update(manual=True, opened=True, openRequest=False)
-            self._close_post(L, i, now, actor)
+            self._close_post(L, i, now, actor, close_mode)
         self._reset_line_plans(lid)
+
+    def act_move(self, pid, lid, i, now, actor):
+        p=self.person(pid)
+        if p['state']=='notyet':
+            return self.act_plan_place(pid,lid,i,now,actor)
+        target, i, slot=self.post(lid,i)
+        if not target.get('active') or not slot.get('open'):
+            raise ActionError('只能移动到启用线路的已开岗位')
+        if p['state']!='onpost':
+            if slot.get('occ'):
+                raise ActionError('休息人员不能直接替换在岗人员，请安排轮岗')
+            return self.act_fix_place(pid,lid,i,'现场拖动调整',now,actor)
+        source, old=self.find_post(pid)
+        if source['id']==lid and old==i:
+            return
+        other=slot.get('occ')
+        if other and self.P[other]['state']!='onpost':
+            raise ActionError('运行中不能与未到班次人员交换')
+        source['posts'][old]['occ']=other;slot['occ']=pid
+        for who,line in [(pid,target),(other,source)]:
+            if who and self.P[who].get('line')!=line['id']:
+                self._leave_line(self.P[who],source if who==pid else target,old if who==pid else i,now)
+                self._enter(self.P[who],line,now)
+        self._reset_line_plans(source['id']);self._reset_line_plans(lid)
+        self.h.log('move',actor,pid,lid,slot['name'],{'swapped':other,'from':source['id'],'fromPost':source['posts'][old]['name']})
+
+    def act_post_order(self, lid, i, target_i, now, actor):
+        L,i,_=self.post(lid,i);_,target_i,_=self.post(lid,target_i)
+        if i==target_i:
+            return
+        old=list(L['posts']);post=L['posts'].pop(i);L['posts'].insert(target_i,post)
+        for kind in ('crew','seven'):
+            previous=dict(self.d['plan'][kind])
+            for j,item in enumerate(L['posts']):
+                key=f'{lid}#{j}';old_j=next(k for k,x in enumerate(old) if x is item)
+                self.d['plan'][kind].pop(key,None)
+                if f'{lid}#{old_j}' in previous:
+                    self.d['plan'][kind][key]=previous[f'{lid}#{old_j}']
+        self._reset_line_plans(lid)
+        self.h.log('post_order',actor,None,lid,post['name'],{'from':i,'to':target_i})
 
     def act_line(self, lid, active, now, actor):
         L = self.line(lid)

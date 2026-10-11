@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app import announcements as domain
+from app import announcement_training as training
 from app.v2_auth import V2User, current_user
 from app.v2_database import FILE_DIR, get_db
 from app.v2_models import (Announcement, AnnouncementAsset, AnnouncementDelivery, AnnouncementFavorite,
@@ -49,6 +50,9 @@ class AnnouncementInput(BaseModel):
     project_id: int | None = None
     tiers: list[Tier] = Field(min_length=1, max_length=5)
     confirmation_level: Literal[1, 2, 3] = 2
+    training_required: bool = False
+    trainer_scope: Literal["circle", "all"] = "circle"
+    trainer_ids: list[int] = Field(default_factory=list, max_length=1000)
     effective_on: date
     expires_on: date | None = None
     due_on: date | None = None
@@ -72,6 +76,11 @@ class AnnouncementInput(BaseModel):
             raise ValueError("不能重复添加同一文件")
         self.tiers = list(dict.fromkeys(self.tiers))
         self.attraction_ids = sorted(set(self.attraction_ids))
+        self.trainer_ids = sorted(set(self.trainer_ids))
+        if self.training_required and (self.confirmation_level != 3 or not self.trainer_ids):
+            raise ValueError("培训码仅用于第三级签字，须指定培训师")
+        if not self.training_required and self.trainer_ids:
+            raise ValueError("未开启培训签字不能指定培训师")
         return self
 
 
@@ -80,6 +89,24 @@ class ReceiptInput(BaseModel):
     action: Literal["read", "confirm"] = "read"
     acknowledged: bool = False
     signature: str | None = Field(default=None, max_length=1_500_000)
+    training_code: str = Field(default="", max_length=6)
+
+
+class TrainingCodeInput(BaseModel):
+    version: int = Field(ge=1)
+    hours: int = Field(default=2, ge=1, le=6)
+    request_key: str = Field(min_length=8, max_length=96)
+
+
+class TrainingVerifyInput(BaseModel):
+    version: int = Field(ge=1)
+    code: str = Field(max_length=6)
+
+
+class TrainersInput(BaseModel):
+    expected_version: int = Field(ge=1)
+    trainer_scope: Literal["circle", "all"]
+    trainer_ids: list[int] = Field(default_factory=list, max_length=1000)
 
 
 class ReasonInput(BaseModel):
@@ -146,6 +173,8 @@ def write_version(db, announcement, payload, user, number):
         change_summary=payload.change_summary, created_by=user.id, request_key=payload.request_key, payload_digest=domain.digest(values))
     db.add(row)
     db.flush()
+    if payload.training_required:
+        training.set_trainers(db, row, payload.trainer_scope, user.employee.attraction_id, payload.trainer_ids)
     return row
 
 
@@ -155,8 +184,17 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(current_user))
     return {"categories": domain.CATEGORIES, "tiers": domain.TIERS,
             "circles": [{"id": id, "name": name} for id, name in domain.live_circles(db).items()],
             "publisher": config, "can_publish": bool(config["circles"] or config["projects"]),
+            "can_train": user.has_role("TR"),
             "can_admin": domain.admin(user), "can_follow": user.has_role("SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM", "AM") or domain.admin(user),
             "counts": domain.summary(db, user)}
+
+
+@router.get("/training-options")
+def training_options(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    config = domain.grant_config(db, user.id)
+    if not config["circles"] and not config["projects"] and not db.query(Announcement.id).filter_by(owner_id=user.id).first():
+        raise HTTPException(403, "仅发布者或当前公告负责人可选择培训师")
+    return {"items": training.candidates(db), "own_circle_id": user.employee.attraction_id}
 
 
 @router.get("/summary")
@@ -165,7 +203,7 @@ def summary(db: Session = Depends(get_db), user: V2User = Depends(current_user))
 
 
 @router.get("")
-def listing(view: Literal["pending", "history", "favorites", "manage"] = "pending", q: str = Query("", max_length=100),
+def listing(view: Literal["pending", "history", "favorites", "manage", "training"] = "pending", q: str = Query("", max_length=100),
             category: str = "", page: int = Query(1, ge=1), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     domain.sync_current(db)
     receipts = db.query(AnnouncementDelivery).filter_by(employee_id=user.id).all()
@@ -193,6 +231,9 @@ def listing(view: Literal["pending", "history", "favorites", "manage"] = "pendin
                 version = archived[0]
             else:
                 version = accessible[0]
+        elif view == "training":
+            if not training.authorized(db, current.id, user.id) or not training.effective(row, current):
+                continue
         else:
             ids = domain.record_ids(db, user, row, current)
             if row.owner_id != user.id and not domain.admin(user) and ids == set():
@@ -250,6 +291,7 @@ def revise(id: int, payload: AnnouncementInput, request: Request, db: Session = 
     if not payload.change_summary.strip():
         raise HTTPException(400, "请填写变更说明")
     previous = domain.current_version(db, row)
+    training.end_codes(db, previous.id)
     domain.validate_scope(db, user.id, values)
     domain.validate_attachments(db, user, values["attachments"], previous)
     seen = {d.employee_id for d in db.query(AnnouncementDelivery).filter_by(version_id=previous.id) if d.seen_at}
@@ -351,6 +393,7 @@ def withdraw(id: int, payload: ReasonInput, request: Request, db: Session = Depe
     row = get_announcement(db, id)
     ensure_owner(row, user)
     ensure_version(row, payload.expected_version)
+    training.end_codes(db, domain.current_version(db, row).id)
     if not payload.reason.strip():
         raise HTTPException(400, "请填写撤下原因")
     if row.status != "withdrawn":
@@ -421,6 +464,9 @@ def receipt(id: int, payload: ReceiptInput, request: Request, db: Session = Depe
     path = None
     try:
         if not delivery.confirmed_at:
+            code = None
+            if payload.action == "confirm" and training.settings(db, version.id)["training_required"]:
+                code = training.validate_code(db, row, version, delivery, payload.training_code)
             delivery.seen_at = delivery.seen_at or datetime.now()
             db.query(AnnouncementNotification).filter(AnnouncementNotification.employee_id == user.id,
                 AnnouncementNotification.announcement_id == id,
@@ -441,6 +487,9 @@ def receipt(id: int, payload: ReceiptInput, request: Request, db: Session = Depe
                     delivery.signature_file_id = file.id
                     delivery.signing_statement = f"本人{user.name}（{user.employee.employee_no}）已阅读并知悉《{version.title}》V{version.number}的要求。"
                 delivery.confirmed_at, delivery.status = datetime.now(), "completed"
+                if code:
+                    training.evidence(db, delivery, code)
+                    db.flush()
                 write_audit(db, user.employee, "签收公告", "announcement", id,
                             after={"version": version.number, "level": version.confirmation_level, "delivery_id": delivery.id}, ip_address=client_ip(request))
         result = domain.delivery_payload(db, delivery)
@@ -451,6 +500,87 @@ def receipt(id: int, payload: ReceiptInput, request: Request, db: Session = Depe
         if path:
             path.unlink(missing_ok=True)
         raise
+
+
+@router.get("/{id}/training")
+def training_session(id: int, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    domain.sync_current(db)
+    row = get_announcement(db, id)
+    version = domain.current_version(db, row)
+    if not training.authorized(db, version.id, user.id) or not training.effective(row, version):
+        raise HTTPException(403, "仅当前有效公告的授权TR可查看培训跟进")
+    from app.v2_models import AnnouncementTrainingCode
+    codes = db.query(AnnouncementTrainingCode).filter_by(version_id=version.id, trainer_id=user.id).order_by(AnnouncementTrainingCode.id.desc()).all()
+    deliveries = db.query(AnnouncementDelivery).filter_by(version_id=version.id).all()
+    items, groups = domain.grouped_records(db, deliveries)
+    # Shared progress is visible to assigned trainers; raw signatures stay in
+    # existing management permission boundaries, and codes are never listed.
+    items = [{k: v for k, v in item.items() if k not in {"signature_url", "signing_statement"}} for item in items]
+    result = {"version": version.number, "title": version.title, "items": items, "groups": groups,
+              "sessions": [{"id": c.id, "created_at": c.created_at, "expires_at": c.expires_at,
+                            "active": c.ended_at is None and c.expires_at > datetime.now()} for c in codes[:20]]}
+    db.commit()
+    return result
+
+
+@router.post("/{id}/training/codes")
+def generate_training_code(id: int, payload: TrainingCodeInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    domain.lock(db)
+    row = get_announcement(db, id)
+    ensure_version(row, payload.version)
+    result = training.generate(db, row, domain.current_version(db, row), user, payload.hours, payload.request_key)
+    write_audit(db, user.employee, "生成公告培训码", "announcement", id, after={"version": payload.version, "session": result["id"], "hours": payload.hours}, ip_address=client_ip(request))
+    db.commit()
+    return result
+
+
+@router.post("/{id}/training/end")
+def end_training_code(id: int, payload: ReasonInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    domain.lock(db)
+    row = get_announcement(db, id)
+    ensure_version(row, payload.expected_version)
+    version = domain.current_version(db, row)
+    if not training.authorized(db, version.id, user.id):
+        raise HTTPException(403, "仅授权TR可结束自己的培训码")
+    training.end_codes(db, version.id, user.id)
+    write_audit(db, user.employee, "结束公告培训码", "announcement", id, reason=payload.reason, ip_address=client_ip(request))
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/{id}/training/verify")
+def verify_training_code(id: int, payload: TrainingVerifyInput, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    domain.lock(db)
+    domain.sync_current(db)
+    row = get_announcement(db, id)
+    ensure_version(row, payload.version)
+    version = domain.current_version(db, row)
+    delivery = db.query(AnnouncementDelivery).filter_by(version_id=version.id, employee_id=user.id).first()
+    if not delivery or not training.settings(db, version.id)["training_required"]:
+        raise HTTPException(403, "没有此公告的培训签收任务")
+    code = training.validate_code(db, row, version, delivery, payload.code)
+    trainer = db.get(Employee, code.trainer_id)
+    training.evidence(db, delivery, code)
+    db.commit()
+    return {"ok": True, "trainer_name": trainer.name, "expires_at": code.expires_at}
+
+
+@router.post("/{id}/training/trainers")
+def update_trainers(id: int, payload: TrainersInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    domain.lock(db)
+    row = get_announcement(db, id)
+    ensure_owner(row, user)
+    ensure_version(row, payload.expected_version)
+    version = domain.current_version(db, row)
+    if not training.settings(db, version.id)["training_required"] or row.status != "published":
+        raise HTTPException(409, "当前公告未开启培训签字或已撤下")
+    # Keep the original circle boundary when responsibility is handed over.
+    from app.v2_models import AnnouncementTrainingConfig
+    circle = db.get(AnnouncementTrainingConfig, version.id).circle_id
+    training.set_trainers(db, version, payload.trainer_scope, circle, sorted(set(payload.trainer_ids)))
+    write_audit(db, user.employee, "调整公告培训师", "announcement", id, after=payload.model_dump(), ip_address=client_ip(request))
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/{id}/records")
@@ -512,6 +642,14 @@ def export(id: int, request: Request, format: Literal["pdf", "xlsx"] = "pdf", ve
     db.commit()
     return Response(content, media_type="application/pdf" if format == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="announcement-{id}-v{data["announcement"]["version"]}.{format}"', "Cache-Control": "private, no-store"})
+
+
+@router.get("/{id}/followup-export")
+def followup_export(id: int, request: Request, version: int | None = None, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    row = get_announcement(db, id)
+    if user.id not in {row.publisher_id, row.owner_id} and not domain.admin(user):
+        raise HTTPException(403, "仅原发布者、现负责人及最高管理权限可调取全部跟进记录")
+    return export(id, request, "xlsx", version, db, user)
 
 
 @router.post("/assets")

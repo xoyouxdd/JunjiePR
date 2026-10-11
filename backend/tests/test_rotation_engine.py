@@ -522,15 +522,18 @@ def test_meal_only_when_enough_people_rest_for_every_open_line():
         eng.P[f"r{i}"]["readyAt"] = hm("11:10")
     eater = eng.P["eater"]
     # 2 条线开着，休息中 3 人：够了，可以吃饭
-    assert eng._meal_decision(eater, hm("11:00")) == "meal"
+    assert eng.meal_options(eater, hm("11:00"))["canChoose"] is True
+    assert eng._meal_decision(eater, hm("11:00")) == "rest"
     eng.P["r0"]["state"] = "meal"
     eng.P["r0"]["readyAt"] = hm("11:40")
     eng.P["r1"]["state"] = "meal"
     eng.P["r1"]["readyAt"] = hm("11:40")
     # 只剩 1 人休息，不够 2 条线：只休息
     assert eng._meal_decision(eater, hm("11:00")) == "rest"
-    # 吃饭剩不到 20 分钟的人算作休息中
-    assert eng._meal_decision(eater, hm("11:21")) == "meal"
+    # 吃饭剩15分钟及以内才计入自选吃饭的储备；默认仍休息
+    assert not eng.meal_options(eater, hm("11:24"))["canChoose"]
+    assert eng.meal_options(eater, hm("11:25"))["canChoose"]
+    assert eng._meal_decision(eater, hm("11:25")) == "rest"
 
 
 def test_supervisor_is_alerted_when_meal_deadline_is_under_three_hours():

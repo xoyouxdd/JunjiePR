@@ -344,7 +344,7 @@ class DbHooks:
 
     def log(self, typ, actor, pid, line, post, detail):
         if hasattr(actor, "kind"):
-            actor_type, actor_id, actor_name = actor.kind, actor.actor_id, actor.name
+            actor_type, actor_id, actor_name = ('adjustment' if getattr(actor,'adjustment',False) else actor.kind), actor.actor_id, actor.name
         else:
             actor_type, actor_id, actor_name = "system", None, "系统" if actor == "system" else str(actor)
         self.db.add(RotationEvent(
@@ -655,6 +655,7 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "assign": av, "flags": p.get("flags", []), "tags": p.get("tags", []), "away": p.get("away"),
         "walkbackSince": p.get("walkbackSince"), "arriveAt": p.get("arriveAt"), "ate": p.get("ate"),
         "mealEligible": eng.meal_eligible(p), "downReason": p.get("downReason"), "after": p.get("after"),
+        "mealOptions": eng.meal_options(p, now),
         "visited": p.get("visited", []), "mark": p.get("mark", ""), "absences": p.get("absences", []),
         "preparing": preparing,
         "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
@@ -671,7 +672,7 @@ def lines_view(eng: E.Engine) -> list[dict]:
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
         "walk": eng.walk(L["id"]),
         "posts": [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"), "since": x.get("since"),
-                   "openAt": x.get("openAt"), "opened": x.get("opened"), "seven": x.get("seven")} for x in L["posts"]],
+                   "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for x in L["posts"]],
     } for L in eng.d["lines"]]
 
 
@@ -830,7 +831,7 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
 SCREEN_ACTIONS = {"arrive", "depart"}
 LIVE_ACTIONS = {
     "arrive", "depart", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
-    "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place",
+    "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order",
 }
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
 
@@ -861,10 +862,12 @@ def action_time(value) -> int:
 
 @transactional
 def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict | None:
+    from app.rotation.adjustment import revalidate_actor
+    revalidate_actor(db, actor)
     act = body.get("action")
     if not isinstance(act, str) or act not in LIVE_ACTIONS:
         raise ActionError("不支持的操作")
-    if act not in {"post", "line", "set_close"}:
+    if act not in {"post", "post_order", "line", "set_close"}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
             raise ActionError("工号必须是字符串")
@@ -875,6 +878,10 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         if not row:
             raise ActionError("今天的轮岗还没有发布")
         state = day_state(row)
+        if body.get('expected_snapshot'):
+            from app.rotation.manual import fingerprint
+            if body['expected_snapshot'] != fingerprint(state):
+                raise ConfirmationConflict('安排已变化，请重新预览后提交')
         token = body.get("confirmation_token")
         if token is not None:
             if act not in SCREEN_ACTIONS or not isinstance(token, str) or len(token) != 64:
@@ -887,6 +894,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         if row.status != "live":
             raise ActionError("今天的轮岗还没有发布")
         advance(db, cfg, row, state, now)
+        if body.get('expected_snapshot') and body['expected_snapshot'] != fingerprint(state):
+            raise ConfirmationConflict('安排已变化，请重新预览后提交')
         eng, hooks = engine_for(db, cfg, row, state)
         hooks.now = now
         pid = body.get("pid")
@@ -902,7 +911,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         if act.startswith("fix_") and not reason:
             raise ActionError("更正需要填写原因")
         if act == "arrive":
-            eng.act_arrive(pid, now, actor)
+            eng.act_arrive(pid, now, actor, meal_choice=body.get('meal_choice'))
         elif act == "plan_place":
             _require(body, "line", "i")
             eng.act_plan_place(pid, body["line"], body["i"], now, actor)
@@ -910,11 +919,9 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             eng.act_depart(pid, now, actor)
         elif act == "undo":
             eng.act_undo(pid, now, actor)
-        elif act == "post":
-            _require(body, "line", "i")
-            open_ = action_boolean(body, "open")
-            open_at = action_time(body["openAt"]) if open_ and "openAt" in body else None
-            eng.act_post(body["line"], body["i"], open_, now, actor, open_at=open_at)
+        elif act in {"post", "move", "post_order"}:
+            from app.rotation.manual import apply
+            apply(eng,body,now,actor)
         elif act == "line":
             _require(body, "line")
             eng.act_line(body["line"], action_boolean(body, "active"), now, actor)

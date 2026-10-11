@@ -7,5 +7,5 @@ drop cached CSS/JS whenever a new edition ships.
 Same day → increment N. New day → YYYY.MM.DD.1.
 """
 
-APP_VERSION = "2026.10.11.2"
+APP_VERSION = "2026.10.11.6"
 STATIC_CACHE_VERSION = APP_VERSION

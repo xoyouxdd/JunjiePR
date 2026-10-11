@@ -100,7 +100,7 @@ process.stdout.write(JSON.stringify({manager:render(input.manager,false),screen:
         assert view["state"] == expected and view["can"] is can, name
         sections = re.findall(r"<section[^>]*>(.*?)</section>", view["pool"], re.S)
         section = next(s for s in sections if "定时开岗员工" in s)
-        assert ("<h2>休息区" if expected == "rest" else "<h2>去轮岗" if name == "screen" else "<h2>待出发") in section
+        assert ("<h2>休息区" if expected == "rest" else "<h2>待出发") in section
         if expected == "rest":
             assert "data-act=\"depart\"" not in section
             assert ("08:08" if opening else "08:20" if ready_at == 500 else "08:15") in section

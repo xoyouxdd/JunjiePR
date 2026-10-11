@@ -61,6 +61,16 @@ const reviewRecord = {id: 71, employee_name: '复核测试主管', employee_no: 
   recognition_date: '2026-10-08', submitted_at: '2026-10-11 12:50:34',
   recognition_type: '演出', recognizer_name: '测试GSM', fraction: 1, credited_fraction: 1,
   content: '补录认可日期展示验证', status: 'pending', status_name: '待复核'};
+let trainingDemo = false, trainingSigned = false;
+const trainingAnnouncement = {id: 51, version: 1, current_version: 1, title: '培训签字验证', summary: '',
+  category: '安全 & 合规', scope_kind: 'circle', attraction_ids: [1], tiers: ['frontline'], scope_label: '热力追踪',
+  confirmation_level: 3, training_required: true, trainer_scope: 'circle', trainer_ids: [8], trainer_circle_id: 1,
+  status: 'published', effective: true, effective_on: '2026-10-01', due_on: null, expires_on: null,
+  published_at: '2026-10-11', updated_at: '2026-10-11', author: '测试GSM', attachments: [],
+  versions: [{number: 1, accessible: true}], body: '培训后签字', body_lines: [{text: '培训后签字', changed: false}]};
+function demoAnnouncement() {return {...trainingAnnouncement, can_edit: mode === 'publisher',
+  can_manage: mode === 'publisher', can_train: mode === 'trainer', can_followup_export: mode === 'publisher',
+  receipt: mode === 'member' ? {status: trainingSigned ? 'completed' : 'pending', confirmed_at: trainingSigned ? '2026-10-11T13:00:00' : null} : null};}
 const requests = [], uploads = [], missingApis = [];
 function sendJson(response, value) {
   response.writeHead(200, {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'});
@@ -86,13 +96,33 @@ async function fixtureRequest(request, response) {
     response.end(fs.readFileSync(file)); return;
   }
   if (route === '/api/me') {
-    sendJson(response, mode === 'member' ? {...user, name: '测试员工', role_code: 'CM', base_role_code: 'CM',
+    sendJson(response, ['publisher','trainer'].includes(mode) ? {...user, role_code: mode === 'trainer' ? 'TR' : 'GSM', base_role_code: mode === 'trainer' ? 'TR' : 'GSM', role_codes: [mode === 'trainer' ? 'TR' : 'GSM']} : mode === 'member' ? {...user, name: '测试员工', role_code: 'CM', base_role_code: 'CM',
       role_name: 'CM', permissions: ['SELF_RECOGNITION']} : {...user, must_change_password: mode === 'password'});
-  } else if (route === '/api/options') sendJson(response, options);
+  } else if (route === '/api/rotation/adjust/mine') sendJson(response, {items: []});
+  else if (route === '/api/options') sendJson(response, options);
   else if (route === '/api/action-center') sendJson(response, {month: '2026-10', items: [], total: 0});
+  else if (route === '/api/deduction-upgrades/pending') sendJson(response, {items:[]});
+  else if (route === '/api/announcements/options' && trainingDemo) sendJson(response, {can_publish: mode === 'publisher', can_follow: mode === 'publisher', can_train: mode === 'trainer', can_admin: false,
+    counts: {pending: 1,messages: 0,handovers: 0}, categories: ['安全 & 合规'], circles: [{id:1,name:'热力追踪'},{id:2,name:'小熊罐子'}],
+    tiers: {frontline:'CM / TR',lead:'LEAD'}, publisher: {circles:[1],projects:[],tiers:['frontline','lead'],categories:['安全 & 合规']}});
+  else if (route === '/api/announcements/training-options') sendJson(response, {own_circle_id:1,items:[{id:8,name:'本圈培训师',employee_no:'TR8',attraction_id:1},{id:9,name:'跨圈培训师',employee_no:'TR9',attraction_id:2}]});
+  else if (route === '/api/announcements/summary') sendJson(response, {pending:1,messages:0,handovers:0});
+  else if (route === '/api/announcements/51') sendJson(response, demoAnnouncement());
+  else if (route === '/api/announcements/51/receipt') {
+    const chunks=[]; for await (const chunk of request) chunks.push(chunk);
+    const body=JSON.parse(Buffer.concat(chunks).toString());
+    if (body.action==='confirm') {assert.equal(body.training_code,'123456');assert(body.signature?.startsWith('data:image/png;base64,'));trainingSigned=true;}
+    sendJson(response, demoAnnouncement().receipt);
+  } else if (route === '/api/announcements/51/training/verify') sendJson(response, {ok:true,trainer_name:'本圈培训师',expires_at:'2026-10-11T19:00:00'});
+  else if (route === '/api/announcements/51/training/codes') {
+    const chunks=[];for await(const chunk of request)chunks.push(chunk);
+    assert.equal(JSON.parse(Buffer.concat(chunks).toString()).hours,6);
+    sendJson(response,{id:1,code:'123456',expires_at:'2026-10-11T19:00:00'});
+  } else if (route === '/api/announcements/51/training') sendJson(response,{title:trainingAnnouncement.title,version:1,items:[],groups:[],sessions:[]});
+  else if (route === '/api/announcements/51/records') sendJson(response,{announcement:demoAnnouncement(),items:[],groups:[],counts:{required:0,completed:0,pending:0,suspended:0,exited:0},handover:{owner:{name:'测试GSM',employee_no:'GSM1'},history:[]}});
   else if (route === '/api/announcements/options') sendJson(response, {can_publish: false, can_follow: false,
     can_admin: false, counts: {pending: 0, messages: 0, handovers: 0}, categories: ['通用']});
-  else if (route === '/api/announcements') sendJson(response, {items: [], page: 1, pages: 1, total: 0});
+  else if (route === '/api/announcements') sendJson(response, {items: trainingDemo ? [demoAnnouncement()] : [], page: 1, pages: 1, total: trainingDemo ? 1 : 0});
   else if (route === '/api/announcement-media/options') sendJson(response, {templates: [], categories: ['通用']});
   else if (route === '/api/changelog/announcement') sendJson(response, {read: true});
   else if (route === '/api/admin/circle-hr-accounts') sendJson(response, {items: [{employee_id: 7,
@@ -294,6 +324,60 @@ async function main() {
     assert.match(fallback.failure, /请先选择认可图片/);
     assert.deepEqual(memberErrors, []); checks.push('mobile member registration, multipart image, date fallback and idempotency');
     await member.close();
+    trainingDemo = true;
+    for (const trainingMode of ['publisher','trainer','member']) {
+      mode=trainingMode;
+      const page=await browser.newPage({viewport:{width:trainingMode==='publisher'?1280:390,height:900}});
+      const errors=[];page.on('pageerror',e=>errors.push(e.message));
+      await page.goto(`${origin}/`);
+      await page.locator('#tabs [data-tab="announcements"]').first().waitFor({state:'attached'});
+      await page.evaluate(async()=>{
+        const entryUrl=new URL(document.querySelector('script[type="module"][src]').src);
+        const {clearPageResources}=await import(new URL('./app/context.js',entryUrl));clearPageResources();
+        const {renderAnnouncements}=await import(new URL('./app/announcements.js',entryUrl));await renderAnnouncements();
+      });
+      await page.locator('[data-ann-open="51"]').waitFor();
+      if(mode==='publisher'){
+        await page.locator('[data-ann-new]').click();
+        await page.locator('#announcementPublishForm').waitFor();
+        await page.locator('[name=confirmation_level]').selectOption('3');
+        await page.locator('[name=training_required]').check();
+        assert.equal(await page.locator('[name=trainer_ids]').count(),1);
+        await page.locator('[name=trainer_scope]').selectOption('all');
+        assert.equal(await page.locator('[name=trainer_ids]').count(),2);
+        await page.locator('[name=trainer_ids][value="9"]').check();
+        await page.locator('[name=title]').fill('培训码公告');await page.locator('[name=body]').fill('学习后签字');
+        await page.getByRole('button',{name:'预览',exact:true}).click();
+        assert.match(await page.locator('#announcementPublishReview').innerText(),/培训码＋签字.*跨圈培训师/);
+        fs.mkdirSync(path.resolve(__dirname,'../../.handover_review'),{recursive:true});
+        await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-publish-20261011.png'),fullPage:true});
+        await page.locator('[data-ann-back]').click();
+        await page.locator('[data-ann-view=manage]').click();await page.locator('[data-ann-records="51"]').click();
+        await page.getByRole('link',{name:'跟进Excel'}).waitFor();
+        assert.match(await page.getByRole('link',{name:'跟进Excel'}).getAttribute('href'),/followup-export\?version=1/);
+      }else if(mode==='trainer'){
+        await page.locator('[data-ann-view=training]').click();await page.locator('[data-ann-training="51"]').click();
+        await page.locator('[name=hours]').selectOption('6');await page.getByRole('button',{name:'生成培训码',exact:true}).click();
+        await page.locator('[data-ann-current-code]').filter({hasText:'123456'}).waitFor();
+        await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-tr-20261011.png'),fullPage:true});
+      }else{
+        await page.locator('[data-ann-open="51"]').click();
+        await page.locator('#announcementReceiptForm').waitFor();
+        assert.equal(await page.locator('#announcementSignature').isVisible(),false);
+        await page.locator('[name=training_code]').fill('123456');await page.locator('[data-ann-verify-code]').click();
+        await page.locator('#announcementSignature').waitFor({state:'visible'});
+        assert(await page.locator('#announcementSignature').evaluate(el=>el.width)>100);
+        await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-member-20261011.png'),fullPage:true});
+        await page.locator('[name=acknowledged]').check();
+        const box=await page.locator('#announcementSignature').boundingBox();
+        await page.mouse.move(box.x+20,box.y+30);await page.mouse.down();await page.mouse.move(box.x+140,box.y+100,{steps:8});await page.mouse.up();
+        await page.getByRole('button',{name:'提交签字',exact:true}).click();
+        await page.locator('[data-ann-view=history][aria-pressed=true]').waitFor();assert(trainingSigned);
+      }
+      assert.deepEqual(errors,[]);if(mode!=='publisher')assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      checks.push(`announcement training ${mode}: real module DOM flow`);await page.close();
+    }
+    trainingDemo=false;
     mode = 'password';
     const password = await browser.newPage();
     await password.goto(`${origin}/`);

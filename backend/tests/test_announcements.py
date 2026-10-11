@@ -25,6 +25,7 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from app.main import app
 from app.v2_database import SessionLocal, FILE_DIR
 from app.v2_models import (Announcement, AnnouncementVersion, AnnouncementDelivery, AnnouncementNotification,
+    AnnouncementTrainingConfig, AnnouncementTrainer, AnnouncementTrainingCode, AnnouncementTrainingReceipt, AnnouncementTrainingAttempt,
     AnnouncementHandover, AnnouncementFavorite, AnnouncementGrant, AnnouncementProjectMember,
     AnnouncementProject, AnnouncementAsset, Employee, EmployeeLOAPeriod, EmployeeRoleAssignment,
     GroupMembership, Role, StoredFile, UserAccount, WorkGroup)
@@ -47,7 +48,8 @@ def ok(response):
 def client():
     with TestClient(app) as client:
         with SessionLocal() as db:
-            for model in [AnnouncementHandover, AnnouncementFavorite, AnnouncementNotification, AnnouncementDelivery,
+            for model in [AnnouncementTrainingReceipt, AnnouncementTrainingAttempt, AnnouncementTrainingCode, AnnouncementTrainer, AnnouncementTrainingConfig,
+                          AnnouncementHandover, AnnouncementFavorite, AnnouncementNotification, AnnouncementDelivery,
                           AnnouncementVersion, Announcement, AnnouncementGrant, AnnouncementProjectMember,
                           AnnouncementProject, AnnouncementAsset]:
                 db.query(model).delete()

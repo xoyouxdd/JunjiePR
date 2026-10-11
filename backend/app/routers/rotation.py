@@ -22,6 +22,7 @@ from app.rotation.access import (
     require_actor,
     require_entry,
     require_manager,
+    require_controller,
     require_member,
     require_screen,
     rotation_attraction_id,
@@ -40,6 +41,8 @@ from app.v2_services import write_audit
 
 
 router = APIRouter(prefix="/rotation", tags=["rotation"])
+from app.routers.rotation_adjust import router as adjustment_router
+router.include_router(adjustment_router)
 
 
 def _format_time(value: datetime | None) -> str | None:
@@ -58,8 +61,17 @@ def rotation_enter(payload: dict, request: Request, response: Response, db: Sess
     login_name = str(payload.get("account") or "").strip()
     if not login_name:
         raise HTTPException(400, "请输入模拟账号")
+    if login_name == 'self':
+        from app.rotation.adjustment import qualified, start_staff
+        if not qualified(db,user.employee):
+            raise HTTPException(403,'只有本圈管理人员可直接进入现场调整')
+        start_session(db,request,response,account=find_rotation_account(db,'6666666'),entered_by=user.employee)
+        start_staff(db,request,response,user.employee)
+        return {'ok':True,'kind':'supervisor','name':user.name,'redirect':'/rotation/screen'}
     account = find_rotation_account(db, login_name)
     if account:
+        if account.kind in {'supervisor','manager'} and user.base_role.code!='GSM':
+            raise HTTPException(403,'请使用本人现场调整入口；TR须使用本人账号和临时授权码')
         if not account.enabled:
             raise HTTPException(403, "该模拟账号已停用")
         start_session(db, request, response, account=account, entered_by=user.employee)
@@ -99,12 +111,22 @@ def rotation_whoami(db: Session = Depends(get_db), actor: RotationActor = Depend
         "employee_no": actor.member_employee_no,
         "attraction_name": ROTATION_ATTRACTION_NAME,
         "test_mode": True,
+        "adjustment": actor.adjustment, "can_authorize": actor.can_authorize,
+        "expires_at": actor.expires_at.isoformat() if actor.expires_at else None,
+        "temporary": actor.temporary,
     }
 
 
 @router.post("/logout")
 def rotation_logout(request: Request, response: Response, db: Session = Depends(get_db)):
     """退出轮岗模拟账号；PR 员工账号不受影响。"""
+    from app.rotation.adjustment import COOKIE
+    from app.rotation.models import RotationAdjustSession
+    raw_adjust=request.cookies.get(COOKIE)
+    if raw_adjust:
+        db.query(RotationAdjustSession).filter_by(token_hash=token_hash(raw_adjust)).delete()
+        db.commit()
+    response.delete_cookie(COOKIE,secure=request_is_https(request),httponly=True,samesite="lax")
     raw_token = request.cookies.get(ACCOUNT_COOKIE)
     if raw_token:
         db.query(RotationAccountSession).filter(RotationAccountSession.token_hash == token_hash(raw_token)).delete(synchronize_session=False)
@@ -134,7 +156,7 @@ def _account_payload(account: RotationAccount) -> dict:
 
 
 @router.get("/accounts")
-def rotation_accounts(db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+def rotation_accounts(db: Session = Depends(get_db), actor: RotationActor = Depends(require_controller)):
     rows = db.query(RotationAccount).order_by(RotationAccount.login_account.asc()).all()
     return {"items": [_account_payload(row) for row in rows]}
 
@@ -145,7 +167,7 @@ def reset_rotation_account_password(
     payload: dict,
     request: Request,
     db: Session = Depends(get_db),
-    actor: RotationActor = Depends(require_manager),
+    actor: RotationActor = Depends(require_controller),
 ):
     """重置专用账号密码（用于登录页直接登录）：该账号原有的登录全部失效。"""
     password = validate_account_password(payload.get("new_password"))
@@ -201,7 +223,7 @@ def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: Rot
     try:
         return service.do_live_action(db, rotation_attraction_id(db), actor,
                                       {"action": payload["action"], "pid": payload.get("pid"),
-                                       "confirmation_token": payload["confirmation_token"]})
+                                       "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice")})
     except service.ActionError as exc:
         raise _action_error(exc) from exc
 
@@ -220,7 +242,7 @@ def rotation_member_act(payload: dict, db: Session = Depends(get_db), actor: Rot
     try:
         return service.do_live_action(db, rotation_attraction_id(db), actor,
                                       {"action": payload["action"], "pid": actor.member_employee_no,
-                                       "confirmation_token": payload["confirmation_token"]})
+                                       "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice")})
     except service.ActionError as exc:
         raise _action_error(exc) from exc
 
@@ -255,7 +277,7 @@ def rotation_act(payload: dict, db: Session = Depends(get_db), actor: RotationAc
 
 
 @router.post("/draft")
-def rotation_draft(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+def rotation_draft(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_controller)):
     try:
         service.do_draft_action(db, rotation_attraction_id(db), actor, payload)
     except service.ActionError as exc:
@@ -274,7 +296,7 @@ async def rotation_roster_upload(
     scope: str = Form("week"),
     date: str = Form(""),
     db: Session = Depends(get_db),
-    actor: RotationActor = Depends(require_manager),
+    actor: RotationActor = Depends(require_controller),
 ):
     if not (file.filename or "").lower().endswith(".xlsx"):
         raise HTTPException(400, "请上传 .xlsx 格式的名单")
@@ -320,7 +342,7 @@ def rotation_config(db: Session = Depends(get_db), actor: RotationActor = Depend
 
 
 @router.put("/config")
-def rotation_config_update(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+def rotation_config_update(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_controller)):
     try:
         with service.transaction(db):
             cfg = service.load_config(db, rotation_attraction_id(db))

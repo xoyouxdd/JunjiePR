@@ -1,7 +1,7 @@
 // Action-center, operations health and change history.
 import { api, json } from './api.js';
 import { announcementWorkspaces, setAnnouncementBadge } from './announcement-state.js';
-import { beginViewRequest, render } from './context.js';
+import { beginViewRequest, render, registerPageCleanup } from './context.js';
 import { confirmModal } from './dialogs.js';
 import { esc } from './format.js';
 import { refreshActionBadge, renderTabs, setActionBadge } from './navigation.js';
@@ -43,6 +43,12 @@ async function renderActionCenter(){
     host.querySelector('[data-backup-retry]').onclick=async()=>{const confirmed=await confirmModal('重新备份数据库','<p>将在服务器后台创建一次新的 SQLite 快照；这不会修复缺失的每日计划任务。</p>','确认备份');if(!confirmed)return;const retryButton=host.querySelector('[data-backup-retry]');retryButton.disabled=true;try{await api('/api/admin/backup-health/retry',json('POST',{}));toast('手动备份已启动');const statusNode=host.querySelector('[data-manual-backup-status]');statusNode.textContent='手动备份正在执行…';for(let i=0;i<120&&host.isConnected;i++){await new Promise(resolve=>setTimeout(resolve,3000));if(!host.isConnected)break;const status=await api('/api/admin/backup-health/manual-status');if(status.status!=='running'){statusNode.textContent=status.status==='completed'?`手动备份成功：${status.file_name||'已完成'}`:'手动备份失败，请联系服务器管理员检查日志。';toast(status.status==='completed'?'手动备份完成':'手动备份失败',status.status!=='completed');retryButton.disabled=false;break;}}}catch(error){retryButton.disabled=false;toast(error.message,true)}};
   }host.scrollIntoView({behavior:'smooth',block:'nearest'});}catch(error){toast(error.message,true)}finally{button.disabled=false;}});
   if(isUpgradeReviewer)bindUpgradeReviewActions(app,renderActionCenter);
+  if(state.me.base_role_code==='TR'||state.me.role_code==='TR'){
+    const host=document.createElement('section');host.className='panel section-gap';host.setAttribute('aria-label','轮岗协助授权');app.append(host);
+    let busy=false;
+    const update=async()=>{if(busy||!request.isCurrent())return;busy=true;try{const result=await api('/api/rotation/adjust/mine');if(!request.isCurrent())return;host.hidden=!result.items?.length;host.innerHTML=`<h3>轮岗协助授权 · 测试</h3>${(result.items||[]).map(g=>`<article><strong>操作码 ${esc(g.code)}</strong><p>${esc(g.issuer)}授权 · 有效至 ${esc(new Date(g.expires_at).toLocaleTimeString())}</p><p>授权期内拥有与LEAD相同的本圈现场调整权限。大屏登录调整选择TR，输入本人账号与操作码。</p></article>`).join('')}`;}catch(_){host.hidden=true;}finally{busy=false;}};
+    await update();const timer=setInterval(update,10000);registerPageCleanup(()=>clearInterval(timer));
+  }
 }
 
 function operationsBackupHtml(backup){

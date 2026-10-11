@@ -11,7 +11,7 @@ try { tab = localStorage.getItem('rotation.tab') || 'board'; } catch (_) { /* �
 if (!TABS.some(([id]) => id === tab)) tab = 'board';
 const view = { logDate: null, log: null, record: null, recordNo: '', rosterDate: null, roster: null, config: null, accounts: null };
 
-const isManager = () => me && (me.kind === 'supervisor' || me.kind === 'manager');
+const isManager = () => me && (me.kind === 'supervisor' || me.kind === 'manager') && (!me.adjustment || typeof adjustmentState!=='undefined' && !!adjustmentState && !adjustExitPending);
 
 // 正在输入时不重绘，避免吞掉输入内容。
 function editing() {
@@ -28,7 +28,7 @@ function renderWho() {
 }
 
 function renderClockBar() {
-  if (!isManager()) { $bar.hidden = true; return; }
+  if (!isManager() || me.adjustment) { $bar.hidden = true; return; }
   const c = RT.data.clock;
   const sim = c.mode === 'sim';
   const dates = RT.data.rosterDates || [];
@@ -74,7 +74,7 @@ async function clockAction(action, extra = {}) {
 function renderTabs() {
   if (!isManager()) { $tabs.hidden = true; return; }
   $tabs.hidden = false;
-  $tabs.innerHTML = TABS.map(([id, label]) => `<button type="button" class="${id === tab ? 'active' : ''}" data-tab="${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</button>`).join('');
+  $tabs.innerHTML = TABS.filter(([id])=>!me.adjustment||['board','records'].includes(id)).map(([id, label]) => `<button type="button" class="${id === tab ? 'active' : ''}" data-tab="${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</button>`).join('');
   $tabs.querySelectorAll('[data-tab]').forEach(button => {
     button.onclick = () => {
       tab = button.dataset.tab;
@@ -103,7 +103,7 @@ function boardView() {
   if (d.status === 'ended') return `<section class="panel rt-empty"><h2>${esc(d.date)} 的轮岗已结束</h2><p>可在「记录」查看当天的操作日志和个人轮岗记录。</p></section>`;
   const n = nowMin();
   const alerts = d.alerts.map(a => `<div class="rt-alert ${esc(a.level)}">${esc(a.msg)}</div>`).join('') + d.notices.slice(-3).map(x => `<div class="rt-alert">${hm(x.t)} ${esc(x.msg)}</div>`).join('');
-  return `${alerts ? `<div class="rt-alerts">${alerts}</div>` : ''}<div class="rt-board"><div class="rt-lines">${d.lines.map(L => lineCard(L, n, true)).join('')}</div><div class="rt-pool">${poolView(n)}</div></div>`;
+  return `${alerts ? `<div class="rt-alerts">${alerts}</div>` : ''}<div class="rt-board"><div class="rt-lines">${d.lines.map(L => lineCard(L, n, isManager())).join('')}</div><div class="rt-pool">${poolView(n)}</div></div>`;
 }
 
 function poolView(n) {
@@ -174,6 +174,7 @@ function personMenu(p) {
 }
 
 function postMenu(key) {
+  if(typeof adjustPostMenu==='function'){const [line,i]=key.split('#');adjustPostMenu(line,Number(i));return;}
   const [lid, idx] = key.split('#');
   const L = RT.data.day.lines.find(l => l.id === lid);
   const x = L.posts[Number(idx)];
@@ -235,10 +236,10 @@ $app.addEventListener('keydown', event => {
 $app.addEventListener('dragstart', event => {
   const source = event.target.closest('[data-drag-pid],tr[data-pid]');
   const pid = source?.dataset.dragPid || source?.dataset.pid;
-  if (!isManager() || tab !== 'board' || personOf(pid)?.state !== 'notyet') {event.preventDefault(); return;}
+  if (!isManager() || tab !== 'board' || (!event.target.closest('[data-drag-post]')&&!['notyet','onpost'].includes(personOf(pid)?.state))) {event.preventDefault(); return;}
   RT.pressing = true;
   RT.dragging = true;
-  event.dataTransfer.setData('text/plain', pid);
+  event.dataTransfer.setData('text/plain',event.target.closest('[data-drag-post]')?'post:'+event.target.closest('[data-drag-post]').dataset.dragPost:pid);
 });
 $app.addEventListener('dragover', event => {
   if (isManager() && tab === 'board' && event.target.closest('[data-post]')) event.preventDefault();
@@ -248,7 +249,7 @@ $app.addEventListener('drop', async event => {
   if (!isManager() || tab !== 'board' || !target) return;
   event.preventDefault(); RT.pressing = false; RT.dragging = false;
   const [line, index] = target.dataset.post.split('#');
-  await act('/api/rotation/act', {action:'plan_place', pid:event.dataTransfer.getData('text/plain'), line, i:Number(index)}, '预排已调整，班次开始后计时');
+  const raw=event.dataTransfer.getData('text/plain');if(raw.startsWith('post:')){const [source,from]=raw.slice(5).split('#');if(source!==line){toast('岗位顺序只能在本线内调整',true);return;}await adjustPreview({action:'post_order',line,i:Number(from),target_i:Number(index)});}else await adjustPreview({action:'move',pid:raw,line,i:Number(index)});
 });
 $app.addEventListener('dragend', () => {RT.pressing = false; RT.dragging = false;});
 
@@ -370,7 +371,7 @@ function bindRoster() {
 const EVENT_NAME = {
   publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
   arrive: '去休息', arrive_done: '去休息后下班', arrive_away: '去休息后转暂离', depart: '去轮岗', undo_arrive: '撤回去休息', away: '暂离/出圈', back: '回池',
-  reassign: '改派', leave: '离岗', flag: '标记', post_open: '开岗', post_close: '撤岗', line_on: '启用线', line_off: '停用线', set_close: '改闭园时间',
+  reassign: '改派', leave: '离岗', flag: '标记', move:'现场人员调整',post_order:'岗位顺序调整',post_schedule_close:'计划撤岗',post_open: '开岗', post_close: '撤岗', line_on: '启用线', line_off: '停用线', set_close: '改闭园时间',
   fix_undo_depart: '更正：撤销出发', fix_remove: '更正：移出岗位', fix_place: '更正：放入岗位', add_person: '临时加人', shift_end: '下班', shift_end_onpost: '在岗到点下班',
   shift_end_unconfirmed: '未到大屏确认即下班', park_close: '闭园', absence_missed: '错过出圈', assign_cleared: '去向作废', target_gone: '替换对象已离开',
   push7_substitute: '补选推 7 点', day_end: '当天收尾',
@@ -554,6 +555,7 @@ document.getElementById('rtSwitch').onclick = async () => {
   try {
     me = await rtApi('/api/rotation/whoami');
     if (me.kind === 'screen') { location.href = portalPath('/rotation/screen'); return; }
+    if (me.adjustment&&!['board','records'].includes(tab))tab='board';
     renderWho();
     renderTabs();
     await RT.load();

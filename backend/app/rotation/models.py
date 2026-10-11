@@ -9,6 +9,27 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database.connection import Base
 
 
+class RotationAssistGrant(Base):
+    __tablename__ = "rotation_assist_grants"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    issuer_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    issuer_name: Mapped[str] = mapped_column(String(100))
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class RotationAdjustSession(Base):
+    __tablename__ = "rotation_adjust_sessions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    grant_id: Mapped[int | None] = mapped_column(ForeignKey("rotation_assist_grants.id"), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class RotationAccount(Base):
     """轮岗专用账号：休息室大屏、轮岗主管、轮岗经理。
 

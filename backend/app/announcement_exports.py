@@ -36,24 +36,26 @@ def spreadsheet(data, user):
     sheet.title = "签收记录"
     announcement, counts = data["announcement"], data["counts"]
     sheet.append(["公告签收记录"])
-    sheet.merge_cells("A1:K1")
+    sheet.merge_cells("A1:P1")
     sheet["A1"].font = Font(size=20, bold=True, color="173F52")
     sheet.row_dimensions[1].height = 35
     sheet.append([announcement["title"]])
-    sheet.merge_cells("A2:K2")
+    sheet.merge_cells("A2:P2")
     sheet["A2"].alignment = Alignment(wrap_text=True, vertical="center")
     sheet.row_dimensions[2].height = 44
     sheet.append([f"编号 ANN-{announcement['id']:06d} / V{announcement['version']} / {announcement['scope_label']}"])
-    sheet.merge_cells("A3:K3")
+    sheet.merge_cells("A3:P3")
     sheet.append([f"{'应签' if announcement['effective'] else '原应签'} {counts['required']} · 已签 {counts['completed']} · {'待签' if announcement['effective'] else '未签'} {counts['pending']} · 暂缓 {counts['suspended']} · 退出 {counts['exited']}"])
-    sheet.merge_cells("A4:K4")
+    sheet.merge_cells("A4:P4")
     sheet.append([f"导出：{user.name}（{user.employee.employee_no}） / {datetime.now():%Y-%m-%d %H:%M:%S} / {'管理范围内人员' if data['scoped'] else '全部接收人员'}"])
-    sheet.merge_cells("A5:K5")
-    sheet.append(["工号", "姓名", "层级", "景点圈", "状态", "接收原因", "接收时间", "阅读时间", "确认时间", "期限", "签字声明"])
+    sheet.merge_cells("A5:P5")
+    sheet.append(["景点圈", "小组", "工号", "姓名", "层级", "状态", "接收原因", "接收时间", "阅读时间", "确认时间", "期限", "签字声明", "跟进培训师", "培训师工号", "培训批次", "验码时间"])
     for row in data["items"]:
-        sheet.append([row["employee_no"], row["employee_name"], row["role_label"], row["attraction_name"],
-                      STATUS.get(row["status"], row["status"]), row["reason"], text(row["delivered_at"]), text(row["seen_at"]),
-                      text(row["confirmed_at"]), row["due_on"] or "—", row["signing_statement"] or "—"])
+        sheet.append([row["attraction_name"], row["group_name"], row["employee_no"], row["employee_name"], row["role_label"],
+                      "逾期未签" if row.get("overdue") else STATUS.get(row["status"], row["status"]), row["reason"],
+                      text(row["delivered_at"]), text(row["seen_at"]), text(row["confirmed_at"]), row["due_on"] or "—",
+                      row["signing_statement"] or "—", row.get("trainer_name") or "—", row.get("trainer_no") or "—",
+                      row.get("training_session_id") or "—", text(row.get("training_verified_at"))])
     for cell in sheet[6]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="173F52")
@@ -62,19 +64,27 @@ def spreadsheet(data, user):
             if isinstance(cell.value, str):
                 cell.data_type = "s"  # User input must never become an Excel formula.
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    for index, width in enumerate([18, 20, 22, 16, 14, 22, 22, 22, 22, 16, 45], 1):
+    for index, width in enumerate([16, 22, 18, 20, 22, 14, 22, 22, 22, 22, 16, 45, 20, 18, 14, 22], 1):
         sheet.column_dimensions[get_column_letter(index)].width = width
     sheet.freeze_panes = "A7"
-    sheet.auto_filter.ref = f"A6:K{max(6,sheet.max_row)}"
+    sheet.auto_filter.ref = f"A6:P{max(6,sheet.max_row)}"
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.orientation = "landscape"
     sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
     sheet.page_setup.fitToWidth, sheet.page_setup.fitToHeight = 1, 0
     sheet.print_title_rows = "1:6"
     sheet.oddFooter.center.text = f"受控签收记录 / {user.employee.employee_no} / &P / &N"
+    followup = workbook.copy_worksheet(sheet)
+    followup.title = "跟进记录"
+    followup["A1"] = "公告培训与签收跟进记录"
+    followup.freeze_panes = "A7"
+    followup.auto_filter.ref = sheet.auto_filter.ref
+    followup.print_title_rows = "1:6"
+    followup.oddFooter.center.text = sheet.oddFooter.center.text
     info = workbook.create_sheet("公告内容")
     info.append(["版本", f"ANN-{announcement['id']:06d} / V{announcement['version']}"])
     for key, value in [("标题", announcement["title"]), ("板块", announcement["category"]),
+                       ("确认方式", "培训码＋本人签字" if announcement.get("training_required") else {1: "阅读", 2: "确认", 3: "签字"}[announcement["confirmation_level"]]),
                        ("范围", announcement["scope_label"]), ("生效", announcement["effective_on"]),
                        ("失效", announcement["expires_on"] or "持续有效"), ("重点", announcement.get("summary", "")),
                        ("变更", announcement.get("change_summary", ""))]:
@@ -112,7 +122,7 @@ def pdf(data, user):
     ratio = f"{counts['completed']/counts['required']:.0%}" if counts["required"] else "—"
     html = f"""<h1>{escape(announcement['title'])}</h1><p>{escape(announcement['category'])} | {escape(label)}</p>
         <p class='muted'>范围：{escape(announcement['scope_label'])}<br>生效：{escape(announcement['effective_on'])} / 失效：{escape(text(announcement['expires_on']))}<br>
-        确认方式：{ {1:'阅读',2:'明确确认',3:'手写签字'}[announcement['confirmation_level']] } / 状态：{'有效' if announcement['effective'] else '历史 / 已停止适用'}</p>
+        确认方式：{ '培训码＋本人签字' if announcement.get('training_required') else {1:'阅读',2:'明确确认',3:'手写签字'}[announcement['confirmation_level']] } / 状态：{'有效' if announcement['effective'] else '历史 / 已停止适用'}</p>
         <div class='stats'>{'应签' if announcement['effective'] else '原应签'} {counts['required']} / 已签 {counts['completed']} / {'待签' if announcement['effective'] else '未签'} {counts['pending']}<br>签收率 {ratio}</div>
         <p>暂缓 {counts['suspended']} / 退出范围 {counts['exited']}（不计入当前应签人数）</p>
         <h2>记录口径</h2><p>签收与本次导出的公告版本逐一对应，旧版签收不代替新版确认。已查收公告的有效要求持续适用。</p>
@@ -153,9 +163,9 @@ def pdf(data, user):
     if rows:
         p, top = detail_page(), 133
     for index, r in enumerate(rows):
-        cells = [[r["employee_name"], r["employee_no"], r["role_label"]], [r["attraction_name"]],
+        cells = [[r["employee_name"], r["employee_no"], r["role_label"]], [r["attraction_name"], r.get("group_name", "")],
                  [STATUS.get(r["status"],r["status"]), r["reason"]],
-                 [text(r["seen_at"]), text(r["confirmed_at"]), "截止 "+text(r["due_on"])]]
+                 [text(r["seen_at"]), text(r["confirmed_at"]), "截止 "+text(r["due_on"]), *( ["培训师："+r["trainer_name"], "验码："+text(r["training_verified_at"])] if r.get("trainer_name") else [] )]]
         line_counts = []
         for i, cell in enumerate(cells):
             available = columns[i+1]-columns[i]-14

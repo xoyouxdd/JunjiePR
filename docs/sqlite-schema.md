@@ -1182,6 +1182,11 @@
 | `announcement_favorites` | 公告/员工唯一 | 公告、员工 |
 | `announcement_assets` | 文件ID唯一 → `stored_files`；归属人 → `employees` | 归属人 |
 | `announcement_handovers` | 公告、原负责人、接任人、申请人外键；记录待接受、接受、兜底及取消状态 | 公告、状态 |
+| `announcement_training_configs` | 版本ID主键 → `announcement_versions`；培训门槛、本圈/全部圈及本圈边界 | 版本 |
+| `announcement_trainers` | 版本/员工唯一；对应版本及员工外键；可撤销培训授权 | 版本、员工 |
+| `announcement_training_codes` | 版本及培训师外键；保存数字码摘要、有效期、结束时间；请求键唯一，生成重试不重复开批次 | 版本、培训师、码摘要 |
+| `announcement_training_receipts` | 接收记录ID主键 → `announcement_deliveries`；批次及培训师外键；培训师姓名/工号快照、验码时间；签署完成后不覆盖 | 接收记录 |
+| `announcement_training_attempts` | 版本/员工唯一；保存验码失败次数和暂时锁定期限 | 版本 |
 
 图片素材表 `announcement_media` 见其既有条目。图片、附件和签名均继续使用 `stored_files`，访问须满足素材归属或相应公告/签收管理范围。撤下公告保留所有版本与凭据；不存在业务物理删除入口。详情见 [announcements.md](announcements.md)。
 
@@ -1210,3 +1215,9 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 | 月度分值口径 | 视图节 |
 
 测试必须用隔离数据目录，不要指向生产库。
+
+
+### 轮岗临时协助与调整会话
+
+- `rotation_assist_grants`：TR员工、授权者及名称、本圈、真实签发及到期时间、撤销状态。授权码从数据目录 `rotation-assist.key` 派生，不明文落库。重新下发撤销该TR此前有效授权。
+- `rotation_adjust_sessions`：实际员工、可选授权ID、登录令牌哈希、真实到期时间。与轮岗专用账号会话独立；TR每次写入核验关联授权。

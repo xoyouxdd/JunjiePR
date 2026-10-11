@@ -7,6 +7,43 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.11.6", "date": "2026-10-11", "status": "candidate",
+        "items": [{"summary": "轮岗现场调整与TR临时协助",
+                   "detail": "去轮岗确认后立即进线；撤岗可选择顺推或直接下线，可预览、定时和取消待撤。运行中可交换人员、调整岗位顺序。主管可向本圈指定或全部TR下发5至45分钟临时授权，独立待办展示；大屏本人登录调整、显示倒计时并提示退出，到期或撤销停止操作。储备达到开线数时，可休饭人员自选休息或吃饭，默认休息，原有强制休饭保留。测试入口新增热力追踪LEAD和TA LEAD。",
+                   "audiences": ["all"]}],
+    },
+    {
+        "version": "2026.10.11.5",
+        "date": "2026-10-11",
+        "status": "candidate",
+        "items": [
+            {"summary": "轮岗大屏适配平板布局",
+             "detail": "休息室大屏横屏采用线路与人员左右分区，顶部压缩，待出发、到达确认、休息和吃饭独立滚动；适配1024至1366像素横屏及竖屏。计划加岗显示绿色，计划撤岗显示红色和时间；只调整展示，不改变轮岗调度或操作授权。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
+        "version": "2026.10.11.4",
+        "date": "2026-10-11",
+        "status": "candidate",
+        "items": [
+            {"summary": "公告中心统一手机与电脑布局",
+             "detail": "阅读、发布、签字、培训跟进及管理页面统一控件与间距。电脑表单限制阅读宽度；手机视图标签可横向滑动，筛选上下排列，导出按钮简化，培训师名单在区域内滚动；交接继续独立展示。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
+        "version": "2026.10.11.3",
+        "date": "2026-10-11",
+        "status": "candidate",
+        "items": [
+            {"summary": "公告支持培训码签字与跟进Excel",
+             "detail": "发布者可在第三级签字中指定本圈或全部景点圈的TR，多位培训师独立生成1—6小时有效的培训码。接收人员验码后本人签字才完成签收；更新、撤下及取消授权后旧码失效。发布者与现负责人可调取全部跟进Excel，按圈、小组、工号排序，保存培训师、对应人员、批次、验码及签字时间。",
+             "audiences": ["all"]},
+
+        ],
+    },
+    {
         "version": "2026.10.11.2",
         "date": "2026-10-11",
         "status": "candidate",

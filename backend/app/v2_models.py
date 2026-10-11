@@ -284,6 +284,54 @@ class AnnouncementDelivery(Base):
     signing_statement: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class AnnouncementTrainingConfig(Base):
+    __tablename__ = "announcement_training_configs"
+    version_id: Mapped[int] = mapped_column(ForeignKey("announcement_versions.id"), primary_key=True)
+    trainer_scope: Mapped[str] = mapped_column(String(10))
+    circle_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class AnnouncementTrainer(Base):
+    __tablename__ = "announcement_trainers"
+    __table_args__ = (UniqueConstraint("version_id", "employee_id", name="uq_announcement_trainer"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("announcement_versions.id"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AnnouncementTrainingCode(Base):
+    __tablename__ = "announcement_training_codes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("announcement_versions.id"), index=True)
+    trainer_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), index=True)
+    request_key: Mapped[str] = mapped_column(String(96), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AnnouncementTrainingReceipt(Base):
+    __tablename__ = "announcement_training_receipts"
+    delivery_id: Mapped[int] = mapped_column(ForeignKey("announcement_deliveries.id"), primary_key=True)
+    code_id: Mapped[int] = mapped_column(ForeignKey("announcement_training_codes.id"))
+    trainer_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    trainer_name: Mapped[str] = mapped_column(String(100))
+    trainer_no: Mapped[str] = mapped_column(String(50))
+    verified_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class AnnouncementTrainingAttempt(Base):
+    __tablename__ = "announcement_training_attempts"
+    __table_args__ = (UniqueConstraint("version_id", "employee_id", name="uq_announcement_training_attempt"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(ForeignKey("announcement_versions.id"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AnnouncementNotification(Base):
     __tablename__ = "announcement_notifications"
     __table_args__ = (UniqueConstraint("employee_id", "event_key", name="uq_announcement_notification"),)
