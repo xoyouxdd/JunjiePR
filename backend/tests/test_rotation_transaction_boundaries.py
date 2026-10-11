@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import asyncio
 import json
 from pathlib import Path
 from threading import Event, Thread
@@ -71,6 +72,162 @@ def snapshot(rotation):
         return (row.state_json if row else None,
                 db.query(RotationEvent).count(), db.query(RotationSegment).count(),
                 db.query(RotationDuty).count(), db.query(RotationNotice).count())
+
+
+def confirmation_setup(rotation, *, outgoing=False):
+    live(rotation)
+    with rotation.factory() as db, S.transaction(db):
+        cfg = S.load_config(db, rotation.attraction_id)
+        S.set_sim_clock(cfg, DAY, 470, paused=True)
+        row = S.day_row(db, rotation.attraction_id, DAY)
+        state = S.day_state(row)
+        state['lastTick'] = 470
+        for pid, line, index in [('3', 'A', 0), ('2', 'A', 1), ('4', 'B', 0), ('5', 'B', 1)]:
+            p = state['persons'][pid]
+            p.update(state='onpost', line=line, lineStart=435, assign=None, end=1000)
+            state['lines'][0 if line == 'A' else 1]['posts'][index].update(occ=pid, since=435)
+        state['persons']['2']['end'] = 1000 if outgoing else 490
+        if outgoing:
+            state['persons']['2']['absences'] = [{'start': 490, 'end': 550, 'label': 'SSEI', 'done': False}]
+        state['persons']['1'].update(state='ready', line=None, readyAt=460, readySince=460,
+                                    breakStart=445, end=1000,
+                                    assign={'line':'A', 'mode':'chain', 'target':'2',
+                                            'why':'推出圈' if outgoing else '推下班', 'departAt':470})
+        S.save_day(db, row, state)
+    with rotation.factory() as db:
+        p = S.member_payload(db, rotation.attraction_id, '1')['person']
+    return {'action':'depart', 'pid':'1', 'confirmation_token':p['confirmationTokens']['depart']}
+
+
+@pytest.mark.parametrize('outgoing', [False, True])
+def test_confirmation_preserves_target_original_post_and_is_idempotent(rotation, outgoing):
+    body = confirmation_setup(rotation, outgoing=outgoing)
+    with rotation.factory() as db:
+        result = S.do_live_action(db, rotation.attraction_id, 'test', body)
+    assert result['result']['post'] == '入口'
+    assert result['result']['assignment']['targetPost'] == '出口'
+    assert result['result']['assignment']['targetName'] == '员工2'
+    after = snapshot(rotation)
+    with rotation.factory() as db:
+        repeat = S.do_live_action(db, rotation.attraction_id, 'screen', body)
+    assert repeat['duplicate'] is True and repeat['result'] == result['result']
+    assert snapshot(rotation) == after
+    with rotation.factory() as db:
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'fix_remove', 'pid':'1', 'reason':'测试更正'})
+        view = S.member_payload(db, rotation.attraction_id, '1')
+        status = S.confirmation_status(db, rotation.attraction_id, DAY, body['confirmation_token'], '1')
+    assert view['confirmations'][0]['assignment']['targetPost'] == '出口'
+    assert status['confirmed'] is True
+
+
+def test_simultaneous_confirmation_executes_exactly_once(rotation):
+    body = confirmation_setup(rotation)
+    start, outputs, failures = Event(), [], []
+    def run():
+        try:
+            with rotation.factory() as db:
+                start.wait(3)
+                outputs.append(S.do_live_action(db, rotation.attraction_id, 'test', body))
+        except Exception as exc:
+            failures.append(exc)
+    threads = [Thread(target=run) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    start.set()
+    for thread in threads:
+        thread.join(5)
+        assert not thread.is_alive()
+    assert not failures
+    assert len(outputs) == 8 and sum(not out['duplicate'] for out in outputs) == 1
+    with rotation.factory() as db:
+        assert db.query(RotationEvent).filter_by(event_type='depart', employee_no='1').count() == 1
+        state = S.day_state(S.day_row(db, rotation.attraction_id, DAY))
+    assert state['lines'][0]['posts'][0]['occ'] == '1'
+    assert state['lines'][0]['posts'][1]['occ'] == '3'
+
+
+def test_committed_confirmation_notifies_all_live_subscribers(rotation):
+    from app.routers.rotation import rotation_stream
+    body = confirmation_setup(rotation)
+    async def connected():
+        return False
+    async def check():
+        streams = [await rotation_stream(SimpleNamespace(is_disconnected=connected), actor=None) for _ in range(20)]
+        iterators = [response.body_iterator for response in streams]
+        try:
+            initial = await asyncio.gather(*(iterator.__anext__() for iterator in iterators))
+            assert all(value == initial[0] for value in initial)
+            def confirm():
+                with rotation.factory() as db:
+                    return S.do_live_action(db, rotation.attraction_id, 'test', body)
+            await asyncio.to_thread(confirm)
+            updates = await asyncio.wait_for(asyncio.gather(*(iterator.__anext__() for iterator in iterators)), timeout=3)
+            assert all(value == f'data: {S.RUNTIME.version}\n\n' for value in updates)
+            assert updates[0] != initial[0]
+        finally:
+            await asyncio.gather(*(iterator.aclose() for iterator in iterators))
+    asyncio.run(check())
+
+
+def test_changed_route_requires_new_confirmation(rotation):
+    body = confirmation_setup(rotation)
+    with rotation.factory() as db:
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'reassign', 'pid':'1', 'line':'B'})
+    before = snapshot(rotation)
+    with rotation.factory() as db, pytest.raises(S.ConfirmationConflict):
+        S.do_live_action(db, rotation.attraction_id, 'test', body)
+    assert snapshot(rotation) == before
+
+
+def test_confirmation_failure_does_not_leave_success_record(rotation, monkeypatch):
+    body = confirmation_setup(rotation)
+    before = snapshot(rotation)
+    with rotation.factory() as db:
+        fail_commit(db, monkeypatch)
+        with pytest.raises(RuntimeError, match='injected commit failure'):
+            S.do_live_action(db, rotation.attraction_id, 'test', body)
+    assert snapshot(rotation) == before
+    with rotation.factory() as db:
+        assert not S.confirmation_status(db, rotation.attraction_id, DAY, body['confirmation_token'], '1')['confirmed']
+
+
+def test_reset_invalidates_previous_run_confirmation(rotation):
+    body = confirmation_setup(rotation)
+    with rotation.factory() as db:
+        S.do_live_action(db, rotation.attraction_id, 'test', body)
+        test_clock.control(db, rotation.attraction_id, {'action':'reset'})
+        S.set_sim_clock(S.load_config(db, rotation.attraction_id), DAY, 470, paused=True)
+        db.commit()
+    with rotation.factory() as db:
+        assert not S.confirmation_status(db, rotation.attraction_id, DAY, body['confirmation_token'], '1')['confirmed']
+        assert S.member_payload(db, rotation.attraction_id, '1')['confirmations'] == []
+        with pytest.raises(S.ConfirmationConflict):
+            S.do_live_action(db, rotation.attraction_id, 'test', body)
+
+
+def test_departure_token_survives_unrelated_line_changes_and_time_ticks(rotation):
+    body = confirmation_setup(rotation)
+    with rotation.factory() as db:
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'flag','pid':'4','flag':'送失物','on':True})
+        cfg = S.load_config(db, rotation.attraction_id)
+        S.set_sim_clock(cfg, DAY, 470.5, paused=True)
+        db.commit()
+        view = S.member_payload(db, rotation.attraction_id, '1')
+    assert view['person']['confirmationTokens']['depart'] == body['confirmation_token']
+
+
+def test_room_confirmation_retry_does_not_restart_break(rotation):
+    confirmation_setup(rotation)
+    with rotation.factory() as db:
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'fix_remove','pid':'4','reason':'测试回休息'})
+        p = S.member_payload(db, rotation.attraction_id, '4')['person']
+        body = {'action':'arrive','pid':'4','confirmation_token':p['confirmationTokens']['arrive']}
+        first = S.do_live_action(db, rotation.attraction_id, 'test', body)
+        repeat = S.do_live_action(db, rotation.attraction_id, 'screen', body)
+        assert repeat['duplicate'] and repeat['result']['readyAt'] == first['result']['readyAt']
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'undo','pid':'4'})
+        new = S.member_payload(db, rotation.attraction_id, '4')['person']['confirmationTokens']['arrive']
+        assert new != body['confirmation_token']
 
 
 def fail_commit(db, monkeypatch):

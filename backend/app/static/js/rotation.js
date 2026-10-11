@@ -64,7 +64,7 @@ async function clockAction(action, extra = {}) {
   if (action === 'jump') body.minutes = 10;
   try {
     const out = await rtPost('/api/rotation/test-clock', body);
-    if (action === 'next') toast(out.waiting && out.waiting.length ? `需要在大屏操作：${out.waiting.join('；')}` : '已推进到当天结束');
+    if (action === 'next') toast(out.waiting && out.waiting.length ? `等待个人或大屏确认：${out.waiting.join('；')}` : '已推进到当天结束');
     await RT.load();
   } catch (error) {
     toast(error.message, true);
@@ -478,8 +478,12 @@ function memberView() {
   const n = nowMin();
   const open = d.notices.filter(x => x.status === 'open');
   const done = d.notices.filter(x => x.status !== 'open');
+  const action = p && ['walkback', 'pending'].includes(p.state) ? 'arrive' : p?.assign ? 'depart' : null;
+  const can = action === 'arrive' || (action === 'depart' && canDepartNow(p, n));
+  const actionButton = action ? `<div class="rt-actions"><button type="button" class="primary" data-member-act="${action}" ${can && !confirmationBlocked() ? '' : 'disabled'}>${RT.pendingConfirmation ? '正在核实确认结果' : RT.submitting ? '正在提交' : action === 'arrive' ? '确认已到休息室' : can ? '去轮岗' : '等待出发'}</button></div>` : '';
   const todo = `<section class="panel rt-todo"><div class="rt-todo-head"><h2>待办</h2><span class="rotation-test-badge">测试</span></div>
     ${open.length ? open.map(x => `<article class="rt-notice ${esc(x.kind)}"><strong>${esc(x.title)}</strong>${x.body ? `<p>${esc(x.body)}</p>` : ''}</article>`).join('') : '<p class="field-hint">当前没有轮岗待办。</p>'}
+    ${action === 'depart' ? `<div class="rt-route">${assignmentDescription(p.assign)}</div>` : ''}${actionButton}
     ${done.length ? `<details><summary>已完成 ${done.length} 项</summary>${done.map(x => `<p class="rt-notice-done">${esc(x.updated_at || '')} ${esc(x.title)}</p>`).join('')}</details>` : ''}</section>`;
   if (!p) return `${todo}<section class="panel rt-empty"><h2>今天没有你的轮岗</h2><p>名单发布后这里会显示你的状态和所在线。</p></section>`;
   const state = poolState(p, n);
@@ -495,7 +499,10 @@ function memberView() {
   const line = d.line ? `<section class="panel"><h2>${esc(d.line.id)} 线</h2><div class="rt-line">${d.line.posts.map(x => `<div class="rt-post${x.occ === p.pid ? ' me' : ''}${x.open ? '' : ' closed'}"><span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${x.open ? esc(x.occName || '空岗') : '未开'}</span></div>`).join('')}</div></section>` : '';
   const today = (d.today || []).map(s => `<span class="rt-pill">${esc(s.line)} ${hm(s.start)}-${hm(s.end)}</span>`).join('');
   const week = Object.entries(d.week_minutes || {}).sort().map(([lineId, m]) => `<span class="rt-pill">${esc(lineId)} ${Math.round(m)} 分钟</span>`).join('');
-  return `${todo}<section class="panel"><h2>${esc(p.name)}</h2><p class="rt-status">${status}</p>${next}<p class="field-hint">班次 ${hm(p.start)}-${hm(p.end)}${p.mealEligible ? (p.ate ? '，已吃饭' : '，有吃饭') : ''}${badges(p)}</p></section>${line}
+  const results = d.confirmations || [];
+  const resultCard = r => `<article class="rt-confirmation"><strong>${hm(r.minute)} · ${r.action === 'depart' ? '已确认进线' : '已确认到达休息室'}</strong>${r.action === 'depart' ? `<p>进入 ${esc(r.line)} 线 · ${esc(r.post)}</p>${r.assignment?.targetName ? `<p>${esc(r.assignment.why || (r.assignment.mode === 'push7' ? '推7点' : '替换'))}：${esc(r.assignment.targetName)}<br>原岗位：${esc(r.assignment.targetLine || r.assignment.line)} · ${esc(r.assignment.targetPost)}</p>` : ''}${r.assignment?.mode === 'chain' ? '<p class="field-hint">从入口岗依次推进，推至目标人员所在岗位。</p>' : ''}` : `<p>${STATE_NAME[r.state] || ''}${['rest','meal','ready'].includes(r.state) && r.readyAt ? `至 ${hm(r.readyAt)}` : ''}</p>`}<small>${r.source === 'member' ? '个人待办确认' : '大屏确认'}</small></article>`;
+  const confirmations = results.length ? `<section class="panel"><h2>本次确认</h2>${resultCard(results[0])}${results.length > 1 ? `<details><summary>此前确认 ${results.length - 1} 条</summary>${results.slice(1).map(resultCard).join('')}</details>` : ''}</section>` : '';
+  return `${todo}<section class="panel"><h2>${esc(p.name)}</h2><p class="rt-status">${status}</p>${next}<p class="field-hint">班次 ${hm(p.start)}-${hm(p.end)}${p.mealEligible ? (p.ate ? '，已吃饭' : '，有吃饭') : ''}${badges(p)}</p></section>${confirmations}${line}
     <section class="panel"><h2>今天去过的线</h2><div class="rt-row">${today || '<span class="field-hint">暂无</span>'}</div><h2>本周各线累计</h2><div class="rt-row">${week || '<span class="field-hint">暂无</span>'}</div></section>`;
 }
 
@@ -505,8 +512,9 @@ RT.render = fromTicker => {
   if (!RT.data || !me || RT.dragging) return;
   renderClock();
   if (me.kind === 'member') {
-    if (fromTicker && $app.querySelector('details[open]')) return;
+    const expanded = [...$app.querySelectorAll('details')].map(el => el.open);
     $app.innerHTML = memberView();
+    [...$app.querySelectorAll('details')].forEach((el, i) => { el.open = expanded[i] || false; });
     return;
   }
   // 每秒刷新只更新看板；表单页在正在输入或由计时器触发时不重绘
@@ -527,13 +535,17 @@ RT.render = fromTicker => {
 };
 
 RT.load = async () => {
-  const data = await rtApi(me.kind === 'member' ? '/api/rotation/me' : '/api/rotation/board');
-  RT.data = data;
-  RT.fetchedAt = Date.now();
-  if (!RT.modalOpen) RT.render();
+  await loadLive(me.kind === 'member' ? '/api/rotation/me' : '/api/rotation/board');
 };
 
+$app.addEventListener('click', event => {
+  const button = event.target.closest('[data-member-act]');
+  if (!button || button.disabled || me?.kind !== 'member' || !RT.data?.person) return;
+  confirmRotation(RT.data.person, button.dataset.memberAct, '/api/rotation/me/act');
+});
+
 document.getElementById('rtSwitch').onclick = async () => {
+  storePendingConfirmation(null);
   try { await rtPost('/api/rotation/logout'); } catch (_) { /* 退出失败也回到入口 */ }
   location.href = portalPath('/');
 };

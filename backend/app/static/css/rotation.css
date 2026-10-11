@@ -154,6 +154,12 @@ button.rt-chip { cursor: pointer; }
 .rt-card h3 { margin-top: 0; }
 
 /* ---------- 个人页待办 */
+.rt-sync { font-size: 12px; color: #abe3ca; }
+.rt-sync.offline { color: #ffd38b; font-weight: 700; }
+.rt-route { padding: 12px; margin-top: 10px; background: var(--info-bg-soft); border-radius: 8px; line-height: 1.7; }
+.rt-confirmation { padding: 12px; margin: 8px 0; border-left: 4px solid var(--primary); background: var(--surface-tint); border-radius: 6px; }
+.rt-confirmation p { margin: 6px 0; }
+.rt-confirmation small { color: var(--muted); }
 .rt-todo { border: 2px solid var(--warn-border); }
 .rt-todo-head { display: flex; align-items: center; gap: 10px; }
 .rt-todo-head h2 { margin: 0; }

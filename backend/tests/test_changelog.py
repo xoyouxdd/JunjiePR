@@ -89,8 +89,10 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    # 本职CM/TR本人登记更新对有对应权限的员工可见。
-    assert cm[0]["current"] is True
+    # 最新轮岗测试更新只对TR/正式GSM展示；其他角色保留历史记录。
+    assert cm[0]["current"] is False
+    assert gsm[0]["current"] is True
+    assert gsm[0]["items"][0]["summary"] == "轮岗测试支持个人待办确认与大屏同步"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -98,7 +100,7 @@ def test_changelog_filters_by_role() -> None:
     assert "手机底部栏按角色放常用功能" in cm_text
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
-    assert admin[0]["current"] is True
+    assert admin[0]["current"] is False
 
 
 def test_changelog_requires_matching_role_and_all_extra_permissions() -> None:
@@ -139,20 +141,18 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in cm["release"]["items"]] == ["新增公告中心与版本查收", "公告支持平台内制图和附件"]
+        assert cm == {"release": None, "read": True}
+        assert client.post("/api/changelog/announcement/read", json={"version":APP_VERSION}).status_code == 404
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert tr["release"]["items"][:-1] == cm["release"]["items"]
-        assert tr["release"]["items"][-1]["summary"] == "轮岗休息与待出发显示修复"
+        assert [item["summary"] for item in tr["release"]["items"]] == ["轮岗测试支持个人待办确认与大屏同步"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
-        assert hr["release"]["version"] == APP_VERSION
-        assert {item["summary"] for item in hr["release"]["items"]} == {
-            "新增公告中心与版本查收", "公告发布、交接与签收导出", "公告授权和管理员兜底交接", "公告支持平台内制图和附件", "轮岗休息与待出发显示修复", "部署任务状态与看门狗停止核验修复"}
+        assert hr == {"release": None, "read": True}
         client.post("/api/logout")
-        login(client, "HR01", "HR123")
+        login(client, "TRTEST01")
         first = client.get("/api/changelog/announcement").json()
         history = client.get("/api/changelog").json()["releases"]
         assert first["read"] is False
@@ -168,7 +168,16 @@ def test_current_release_items_match_roles_and_permissions() -> None:
     assert item_visible(loa, "CM", set()) and item_visible(navigation, "HR_CIRCLE", set())
     assert item_visible(upgrade, "GSM", set()) and not item_visible(upgrade, "CM", set())
     assert item_visible(rotation_fix, "TR", set()) and not item_visible(rotation_fix, "CM", set())
-    common, publish, lead, admin, artwork, rotation_status, deployment_fix = RELEASES[0]["items"]
+    mobile_rotation, review_dates = RELEASES[0]["items"]
+    for role in ('TR', 'GSM'):
+        assert item_visible(mobile_rotation, role, set())
+    for role in ('CM', 'SUPERVISOR', 'TA_GSM', 'AM', 'HR_CIRCLE', 'SYSTEM_ADMIN'):
+        assert not item_visible(mobile_rotation, role, set())
+    for role in ('SUPERVISOR', 'TA_SUPERVISOR', 'GSM', 'AM'):
+        assert item_visible(review_dates, role, set())
+    for role in ('CM', 'TR', 'HR_CIRCLE', 'SYSTEM_ADMIN'):
+        assert not item_visible(review_dates, role, set())
+    common, publish, lead, admin, artwork, rotation_status, deployment_fix = next(r for r in RELEASES if r['version']=='2026.10.10.7')['items']
     assert item_visible(deployment_fix, "SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
     assert not item_visible(deployment_fix, "SYSTEM_ADMIN", set())
     assert not item_visible(deployment_fix, "GSM", {"SYSTEM_ADMIN"})

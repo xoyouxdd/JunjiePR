@@ -173,7 +173,7 @@ def reset_rotation_account_password(
 # ---------------------------------------------------------------- 看板、大屏、个人页
 
 def _action_error(exc: service.ActionError) -> HTTPException:
-    return HTTPException(400, str(exc))
+    return HTTPException(409 if isinstance(exc, service.ConfirmationConflict) else 400, str(exc))
 
 
 @router.get("/board")
@@ -196,11 +196,33 @@ def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: Rot
         raise HTTPException(400, "操作类型必须是字符串")
     if payload["action"] not in service.SCREEN_ACTIONS:
         raise HTTPException(403, "大屏只能点去休息和去轮岗")
+    if not payload.get("confirmation_token"):
+        raise HTTPException(400, "请刷新后重新确认")
     try:
-        service.do_live_action(db, rotation_attraction_id(db), actor, {"action": payload["action"], "pid": payload.get("pid")})
+        return service.do_live_action(db, rotation_attraction_id(db), actor,
+                                      {"action": payload["action"], "pid": payload.get("pid"),
+                                       "confirmation_token": payload["confirmation_token"]})
     except service.ActionError as exc:
         raise _action_error(exc) from exc
-    return {"ok": True}
+
+
+@router.post("/me/act")
+def rotation_member_act(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_member)):
+    """模拟 CM/TR 只确认当前会话本人，和大屏共用一次性步骤。"""
+    if not isinstance(payload.get("action"), str):
+        raise HTTPException(400, "操作类型必须是字符串")
+    if payload.get("action") not in service.SCREEN_ACTIONS:
+        raise HTTPException(403, "个人待办只能确认到达休息室和去轮岗")
+    if payload.get("pid", actor.member_employee_no) != actor.member_employee_no:
+        raise HTTPException(403, "只能确认自己的轮岗待办")
+    if not payload.get("confirmation_token"):
+        raise HTTPException(400, "请刷新后重新确认")
+    try:
+        return service.do_live_action(db, rotation_attraction_id(db), actor,
+                                      {"action": payload["action"], "pid": actor.member_employee_no,
+                                       "confirmation_token": payload["confirmation_token"]})
+    except service.ActionError as exc:
+        raise _action_error(exc) from exc
 
 
 @router.get("/me")
@@ -208,6 +230,19 @@ def rotation_me(db: Session = Depends(get_db), actor: RotationActor = Depends(re
     payload = service.member_payload(db, rotation_attraction_id(db), actor.member_employee_no)
     payload["test_mode"] = True
     return payload
+
+
+@router.get("/confirmation")
+def rotation_confirmation(token: str, date: str, db: Session = Depends(get_db), actor: RotationActor = Depends(require_actor)):
+    if actor.kind not in {"member", "screen"}:
+        raise HTTPException(403, "只有个人待办和大屏可以核实确认结果")
+    if len(token) != 64:
+        raise HTTPException(400, "确认任务无效")
+    try:
+        return service.confirmation_status(db, rotation_attraction_id(db), date, token,
+                                           actor.member_employee_no if actor.kind == "member" else None)
+    except service.ActionError as exc:
+        raise _action_error(exc) from exc
 
 
 @router.post("/act")

@@ -33,6 +33,11 @@ const RT = {
   queued: false,
   modalOpen: false,
   pressing: false,
+  sync: 'connecting',
+  lastSyncedAt: 0,
+  submitting: false,
+  pendingConfirmation: null,
+  checkingConfirmation: false,
   render: () => {},
   load: async () => {},
 };
@@ -59,19 +64,31 @@ function restUntil(p) {
 
 async function rtApi(path, options = {}) {
   let res;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  let body;
   try {
-    res = await fetch(portalPath(path), { credentials: 'same-origin', ...options });
+    res = await fetch(portalPath(path), { credentials: 'same-origin', ...options, signal: controller.signal });
+    body = await res.json();
   } catch (_) {
-    throw new Error('网络连接失败，请检查网络后重试');
+    const error = new Error(RT.pendingConfirmation ? '网络连接中断，正在核实确认结果' : '网络连接失败，恢复后将重新同步');
+    error.uncertain = true;
+    RT.sync = 'offline';
+    renderSyncStatus();
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  const body = await res.json().catch(() => ({}));
   if (res.status === 401) {
     location.href = portalPath(document.body.classList.contains('rotation-screen') ? '/login' : '/');
     throw new Error('请重新进入轮岗');
   }
   if (!res.ok) {
     const detail = body.detail;
-    throw new Error(typeof detail === 'string' ? detail : (detail && detail.message) || '操作失败，请稍后重试');
+    const error = new Error(typeof detail === 'string' ? detail : (detail && detail.message) || '操作失败，请稍后重试');
+    error.status = res.status;
+    error.uncertain = res.status >= 500;
+    throw error;
   }
   return body;
 }
@@ -134,7 +151,7 @@ function confirmBox(title, message, okText, run, { warn = false, autoCancel = 0 
       const done = await run();
       if (done !== false) closeModal(); else ok.disabled = false;
     };
-    if (autoCancel) timer = setTimeout(() => { if (RT.modalOpen) closeModal(); }, autoCancel);
+    if (autoCancel) timer = setTimeout(() => { if (RT.modalOpen && document.getElementById('rtModal').contains(ok)) closeModal(); }, autoCancel);
   });
 }
 
@@ -162,10 +179,114 @@ async function act(path, body, okMessage) {
 
 // ---------------------------------------------------------------- 实时同步
 
+function renderSyncStatus() {
+  const el = document.getElementById('rtSync');
+  if (!el) return;
+  const stale = RT.lastSyncedAt && Date.now() - RT.lastSyncedAt > 20000;
+  const labels = {live: '实时同步', polling: '定时同步', connecting: '正在连接', offline: '连接中断'};
+  el.className = `rt-sync ${RT.sync === 'offline' || stale ? 'offline' : ''}`;
+  const last = RT.lastSyncedAt ? ` · ${new Date(RT.lastSyncedAt).toLocaleTimeString('zh-CN', {hour12:false})} 更新` : '';
+  el.textContent = `${RT.submitting ? '正在提交' : RT.pendingConfirmation ? '正在核实确认结果' : stale ? '正在核实连接' : labels[RT.sync]}${last}`;
+}
+
+function acceptLiveData(data) {
+  // A slow earlier request must not overwrite a newer response. A live-stream
+  // reconnect resets the baseline so a restarted server can start at version 0.
+  if (RT.data && Number(data.version) < Number(RT.data.version)) return false;
+  RT.data = data;
+  RT.fetchedAt = Date.now();
+  RT.lastSyncedAt = Date.now();
+  if (RT.sync === 'offline') RT.sync = 'polling';
+  renderSyncStatus();
+  if (!RT.modalOpen && !RT.pressing) RT.render();
+  return true;
+}
+
+let liveRequest = 0;
+let acceptedRequest = 0;
+async function loadLive(path) {
+  const request = ++liveRequest;
+  const data = await rtApi(path);
+  if (request < acceptedRequest) return;
+  if (acceptLiveData(data)) acceptedRequest = request;
+}
+
+function confirmationBlocked() {
+  return RT.submitting || !!RT.pendingConfirmation || RT.sync === 'offline'
+    || !RT.lastSyncedAt || Date.now() - RT.lastSyncedAt > 20000;
+}
+
+function storePendingConfirmation(value) {
+  RT.pendingConfirmation = value;
+  try {
+    if (value) sessionStorage.setItem('rotation.pendingConfirmation', JSON.stringify(value));
+    else sessionStorage.removeItem('rotation.pendingConfirmation');
+  } catch (_) { /* Memory still protects this page when browser storage is unavailable. */ }
+  renderSyncStatus();
+}
+
+async function checkPendingConfirmation() {
+  if (!RT.pendingConfirmation || RT.submitting || RT.checkingConfirmation) return;
+  if (RT.data?.person && RT.pendingConfirmation.pid && RT.data.person.pid !== RT.pendingConfirmation.pid) {
+    storePendingConfirmation(null);
+    return;
+  }
+  RT.checkingConfirmation = true;
+  try {
+    const pending = RT.pendingConfirmation;
+    const out = await rtApi(`/api/rotation/confirmation?token=${encodeURIComponent(pending.token)}&date=${encodeURIComponent(pending.date)}`);
+    storePendingConfirmation(null);
+    toast(out.confirmed ? '已核实：确认成功，画面已同步' : '本次未确认，请查看最新安排后重新确认', !out.confirmed);
+    await RT.load();
+  } catch (_) { /* Keep unresolved operations blocked until connectivity returns. */ }
+  finally { RT.checkingConfirmation = false; }
+}
+
+function assignmentDescription(a) {
+  if (!a) return '';
+  const own = `进入 <b>${esc(a.line)}</b> 线 · <b>${esc(a.entryPost || '入口岗')}</b>`;
+  const target = a.targetName ? `<br>${esc(a.why || (a.mode === 'push7' ? '推7点' : '替换'))}：${esc(a.targetName)}，原岗位 ${esc(a.targetLine || a.line)} · ${esc(a.targetPost || '待核实')}` : '';
+  return `${own}${target}${a.mode === 'chain' ? '<br>从入口岗依次推进，推至目标人员所在岗位。' : ''}`;
+}
+
+function confirmRotation(p, action, path) {
+  if (confirmationBlocked()) { toast('请等待联网同步或确认结果核实后再操作', true); return; }
+  const token = p.confirmationTokens?.[action];
+  if (!token) { toast('任务已变化，请等待最新画面', true); scheduleLoad(); return; }
+  if (action === 'depart' && !canDepartNow(p, nowMin())) { toast('休息未结束或还没到出发时间', true); return; }
+  const text = action === 'depart' ? assignmentDescription(p.assign) : '请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
+  confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : '到达休息室'}`, text,
+    action === 'depart' ? '确认去轮岗' : '确认已到达', async () => {
+      if (confirmationBlocked()) { toast('当前连接不可用，请稍后确认', true); return false; }
+      RT.submitting = true;
+      storePendingConfirmation({token, pid:p.pid, date: RT.data.clock.date});
+      let out;
+      try {
+        out = await rtPost(path, {action, pid:p.pid, confirmation_token:token});
+      } catch (error) {
+        if (!error.uncertain) storePendingConfirmation(null);
+        RT.submitting = false;
+        renderSyncStatus();
+        toast(error.message, true);
+        closeModal();
+        scheduleLoad();
+        return false;
+      }
+      RT.submitting = false;
+      storePendingConfirmation(null);
+      toast(out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : '已确认到达休息室');
+      // The mutation succeeded even if the subsequent view refresh fails.
+      try { await RT.load(); } catch (_) { toast('确认成功，等待画面恢复同步'); }
+      return true;
+    }, {autoCancel: 8000});
+}
+
 function scheduleLoad() {
   if (RT.loading) { RT.queued = true; return; }
   RT.loading = true;
-  RT.load().catch(error => toast(error.message, true)).finally(() => {
+  RT.load().then(() => checkPendingConfirmation()).catch(() => {
+    RT.sync = 'offline'; renderSyncStatus();
+  }).finally(() => {
     RT.loading = false;
     if (RT.queued) { RT.queued = false; scheduleLoad(); }
   });
@@ -173,11 +294,18 @@ function scheduleLoad() {
 
 function connectLive() {
   let poll = null;
+  try { RT.pendingConfirmation = JSON.parse(sessionStorage.getItem('rotation.pendingConfirmation') || 'null'); } catch (_) { /* No persisted request. */ }
   const startPolling = () => { if (!poll) poll = setInterval(scheduleLoad, 5000); };
-  if (!window.EventSource) { startPolling(); return; }
+  if (!window.EventSource) { RT.sync = 'polling'; startPolling(); renderSyncStatus(); checkPendingConfirmation(); return; }
   const source = new EventSource(portalPath('/api/rotation/stream'));
-  source.onmessage = () => { scheduleLoad(); if (poll) { clearInterval(poll); poll = null; } };
-  source.onerror = () => startPolling();
+  source.onopen = () => { RT.sync = 'live'; if (RT.data) RT.data.version = -1; renderSyncStatus(); scheduleLoad(); };
+  source.onmessage = () => { RT.sync = 'live'; scheduleLoad(); if (poll) { clearInterval(poll); poll = null; } };
+  source.onerror = () => { RT.sync = 'offline'; renderSyncStatus(); startPolling(); };
+  // Check the channel and request result even when no employee changes state.
+  setInterval(scheduleLoad, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) scheduleLoad(); });
+  window.addEventListener('online', scheduleLoad);
+  window.addEventListener('offline', () => { RT.sync = 'offline'; renderSyncStatus(); });
 }
 
 // 手指按下期间不重绘，避免刷新吞掉点击。
@@ -188,6 +316,7 @@ document.addEventListener('pointercancel', () => { RT.pressing = false; }, true)
 function startLocalTicker() {
   setInterval(() => {
     renderClock();
+    renderSyncStatus();
     if (!RT.modalOpen && !RT.pressing) RT.render(true);
   }, 1000);
 }

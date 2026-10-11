@@ -1,7 +1,7 @@
 """轮岗的身份与权限（测试阶段）。
 
 轮岗目前是独立的测试环境，数据全部为模拟数据，不影响任何真实员工：
-- PR 员工账号只决定能否打开「轮岗（测试）」入口：热力追踪的 TR 和 GSM；
+- PR 员工账号只决定能否打开「轮岗（测试）」入口：热力追踪范围内的 TR 和正式 GSM；
 - 进入后选择模拟账号操作：大屏（只能点到达和出发）、轮岗主管、轮岗经理，或名单中某个 CM/TR 的工号；
 - 休息室大屏设备不登录员工账号，在登录页直接用大屏账号和密码登录。
 专用账号不对应员工，只能访问轮岗接口。
@@ -60,11 +60,11 @@ def rotation_attraction_id(db: Session) -> int:
 
 
 def can_enter(db: Session, user: V2User) -> bool:
-    """「轮岗（测试）」入口：热力追踪的 TR 和 GSM。"""
+    """「轮岗（测试）」入口：本职 TR 和正式 GSM，限定热力追踪范围。"""
     attraction_id = rotation_attraction_id(db)
     if user.base_role.code == "TR":
         return user.employee.attraction_id == attraction_id
-    if user.has_role("GSM"):
+    if user.base_role.code == "GSM":
         return user.employee.attraction_id == attraction_id or attraction_id in managed_attraction_ids(db, user.id)
     return False
 

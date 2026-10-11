@@ -29,7 +29,7 @@ function screenView() {
       if (over >= 2) cls = 'rt-chip late'; else if (over >= -early) cls = 'rt-chip due';
       sub = over >= -early ? (over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发') : `${hm(a.departAt)} 出发`;
     }
-    const can = canDepartNow(p, n);
+    const can = canDepartNow(p, n) && !confirmationBlocked();
     return `<button type="button" class="${cls}" data-pid="${esc(p.pid)}" data-act="depart" ${can ? '' : 'aria-disabled="true"'}><span class="rt-nm">${esc(p.name)}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
   }, 'rt-ready');
   pool += poolSection('去休息 / 吃饭', '下线回到休息室点自己的名字', arrive, p => {
@@ -56,10 +56,7 @@ RT.render = () => {
 };
 
 RT.load = async () => {
-  const data = await rtApi('/api/rotation/screen/state');
-  RT.data = data;
-  RT.fetchedAt = Date.now();
-  if (!RT.modalOpen) RT.render();
+  await loadLive('/api/rotation/screen/state');
 };
 
 $app.addEventListener('click', event => {
@@ -68,21 +65,12 @@ $app.addEventListener('click', event => {
   const p = personOf(chip.dataset.pid);
   if (!p) return;
   if (chip.dataset.act === 'arrive') {
-    const note = p.after === 'done' ? '今天轮岗结束，确认后即可下班。' : p.state === 'pending' ? 'OP 结束，确认后转入休息区。' : '确认已回到休息室？系统会安排休息或吃饭。';
-    confirmBox(`确认是 ${esc(p.name)}（${esc(p.pid)}）？`, note, '确认去休息', async () => {
-      const done = await act('/api/rotation/screen/act', { action: 'arrive', pid: p.pid });
-      if (done) {
-        const q = personOf(p.pid);
-        if (q) toast(q.state === 'meal' ? `${q.name}：吃饭至 ${hm(q.readyAt)}` : q.state === 'rest' ? `${q.name}：休息至 ${hm(q.readyAt)}` : `${q.name}：${STATE_NAME[q.state] || ''}`);
-      }
-      return done;
-    }, { autoCancel: 8000 });
+    confirmRotation(p, 'arrive', '/api/rotation/screen/act');
   } else if (chip.dataset.act === 'depart') {
     const a = p.assign;
     if (!a) { toast(`${p.name} 还没有分配去向，请稍等`, true); return; }
     if (chip.getAttribute('aria-disabled') === 'true') { toast(`${p.name} 请在 ${hm(a.departAt)} 出发`, true); return; }
-    const how = a.mode === 'push7' ? `到 7 点岗位直接替换 ${esc(a.targetName || '')}` : a.mode === 'chain' ? `从入口岗推进，${esc(a.why || '推下班')}替换 ${esc(a.targetName || '')}` : '从入口岗进线推岗';
-    confirmBox(`确认是 ${esc(p.name)}（${esc(p.pid)}）？`, `出发去 <b>${esc(a.line)}</b> 线：${how}。出发后不能撤销。`, '确认去轮岗', () => act('/api/rotation/screen/act', { action: 'depart', pid: p.pid }, `${p.name} 已出发去 ${a.line} 线`), { autoCancel: 8000 });
+    confirmRotation(p, 'depart', '/api/rotation/screen/act');
   }
 });
 

@@ -57,6 +57,10 @@ const options = {roles: [{code: 'CM', name: 'CM'}], attractions: [{id: 1, name: 
   employee_circles: [{id: 1, name: '热力追踪'}], recognition_venues: [{id: 1, name: '热力追踪'}],
   recognition_types: [{id: 1, name: '安全', code: 'safety'}], deduction_types: []};
 let mode = 'admin', delayedReset = false, releaseReset, resetStarted;
+const reviewRecord = {id: 71, employee_name: '复核测试主管', employee_no: 'SUP71',
+  recognition_date: '2026-10-08', submitted_at: '2026-10-11 12:50:34',
+  recognition_type: '演出', recognizer_name: '测试GSM', fraction: 1, credited_fraction: 1,
+  content: '补录认可日期展示验证', status: 'pending', status_name: '待复核'};
 const requests = [], uploads = [], missingApis = [];
 function sendJson(response, value) {
   response.writeHead(200, {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'});
@@ -100,6 +104,13 @@ async function fixtureRequest(request, response) {
     action: 'fixture', entity: 'synthetic', reason: '前端模块验证'}]);
   else if (route === '/api/hr/organization') sendJson(response, {circles: [], others: [], warnings: []});
   else if (route === '/api/dashboard') sendJson(response, {attendance_score: 12, total_score: 12, records: []});
+  else if (route === '/api/supervisor-reviews' || route === '/api/reviews') {
+    const history = url.searchParams.get('view') === 'history';
+    sendJson(response, {items: [{...reviewRecord, status: history ? 'confirmed' : 'pending',
+      status_name: history ? '已确认' : '待复核'}], total: 1, limit: 200, offset: 0, has_more: false});
+  } else if (route === '/api/supervisor-reviews/71' || route === '/api/reviews/71') {
+    sendJson(response, {record: {...reviewRecord}});
+  }
   else if (route === '/api/recognizers') sendJson(response, [{id: 7, name: '主管测试员', role_name: '主管', score: 1}]);
   else if (route === '/api/recognitions/batch') {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
@@ -205,6 +216,46 @@ async function main() {
       assert.deepEqual(errors, [], `Module/DOM errors at ${pagePath}`);
       checks.push(`admin navigation, versioned imports, strict CSP, stale-write guard and cleanup at ${pagePath}`);
       await page.close();
+    }
+    // Load the real review module and APIs for both queues, with different
+    // business/submission dates. Check responsive layouts and history row updates.
+    mode = 'admin';
+    for (const width of [390, 1280]) {
+      const reviewPage = await browser.newPage({viewport: {width, height: 900}});
+      const reviewErrors = [];
+      reviewPage.on('pageerror', error => reviewErrors.push(error.message));
+      await reviewPage.goto(`${origin}/`);
+      await reviewPage.locator('#app h2').filter({hasText: '待办中心'}).waitFor();
+      for (const renderer of ['renderSupervisorReview', 'renderFrontlineReview']) {
+        await reviewPage.evaluate(async name => {
+          const entryUrl = new URL(document.querySelector('script[type="module"][src]').src);
+          const runtime = await import(new URL('./app/context.js', entryUrl));
+          const reviews = await import(new URL('./app/reviews.js', entryUrl));
+          runtime.clearPageResources();
+          await reviews[name]();
+        }, renderer);
+        const row = reviewPage.locator('[data-review-row="71"]');
+        const checkDates = async () => {
+          assert.equal(await row.locator('strong').filter({hasText: '认可日期：2026-10-08'}).count(), 1);
+          assert.equal(await row.locator('small').filter({hasText: '提交时间：2026-10-11 12:50:34'}).count(), 1);
+          assert.doesNotMatch(await row.innerText(), /认可日期：2026-10-11/);
+        };
+        await checkDates();
+        assert.equal(await reviewPage.locator('.work-card').count(), width === 390 ? 1 : 0);
+        if (width === 1280) assert.equal(await reviewPage.locator('thead th').first().innerText(), '认可日期 / 提交时间');
+        await reviewPage.getByRole('button', {name: '查看已处理历史', exact: true}).click();
+        await row.getByRole('button', {name: '还原', exact: true}).waitFor();
+        await checkDates();
+        await row.getByRole('button', {name: '还原', exact: true}).click();
+        await row.getByRole('button', {name: '确认', exact: true}).waitFor();
+        await checkDates();
+        if (width === 390) {
+          assert.equal(await reviewPage.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        }
+      }
+      assert.deepEqual(reviewErrors, []);
+      checks.push(`review business date versus submission time, both queues, history and row replacement at ${width}px`);
+      await reviewPage.close();
     }
     mode = 'member';
     const member = await browser.newPage({viewport: {width: 390, height: 844}});

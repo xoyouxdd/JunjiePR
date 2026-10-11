@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import threading
@@ -14,6 +15,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import date as Date, datetime, timedelta
 from functools import wraps
+from uuid import uuid4
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -38,6 +40,10 @@ logger = logging.getLogger(__name__)
 STEP = 0.25
 DAY_END = 24 * 60
 ActionError = E.ActionError
+
+
+class ConfirmationConflict(ActionError):
+    """The arrangement shown at confirmation time is no longer current."""
 
 
 class Runtime:
@@ -388,6 +394,7 @@ def day_state(row: RotationDay) -> dict:
 
 
 def save_day(db: Session, row: RotationDay, state: dict, *, notify: bool = True) -> None:
+    state.setdefault("confirmationEpoch", uuid4().hex)
     row.state_json = _dumps(state)
     row.status = state["status"]
     row.version += 1
@@ -527,21 +534,21 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
         step = None
         if st == "walkback":
             if p.get("after") == "done":
-                step = ("arrive", "请到休息室大屏点「去休息」", "今天轮岗即将结束，点完即可下班。")
+                step = ("arrive", "请确认已到休息室", "在个人待办或大屏确认，今天轮岗即将结束，确认后即可下班。")
             elif p.get("after") == "closing":
-                step = ("arrive", "请到休息室大屏点「去休息」", "已闭园，点完转为闭园后工作。")
+                step = ("arrive", "请确认已到休息室", "在个人待办或大屏确认，已闭园，确认后转为闭园后工作。")
             else:
                 reason = p.get("downReason") or "推岗"
-                step = ("arrive", "请到休息室大屏点「去休息」", f"你已下线（{reason}），到大屏确认后系统安排休息或吃饭。")
+                step = ("arrive", "请确认已到休息室", f"你已下线（{reason}），在个人待办或大屏确认后系统安排休息或吃饭。")
         elif st == "pending":
-            step = ("arrive", "请到休息室大屏点「去休息」", "OP 阶段结束，点完转入休息区开始轮岗。")
+            step = ("arrive", "请确认已到休息室", "OP 阶段结束，在个人待办或大屏确认后转入休息区开始轮岗。")
         elif st in ("rest", "meal"):
             word = "吃饭" if st == "meal" else "饭后剩余休息时间" if p.get("breakKind") == "meal_rest" else "休息"
             body = "倒计时结束后才可轮岗，不提前派岗。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
             step = ("rest", f"{word}至 {fmt(p['readyAt'])}", body)
         elif st == "ready":
             if a and now >= max(a["departAt"] - early, a.get("notBefore", 0)):
-                step = ("depart", f"现在出发去 {a['line']} 线", _go_text(eng, a) + "。到休息室大屏点「去轮岗」。")
+                step = ("depart", f"现在出发去 {a['line']} 线", _go_text(eng, a) + "。在个人待办或休息室大屏确认「去轮岗」。")
             elif a:
                 step = ("rest", f"{fmt(a['departAt'])} 出发去 {a['line']} 线", _go_text(eng, a))
             else:
@@ -598,13 +605,43 @@ def sync_notices(db: Session, attraction_id: int, state: dict, eng: E.Engine, no
 
 # ---------------------------------------------------------------- 页面数据
 
-def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
+def assignment_view(eng: E.Engine, p: dict) -> dict | None:
     a = p.get("assign")
-    av = None
-    if a:
-        av = dict(a)
-        if a.get("target") in eng.P:
-            av["targetName"] = eng.P[a["target"]]["name"]
+    if not a:
+        return None
+    av = dict(a)
+    L = eng.line(a["line"])
+    target = eng.P.get(a.get("target"))
+    TL, ti = eng.find_post(a.get("target")) if target else (None, None)
+    if target:
+        av.update(targetName=target["name"], targetLine=TL["id"] if TL else None,
+                  targetPost=TL["posts"][ti]["name"] if TL else None)
+    indexes = eng.open_posts(L)
+    entry = ti if a.get("mode") == "push7" and TL is L else (indexes[0] if indexes else None)
+    av["entryPost"] = L["posts"][entry]["name"] if entry is not None else None
+    return av
+
+
+def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
+    # Bind to this person's step and the displayed route, not the global clock
+    # or version: unrelated people and countdown ticks must not invalidate it.
+    context = {"epoch": eng.d.get("confirmationEpoch"), "date": eng.d["date"],
+               "pid": p["pid"], "action": action, "sequence": p.get("confirmationSequence", 0),
+               "closed": eng.d.get("closed", False)}
+    if action == "depart":
+        a = assignment_view(eng, p)
+        context.update(assign=a, readyAt=p.get("readyAt"), breakStart=p.get("breakStart"))
+        context["posts"] = [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ")}
+                            for x in eng.line(a["line"])["posts"]] if a else []
+    else:
+        context.update(state=p.get("state"), walkbackSince=p.get("walkbackSince"),
+                       anchor=p.get("arriveAnchor"), after=p.get("after"), start=p["start"], end=p["end"])
+    return hashlib.sha256(json.dumps(context, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
+    av = assignment_view(eng, p)
+    a = p.get("assign")
     L, i = eng.find_post(p["pid"]) if p.get("state") == "onpost" else (None, None)
     preparing = None
     if p["pid"] in taken:
@@ -620,6 +657,9 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "mealEligible": eng.meal_eligible(p), "downReason": p.get("downReason"), "after": p.get("after"),
         "visited": p.get("visited", []), "mark": p.get("mark", ""), "absences": p.get("absences", []),
         "preparing": preparing,
+        "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
+                               (["arrive"] if p.get("state") in ("walkback", "pending") else
+                                ["depart"] if p.get("assign") and p.get("state") in ("rest", "ready", "meal") else [])},
         "canDepart": bool(p.get("state") == "ready" and a and now >= (p.get("readyAt") or now) - 0.01
                           and now >= a.get("notBefore", 0) - 0.01
                           and now >= a["departAt"] - eng.S["departEarly"] - 0.01),
@@ -637,6 +677,8 @@ def lines_view(eng: E.Engine) -> list[dict]:
 
 def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) -> dict:
     state = day_state(row)
+    if "confirmationEpoch" not in state:
+        save_day(db, row, state, notify=False)
     eng, _ = engine_for(db, cfg, row, state)
     taken = eng.targeted() if state.get("status") == "live" else {}
     return {
@@ -716,6 +758,7 @@ def screen_payload(db: Session, attraction_id: int) -> dict:
 def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
+    ensure_prearranged_day(db, cfg, attraction_id, day, minute)
     row = day_row(db, attraction_id, day)
     notices = (
         db.query(RotationNotice)
@@ -732,6 +775,7 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
         "settings": {"departEarly": settings_of(cfg)["departEarly"]},
         "person": None,
         "line": None,
+        "confirmations": [],
         "week_minutes": week,
         "notices": [{
             "id": n.id, "kind": n.kind, "title": n.title, "body": n.body, "status": n.status,
@@ -741,11 +785,15 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
     if not row or row.status not in ("live", "ended"):
         return out
     state = day_state(row)
+    if "confirmationEpoch" not in state:
+        save_day(db, row, state, notify=False)
     p = state["persons"].get(employee_no)
     if not p:
         return out
     eng, _ = engine_for(db, cfg, row, state)
     out["person"] = person_view(eng, p, minute, eng.targeted() if state["status"] == "live" else {})
+    out["confirmations"] = [r for r in reversed(list(state.get("confirmations", {}).values()))
+                            if r["pid"] == employee_no][:20]
     lid = p.get("line") or (p.get("assign") or {}).get("line")
     if lid:
         L = eng.line(lid)
@@ -766,6 +814,18 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
 
 
 # ---------------------------------------------------------------- 操作
+
+@transactional
+def confirmation_status(db: Session, attraction_id: int, work_date: str, token: str, employee_no: str | None) -> dict:
+    try:
+        Date.fromisoformat(work_date)
+    except ValueError as exc:
+        raise ActionError("日期格式需为 YYYY-MM-DD") from exc
+    row = day_row(db, attraction_id, work_date)
+    result = day_state(row).get("confirmations", {}).get(token) if row else None
+    if result and employee_no is not None and result["pid"] != employee_no:
+        raise ActionError("只能查看自己的确认结果")
+    return {"confirmed": bool(result), "result": result}
 
 SCREEN_ACTIONS = {"arrive", "depart"}
 LIVE_ACTIONS = {
@@ -800,7 +860,7 @@ def action_time(value) -> int:
 
 
 @transactional
-def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
+def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict | None:
     act = body.get("action")
     if not isinstance(act, str) or act not in LIVE_ACTIONS:
         raise ActionError("不支持的操作")
@@ -812,15 +872,32 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
         cfg = load_config(db, attraction_id)
         day, now = clock_now(cfg)
         row = day_row(db, attraction_id, day)
-        if not row or row.status != "live":
+        if not row:
             raise ActionError("今天的轮岗还没有发布")
         state = day_state(row)
+        token = body.get("confirmation_token")
+        if token is not None:
+            if act not in SCREEN_ACTIONS or not isinstance(token, str) or len(token) != 64:
+                raise ActionError("请刷新后重新确认")
+            completed = state.get("confirmations", {}).get(token)
+            if completed:
+                if completed["pid"] != body.get("pid") or completed["action"] != act:
+                    raise ActionError("确认任务与人员不匹配")
+                return {"ok": True, "duplicate": True, "result": completed}
+        if row.status != "live":
+            raise ActionError("今天的轮岗还没有发布")
         advance(db, cfg, row, state, now)
         eng, hooks = engine_for(db, cfg, row, state)
         hooks.now = now
         pid = body.get("pid")
         if pid is not None and pid not in state["persons"] and act != "add_person":
             raise ActionError("今天的名单里没有这个人")
+        before = None
+        if token is not None:
+            p = eng.P[pid]
+            if token != confirmation_token(eng, p, act):
+                raise ConfirmationConflict("轮岗安排已更新，请查看最新安排后重新确认")
+            before = assignment_view(eng, p) if act == "depart" else None
         reason = str(body.get("reason") or "").strip()
         if act.startswith("fix_") and not reason:
             raise ActionError("更正需要填写原因")
@@ -886,10 +963,24 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             if end <= start:
                 end += DAY_END
             eng.act_add_person({"pid": pid, "name": entry.name, "type": entry.person_type, "mark": entry.mark, "start": start, "end": end}, now, actor)
+        result = None
+        if act in SCREEN_ACTIONS:
+            p = eng.P[pid]
+            p["confirmationSequence"] = p.get("confirmationSequence", 0) + 1
+            L, i = eng.find_post(pid)
+            result = {"pid": pid, "action": act, "date": day, "minute": now,
+                      "source": getattr(actor, "kind", "manager"), "state": p["state"],
+                      "line": L["id"] if L else None, "post": L["posts"][i]["name"] if L else None,
+                      "readyAt": p.get("readyAt"), "assignment": before,
+                      "sequence": p["confirmationSequence"]}
+            if token is not None:
+                result["token"] = token
+                state.setdefault("confirmations", {})[token] = result
         eng.tick(now)
         state["lastTick"] = max(float(state.get("lastTick", now)), now)
         sync_notices(db, attraction_id, state, eng, now)
         save_day(db, row, state)
+        return {"ok": True, "duplicate": False, "result": result} if token is not None else None
 
 
 def remember_initial_draft(state: dict, cfg: RotationConfig) -> None:
@@ -936,6 +1027,9 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 db.flush()
                 state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
                                       duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
+            # A reset starts a new run, even when the first plan is identical.
+            state["confirmationEpoch"] = uuid4().hex
+            state.pop("confirmations", None)
             if row is None:
                 row = RotationDay(attraction_id=attraction_id, work_date=day, status="draft", state_json="{}", version=0)
                 db.add(row)

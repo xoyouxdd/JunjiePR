@@ -7,6 +7,23 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.11.2",
+        "date": "2026-10-11",
+        "status": "candidate",
+        "items": [
+            {
+                "summary": "轮岗测试支持个人待办确认与大屏同步",
+                "detail": "模拟CM/TR可在个人轮岗待办确认到达休息室或去轮岗，与休息室大屏共用同一步骤；重复确认只执行一次，安排变化后需重新查看并确认。进线前显示本人进入岗位、被推人员及原岗位，确认后保留当时结果。网络异常显示同步状态，提交结果不明时先核实，恢复后获取最新画面。仍为独立测试功能，入口仅热力追踪范围内的TR与正式GSM。",
+                "audiences": ["TR", "GSM"],
+            },
+            {
+                "summary": "认可复核补充认可日期",
+                "detail": "主管本人认可及组员认可的复核页面单独显示认可日期和提交时间，手机卡片、电脑列表与已处理历史保持一致，补录时可直接核对实际认可日期。",
+                "audiences": ["SUPERVISOR", "TA_SUPERVISOR", "GSM", "AM"],
+            },
+        ],
+    },
+    {
         "version": "2026.10.10.7",
         "date": "2026-10-10",
         "status": "candidate",

@@ -72,6 +72,12 @@ def person(board: dict, no: str) -> dict:
     return next(p for p in board["day"]["persons"] if p["pid"] == no)
 
 
+def screen_act(screen: TestClient, action: str, pid: str):
+    p = person(ok(screen.get('/api/rotation/screen/state')), pid)
+    return screen.post('/api/rotation/screen/act', json={'action': action, 'pid': pid,
+                       'confirmation_token': p['confirmationTokens'].get(action, '0' * 64)})
+
+
 def test_future_opening_waits_for_departure_window_in_every_api():
     day = '2026-10-08'
     wb = Workbook()
@@ -100,7 +106,7 @@ def test_future_opening_waits_for_departure_window_in_every_api():
         assert me['settings']['departEarly'] == 1 and me['person']['canDepart'] is False
         assert any(n['kind'] == 'rest' and '08:15' in n['title'] for n in me['notices'] if n['status'] == 'open')
         for client, path in ((manager, '/api/rotation/act'), (screen, '/api/rotation/screen/act')):
-            response = client.post(path, json={'action': 'depart', 'pid': '9100001'})
+            response = screen_act(screen, 'depart', '9100001') if client is screen else client.post(path, json={'action': 'depart', 'pid': '9100001'})
             assert response.status_code == 400 and '还没到出发时间' in response.text
         ok(clock(manager, action='jump', minutes=9))
         assert person(ok(manager.get('/api/rotation/board')), '9100001')['canDepart'] is True
@@ -109,8 +115,60 @@ def test_future_opening_waits_for_departure_window_in_every_api():
         assert ok(member.get('/api/rotation/me'))['settings']['departEarly'] == 0
         ok(clock(manager, action='jump', minutes=1))
         assert person(ok(manager.get('/api/rotation/board')), '9100001')['canDepart'] is True
-        ok(screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9100001'}))
+        ok(screen_act(screen, 'depart', '9100001'))
         assert person(ok(manager.get('/api/rotation/board')), '9100001')['state'] == 'onpost'
+
+
+def test_member_and_screen_share_confirmation_and_member_cannot_act_for_others():
+    day, pid = '2026-10-11', '9300001'
+    wb = Workbook()
+    wb.active.append(['工号','姓名','日期','班次','备注'])
+    wb.active.append([pid,'手机演示',day,'07:15-16:15',''])
+    buf = BytesIO()
+    wb.save(buf)
+    with TestClient(app) as manager, TestClient(app) as screen, TestClient(app) as member:
+        login(manager, 'GSMTEST01')
+        enter(manager, '7777777')
+        login(screen, '6666666', '1243')
+        login(member, 'TRTEST01')
+        ok(clock(manager, action='set', date=day, time='03:59'))
+        ok(manager.put('/api/rotation/config', json={'lines':[{'id':'M','posts':[{'name':'手机入口','openAt':'08:15'}]}],
+                                                    'settings':{'departEarly':0}}))
+        ok(manager.post('/api/rotation/roster/upload', files={'file':('名单.xlsx',buf.getvalue(),'application/octet-stream')},data={'scope':'day'}))
+        enter(member, pid)
+        ok(clock(manager, action='jump', minutes=240))
+        ok(clock(manager, action='jump', minutes=6))
+        p = ok(member.get('/api/rotation/me'))['person']
+        body = {'action':'depart','pid':pid,'confirmation_token':p['confirmationTokens']['depart']}
+        assert member.post('/api/rotation/me/act', json={**body,'pid':'OTHER'}).status_code == 403
+        assert member.post('/api/rotation/me/act', json={**body,'action':'undo'}).status_code == 403
+        assert member.post('/api/rotation/me/act', json={**body,'action':[]}).status_code == 400
+        assert member.post('/api/rotation/screen/act', json=body).status_code == 403
+        assert screen.post('/api/rotation/me/act', json=body).status_code == 403
+        response = member.post('/api/rotation/me/act', json=body)
+        assert response.status_code == 400 and '还没到出发时间' in response.text
+        ok(clock(manager, action='jump', minutes=10))
+        p = ok(member.get('/api/rotation/me'))['person']
+        body['confirmation_token'] = p['confirmationTokens']['depart']
+        first = ok(member.post('/api/rotation/me/act', json=body))
+        duplicate = ok(screen.post('/api/rotation/screen/act', json=body))
+        assert first['result']['line'] == 'M' and first['result']['post'] == '手机入口'
+        assert first['duplicate'] is False and duplicate['duplicate'] is True
+        assert duplicate['result'] == first['result']
+        assert person(ok(screen.get('/api/rotation/screen/state')), pid)['state'] == 'onpost'
+        assert ok(member.get('/api/rotation/me'))['confirmations'][0] == first['result']
+        status = ok(member.get('/api/rotation/confirmation',params={'token':body['confirmation_token'],'date':day}))
+        assert status['confirmed'] and status['result'] == first['result']
+        assert len([r for r in ok(manager.get('/api/rotation/log',params={'date':day}))['items']
+                    if r['type']=='depart' and r['employee_no']==pid]) == 1
+        ok(manager.post('/api/rotation/act',json={'action':'fix_remove','pid':pid,'reason':'测试到达确认'}))
+        p = ok(member.get('/api/rotation/me'))['person']
+        room = {'action':'arrive','confirmation_token':p['confirmationTokens']['arrive']}
+        arrived = ok(member.post('/api/rotation/me/act',json=room))
+        repeated = ok(screen.post('/api/rotation/screen/act',json={**room,'pid':pid}))
+        assert repeated['duplicate'] and repeated['result']==arrived['result']
+        assert ok(member.get('/api/rotation/me'))['confirmations'][0]['action']=='arrive'
+        assert person(ok(screen.get('/api/rotation/screen/state')),pid)['readyAt']==arrived['result']['readyAt']
 
 
 def test_manual_opening_default_edit_cancel_and_screen_departure():
@@ -150,7 +208,7 @@ def test_manual_opening_default_edit_cancel_and_screen_departure():
         assert screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9200001'}).status_code == 400
         next_step = ok(clock(manager, action='next'))
         assert next_step['clock']['minute'] == 488 and next_step['waiting']
-        ok(screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9200001'}))
+        ok(screen_act(screen, 'depart', '9200001'))
         assert person(ok(manager.get('/api/rotation/board')), '9200001')['state'] == 'onpost'
         assert manager.post('/api/rotation/act', json={**request, 'openAt': '08:12'}).status_code == 400
 
@@ -199,7 +257,7 @@ def test_full_day_flow_through_the_api() -> None:
         # 大屏只能点去休息、去轮岗
         assert screen.post("/api/rotation/screen/act", json={"action": "undo", "pid": "9000007"}).status_code == 403
         assert screen.post("/api/rotation/act", json={"action": "depart", "pid": "9000007"}).status_code == 403
-        ok(screen.post("/api/rotation/screen/act", json={"action": "depart", "pid": "9000007"}))
+        ok(screen_act(screen, 'depart', '9000007'))
         assert screen.post("/api/rotation/screen/act", json={"action": "depart", "pid": "9000007"}).status_code == 400
 
         assert clock(manager, action="next").status_code == 400  # 点击即替下，已有去休息待办
@@ -211,17 +269,17 @@ def test_full_day_flow_through_the_api() -> None:
         # 员工个人页：待办标测试，随状态更新
         me = ok(member.get("/api/rotation/me"))
         assert me["test_mode"] is True and me["person"]["state"] == "walkback"
-        assert [n["title"] for n in me["notices"] if n["status"] == "open"] == ["请到休息室大屏点「去休息」"]
-        ok(screen.post("/api/rotation/screen/act", json={"action": "arrive", "pid": "9000001"}))
+        assert [n["title"] for n in me["notices"] if n["status"] == "open"] == ["请确认已到休息室"]
+        ok(screen_act(screen, 'arrive', '9000001'))
         me = ok(member.get("/api/rotation/me"))
         open_titles = [n["title"] for n in me["notices"] if n["status"] == "open"]
         assert open_titles == ["休息至 07:33"]
-        assert any(n["status"] == "done" and "去休息" in n["title"] for n in me["notices"])
+        assert any(n["status"] == "done" and "已到休息室" in n["title"] for n in me["notices"])
         assert me["line"] is not None or me["person"]["assign"] is None
 
         # 主管撤回（大屏不能撤回），再到达时休息仍从第一次到达算起
         ok(manager.post("/api/rotation/act", json={"action": "undo", "pid": "9000001"}))
-        ok(screen.post("/api/rotation/screen/act", json={"action": "arrive", "pid": "9000001"}))
+        ok(screen_act(screen, 'arrive', '9000001'))
         assert person(ok(manager.get("/api/rotation/board")), "9000001")["readyAt"] == 7 * 60 + 33
         assert manager.post("/api/rotation/act", json={"action": "fix_remove", "pid": "9000002"}).status_code == 400
 
@@ -299,7 +357,7 @@ def test_automatic_four_am_prearrangement_and_full_test_reset(monkeypatch):
         assert person(started, '9000001')['lineStart'] == 420
         assert person(started, '9000002')['lineStart'] is None
         ok(clock(manager, action='jump', minutes=15))
-        ok(screen.post('/api/rotation/screen/act', json={'action':'depart','pid':original_plan['push7'][0]}))
+        ok(screen_act(screen, 'depart', original_plan['push7'][0]))
         before_reset = ok(manager.get('/api/rotation/person', params={'employee_no':'9000001','date':day}))
         assert any(segment['date'] == day for segment in before_reset['segments'])
         ok(clock(manager, action='reset'))

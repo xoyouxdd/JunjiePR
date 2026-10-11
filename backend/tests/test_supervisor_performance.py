@@ -105,12 +105,17 @@ def test_supervisor_self_recognition_goes_to_the_formal_gsm_queue() -> None:
         login(client, "OMTEST01")
         assert client.get("/api/supervisor-reviews").status_code == 403
         login(client, "GSMTEST01")
-        assert record["id"] in {row["id"] for row in client.get("/api/supervisor-reviews").json()["items"]}
+        queued = next(row for row in client.get("/api/supervisor-reviews").json()["items"] if row["id"] == record["id"])
+        assert queued["recognition_date"] == record["recognition_date"] == date.today().isoformat()
+        assert queued["submitted_at"] == record["submitted_at"]
         actions = client.get("/api/action-center").json()["items"]
         assert any(item["type"] == "supervisor_review" for item in actions)
         confirmed = client.post(f"/api/supervisor-reviews/{record['id']}", json={"action": "confirm"})
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["record"]["status"] == "confirmed"
+        history = next(row for row in client.get("/api/supervisor-reviews?view=history").json()["items"] if row["id"] == record["id"])
+        assert history["recognition_date"] == queued["recognition_date"]
+        assert history["submitted_at"] == queued["submitted_at"]
 
         login(client, "TAGSMTEST01")
         assert client.get("/api/supervisor-reviews").status_code == 403

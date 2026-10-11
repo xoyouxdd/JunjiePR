@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 import os
 from pathlib import Path
 import tempfile
@@ -15,7 +16,7 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
-from app.rotation.access import ACCOUNT_COOKIE  # noqa: E402
+from app.rotation.access import ACCOUNT_COOKIE, can_enter  # noqa: E402
 from app.rotation.models import RotationAccount, RotationRosterEntry, RotationRosterUpload  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
 from app.v2_database import SessionLocal  # noqa: E402
@@ -104,6 +105,15 @@ def test_entry_is_only_for_heat_circle_tr_and_gsm() -> None:
             assert client.get("/api/rotation/access").json()["can_enter"] is False, account
         client.cookies.clear()
         assert enter(client, "7777777").status_code == 401
+
+
+def test_temporary_gsm_duty_cannot_grant_test_entry():
+    with TestClient(app), SessionLocal() as db:
+        heat = db.query(Attraction).filter_by(name='热力追踪').one()
+        user = SimpleNamespace(base_role=SimpleNamespace(code='SUPERVISOR'),
+                               employee=SimpleNamespace(attraction_id=heat.id), id=0,
+                               has_role=lambda *codes: 'GSM' in codes)
+        assert can_enter(db, user) is False
 
 
 def test_entry_switches_between_simulated_accounts_without_password() -> None:
