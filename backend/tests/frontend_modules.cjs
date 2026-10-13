@@ -353,8 +353,9 @@ async function main() {
         await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-publish-20261011.png'),fullPage:true});
         await page.locator('[data-ann-back]').click();
         await page.locator('[data-ann-view=manage]').click();await page.locator('[data-ann-records="51"]').click();
-        await page.getByRole('link',{name:'跟进Excel'}).waitFor();
-        assert.match(await page.getByRole('link',{name:'跟进Excel'}).getAttribute('href'),/followup-export\?version=1/);
+        const followupExport=page.getByRole('link',{name:/下载培训跟进 Excel/});
+        await followupExport.waitFor();
+        assert.match(await followupExport.getAttribute('href'),/followup-export\?version=1/);
       }else if(mode==='trainer'){
         await page.locator('[data-ann-view=training]').click();await page.locator('[data-ann-training="51"]').click();
         await page.locator('[name=hours]').selectOption('6');await page.getByRole('button',{name:'生成培训码',exact:true}).click();

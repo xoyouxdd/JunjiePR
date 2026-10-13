@@ -26,7 +26,7 @@ from app.main import app
 from app.v2_database import SessionLocal, FILE_DIR
 from app.v2_models import (Announcement, AnnouncementVersion, AnnouncementDelivery, AnnouncementNotification,
     AnnouncementTrainingConfig, AnnouncementTrainer, AnnouncementTrainingCode, AnnouncementTrainingReceipt, AnnouncementTrainingAttempt,
-    AnnouncementHandover, AnnouncementFavorite, AnnouncementGrant, AnnouncementProjectMember,
+    AnnouncementHandover, AnnouncementResponsibility, AnnouncementResponsibilityHandover, AnnouncementFavorite, AnnouncementGrant, AnnouncementProjectMember,
     AnnouncementProject, AnnouncementAsset, Employee, EmployeeLOAPeriod, EmployeeRoleAssignment,
     GroupMembership, Role, StoredFile, UserAccount, WorkGroup)
 from app.v2_crypto import hash_password
@@ -48,7 +48,7 @@ def ok(response):
 def client():
     with TestClient(app) as client:
         with SessionLocal() as db:
-            for model in [AnnouncementTrainingReceipt, AnnouncementTrainingAttempt, AnnouncementTrainingCode, AnnouncementTrainer, AnnouncementTrainingConfig,
+            for model in [AnnouncementResponsibilityHandover, AnnouncementResponsibility, AnnouncementTrainingReceipt, AnnouncementTrainingAttempt, AnnouncementTrainingCode, AnnouncementTrainer, AnnouncementTrainingConfig,
                           AnnouncementHandover, AnnouncementFavorite, AnnouncementNotification, AnnouncementDelivery,
                           AnnouncementVersion, Announcement, AnnouncementGrant, AnnouncementProjectMember,
                           AnnouncementProject, AnnouncementAsset]:
@@ -127,12 +127,15 @@ def test_circle_defaults_and_admin_grants_cannot_be_self_escalated(client):
     cfg = config(client)
     gsm = employee(cfg, "GSMTEST01")
     grant = {"employee_id": gsm["id"], "attraction_ids": circles, "starts_on": date.today().isoformat(), "reason": "批准三个圈发布"}
-    ok(client.post("/api/announcements/admin/grants", json=grant))
+    saved = ok(client.post("/api/announcements/admin/grants", json=grant))
     login(client)
     assert len(ok(client.get("/api/announcements/options"))["publisher"]["circles"]) == 3
     a = publish(client)
     login(client, "HR01")
-    ok(client.post("/api/announcements/admin/grants", json={**grant, "enabled": False}))
+    updated = ok(client.post("/api/announcements/admin/grants", json={**grant, "enabled": False}))
+    assert updated["id"] == saved["id"]
+    rows = [g for g in ok(client.get("/api/announcements/admin/config"))["grants"] if g["employee_id"] == gsm["id"]]
+    assert len(rows) == 1 and rows[0]["enabled"] is False
     login(client)
     assert not ok(client.get("/api/announcements/options"))["can_publish"]
     assert client.post("/api/announcements", json=form(client)).status_code in {400, 403}
@@ -298,6 +301,55 @@ def test_project_poc_is_explicit_and_cannot_publish_to_circles(client):
     assert ok(client.get("/api/announcements"))["total"] == 1
 
 
+@pytest.mark.parametrize("account", ["GSMTEST01", "TAGSMTEST01", "AMTEST01"])
+def test_manager_circle_and_training_project_grants_are_independent(client, account):
+    cfg = config(client)
+    manager = employee(cfg, account)
+    member = employee(cfg, "CMTEST01")
+    project = ok(client.post("/api/announcements/admin/projects", json={
+        "name": "培训项目", "employee_ids": [member["id"]]}))
+    circle_values = {"employee_id": manager["id"], "attraction_ids": [manager["attraction_id"]],
+                     "categories": list(domain.CATEGORIES), "starts_on": date.today().isoformat(), "reason": "圈负责人"}
+    circle_grant = ok(client.post("/api/announcements/admin/grants", json=circle_values))
+    project_values = {"employee_id": manager["id"], "scope_kind": "project", "project_id": project["id"],
+                      "categories": ["培训"], "tiers": ["frontline"],
+                      "starts_on": date.today().isoformat(), "reason": "兼任培训项目POC"}
+    project_grant = ok(client.post("/api/announcements/admin/grants", json=project_values))
+    assert circle_grant["id"] != project_grant["id"]
+    login(client, account)
+    options = ok(client.get("/api/announcements/options"))
+    assert "培训" in options["categories"] and len(options["categories"]) == 6
+    assert options["publisher"]["circles"] == [manager["attraction_id"]]
+    assert options["publisher"]["projects"][0]["categories"] == ["培训"]
+    circle_notice = publish(client, category="培训")
+    project_notice = publish(client, scope_kind="project", attraction_ids=[], project_id=project["id"],
+                             category="培训", tiers=["frontline"])
+    assert circle_notice["scope_kind"] == "circle" and project_notice["scope_kind"] == "project"
+    assert client.post("/api/announcements", json=form(client, scope_kind="project", attraction_ids=[],
+        project_id=project["id"], category=domain.CATEGORIES[0], tiers=["frontline"])).status_code == 403
+    assert client.post("/api/announcements", json=form(client, scope_kind="project", attraction_ids=[],
+        project_id=project["id"], category="培训", tiers=["gsm"])).status_code == 403
+    login(client, "CMTEST01")
+    assert client.get(f"/api/announcements/{project_notice['id']}").status_code == 200
+    assert all(a["category"] == "培训" for a in ok(client.get("/api/announcements?category=培训"))["items"])
+    login(client, "HR01")
+    ok(client.post("/api/announcements/admin/grants", json={**project_values, "enabled": False}))
+    login(client, account)
+    options = ok(client.get("/api/announcements/options"))
+    assert options["can_publish"] and options["publisher"]["circles"] and not options["publisher"]["projects"]
+    login(client, "HR01")
+    ok(client.post("/api/announcements/admin/grants", json=project_values))
+    # Existing explicit restrictions must not inherit the new category.
+    ok(client.post("/api/announcements/admin/grants", json={**circle_values, "categories": domain.CATEGORIES[:-1]}))
+    login(client, account)
+    assert client.post("/api/announcements", json=form(client, category="培训")).status_code == 403
+    login(client, "HR01")
+    ok(client.post("/api/announcements/admin/grants", json={**circle_values, "enabled": False}))
+    login(client, account)
+    options = ok(client.get("/api/announcements/options"))
+    assert options["can_publish"] and not options["publisher"]["circles"] and options["publisher"]["projects"]
+
+
 def test_handover_requires_acceptance_and_admin_can_force_qualified_successor(client):
     cfg = config(client)
     ta, am = employee(cfg, "TAGSMTEST01"), employee(cfg, "AMTEST01")
@@ -413,11 +465,16 @@ def test_reports_preserve_snapshot_formula_safety_and_actual_signature_evidence(
     excel = client.get(f"/api/announcements/{a['id']}/export?format=xlsx")
     assert excel.status_code == 200
     workbook = load_workbook(BytesIO(excel.content))
-    sheet = workbook.active
+    assert workbook.active.title == "签收总览"
+    assert workbook.sheetnames == ["签收总览","签收记录","跟进记录","公告内容"]
+    sheet = workbook["签收记录"]
     dangerous = [c for row in sheet for c in row if isinstance(c.value,str) and c.value.startswith("=")]
     assert dangerous and all(c.data_type == "s" for c in dangerous)
     assert old_name in [c.value for row in sheet for c in row]
-    assert sheet.freeze_panes == "A7"
+    assert sheet.freeze_panes == "E7"
+    assert sheet.column_dimensions["J"].hidden
+    assert "$A$1:$I$" + str(sheet.max_row) in str(sheet.print_area)
+    (output/"announcement-receipt-integration.xlsx").write_bytes(excel.content)
     assert "公告内容" in workbook.sheetnames
 
 
@@ -599,3 +656,304 @@ def test_group_distribution_is_ordered_scoped_and_uses_current_valid_memberships
     assert transferred["group_id"] is None and transferred["status"] == "pending"
     assert transferred["attraction_id"] == own_circle
     assert group_ids[2] not in {g["id"] for g in data["groups"]}
+
+
+def test_report_layout_keeps_scoped_counts_and_full_content(client):
+    from types import SimpleNamespace
+    from app.announcement_exports import spreadsheet, pdf, report_groups
+    rows = []
+    for i in range(24):
+        status = ["completed", "pending", "suspended", "exited"][i % 4]
+        rows.append({"attraction_name": "模拟热力追踪" if i < 12 else "模拟矮人迷宫",
+            "group_name": f"模拟小组 {i//6+1}", "employee_no": f"009{i:04d}", "employee_name": f"模拟人员{i+1}",
+            "role_label": "CM / TR", "status": status, "reason": "首次接收", "delivered_at": "2026-10-13T08:00:00",
+            "seen_at": "2026-10-13T08:30:00" if status == "completed" else None,
+            "confirmed_at": "2026-10-13T09:00:00" if status == "completed" else None,
+            "due_on": "2026-10-16", "signing_statement": None, "signature_url": None,
+            "trainer_name": "模拟培训师" if status == "completed" else None, "trainer_no": "0001001" if status == "completed" else None,
+            "training_session_id": 9 if status == "completed" else None,
+            "training_verified_at": "2026-10-13T08:55:00" if status == "completed" else None})
+    announcement = {"id": 99, "version": 2, "title": "模拟数据 · 岗位培训签收", "category": "培训", "effective": True,
+        "scope_label": "模拟热力追踪、模拟矮人迷宫", "effective_on": "2026-10-13", "due_on": "2026-10-16", "expires_on": None,
+        "confirmation_level": 3, "training_required": True, "summary": "先完成现场培训，再验码并本人签字。",
+        "change_summary": "新增岗位操作要点及培训跟进要求。",
+        "body": "第一部分：培训要求\n完成现场讲解、操作示范与本人确认。\n\n第二部分：操作要点\n核对岗位安排，发现异常立即报告。"}
+    data = {"announcement": announcement, "items": rows, "counts": {"required": 12, "completed": 6, "pending": 6, "suspended": 6, "exited": 6}, "scoped": True}
+    user = SimpleNamespace(name="模拟导出人", employee=SimpleNamespace(employee_no="0000001"))
+    raw = spreadsheet(data, user)
+    book = load_workbook(BytesIO(raw))
+    assert book.active.title == "签收总览"
+    groups = report_groups(data)
+    assert len(groups) == 4
+    totals = [sum(book.active.cell(r,c).value for r in range(7,11)) for c in range(3,8)]
+    assert totals == [12,6,6,6,6]
+    sheet = book["签收记录"]
+    assert sheet.max_row == 30 and sheet["C7"].value == "0090000" and sheet["C7"].data_type == "s"
+    assert isinstance(sheet["F7"].value, datetime) and isinstance(sheet["H7"].value, datetime)
+    assert sheet["F7"].number_format == "yyyy-mm-dd hh:mm"
+    assert sheet.column_dimensions["J"].hidden and book["跟进记录"].max_column == 11
+    assert [c.value for c in book["跟进记录"][6]] != [c.value for c in sheet[6]]
+    body_values = [row[1].value or "" for row in book["公告内容"] if row[0].value in {"正文","续"}]
+    assert "\n".join(body_values) == announcement["body"]
+    content = pdf(data, user)
+    target = Path(__file__).resolve().parents[2]/".handover_review"/"announcement-export-20261013"
+    target.mkdir(parents=True, exist_ok=True)
+    (target/"receipt-demo.xlsx").write_bytes(raw)
+    (target/"receipt-demo.pdf").write_bytes(content)
+    with fitz.open(stream=content,filetype="pdf") as document:
+        full = "".join(page.get_text() for page in document)
+        assert "签收总览" in full and "当前管理范围" in full and "操作示范" in full
+        assert "新增岗位操作要点" in full
+        for i,page in enumerate(document):
+            page.get_pixmap(matrix=fitz.Matrix(1.3,1.3)).save(target/f"receipt-demo-{i+1}.png")
+    # Empty reports remain printable. Many short paragraphs must paginate without loss.
+    empty = {**data,"items": [], "counts": dict.fromkeys(data["counts"],0)}
+    with fitz.open(stream=pdf(empty,user),filetype="pdf") as document:
+        assert "尚无接收记录" in "".join(p.get_text() for p in document)
+    long_data = {**empty,"announcement": {**announcement,"body": "\n".join(f"段落{i:04d}：逐项核对培训要求。" for i in range(120))}}
+    long_book = load_workbook(BytesIO(spreadsheet({**long_data,"announcement": {**long_data["announcement"],"change_summary": "长变更"*300}},user)))
+    content_sheet = long_book["公告内容"]
+    assert all(d.height <= 409 for d in content_sheet.row_dimensions.values())
+    assert "".join(row[1].value for row in content_sheet if str(row[0].value).startswith("变更")) == "长变更"*300
+    with fitz.open(stream=pdf(long_data,user),filetype="pdf") as document:
+        full = "".join(p.get_text() for p in document)
+        assert all(f"段落{i:04d}" in full for i in range(120))
+
+
+def test_handover_center_and_history_are_private_to_publishers_owners_and_admins(client):
+    cfg = config(client)
+    ta = employee(cfg, "TAGSMTEST01")
+    login(client)
+    mine = publish(client, category="培训")
+    login(client, "AMTEST01")
+    other = publish(client, category="礼仪 & MM")
+    assert {a["id"] for a in ok(client.get("/api/announcements/handover-center"))["items"]} == {other["id"]}
+    records = ok(client.get(f"/api/announcements/{mine['id']}/records"))
+    assert records["handover"] is None and records["announcement"]["can_view_handover"] is False
+    assert client.get(f"/api/announcements/successors/{mine['id']}").status_code == 403
+    assert client.post(f"/api/announcements/{mine['id']}/handover", json={"successor_id": ta["id"],"reason":"越权","expected_version":1}).status_code == 403
+    login(client)
+    center = ok(client.get("/api/announcements/handover-center?all=true"))
+    assert not center["all_visible"] and {a["id"] for a in center["items"]} == {mine["id"]}
+    assert ok(client.get(f"/api/announcements/{other['id']}/records"))["handover"] is None
+    request = ok(client.post(f"/api/announcements/{mine['id']}/handover", json={"successor_id":ta["id"],"reason":"本人交接","expected_version":1}))
+    assert ok(client.get("/api/announcements/handover-center"))["items"][0]["pending"] == 1
+    login(client,"TAGSMTEST01")
+    assert ok(client.get("/api/announcements/handover-center"))["items"] == []
+    assert ok(client.get(f"/api/announcements/{mine['id']}/records"))["handover"] is None
+    assert ok(client.get("/api/announcements/handovers"))[0]["id"] == request["handover_id"]
+    ok(client.post(f"/api/announcements/handovers/{request['handover_id']}/accept"))
+    center = ok(client.get("/api/announcements/handover-center"))
+    assert {a["id"] for a in center["items"]} == {mine["id"]}
+    assert center["items"][0]["owner"]["id"] == ta["id"] and center["items"][0]["can_handover"]
+    assert ok(client.get(f"/api/announcements/{mine['id']}/records"))["handover"]["owner"]["id"] == ta["id"]
+    login(client)
+    center = ok(client.get("/api/announcements/handover-center"))
+    assert center["items"][0]["owner"]["id"] == ta["id"] and not center["items"][0]["can_handover"]
+    assert ok(client.get(f"/api/announcements/{mine['id']}/records"))["handover"]["history"][0]["status"] == "accepted"
+    # Two independent administrator accounts use the same permission boundary.
+    admin_id, admin_no = new_employee(ta["attraction_id"])
+    with SessionLocal() as db:
+        assignment = db.query(EmployeeRoleAssignment).filter_by(employee_id=admin_id).one()
+        assignment.role_id = db.query(Role).filter_by(code="SYSTEM_ADMIN").one().id
+        db.commit()
+    for account in ["HR01",admin_no]:
+        login(client,account)
+        center = ok(client.get("/api/announcements/handover-center"))
+        assert center["all_visible"] and {a["id"] for a in center["items"]} == {mine["id"],other["id"]}
+        item = next(a for a in center["items"] if a["id"] == mine["id"])
+        assert item["category"] == "培训" and item["owner"]["id"] == ta["id"]
+        assert ok(client.get(f"/api/announcements/{mine['id']}/records"))["handover"]["owner"]["id"] == ta["id"]
+
+
+def shared_setup(client):
+    cfg = config(client)
+    gsm, ta = employee(cfg, "GSMTEST01"), employee(cfg, "TAGSMTEST01")
+    partner_id, partner_no = new_employee(gsm["attraction_id"])
+    with SessionLocal() as db:
+        assignment = db.query(EmployeeRoleAssignment).filter_by(employee_id=partner_id).one()
+        assignment.role_id = db.query(Role).filter_by(code="GSM").one().id
+        db.commit()
+    login(client)
+    a, b = publish(client), publish(client, title="同板块第二份公告")
+    login(client, "HR01")
+    group = next(g for g in ok(client.get("/api/announcements/handover-center"))["groups"]
+        if a["id"] in {x["id"] for x in g["announcements"]})
+    ok(client.post("/api/announcements/responsibilities", json={"key":group["key"],"expected_revision":0,
+        "member_ids":[gsm["id"],partner_id],"reason":"两位景点圈负责人共同管理"}))
+    return gsm, ta, partner_id, partner_no, a, b, group["key"]
+
+
+def batch_input(client, key, from_id, to_id, **changes):
+    group = ok(client.get("/api/announcements/responsibility", params={"key":key}))
+    return {**{"key":key,"expected_revision":group["revision"],"from_id":from_id,"successor_id":to_id,
+        "announcements":sorted([{"id":a["id"],"version":a["version"]} for a in group["announcements"]],key=lambda a:a["id"]),
+        "reason":"整组岗位交接","force":False}, **changes}
+
+
+def test_shared_managers_update_export_withdraw_train_and_transfer_entire_board(client):
+    gsm, ta, partner_id, partner_no, a, b, key = shared_setup(client)
+    login(client, partner_no)
+    assert ok(client.get(f"/api/announcements/{a['id']}"))["can_edit"]
+    assert {p["id"] for p in ok(client.get(f"/api/announcements/{a['id']}/records"))["handover"]["owners"]} == {gsm["id"],partner_id}
+    assert client.get(f"/api/announcements/{a['id']}/followup-export").status_code == 200
+    assert client.get(f"/api/announcements/{a['id']}/export?format=pdf").status_code == 200
+    ok(client.post(f"/api/announcements/{b['id']}/withdraw",json={"expected_version":1,"reason":"共同负责人撤下"}))
+    # A later publication in the same unit inherits both explicitly assigned managers.
+    tr = next(e for e in ok(client.get("/api/announcements/training-options"))["items"] if e["employee_no"]=="TRTEST01")
+    c = publish(client,title="同板块培训公告",confirmation_level=3,training_required=True,trainer_ids=[tr["id"]])
+    login(client)
+    ok(client.post(f"/api/announcements/{c['id']}/training/trainers",json={"expected_version":1,"trainer_scope":"circle","trainer_ids":[tr["id"]]}))
+    login(client,"TRTEST01")
+    code = ok(client.post(f"/api/announcements/{c['id']}/training/codes",json={"version":1,"hours":2,"request_key":uuid4().hex}))
+    login(client,"CMTEST01")
+    ok(receipt(client,a,action="confirm",acknowledged=True))
+    with SessionLocal() as db:
+        before = [(d.id,d.confirmed_at,d.version_id) for d in db.query(AnnouncementDelivery).filter_by(version_id=a["version_id"])]
+    login(client)
+    requested = ok(client.post("/api/announcements/responsibility-handover",json=batch_input(client,key,gsm["id"],ta["id"])))
+    assert requested["count"]==3
+    login(client,partner_no)
+    assert client.post(f"/api/announcements/handovers/{requested['handover_id']}/accept").status_code==404
+    assert client.post("/api/announcements/responsibility-handover",json=batch_input(client,key,partner_id,ta["id"])).status_code==409
+    login(client,"TAGSMTEST01")
+    incoming = ok(client.get("/api/announcements/handovers"))
+    assert len(incoming)==1 and incoming[0]["count"]==3
+    assert ok(client.get("/api/announcements/summary"))["handovers"]==1
+    assert ok(client.post(f"/api/announcements/handovers/{requested['handover_id']}/accept"))["count"]==3
+    group = ok(client.get("/api/announcements/responsibility",params={"key":key}))
+    assert {p["id"] for p in group["owners"]}=={partner_id,ta["id"]}
+    for item in [a,b,c]:
+        assert ok(client.get(f"/api/announcements/{item['id']}"))["can_edit"]
+    with SessionLocal() as db:
+        assert before==[(d.id,d.confirmed_at,d.version_id) for d in db.query(AnnouncementDelivery).filter_by(version_id=a["version_id"])]
+        assert db.query(AnnouncementTrainingCode).filter_by(version_id=c["version_id"]).one().ended_at is None
+        assert db.query(AnnouncementHandover).filter_by(status="accepted").count()==3
+    login(client)
+    assert not ok(client.get(f"/api/announcements/{a['id']}"))["can_edit"]
+    assert client.post(f"/api/announcements/{a['id']}/withdraw",json={"expected_version":1,"reason":"原发布者"}).status_code==403
+    assert client.get(f"/api/announcements/{a['id']}/followup-export").status_code==200
+    login(client,partner_no)
+    revised=ok(client.post(f"/api/announcements/{a['id']}/versions",json=form(client,expected_version=1,change_summary="共同负责人更新")))
+    assert revised["version"]==2
+
+
+def test_shared_scope_is_explicit_and_batch_acceptance_rejects_stale_versions(client):
+    gsm,ta,partner_id,partner_no,a,b,key=shared_setup(client)
+    login(client,"AMTEST01")
+    other_circle=next(c["id"] for c in ok(client.get("/api/announcements/options"))["circles"] if c["id"]!=gsm["attraction_id"])
+    elsewhere=publish(client,attraction_ids=[other_circle])
+    separate=publish(client,category="培训",attraction_ids=[gsm["attraction_id"]])
+    login(client,partner_no)
+    assert client.get(f"/api/announcements/{elsewhere['id']}").status_code == 404
+    assert ok(client.get(f"/api/announcements/{separate['id']}/records"))["handover"] is None
+    assert client.post("/api/announcements/responsibilities",json={"key":key,"expected_revision":1,"member_ids":[partner_id],"reason":"越权设置"}).status_code==403
+    assert client.post("/api/announcements/responsibility-handover",json=batch_input(client,key,gsm["id"],ta["id"])).status_code==403
+    login(client)
+    requested=ok(client.post("/api/announcements/responsibility-handover",json=batch_input(client,key,gsm["id"],ta["id"])))
+    ok(client.post(f"/api/announcements/{a['id']}/versions",json=form(client,expected_version=1,change_summary="交接期间更新")))
+    login(client,"TAGSMTEST01")
+    assert client.post(f"/api/announcements/handovers/{requested['handover_id']}/accept").status_code==409
+    with SessionLocal() as db:
+        assert {gsm["id"],partner_id}==set(domain.unpack(db.query(AnnouncementResponsibility).filter_by(scope_key=key).one().member_ids_json))
+        assert db.query(AnnouncementHandover).filter_by(status="accepted").count()==0
+        assert db.get(Announcement,b["id"]).owner_id==gsm["id"]
+
+
+def test_admin_shared_roster_validation_and_force_transfer_preserve_other_manager(client):
+    gsm,ta,partner_id,partner_no,a,b,key=shared_setup(client)
+    login(client,"HR01")
+    base={"key":key,"expected_revision":1,"member_ids":[gsm["id"],partner_id],"reason":"调整"}
+    assert client.post("/api/announcements/responsibilities",json={**base,"member_ids":[gsm["id"],partner_id,ta["id"]]}).status_code==422
+    cm=employee(ok(client.get("/api/announcements/admin/config")),"CMTEST01")
+    assert client.post("/api/announcements/responsibilities",json={**base,"member_ids":[gsm["id"],cm["id"]]}).status_code==403
+    assert client.post("/api/announcements/responsibilities",json={**base,"expected_revision":0}).status_code==409
+    forced=ok(client.post("/api/announcements/responsibility-handover",json=batch_input(client,key,gsm["id"],ta["id"],force=True)))
+    assert forced["count"]==2
+    group=ok(client.get("/api/announcements/responsibility",params={"key":key}))
+    assert {p["id"] for p in group["owners"]}=={partner_id,ta["id"]}
+    assert ok(client.get(f"/api/announcements/{b['id']}/records"))["handover"]["history"][0]["status"]=="forced"
+
+
+def test_batch_handover_rechecks_successor_grants_and_rejects_single_notice_route(client):
+    gsm,ta,partner_id,partner_no,a,b,key=shared_setup(client)
+    login(client)
+    assert client.post(f"/api/announcements/{a['id']}/handover",json={"expected_version":1,"successor_id":ta["id"],"reason":"未核对整组"}).status_code==409
+    requested=ok(client.post("/api/announcements/responsibility-handover",json=batch_input(client,key,gsm["id"],ta["id"])))
+    login(client,"HR01")
+    ok(client.post("/api/announcements/admin/grants",json={"employee_id":ta["id"],"attraction_ids":[gsm["attraction_id"]],
+        "enabled":False,"starts_on":date.today().isoformat(),"reason":"接受前停用发布授权"}))
+    login(client,"TAGSMTEST01")
+    assert client.post(f"/api/announcements/handovers/{requested['handover_id']}/accept").status_code==403
+    with SessionLocal() as db:
+        assert db.get(Announcement,a["id"]).owner_id==gsm["id"]
+        assert db.get(Announcement,b["id"]).owner_id==gsm["id"]
+        assert db.query(AnnouncementHandover).filter_by(status="accepted").count()==0
+
+
+def test_project_coowners_share_only_explicit_project_and_category(client):
+    cfg=config(client)
+    gsm,am=employee(cfg,"GSMTEST01"),employee(cfg,"AMTEST01")
+    project=ok(client.post("/api/announcements/admin/projects",json={"name":"礼仪项目","employee_ids":[gsm["id"]]}))
+    for person in [gsm,am]:
+        ok(client.post("/api/announcements/admin/grants",json={"employee_id":person["id"],"scope_kind":"project","project_id":project["id"],
+            "starts_on":date.today().isoformat(),"reason":"项目POC发布"}))
+    login(client)
+    a=publish(client,scope_kind="project",project_id=project["id"],attraction_ids=[],category="礼仪 & MM")
+    b=publish(client,category="礼仪 & MM")
+    c=publish(client,scope_kind="project",project_id=project["id"],attraction_ids=[],category="培训")
+    login(client,"HR01")
+    group=next(g for g in ok(client.get("/api/announcements/handover-center"))["groups"] if a["id"] in {x["id"] for x in g["announcements"]})
+    ok(client.post("/api/announcements/responsibilities",json={"key":group["key"],"expected_revision":0,"member_ids":[gsm["id"],am["id"]],"reason":"两位项目POC"}))
+    login(client,"AMTEST01")
+    assert ok(client.get(f"/api/announcements/{a['id']}"))["can_edit"]
+    assert not ok(client.get(f"/api/announcements/{b['id']}"))["can_edit"]
+    assert not ok(client.get(f"/api/announcements/{c['id']}"))["can_edit"]
+    records=ok(client.get(f"/api/announcements/{a['id']}/records"))
+    assert not records["scoped"] and {p["id"] for p in records["handover"]["owners"]}=={gsm["id"],am["id"]}
+
+
+def test_unconfigured_board_with_separate_publishers_has_no_personal_transfer_entry(client):
+    cfg = config(client)
+    gsm = employee(cfg, "GSMTEST01")
+    login(client)
+    mine = publish(client)
+    login(client, "AMTEST01")
+    other = publish(client, attraction_ids=[gsm["attraction_id"]])
+    login(client)
+    group = next(g for g in ok(client.get("/api/announcements/handover-center"))["groups"]
+        if mine["id"] in {a["id"] for a in g["announcements"]})
+    assert not group["can_handover"]
+    assert not ok(client.get("/api/announcements/handover-center"))["items"][0]["can_handover"]
+    assert {a["id"] for a in group["announcements"]} == {mine["id"]}
+    assert not ok(client.get(f"/api/announcements/{mine['id']}/records"))["handover"]["can_handover"]
+    assert client.get("/api/announcements/responsibility", params={"key": group["key"]}).status_code == 403
+    login(client, "HR01")
+    group = ok(client.get("/api/announcements/responsibility", params={"key": group["key"]}))
+    assert group["can_handover"] and {a["id"] for a in group["announcements"]} == {mine["id"], other["id"]}
+
+
+def test_managed_board_scope_change_is_rejected_without_mutating_receipts_or_training(client):
+    gsm, ta, partner_id, partner_no, a, b, key = shared_setup(client)
+    login(client, partner_no)
+    trainer = next(e for e in ok(client.get("/api/announcements/training-options"))["items"] if e["employee_no"] == "TRTEST01")
+    notice = publish(client, confirmation_level=3, training_required=True, trainer_ids=[trainer["id"]])
+    assert notice["responsibility_scope_locked"]
+    login(client, "TRTEST01")
+    ok(client.post(f"/api/announcements/{notice['id']}/training/codes",
+        json={"version":1,"hours":2,"request_key":uuid4().hex}))
+    with SessionLocal() as db:
+        before = [(d.id,d.status,d.version_id) for d in db.query(AnnouncementDelivery).filter_by(version_id=notice["version_id"])]
+    login(client, partner_no)
+    attempted = client.post(f"/api/announcements/{notice['id']}/versions",
+        json=form(client,category="培训",expected_version=1,change_summary="尝试移出共同管理"))
+    assert attempted.status_code == 409
+    with SessionLocal() as db:
+        assert db.get(Announcement,notice["id"]).current_version == 1
+        assert before == [(d.id,d.status,d.version_id) for d in db.query(AnnouncementDelivery).filter_by(version_id=notice["version_id"])]
+        assert db.query(AnnouncementTrainingCode).filter_by(version_id=notice["version_id"]).one().ended_at is None
+        assert db.query(AnnouncementVersion).filter_by(announcement_id=notice["id"]).count() == 1
+    requested = ok(client.post("/api/announcements/responsibility-handover",
+        json=batch_input(client,key,partner_id,ta["id"])))
+    login(client, "TAGSMTEST01")
+    assert ok(client.post(f"/api/announcements/handovers/{requested['handover_id']}/accept"))["count"] == 3

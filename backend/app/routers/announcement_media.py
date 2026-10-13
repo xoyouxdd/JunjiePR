@@ -27,13 +27,13 @@ router = APIRouter(prefix="/announcement-media", tags=["announcement-media"])
 publisher = require_publisher
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 20_000_000
-CATEGORIES = ("安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动")
+CATEGORIES = ("安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动", "培训")
 
 
 class PosterRequest(BaseModel):
     title: str = Field(min_length=1, max_length=48)
     summary: str = Field(min_length=1, max_length=180)
-    category: Literal["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动"]
+    category: Literal["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动", "培训"]
     layout: Literal["portrait", "landscape"] = "portrait"
     style: Literal["notice", "event", "guide"] = "notice"
     template_id: str = Field(default="", max_length=48)

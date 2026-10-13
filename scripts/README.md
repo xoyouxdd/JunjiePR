@@ -45,9 +45,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Invoke-SqliteOnlin
 正式模式仅接受以下固定路径：
 
 - 项目根目录：`C:\Server\zhaojunjie\recognition-card-system`
-- 应用目录：`C:\Server\zhaojunjie\recognition-card-system\backend`
-- 数据库：`C:\Server\zhaojunjie\recognition-card-system\backend\data_v2\recognition_v2.db`
-- Python：`C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe`
+- 应用目录：`C:\Server\zhaojunjie\recognition-card-system`（与 `server_release.py` 的正式部署布局一致）
+- 数据库：`C:\Server\zhaojunjie\recognition-card-system\data_v2\recognition_v2.db`
+- Python：`C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe`
 - 专用备份目录：`C:\Server\zhaojunjie\backups\recognition-card-system-sqlite`
 
 每次成功会生成一份 `recognition_v2-时间戳.db` 和相邻的 `.manifest.json`。清单包含文件大小、SHA-256、SQLite 版本和 `quick_check` 结果。保留策略只识别这个严格命名格式；删除前会再次确认解析后的文件仍位于专用备份目录中。
@@ -85,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Run-MonthlyRestore
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-DailyBackupTask.ps1 -DailyAt "02:15" -RetentionDays 30 -DryRun
 ```
 
-将 `backend/` 与 `scripts/` 一起部署到正式项目根目录后，以管理员 PowerShell 执行安装：
+正式发布将 `backend/app` 展开为项目根目录下的 `app`，数据库和虚拟环境同样位于根目录。日常运维脚本须单独核对并同步到根目录下的 `scripts/`；应用发布不自动安装每日计划任务。脚本就位后，以管理员 PowerShell 执行安装：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\Server\zhaojunjie\recognition-card-system\scripts\Install-DailyBackupTask.ps1 -DailyAt "02:15" -RetentionDays 30
@@ -127,7 +127,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Invoke-SqliteOnlin
 正式发布前先用在线快照或预检快照执行一次只读核对。脚本始终以 SQLite `mode=ro` 打开数据库，输出只包含数量和问题代码，不输出员工、账号、附件或凭据：
 
 ```powershell
-C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe .\scripts\verify_readiness.py `
+C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe .\scripts\verify_readiness.py `
   --database C:\Server\zhaojunjie\backups\recognition-v2268-preflight-时间\recognition_v2.db `
   --output C:\Server\zhaojunjie\backups\recognition-v2268-preflight-时间\readiness-report.json
 ```

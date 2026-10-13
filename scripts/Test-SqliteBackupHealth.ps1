@@ -2,7 +2,7 @@
 param(
     [string]$TaskName = "RecognitionCardSystem-SQLiteBackup",
     [string]$BackupRoot = "C:\Server\zhaojunjie\backups\recognition-card-system-sqlite",
-    [string]$Python = "C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe",
+    [string]$Python = "C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe",
     [ValidateRange(1, 168)]
     [int]$MaxBackupAgeHours = 26,
     [ValidateRange(1, 1440)]
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $expectedBackupRoot = "C:\Server\zhaojunjie\backups\recognition-card-system-sqlite"
-$expectedPython = "C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe"
+$expectedPython = "C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe"
 $backupNamePattern = '^recognition_v2-\d{8}T\d{6}-\d{3}\.db$'
 
 function Get-NormalizedPath([string]$Path) {

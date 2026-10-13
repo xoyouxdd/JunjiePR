@@ -362,6 +362,31 @@ class AnnouncementAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class AnnouncementResponsibility(Base):
+    __tablename__ = "announcement_responsibilities"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope_key: Mapped[str] = mapped_column(Text, unique=True)
+    member_ids_json: Mapped[str] = mapped_column(Text)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    changed_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    reason: Mapped[str] = mapped_column(Text)
+
+
+class AnnouncementResponsibilityHandover(Base):
+    __tablename__ = "announcement_responsibility_handovers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    responsibility_id: Mapped[int] = mapped_column(ForeignKey("announcement_responsibilities.id"), index=True)
+    expected_revision: Mapped[int] = mapped_column(Integer)
+    from_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    to_id: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    snapshot_json: Mapped[str] = mapped_column(Text)
+    handover_ids_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AnnouncementHandover(Base):
     __tablename__ = "announcement_handovers"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

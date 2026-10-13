@@ -17,21 +17,23 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from fastapi.responses import Response
 from PIL import Image, ImageStat
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app import announcement_responsibilities as responsibilities
 from app import announcements as domain
 from app import announcement_training as training
 from app.v2_auth import V2User, current_user
 from app.v2_database import FILE_DIR, get_db
 from app.v2_models import (Announcement, AnnouncementAsset, AnnouncementDelivery, AnnouncementFavorite,
-    AnnouncementGrant, AnnouncementHandover, AnnouncementNotification, AnnouncementProject,
+    AnnouncementGrant, AnnouncementHandover, AnnouncementResponsibility, AnnouncementResponsibilityHandover, AnnouncementNotification, AnnouncementProject,
     AnnouncementProjectMember, AnnouncementVersion, Employee, StoredFile, UserAccount)
 from app.v2_services import remove_upload_file, save_upload, write_audit
 from app.routers._shared import client_ip
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
 Tier = Literal["frontline", "lead", "gsm", "am", "hr"]
-Category = Literal["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动"]
+Category = Literal["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动", "培训"]
 
 
 class Attachment(BaseModel):
@@ -119,6 +121,23 @@ class HandoverInput(ReasonInput):
     force: bool = False
 
 
+class ResponsibilityInput(BaseModel):
+    key: str = Field(min_length=1, max_length=2000)
+    expected_revision: int = Field(ge=0)
+    member_ids: list[int] = Field(min_length=1, max_length=2)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class ResponsibilityHandoverInput(BaseModel):
+    key: str = Field(min_length=1, max_length=2000)
+    expected_revision: int = Field(ge=0)
+    from_id: int = Field(gt=0)
+    successor_id: int = Field(gt=0)
+    announcements: list[dict[str, int]] = Field(min_length=1, max_length=10000)
+    reason: str = Field(min_length=1, max_length=1000)
+    force: bool = False
+
+
 class GrantInput(BaseModel):
     employee_id: int = Field(gt=0)
     scope_kind: Literal["circle", "project"] = "circle"
@@ -126,7 +145,7 @@ class GrantInput(BaseModel):
     enabled: bool = True
     attraction_ids: list[int] = Field(default_factory=list, max_length=20)
     tiers: list[Tier] = Field(default_factory=lambda: list(domain.TIERS), min_length=1, max_length=5)
-    categories: list[Category] = Field(default_factory=lambda: domain.CATEGORIES, min_length=1, max_length=5)
+    categories: list[Category] = Field(default_factory=lambda: list(domain.CATEGORIES), min_length=1, max_length=len(domain.CATEGORIES))
     starts_on: date
     ends_on: date | None = None
     reason: str = Field(min_length=1, max_length=1000)
@@ -152,8 +171,8 @@ def get_announcement(db, id):
     return row
 
 
-def ensure_owner(announcement, user):
-    if announcement.owner_id != user.id:
+def ensure_owner(db, announcement, user):
+    if not responsibilities.manages(db, user, announcement):
         raise HTTPException(403, "仅公告负责人可执行；管理员可通过交接接管")
 
 
@@ -184,6 +203,7 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(current_user))
     return {"categories": domain.CATEGORIES, "tiers": domain.TIERS,
             "circles": [{"id": id, "name": name} for id, name in domain.live_circles(db).items()],
             "publisher": config, "can_publish": bool(config["circles"] or config["projects"]),
+            "can_handover": domain.admin(user) or bool(config["circles"] or config["projects"]) or any(domain.can_view_handover(db, user, a) for a in db.query(Announcement)),
             "can_train": user.has_role("TR"),
             "can_admin": domain.admin(user), "can_follow": user.has_role("SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM", "AM") or domain.admin(user),
             "counts": domain.summary(db, user)}
@@ -192,7 +212,7 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(current_user))
 @router.get("/training-options")
 def training_options(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     config = domain.grant_config(db, user.id)
-    if not config["circles"] and not config["projects"] and not db.query(Announcement.id).filter_by(owner_id=user.id).first():
+    if not config["circles"] and not config["projects"] and not any(responsibilities.manages(db, user, a) for a in db.query(Announcement)):
         raise HTTPException(403, "仅发布者或当前公告负责人可选择培训师")
     return {"items": training.candidates(db), "own_circle_id": user.employee.attraction_id}
 
@@ -265,6 +285,8 @@ def create(payload: AnnouncementInput, request: Request, db: Session = Depends(g
     db.add(row)
     db.flush()
     version = write_version(db, row, payload, user, 1)
+    if not responsibilities.manages(db, user, row):
+        raise HTTPException(403, "该板块已指定共同负责人，请由共同负责人发布或调整负责人设置")
     domain.sync_current(db, initial_id=row.id)
     write_audit(db, user.employee, "发布公告", "announcement", row.id, after=values, ip_address=client_ip(request))
     result = domain.payload(db, user, row, version, True)
@@ -276,7 +298,7 @@ def create(payload: AnnouncementInput, request: Request, db: Session = Depends(g
 def revise(id: int, payload: AnnouncementInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     domain.lock(db)
     row = get_announcement(db, id)
-    ensure_owner(row, user)
+    ensure_owner(db, row, user)
     values = payload.model_dump(mode="json")
     retry = db.query(AnnouncementVersion).filter_by(announcement_id=id, request_key=payload.request_key).first()
     if retry:
@@ -291,6 +313,12 @@ def revise(id: int, payload: AnnouncementInput, request: Request, db: Session = 
     if not payload.change_summary.strip():
         raise HTTPException(400, "请填写变更说明")
     previous = domain.current_version(db, row)
+    if responsibilities.responsibility(db, row):
+        target_key = domain.packed({"category": payload.category, "scope_kind": payload.scope_kind,
+            "attraction_ids": sorted(payload.attraction_ids) if payload.scope_kind == "circle" else [],
+            "project_id": payload.project_id if payload.scope_kind == "project" else None})
+        if responsibilities.scope_key(previous) != target_key:
+            raise HTTPException(409, "该公告已纳入板块负责人管理，更新须保留板块和发布范围；调整范围请另发公告")
     training.end_codes(db, previous.id)
     domain.validate_scope(db, user.id, values)
     domain.validate_attachments(db, user, values["attachments"], previous)
@@ -300,6 +328,11 @@ def revise(id: int, payload: AnnouncementInput, request: Request, db: Session = 
             delivery.status = "superseded"
     row.current_version += 1
     version = write_version(db, row, payload, user, row.current_version)
+    if responsibilities.scope_key(previous) != responsibilities.scope_key(version):
+        group = responsibilities.responsibility(db, row)
+        if group and user.id not in domain.unpack(group.member_ids_json):
+            raise HTTPException(403, "目标板块已指定其他负责人")
+        row.owner_id = user.id
     for employee_id in seen:
         domain.notify(db, employee_id, id, f"updated:{version.id}", "updated", f"{version.title} 已更新至 V{version.number}，请查看变化。")
     domain.sync_current(db)
@@ -328,14 +361,95 @@ def read_notification(notification_id: int, db: Session = Depends(get_db), user:
     return {"ok": True}
 
 
+@router.get("/responsibility")
+def responsibility_detail(key: str = Query(max_length=2000), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    rows = responsibilities.current_rows(db, key)
+    if not rows:
+        raise HTTPException(404, "该板块没有公告")
+    if not domain.admin(user) and not all(responsibilities.manages(db, user, a) for a, _ in rows):
+        raise HTTPException(403, "仅共同负责人或最高管理员可安排整组交接")
+    return {**responsibilities.describe(db, key, rows, user), "candidates": responsibilities.candidates(db, rows)}
+
+
+@router.post("/responsibilities")
+def save_responsibility(payload: ResponsibilityInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    if not domain.admin(user):
+        raise HTTPException(403, "仅最高管理员可设置共同负责人")
+    domain.lock(db)
+    rows = responsibilities.current_rows(db, payload.key)
+    if not rows:
+        raise HTTPException(404, "该板块没有公告")
+    members = list(dict.fromkeys(payload.member_ids))
+    if len(members) != len(payload.member_ids) or not payload.reason.strip():
+        raise HTTPException(400, "请选择一至两位不同负责人并填写原因")
+    for employee_id in members:
+        responsibilities.validate_member(db, employee_id, rows)
+    group = db.query(AnnouncementResponsibility).filter_by(scope_key=payload.key).first()
+    before = domain.unpack(group.member_ids_json) if group else sorted({a.owner_id for a, _ in rows})
+    if (group.revision if group else 0) != payload.expected_revision:
+        raise HTTPException(409, "共同负责人已变化，请刷新")
+    if not group:
+        group = AnnouncementResponsibility(scope_key=payload.key, member_ids_json=domain.packed(members), changed_by=user.id, reason=payload.reason.strip())
+        db.add(group)
+        db.flush()
+    else:
+        responsibilities.cancel_pending(db, group)
+        group.member_ids_json, group.revision = domain.packed(members), group.revision + 1
+        group.changed_by, group.changed_at, group.reason = user.id, datetime.now(), payload.reason.strip()
+    for announcement, _ in rows:
+        if announcement.owner_id not in members:
+            announcement.owner_id = members[0]
+    for old in db.query(AnnouncementHandover).filter(AnnouncementHandover.announcement_id.in_([a.id for a, _ in rows]), AnnouncementHandover.status == "pending"):
+        old.status = "cancelled"
+    for employee_id in set(before) | set(members):
+        domain.notify(db, employee_id, rows[0][0].id, f"responsibility:{group.id}:{group.revision}", "handover",
+            f"{rows[0][1].category}共同负责人已调整")
+    write_audit(db, user.employee, "设置公告共同负责人", "announcement_responsibility", group.id,
+        before={"member_ids": before}, after={"member_ids": members, "scope_key": group.scope_key, "announcement_ids": [a.id for a, _ in rows]},
+        reason=payload.reason, ip_address=client_ip(request))
+    db.commit()
+    return {"ok": True, "id": group.id, "revision": group.revision}
+
+
+@router.post("/responsibility-handover")
+def responsibility_handover(payload: ResponsibilityHandoverInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    domain.lock(db)
+    batch, histories = responsibilities.start(db, payload.key, user, payload.from_id, payload.successor_id,
+        payload.reason, payload.force, payload.expected_revision, payload.announcements)
+    write_audit(db, user.employee, "兜底公告整组交接" if payload.force else "申请公告整组交接",
+        "announcement_responsibility", batch.responsibility_id, before={"from_id": batch.from_id},
+        after={"to_id": batch.to_id, "announcements": payload.announcements, "force": payload.force},
+        reason=payload.reason, ip_address=client_ip(request))
+    db.commit()
+    return {"ok": True, "handover_id": histories[0].id, "count": len(histories)}
+
+
+@router.get("/handover-center")
+def handover_center(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    return domain.handover_center(db, user)
+
+
 @router.get("/handovers")
 def handovers(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     rows = db.query(AnnouncementHandover).filter_by(to_id=user.id, status="pending").all()
+    batches = db.query(AnnouncementResponsibilityHandover).filter_by(to_id=user.id, status="pending").all()
+    linked = {id for b in batches for id in domain.unpack(b.handover_ids_json)}
+    batch_items = []
+    for batch in batches:
+        history = db.get(AnnouncementHandover, domain.unpack(batch.handover_ids_json)[0])
+        announcement = db.get(Announcement, history.announcement_id)
+        first_snapshot = next(x for x in domain.unpack(batch.snapshot_json) if x["id"] == announcement.id)
+        version = db.query(AnnouncementVersion).filter_by(announcement_id=announcement.id, number=first_snapshot["version"]).one()
+        batch_items.append({"id": history.id, "announcement_id": announcement.id, "title": version.category + "整组交接",
+            "from_name": db.get(Employee, batch.from_id).name, "to_name": user.name,
+            "scope_label": domain.payload(db, user, announcement, version)["scope_label"], "version": announcement.current_version,
+            "count": len(domain.unpack(batch.snapshot_json)), "requested_at": batch.requested_at, "reason": history.reason})
+    rows = [h for h in rows if h.id not in linked]
     return [{"id": h.id, "announcement_id": h.announcement_id, "title": domain.current_version(db, db.get(Announcement, h.announcement_id)).title,
              "from_name": db.get(Employee, h.from_id).name, "to_name": user.name,
              "scope_label": domain.payload(db, user, db.get(Announcement, h.announcement_id), domain.current_version(db, db.get(Announcement, h.announcement_id)))["scope_label"],
              "version": db.get(Announcement, h.announcement_id).current_version,
-             "requested_at": h.requested_at, "reason": h.reason} for h in rows]
+             "requested_at": h.requested_at, "reason": h.reason} for h in rows] + batch_items
 
 
 @router.post("/handovers/{handover_id}/accept")
@@ -346,6 +460,14 @@ def accept_handover(handover_id: int, request: Request, db: Session = Depends(ge
         raise HTTPException(404, "交接申请不存在")
     if h.status != "pending":
         raise HTTPException(409, "交接已处理")
+    batch = responsibilities.batch_for_history(db, h.id)
+    if batch:
+        group, rows = responsibilities.complete(db, batch)
+        write_audit(db, user.employee, "接受公告整组交接", "announcement_responsibility", group.id,
+            before={"from_id": batch.from_id}, after={"to_id": user.id, "announcement_ids": [a.id for a, _ in rows]},
+            reason=h.reason, ip_address=client_ip(request))
+        db.commit()
+        return {"ok": True, "count": len(rows)}
     row = get_announcement(db, h.announcement_id)
     if row.owner_id != h.from_id:
         raise HTTPException(409, "负责人已变更")
@@ -366,32 +488,30 @@ def handover(id: int, payload: HandoverInput, request: Request, db: Session = De
         if not domain.admin(user):
             raise HTTPException(403, "仅最高管理权限可兜底交接")
     else:
-        ensure_owner(row, user)
+        ensure_owner(db, row, user)
     ensure_version(row, payload.expected_version)
     if not payload.reason.strip() or payload.successor_id == row.owner_id:
         raise HTTPException(400, "请填写原因并选择其他继任者")
     domain.validate_scope(db, payload.successor_id, domain.version_values(domain.current_version(db, row)))
-    for old in db.query(AnnouncementHandover).filter_by(announcement_id=id, status="pending"):
-        old.status = "cancelled"
-    h = AnnouncementHandover(announcement_id=id, from_id=row.owner_id, to_id=payload.successor_id,
-                            requested_by=user.id, reason=payload.reason.strip(), status="forced" if payload.force else "pending")
-    db.add(h)
-    db.flush()
-    if payload.force:
-        row.owner_id, h.completed_at = payload.successor_id, datetime.now()
-    for employee_id in {h.from_id, h.to_id}:
-        domain.notify(db, employee_id, id, f"handover:{h.id}", "handover", "公告负责人已交接" if payload.force else "公告交接待继任者接受")
+    key = responsibilities.scope_key(domain.current_version(db, row))
+    group = responsibilities.responsibility(db, row)
+    rows = responsibilities.current_rows(db, key)
+    if len(rows) > 1:
+        raise HTTPException(409, "请在交接页核对该板块全部公告后发起整组交接")
+    batch, histories = responsibilities.start(db, key, user, row.owner_id if payload.force else user.id,
+        payload.successor_id, payload.reason, payload.force, group.revision if group else 0, responsibilities.snapshot(rows))
+    h = next(h for h in histories if h.announcement_id == id)
     write_audit(db, user.employee, "兜底公告交接" if payload.force else "申请公告交接", "announcement", id,
                 before={"owner_id": h.from_id}, after={"successor_id": h.to_id, "force": payload.force}, reason=payload.reason, ip_address=client_ip(request))
     db.commit()
-    return {"ok": True, "handover_id": h.id}
+    return {"ok": True, "handover_id": h.id, "count": len(histories)}
 
 
 @router.post("/{id}/withdraw")
 def withdraw(id: int, payload: ReasonInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     domain.lock(db)
     row = get_announcement(db, id)
-    ensure_owner(row, user)
+    ensure_owner(db, row, user)
     ensure_version(row, payload.expected_version)
     training.end_codes(db, domain.current_version(db, row).id)
     if not payload.reason.strip():
@@ -569,7 +689,7 @@ def verify_training_code(id: int, payload: TrainingVerifyInput, db: Session = De
 def update_trainers(id: int, payload: TrainersInput, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     domain.lock(db)
     row = get_announcement(db, id)
-    ensure_owner(row, user)
+    ensure_owner(db, row, user)
     ensure_version(row, payload.expected_version)
     version = domain.current_version(db, row)
     if not training.settings(db, version.id)["training_required"] or row.status != "published":
@@ -629,27 +749,32 @@ def remind(id: int, payload: ReasonInput, request: Request, db: Session = Depend
 @router.get("/{id}/export")
 def export(id: int, request: Request, format: Literal["pdf", "xlsx"] = "pdf", version: int | None = None,
            db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    return export_report(id, request, format, version, db, user)
+
+
+def export_report(id, request, format, version, db, user, followup=False):
     from app.announcement_exports import export_records
     data = records(id, version, db, user)
     announcement = get_announcement(db, id)
     revision = db.query(AnnouncementVersion).filter_by(announcement_id=id, number=data["announcement"]["version"]).one()
     data["announcement"] = domain.payload(db, user, announcement, revision, True)
     try:
-        content = export_records(data, format, user)
+        content = export_records(data, format, user, followup=followup)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    write_audit(db, user.employee, "导出公告签收", "announcement", id, after={"version": data["announcement"]["version"], "format": format, "scoped": data["scoped"]}, ip_address=client_ip(request))
+    write_audit(db, user.employee, "导出公告签收", "announcement", id, after={"version": data["announcement"]["version"], "format": format, "scoped": data["scoped"], "report": "followup" if followup else "receipts"}, ip_address=client_ip(request))
     db.commit()
+    suffix = "-followup" if followup else ""
     return Response(content, media_type="application/pdf" if format == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": f'attachment; filename="announcement-{id}-v{data["announcement"]["version"]}.{format}"', "Cache-Control": "private, no-store"})
+                    headers={"Content-Disposition": f'attachment; filename="announcement-{id}-v{data["announcement"]["version"]}{suffix}.{format}"', "Cache-Control": "private, no-store"})
 
 
 @router.get("/{id}/followup-export")
 def followup_export(id: int, request: Request, version: int | None = None, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     row = get_announcement(db, id)
-    if user.id not in {row.publisher_id, row.owner_id} and not domain.admin(user):
+    if not domain.can_view_handover(db, user, row):
         raise HTTPException(403, "仅原发布者、现负责人及最高管理权限可调取全部跟进记录")
-    return export(id, request, "xlsx", version, db, user)
+    return export_report(id, request, "xlsx", version, db, user, followup=True)
 
 
 @router.post("/assets")
@@ -767,11 +892,11 @@ def project(payload: ProjectInput, request: Request, db: Session = Depends(get_d
 def successors(id: int, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     row = get_announcement(db, id)
     if not domain.admin(user):
-        ensure_owner(row, user)
+        ensure_owner(db, row, user)
     version = domain.current_version(db, row)
     result = []
     for employee in db.query(Employee).filter_by(is_active=True):
-        if employee.id == row.owner_id:
+        if employee.id in responsibilities.member_ids(db, row):
             continue
         try:
             domain.validate_scope(db, employee.id, domain.version_values(version))

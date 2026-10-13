@@ -1182,6 +1182,8 @@
 | `announcement_favorites` | 公告/员工唯一 | 公告、员工 |
 | `announcement_assets` | 文件ID唯一 → `stored_files`；归属人 → `employees` | 归属人 |
 | `announcement_handovers` | 公告、原负责人、接任人、申请人外键；记录待接受、接受、兜底及取消状态 | 公告、状态 |
+| `announcement_responsibilities` | 板块/完整圈集合或项目构成唯一 `scope_key`；一至两位共同负责人ID以JSON保存；修订号防并发覆盖；改动人 → `employees`，保存时间及原因 | 范围键唯一 |
+| `announcement_responsibility_handovers` | 公告组 → `announcement_responsibilities`；离任/继任人 → `employees`；保存负责人修订号、全部公告ID/版本快照、对应逐公告交接历史ID、状态及发起/完成时间 | 公告组、状态 |
 | `announcement_training_configs` | 版本ID主键 → `announcement_versions`；培训门槛、本圈/全部圈及本圈边界 | 版本 |
 | `announcement_trainers` | 版本/员工唯一；对应版本及员工外键；可撤销培训授权 | 版本、员工 |
 | `announcement_training_codes` | 版本及培训师外键；保存数字码摘要、有效期、结束时间；请求键唯一，生成重试不重复开批次 | 版本、培训师、码摘要 |

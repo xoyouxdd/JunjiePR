@@ -201,3 +201,16 @@ def test_overflowing_content_is_rejected_instead_of_clipped():
             "layout": "landscape"})
         assert result.status_code == 400
         assert "放不下" in result.json()["detail"]
+
+
+@pytest.mark.parametrize("template_id", ["", "universal-garden"])
+def test_training_category_can_compose_posters(template_id):
+    with TestClient(app) as client:
+        login(client, "GSMTEST01")
+        assert "培训" in client.get("/api/announcement-media/options").json()["categories"]
+        response = client.post("/api/announcement-media/poster", json={
+            "title": "岗位培训", "summary": "完成学习并确认操作要求", "category": "培训", "template_id": template_id})
+        assert response.status_code == 200, response.text
+        with Image.open(io.BytesIO(response.content)) as poster:
+            assert poster.size == (1080, 1440)
+            poster.load()

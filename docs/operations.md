@@ -6,6 +6,21 @@
 
 最高管理员可在「待办」展开备份健康异常，查看最近巡检问题，并选择删除本次提醒或手动重新备份。删除只隐藏当前巡检报告对应的待办，最多 24 小时；新报告异常会再次出现，不删除备份，也不停用巡检。手动备份在后台生成一份 SQLite 在线快照和 SHA-256 清单，限制并发及短时间重复操作，可在同一待办查看结果；它不会修复缺失的每日备份计划任务。网页服务账号须对配置的备份目录有写入权限，权限应只授予该目录。对应接口仅 `SYSTEM_ADMIN` 可访问：`POST /api/admin/backup-health/dismiss`、`POST /api/admin/backup-health/retry`、`GET /api/admin/backup-health/manual-status`。若任务失败，检查服务器日志、备份目录权限及磁盘空间。
 
+## 每日备份异常的定位与处理
+
+先读「备份健康异常」中的问题代码、巡检时间和任务结果，再核对服务器任务及文件；应用 `/health` 正常只证明应用可访问，不能证明备份正常。`health_report_missing` 表示没有巡检报告，不能直接判断数据库备份失败；`task_last_run_failed` 表示每日任务退出码非零；`backup_timeout_no_output` / `backup_stale` 表示未产生及时的可识别快照。手动备份不会重写巡检报告，故手动成功后旧报告仍可能显示异常；须重新运行巡检确认。
+
+2026-10-13 本地发现并复现了路径合同不一致：当前发布入口 `server_release.py` 使用根目录下的 `app`、`data_v2` 与 `.venv`，原日常备份、巡检及恢复脚本却使用 `backend` 子目录。脚本默认值和正式路径校验现已同时对齐根目录；原脚本即使传正确根目录也会抛出 `Unexpected live root path`。此为已确认代码问题，实际线上是否由该问题触发，仍需以服务器文件和任务结果验证。
+
+处理此类路径故障时：
+
+1. 核对线上根目录的 `data_v2\recognition_v2.db`、`.venv\Scripts\python.exe`、备份目录写入权限，以及每日备份和巡检两个任务。
+2. 单独同步并校验修正后的 `Invoke-SqliteOnlineBackup.ps1`、`Test-SqliteBackupHealth.ps1`、`Test-SqliteBackupRestore.ps1`；应用发布不会自动安装这两个每日任务，也不自动同步全部运维脚本。
+3. 先运行备份 `-DryRun`，核对来源与保留策略，再执行每日任务。只有任务缺失或参数确需修改时才安装/更新，保留现有触发时间和告警环境变量设置。
+4. 确认备份任务结果为 `0`、新快照与清单均存在、SHA-256 和 `quick_check` 正常，再运行巡检；确认新 `backup-health-status.json` 为 `ok=true` 后刷新页面，并复查下一次定时执行结果。部署时生成的根目录 `backups` 快照与日常专用备份目录分开，不互相代替。
+
+本地回归 `test_backup_runtime_paths.py` 将正式路径与发布程序合同对照，并在独立目录执行真实 SQLite 备份、巡检和恢复，验证源库不变。另有 `scripts/tests/Test-BackupHealthScenarios.ps1` 覆盖任务失败、无输出与完整性失败；本地通过不等于线上任务已修复。
+
 ## 脚本一览
 
 | 脚本 | 用途 |

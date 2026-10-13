@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$LiveRoot = "C:\Server\zhaojunjie\recognition-card-system\backend",
+    [string]$LiveRoot = "C:\Server\zhaojunjie\recognition-card-system",
     [string]$BackupRoot = "C:\Server\zhaojunjie\backups\recognition-card-system-sqlite",
-    [string]$Python = "C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe",
+    [string]$Python = "C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe",
     [ValidateRange(1, 3650)]
     [int]$RetentionDays = 30,
     [switch]$DryRun,
@@ -13,9 +13,9 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$expectedLiveRoot = "C:\Server\zhaojunjie\recognition-card-system\backend"
+$expectedLiveRoot = "C:\Server\zhaojunjie\recognition-card-system"
 $expectedBackupRoot = "C:\Server\zhaojunjie\backups\recognition-card-system-sqlite"
-$expectedPython = "C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe"
+$expectedPython = "C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe"
 $backupNamePattern = '^recognition_v2-\d{8}T\d{6}-\d{3}\.db(?:\.manifest\.json)?$'
 
 function Get-NormalizedPath([string]$Path) {

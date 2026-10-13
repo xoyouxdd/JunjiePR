@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.13.1", "date": "2026-10-13", "status": "candidate",
+        "items": [
+            {"summary": "公告中心培训板块与页面优化",
+             "detail": "新增培训板块，优化公告页面、配图和下载入口。已有人工授权保持原板块限制，不自动扩大发布权限。",
+             "audiences": ["all"]},
+            {"summary": "公告共同负责、整组交接与导出优化",
+             "detail": "最高管理员可编辑已有授权及设置一至两位共同负责人；按板块和完整发布范围整组交接，接任时重新校验资格、名单及版本。他人交接信息隔离；PDF与Excel重排总览、人员和培训跟进记录，保持原有导出范围与凭据校验。",
+             "audiences": ["SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM", "AM", "SYSTEM_ADMIN"]},
+            {"summary": "备份脚本运行路径统一",
+             "detail": "在线备份、健康巡检及恢复演练的默认运行路径与部署目录保持一致，补充隔离环境的真实备份和恢复检查。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.11.6", "date": "2026-10-11", "status": "candidate",
         "items": [{"summary": "轮岗现场调整与TR临时协助",
                    "detail": "去轮岗确认后立即进线；撤岗可选择顺推或直接下线，可预览、定时和取消待撤。运行中可交换人员、调整岗位顺序。主管可向本圈指定或全部TR下发5至45分钟临时授权，独立待办展示；大屏本人登录调整、显示倒计时并提示退出，到期或撤销停止操作。储备达到开线数时，可休饭人员自选休息或吃饭，默认休息，原有强制休饭保留。测试入口新增热力追踪LEAD和TA LEAD。",

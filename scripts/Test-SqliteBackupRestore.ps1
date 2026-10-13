@@ -2,10 +2,10 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$BackupFile,
-    [string]$LiveRoot = "C:\Server\zhaojunjie\recognition-card-system\backend",
+    [string]$LiveRoot = "C:\Server\zhaojunjie\recognition-card-system",
     [string]$BackupRoot = "C:\Server\zhaojunjie\backups\recognition-card-system-sqlite",
     [string]$RehearsalRoot = "C:\Server\zhaojunjie\restore-tests\recognition-card-system-sqlite",
-    [string]$Python = "C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe",
+    [string]$Python = "C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe",
     [string[]]$RequiredTables = @(
         "attractions",
         "employees",
@@ -24,10 +24,10 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$expectedLiveRoot = "C:\Server\zhaojunjie\recognition-card-system\backend"
+$expectedLiveRoot = "C:\Server\zhaojunjie\recognition-card-system"
 $expectedBackupRoot = "C:\Server\zhaojunjie\backups\recognition-card-system-sqlite"
 $expectedRehearsalRoot = "C:\Server\zhaojunjie\restore-tests\recognition-card-system-sqlite"
-$expectedPython = "C:\Server\zhaojunjie\recognition-card-system\backend\.venv\Scripts\python.exe"
+$expectedPython = "C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe"
 $backupNamePattern = '^recognition_v2-\d{8}T\d{6}-\d{3}\.db$'
 
 function Get-NormalizedPath([string]$Path) {

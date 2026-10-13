@@ -11,6 +11,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from app import announcement_responsibilities as responsibilities
 from app.v2_auth import V2User, current_user
 from app.v2_database import get_db
 from app.v2_models import (Announcement, AnnouncementAsset, AnnouncementDelivery,
@@ -19,7 +20,7 @@ from app.v2_models import (Announcement, AnnouncementAsset, AnnouncementDelivery
     AnnouncementVersion, Attraction, Employee, EmployeeLOAPeriod, GroupMembership, StoredFile, UserAccount, WorkGroup)
 from app.v2_services import base_roles_at, direct_member_ids, duties_at_bulk, role_at
 
-CATEGORIES = ["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动"]
+CATEGORIES = ["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动", "培训"]
 TIERS = {"frontline": "CM / TR", "lead": "TA LEAD / LEAD", "gsm": "TA GSM / GSM", "am": "AM", "hr": "HR"}
 ROLE_TIERS = {"CM": "frontline", "TR": "frontline", "TA_SUPERVISOR": "lead", "SUPERVISOR": "lead",
               "TA_GSM": "gsm", "GSM": "gsm", "AM": "am", "HR_ADMIN": "hr", "HR_CIRCLE": "hr", "SYSTEM_ADMIN": "hr"}
@@ -226,7 +227,7 @@ def sync_current(db, initial_id=None):
 
 def record_ids(db, user, announcement, version):
     rows = db.query(AnnouncementDelivery).filter_by(version_id=version.id)
-    if admin(user) or user.id in {announcement.owner_id, announcement.publisher_id}:
+    if admin(user) or user.id == announcement.publisher_id or responsibilities.manages(db, user, announcement):
         return None
     if user.has_role("GSM", "TA_GSM", "AM"):
         config = grant_config(db, user.id)
@@ -331,17 +332,48 @@ def grouped_records(db, rows):
     return items, ordered
 
 
+def can_view_handover(db, user, announcement):
+    return admin(user) or user.id == announcement.publisher_id or responsibilities.manages(db, user, announcement)
+
+
 def handover_overview(db, announcement, user):
+    if not can_view_handover(db, user, announcement):
+        return None
     rows = db.query(AnnouncementHandover).filter_by(announcement_id=announcement.id).order_by(
         AnnouncementHandover.requested_at.desc(), AnnouncementHandover.id.desc()).all()
     ids = {announcement.owner_id} | {id for h in rows for id in (h.from_id, h.to_id, h.requested_by)}
     people = {e.id: {"id": e.id, "name": e.name, "employee_no": e.employee_no}
               for e in db.query(Employee).filter(Employee.id.in_(ids))}
-    return {"owner": people[announcement.owner_id], "history": [
+    key = responsibilities.scope_key(current_version(db, announcement))
+    can_handover = admin(user) or all(responsibilities.manages(db, user, a) for a, _ in responsibilities.current_rows(db, key))
+    return {"owner": people[announcement.owner_id], "owners": responsibilities.people(db, responsibilities.member_ids(db, announcement)), "scope_key": key, "can_handover": can_handover, "history": [
         {"id": h.id, "from": people[h.from_id], "to": people[h.to_id], "requested_by": people[h.requested_by],
          "reason": h.reason, "status": h.status, "requested_at": h.requested_at, "completed_at": h.completed_at,
          "can_accept": h.status == "pending" and h.to_id == user.id and h.from_id == announcement.owner_id}
         for h in rows]}
+
+
+def handover_center(db, user):
+    query = db.query(Announcement, AnnouncementVersion).join(AnnouncementVersion,
+        (AnnouncementVersion.announcement_id == Announcement.id) & (AnnouncementVersion.number == Announcement.current_version))
+    all_rows = query.order_by(AnnouncementVersion.created_at.desc(), Announcement.id.desc()).all()
+    rows = [(a, v) for a, v in all_rows if can_view_handover(db, user, a)]
+    ids = {a.id for a, _ in rows}
+    people_ids = {id for a, _ in rows for id in (a.owner_id, a.publisher_id)}
+    people = {e.id: {"id": e.id, "name": e.name, "employee_no": e.employee_no}
+              for e in db.query(Employee).filter(Employee.id.in_(people_ids))}
+    circles = live_circles(db)
+    projects = {p.id: p.name for p in db.query(AnnouncementProject)}
+    pending = {}
+    if ids:
+        for h in db.query(AnnouncementHandover).filter(AnnouncementHandover.announcement_id.in_(ids), AnnouncementHandover.status == "pending"):
+            pending[h.announcement_id] = pending.get(h.announcement_id, 0) + 1
+    return {"all_visible": admin(user), "groups": responsibilities.center_groups(db, user, all_rows), "items": [{"id": a.id, "title": v.title, "category": v.category,
+        "version": a.current_version, "status": a.status, "scope_kind": v.scope_kind,
+        "scope_label": projects.get(v.project_id, "项目") if v.scope_kind == "project" else "、".join(circles.get(id, str(id)) for id in unpack(v.attraction_ids_json)),
+        "owner": people[a.owner_id], "publisher": people[a.publisher_id], "pending": pending.get(a.id, 0),
+        "can_handover": admin(user) or all(responsibilities.manages(db, user, other)
+            for other, _ in responsibilities.current_rows(db, responsibilities.scope_key(v)))} for a, v in rows]}
 
 
 def payload(db, user, announcement, version, detail=False):
@@ -363,10 +395,12 @@ def payload(db, user, announcement, version, detail=False):
         "published_at": announcement.published_at, "updated_at": version.created_at, "owner_id": announcement.owner_id,
         "status": announcement.status, "effective": effective, "favorite": bool(favorite), "change_summary": version.change_summary,
         "receipt": delivery_payload(db, receipt) if receipt else None, "attachments": attachments,
-        "can_edit": announcement.owner_id == user.id, "can_manage": record_ids(db, user, announcement, version) != set(),
+        "can_edit": responsibilities.manages(db, user, announcement), "owners": responsibilities.people(db, responsibilities.member_ids(db, announcement)) if can_view_handover(db, user, announcement) else [], "can_manage": record_ids(db, user, announcement, version) != set(),
+        "responsibility_scope_locked": responsibilities.responsibility(db, announcement) is not None,
         "withdrawn_reason": announcement.withdrawn_reason, "withdrawn_at": announcement.withdrawn_at,
         **training.settings(db, version.id), "can_train": effective and training.authorized(db, version.id, user.id),
-        "can_followup_export": user.id in {announcement.publisher_id, announcement.owner_id} or admin(user)}
+        "can_view_handover": can_view_handover(db, user, announcement),
+        "can_followup_export": can_view_handover(db, user, announcement)}
     if detail:
         previous = db.query(AnnouncementVersion).filter_by(announcement_id=announcement.id, number=version.number-1).first()
         old_lines = previous.body.splitlines() if previous else []
@@ -386,6 +420,9 @@ def summary(db, user):
     sync_current(db)
     pending = db.query(AnnouncementDelivery).filter_by(employee_id=user.id, status="pending").count()
     messages = db.query(AnnouncementNotification).filter_by(employee_id=user.id, read_at=None).count()
-    handovers = db.query(AnnouncementHandover).filter_by(to_id=user.id, status="pending").count()
+    from app.v2_models import AnnouncementResponsibilityHandover
+    batches = db.query(AnnouncementResponsibilityHandover).filter_by(to_id=user.id, status="pending").all()
+    linked = {id for b in batches for id in unpack(b.handover_ids_json)}
+    handovers = len(batches) + db.query(AnnouncementHandover).filter_by(to_id=user.id, status="pending").filter(AnnouncementHandover.id.notin_(linked)).count()
     db.commit()
     return {"pending": pending, "messages": messages, "handovers": handovers, "total": pending+messages+handovers}
