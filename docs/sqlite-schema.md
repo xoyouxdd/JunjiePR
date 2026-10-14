@@ -31,6 +31,8 @@
 | 表 | 用途 |
 |---|---|
 | `schema_migration_steps` | 一次性结构补丁登记 |
+| `month_rank_generations` | 月结范围的段位封存代次，`closure_id`唯一，关闭时间与月结行匹配才有效 |
+| `employee_month_rank_snapshots` | 个人月度分组、封存分数、段位、评语与跨圈关闭联合签名；代次＋员工唯一，员工＋月份查询索引 |
 | `roles` | 角色 |
 | `permissions` | 权限点 |
 | `role_permissions` | 角色-权限 |
@@ -1217,6 +1219,10 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 | 月度分值口径 | 视图节 |
 
 测试必须用隔离数据目录，不要指向生产库。
+
+### 月结个人段位快照
+
+2026.10.14.1新增两张表，启动按模型创建；幂等迁移为已有段位快照表补齐`comment_text`与`comparison_scope_json`，保留原行。关闭月结时与组织快照、审计同事务封存；主管组的跨圈关闭签名在各圈全部月结后统一写入，参与圈重开使全部主管档次失效。旧月份只依据现存组织快照和计分记录补建。表定义见`v2_models.py`的`MonthRankGeneration`与`EmployeeMonthRankSnapshot`，业务及隐私口径见[monthly-self-rank.md](monthly-self-rank.md)。`cohort_size`、`lower_count`、精确分数与联合签名是内部封存输入，dashboard及组员段位对象不直接返回这些比较数据。
 
 
 ### 轮岗临时协助与调整会话

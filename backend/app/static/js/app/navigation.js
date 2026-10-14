@@ -21,6 +21,7 @@ function menuItems() {
   else if (r==='HR_ADMIN') {items.push(['hrEmployees','员工管理'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
   else if (has('DATA_VIEW')) items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
+  if(state.me.led_groups?.length&&!items.some(([id])=>id==='members'))items.push(['members',has('MEMBER_RECORDS')?'组员记录':'组员段位']);
   if(has('REVIEW_SUPERVISOR'))items.splice(Math.min(items.length,1),0,['supervisorReview','主管复核']);
   if(has('LOA_REGISTER'))items.push(['loa','LOA登记']);
   if(has('SICK_LEAVE_IMPORT'))items.push(['sickLeaveImport','缺勤登记']);

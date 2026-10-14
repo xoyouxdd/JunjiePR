@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.14.1", "date": "2026-10-14", "status": "candidate",
+        "items": [
+            {"summary": "我的信息新增月结王者段位",
+             "detail": "最强王者至倔强黑铁十档段位，使用立体徽章和四季背景，明确显示超过区间。同景点圈CM/TR与代理TA主管一起比较；主管与代理TA GSM从2026年10月起，待参与主管计分的各圈全部月结后，按全圈封存分数统一比较。季节与个人分数变化评语位于段位比例下方，月结封存、重开隐藏；首次补建历史月份按时间顺序生成评语。我的签卡标题下显示当月计分与待复核汇总。通过现有月份选择按年查询本人历史数据；分数与段位对应同月，切换显示加载状态，失败可重试。一线暂不显示计分说明入口。",
+             "audiences": ["CM", "TR", "TA_SUPERVISOR", "SUPERVISOR", "TA_GSM"]},
+            {"summary": "公告卡片显示当前处理步骤",
+             "detail": "公告按实际要求显示待阅读、待培训、待确认、待签字或已完成；验码后更新签字步骤，历史、暂缓及撤下状态单独提示，沿用现有阅读与签收操作。",
+             "audiences": ["all"]},
+            {"summary": "小组负责人可查看组员已生效段位",
+             "detail": "现任正式组长和代理组长通过现有组员页面月份筛选，查看当前负责成员的有效历史段位和超过区间，不显示具体名次或精确百分比。成员退出负责范围后停止查看；没有原记录权限的负责人只返回身份与段位，保持具体分数和记录权限隔离。",
+             "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"]},
+        ],
+    },
+    {
         "version": "2026.10.13.1", "date": "2026-10-13", "status": "candidate",
         "items": [
             {"summary": "公告中心培训板块与页面优化",

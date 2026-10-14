@@ -91,7 +91,10 @@ def test_changelog_filters_by_role() -> None:
     assert "POC" in gsm_text
     assert cm[0]["current"] is True
     assert gsm[0]["current"] is True
-    assert gsm[0]["items"][0]["summary"] == "公告中心培训板块与页面优化"
+    assert cm[0]["items"][0]["summary"] == "我的信息新增月结王者段位"
+    assert "我的信息新增月结王者段位" not in gsm_text
+    assert "我的信息新增月结王者段位" not in admin_text
+    assert gsm[0]["items"][0]["summary"] == "公告卡片显示当前处理步骤"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -145,11 +148,12 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["公告中心培训板块与页面优化"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["我的信息新增月结王者段位", "公告卡片显示当前处理步骤"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
-        assert hr["release"]["version"] == APP_VERSION
+        assert [item["summary"] for item in hr["release"]["items"]] == ["公告卡片显示当前处理步骤"]
+        assert hr["read"] is False
         client.post("/api/logout")
         login(client, "TRTEST01")
         first = client.get("/api/changelog/announcement").json()

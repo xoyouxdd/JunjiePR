@@ -4,6 +4,13 @@ from __future__ import annotations
 from sqlalchemy import text
 
 
+def ensure_month_rank_comment_column(db) -> None:
+    columns = {row[1] for row in db.execute(text("PRAGMA table_info(employee_month_rank_snapshots)"))}
+    for name in ("comment_text", "comparison_scope_json"):
+        if columns and name not in columns:
+            db.execute(text(f"ALTER TABLE employee_month_rank_snapshots ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"))
+
+
 def ensure_recognition_shared_evidence(db) -> None:
     """Preserve legacy attachment IDs/data while allowing one file many links."""
     unique_file = False

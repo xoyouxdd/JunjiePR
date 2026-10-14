@@ -4,6 +4,7 @@ from __future__ import annotations
 from calendar import monthrange
 from datetime import date
 from typing import TYPE_CHECKING
+import json
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, text
@@ -18,6 +19,7 @@ from app.v2_models import Attraction, AttendanceMonthlyScore, DeductionRecord, E
 from app.services.attendance import ensure_month_attendance, recalculate_attendance
 from app.services.identity import acting_period_notes, base_roles_at, identity_labels, roles_at
 from app.services.performance_details import load_monthly_records
+from app.services.monthly_ranks import member_month_query_context, member_month_rank, sealed_self_score
 
 if TYPE_CHECKING:
     from app.v2_auth import V2User
@@ -25,9 +27,13 @@ if TYPE_CHECKING:
 def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
     if user.base_role.code not in SCORED_BASE_CODES:
         return {"month": month, "role": user.role.name}
-    recalculate_attendance(db, user.employee, month)
-    db.commit()
-    score = next(iter(employee_month_scores(db, month, [user.id])), None)
+    frozen = sealed_self_score(db, month, user.id)
+    if frozen is None:
+        recalculate_attendance(db, user.employee, month)
+        db.commit()
+    score = ({field: getattr(frozen, field) for field in
+              ("recognition_score", "attendance_score", "deduction_score", "total_score")}
+             if frozen else next(iter(employee_month_scores(db, month, [user.id])), None))
     score = score or {"recognition_score": 0, "attendance_score": 0, "deduction_score": 0, "total_score": 0}
     categories = {
         name: float(total or 0)
@@ -42,6 +48,8 @@ def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
     }
     if score.get("loa_excluded"):
         categories = {name: 0.0 for name in categories}
+    if frozen:
+        categories = json.loads(frozen.category_scores_json)
     records = (
         db.query(RecognitionRecord)
         .options(selectinload(RecognitionRecord.attachments).selectinload(RecognitionAttachment.file))
@@ -54,6 +62,15 @@ def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
         .all()
     )
     records.sort(key=lambda row: row.status == "confirmed")
+    record_items = [recognition_payload(row) for row in records]
+    excluded = frozen.status == "excluded" if frozen else bool(score.get("loa_excluded"))
+    credited_count = sum(row["status"] == "confirmed" and row["credited_fraction"] > 0 and not excluded for row in record_items)
+    recognition_summary = {
+        "credited": credited_count,
+        "pending": sum(row["status"] == "pending" for row in record_items),
+        "uncredited": sum(row["status"] == "confirmed" for row in record_items) - credited_count,
+        "rejected": sum(row["status"] == "rejected" for row in record_items),
+    }
     return {
         "month": month,
         "category_scores": categories,
@@ -61,7 +78,10 @@ def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
         "attendance_score": float(score["attendance_score"] or 0),
         "deduction_score": float(score["deduction_score"] or 0),
         "total_score": float(score["total_score"] or 0),
-        "records": [recognition_payload(row) for row in records],
+        "month_rank": member_month_rank(db, month, user.employee),
+        **member_month_query_context(db, month, user.employee),
+        "recognition_summary": recognition_summary,
+        "records": record_items,
     }
 
 

@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.access_policy import scoped_hr_attraction_ids
+from app.date_utils import parse_score_month
 from app.data_cache import PR_RANKING_CACHE_SECONDS, STATISTICS_CACHE_SECONDS, _pr_ranking_cache_lock, _pr_ranking_response_cache, _statistics_cache_lock, _statistics_response_cache
 from app.excel_export import append_supervisor_score_sheets, build_pr_rankings_workbook, build_statistics_workbook
 from app.excel_export_utils import content_disposition
@@ -22,7 +23,8 @@ from app.v2_models import Attraction, AuditLog, Employee
 from app.v2_watermark import watermark_workbook
 from app.services.attendance import ensure_month_attendance
 from app.services.audit import write_audit
-from app.services.organization import direct_member_ids
+from app.services.organization import active_group_memberships_bulk, direct_member_ids, formal_leader_eligible, group_acting_eligible, group_leader_of_type, groups_assigned_to
+from app.services.monthly_ranks import member_month_rank
 from app.services.monthly_statistics import dashboard_payload, statistics_hierarchy, statistics_payload
 from app.services.performance_details import member_records_payload, member_score_detail_payload, member_score_summary_payload, statistics_details_payload
 from app.services.performance_rankings import gsm_recognizer_ranking_payload, pr_ranking_payload, ranking_employees, ranking_group_labels
@@ -33,7 +35,7 @@ router = APIRouter()
 
 @router.get("/dashboard")
 def dashboard(month: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    month = month or date.today().strftime("%Y-%m")
+    month = parse_score_month(month or date.today().strftime("%Y-%m"))
     return dashboard_payload(db, month, user)
 
 
@@ -55,11 +57,37 @@ def member_score_summary(
     month: str | None = None,
     keyword: str | None = None,
     db: Session = Depends(get_db),
-    user: V2User = Depends(require_permissions("MEMBER_RECORDS")),
+    user: V2User = Depends(current_user),
 ):
-    month = month or date.today().strftime("%Y-%m")
+    month = parse_score_month(month or date.today().strftime("%Y-%m"))
+    valid_types = []
+    if formal_leader_eligible(db, user.id):
+        valid_types.append("formal")
+    if group_acting_eligible(db, user.id):
+        valid_types.append("acting")
+    led = [group for group in groups_assigned_to(db, user.id) if group.status != "closed" and any(
+        (assignment := group_leader_of_type(db, group.id, kind)) and assignment.leader_employee_id == user.id
+        for kind in valid_types)]
+    rank_only = "MEMBER_RECORDS" not in user.permissions
+    if rank_only and not led:
+        raise HTTPException(403, "仅现任小组负责人可查看组员段位")
     member_ids = direct_member_ids(db, user.id, include_overseen=True)
-    return member_score_summary_payload(db, month, member_ids, keyword, score_loader=employee_month_scores)
+    memberships = active_group_memberships_bulk(db, [group.id for group in led])
+    band_member_ids = member_ids & {row.employee_id for rows in memberships.values() for row in rows}
+    people = {person.id: person for person in db.query(Employee).filter(Employee.id.in_(band_member_ids)).all()} if band_member_ids else {}
+    if rank_only:
+        selected = sorted((person for person in people.values() if not keyword or keyword.strip() in person.name or keyword.strip() in person.employee_no), key=lambda person: (person.name, person.employee_no))
+        data = {"month": month, "rank_only": True, "rows": [{"employee_id": person.id,
+            "employee_name": person.name, "employee_no": person.employee_no} for person in selected]}
+    else:
+        data = member_score_summary_payload(db, month, member_ids, keyword, score_loader=employee_month_scores)
+    for row in data["rows"]:
+        person = people.get(row["employee_id"])
+        rank = member_month_rank(db, month, person) if person and month <= date.today().strftime("%Y-%m") else None
+        row["month_rank"] = ({key: rank[key] for key in (
+            "month", "tier", "label", "population_label", "comparison_scope", "comparison_label")}
+            if rank and rank["status"] == "ranked" and rank["month_closed"] else None)
+    return data
 
 
 @router.get("/pr-rankings")

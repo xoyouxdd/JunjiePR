@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database.migrations.schema import (
+    ensure_month_rank_comment_column,
     ensure_recognition_shared_evidence,
     ensure_void_audit_columns,
     ensure_credential_columns,
@@ -64,6 +65,7 @@ MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-10-group-leader-types', ensure_group_leader_types),
     ('2026-10-group-codes', ensure_group_codes),
     ('2026-10-group-codes-resequence', resequence_all_group_codes),
+    ('2026-10-month-rank-comments', ensure_month_rank_comment_column),
     ('2026-09-sick-leave-index-repair', ensure_sick_leave_record_indexes),
 )
 SCHEMA_MIGRATION_STEPS = [(key, runner.__name__) for key, runner in MIGRATION_RUNNERS]

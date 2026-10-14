@@ -8,7 +8,13 @@ import { app } from './state.js';
 
 function memberScoreRow(row){
   const button=(kind,label,value,scoreClass='')=>`<button type="button" class="member-score-link ${scoreClass}" data-member-detail="${kind}" data-employee-id="${row.employee_id}" aria-expanded="false" title="查看${label}明细">${value}</button>`;
-  return `<tr class="member-score-row" data-member-row="${row.employee_id}"><th><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name)}</small></th><td>${button('recognition','加分','+'+fmt(row.recognition_score),'score-positive')}</td><td>${button('deduction','扣分',fmtDeduction(row.deduction_score),'score-negative')}</td><td>${button('attendance','全勤分',fmt(row.attendance_score))}</td><td>${button('all','综合分',fmt(row.total_score),'member-total-link')}</td></tr>`;
+  const rank=row.month_rank;
+  const rankMarkup=rank?`<span class="member-history-rank" data-rank-tier="${esc(rank.tier)}">月结 · ${esc(rank.label)}</span><small>${rank.tier===0?'未超过10%':`超过${esc(rank.tier)}%`} · ${esc(rank.comparison_label)}</small>`:'<small class="member-history-rank-empty">该月暂无已生效段位</small>';
+  return `<tr class="member-score-row" data-member-row="${row.employee_id}"><th><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name)}</small>${rankMarkup}</th><td>${button('recognition','加分','+'+fmt(row.recognition_score),'score-positive')}</td><td>${button('deduction','扣分',fmtDeduction(row.deduction_score),'score-negative')}</td><td>${button('attendance','全勤分',fmt(row.attendance_score))}</td><td>${button('all','综合分',fmt(row.total_score),'member-total-link')}</td></tr>`;
+}
+
+function memberRanksOnly(data){
+  return `<div class="member-rank-list">${data.rows.map(row=>`<article class="work-card"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small>${row.month_rank?`<p class="member-history-rank" data-rank-tier="${esc(row.month_rank.tier)}">${esc(row.month_rank.label)} · ${row.month_rank.tier===0?'未超过10%':`超过${esc(row.month_rank.tier)}%`}</p><p class="field-hint">${esc(row.month_rank.comparison_label)} · ${esc(data.month)}</p>`:'<p class="field-hint">该月暂无已生效段位</p>'}</article>`).join('')||'<p class="empty">暂无当前负责的组员</p>'}</div>`;
 }
 
 function memberAttachment(record){
@@ -44,10 +50,26 @@ function bindMemberScoreDetails(data){
 
 async function renderMembers(){
   const request=beginViewRequest();
-  app.innerHTML=`<div class="section-gap"><section class="panel"><h2>组员记录</h2><p>每名直属CM/TR一行汇总，按综合分从高到低排列，同分按工号排序。点击加分、扣分、全勤分查看分类明细；点击综合分查看当月所有记录。</p><form id="memberFilter" class="entry-filter member-score-filter"><label>月份<input name="month" type="month" value="${monthNow()}" required></label><label>员工搜索<input name="keyword" placeholder="姓名/员工号"></label><button class="primary">查询</button></form></section><section class="panel"><div id="memberResults"></div></section><div id="memberDetail"></div></div>`;
+  app.innerHTML=`<div class="section-gap"><section class="panel"><h2 id="memberOverviewTitle">组员记录</h2><p id="memberOverviewHint">每名直属CM/TR一行汇总，按综合分从高到低排列，同分按工号排序。点击加分、扣分、全勤分查看分类明细；点击综合分查看当月所有记录。切换月份可查看组员已生效段位与超过区间。</p><form id="memberFilter" class="entry-filter member-score-filter"><label>月份<input name="month" type="month" value="${monthNow()}" required></label><label>员工搜索<input name="keyword" placeholder="姓名/员工号"></label><button class="primary">查询</button></form></section><section class="panel"><div id="memberResults"></div></section><div id="memberDetail"></div></div>`;
   const form=document.getElementById('memberFilter');
   const page=captureViewContext(form,{latest:false});
-  const load=async()=>{if(!page.isCurrent())return;const request=beginViewRequest();const qs=new URLSearchParams([...new FormData(form)].filter(([,value])=>value));const data=await api('/api/member-score-summary?'+qs);if(!request.isCurrent())return;document.getElementById('memberResults').innerHTML=`<div class="table-wrap member-score-wrap"><table class="member-score-table"><thead><tr><th>员工</th><th>加分</th><th>扣分</th><th>全勤分</th><th>综合分</th></tr></thead><tbody>${data.rows.map(memberScoreRow).join('')||'<tr><td colspan="5" class="empty">无直属CM/TR或无匹配员工</td></tr>'}</tbody></table></div>`;document.getElementById('memberDetail').innerHTML='';bindMemberScoreDetails(data)};
+  const load=async()=>{
+    if(!page.isCurrent())return;
+    const request=beginViewRequest();
+    const qs=new URLSearchParams([...new FormData(form)].filter(([,value])=>value));
+    document.getElementById('memberResults').innerHTML='<p class="empty" role="status" aria-busy="true">正在查询组员信息…</p>';
+    document.getElementById('memberDetail').innerHTML='';
+    try{
+      const data=await api('/api/member-score-summary?'+qs);
+      if(!request.isCurrent())return;
+      document.getElementById('memberOverviewTitle').textContent=data.rank_only?'组员段位':'组员记录';
+      document.getElementById('memberOverviewHint').textContent=data.rank_only?'查看当前负责成员已生效的月结段位与超过区间，切换月份查看历史。':'每名直属CM/TR一行汇总，点击分数查看明细；切换月份可查看已生效段位与超过区间。';
+      document.getElementById('memberResults').innerHTML=data.rank_only?memberRanksOnly(data):`<div class="table-wrap member-score-wrap"><table class="member-score-table"><thead><tr><th>员工</th><th>加分</th><th>扣分</th><th>全勤分</th><th>综合分</th></tr></thead><tbody>${data.rows.map(memberScoreRow).join('')||'<tr><td colspan="5" class="empty">无直属CM/TR或无匹配员工</td></tr>'}</tbody></table></div>`;
+      if(!data.rank_only)bindMemberScoreDetails(data);
+    }catch(error){
+      if(request.isCurrent()&&error.name!=='AbortError')document.getElementById('memberResults').innerHTML=`<p class="error" role="alert">查询失败：${esc(error.message)} 请重新查询。</p>`;
+    }
+  };
   form.onsubmit=e=>{e.preventDefault();load()};
   await load();
 }

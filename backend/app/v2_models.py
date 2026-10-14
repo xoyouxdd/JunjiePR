@@ -855,6 +855,45 @@ class EmployeeMonthOrganizationSnapshot(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class MonthRankGeneration(Base):
+    """One sealed ranking generation per close scope; replaced on reclose."""
+
+    __tablename__ = "month_rank_generations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    closure_id: Mapped[int] = mapped_column(ForeignKey("month_closures.id"), unique=True)
+    closed_at: Mapped[datetime] = mapped_column(DateTime)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class EmployeeMonthRankSnapshot(Base):
+    """Private score and comparison inputs; the dashboard exposes only a band."""
+
+    __tablename__ = "employee_month_rank_snapshots"
+    __table_args__ = (
+        UniqueConstraint("generation_id", "employee_id", name="uq_month_rank_employee"),
+        Index("ix_month_rank_self", "employee_id", "score_month"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    generation_id: Mapped[int] = mapped_column(ForeignKey("month_rank_generations.id"), index=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    score_month: Mapped[str] = mapped_column(String(7))
+    attraction_id: Mapped[int] = mapped_column(ForeignKey("attractions.id"))
+    attraction_name: Mapped[str] = mapped_column(String(100))
+    base_role_code: Mapped[str] = mapped_column(String(30))
+    population: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20))
+    tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cohort_size: Mapped[int] = mapped_column(Integer, default=0)
+    lower_count: Mapped[int] = mapped_column(Integer, default=0)
+    recognition_score: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    attendance_score: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    deduction_score: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    total_score: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    category_scores_json: Mapped[str] = mapped_column(Text, default="{}")
+    comment_text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    comparison_scope_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+
+
 class SickLeaveRecord(Base):
     __tablename__ = "sick_leave_records"
 

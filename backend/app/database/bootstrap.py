@@ -41,6 +41,9 @@ def _init_db_unlocked() -> None:
         disable_test_accounts(db)
         ensure_highest_admin_account(db)
         ensure_circle_hr_accounts(db)
+        from app.services.monthly_ranks import backfill_closed_rankings
+
+        backfill_closed_rankings(db)
         create_score_view(db)
         from app.rotation.access import ensure_rotation_accounts
 

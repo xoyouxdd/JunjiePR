@@ -11,6 +11,7 @@ from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
+from app.services.monthly_ranks import capture_month_ranks, prepare_rank_attendance
 from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
 from app.routers._shared import (
     MATERIAL_COLLABORATOR_CODES,
@@ -435,7 +436,9 @@ def close_month(
             db.rollback()
             raise HTTPException(409, "该月份和景点圈刚刚已由其他管理员关闭月结") from exc
     scope_name = attraction.name if attraction else "全部景点圈"
+    prepare_rank_attendance(db, month, attraction_id)
     snapshot_count = capture_month_organization_snapshots(db, month, attraction_id)
+    rank_count = capture_month_ranks(db, row)
     write_audit(
         db,
         user.employee,
@@ -443,7 +446,7 @@ def close_month(
         "month_close",
         row.id,
         before=before,
-        after={"month": month, "attraction_id": attraction_id, "scope": scope_name, "status": "closed", "organization_snapshots_created": snapshot_count, "checklist": "completed", "rule_effective_date": MONTH_CLOSE_EFFECTIVE_DATE},
+        after={"month": month, "attraction_id": attraction_id, "scope": scope_name, "status": "closed", "organization_snapshots_created": snapshot_count, "rank_snapshots_created": rank_count, "checklist": "completed", "rule_effective_date": MONTH_CLOSE_EFFECTIVE_DATE},
         reason=reason,
         ip_address=client_ip(request),
     )

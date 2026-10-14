@@ -61,7 +61,7 @@ const reviewRecord = {id: 71, employee_name: '复核测试主管', employee_no: 
   recognition_date: '2026-10-08', submitted_at: '2026-10-11 12:50:34',
   recognition_type: '演出', recognizer_name: '测试GSM', fraction: 1, credited_fraction: 1,
   content: '补录认可日期展示验证', status: 'pending', status_name: '待复核'};
-let trainingDemo = false, trainingSigned = false;
+let trainingDemo = false, trainingSigned = false, trainingSeen = false;
 const trainingAnnouncement = {id: 51, version: 1, current_version: 1, title: '培训签字验证', summary: '',
   category: '安全 & 合规', scope_kind: 'circle', attraction_ids: [1], tiers: ['frontline'], scope_label: '热力追踪',
   confirmation_level: 3, training_required: true, trainer_scope: 'circle', trainer_ids: [8], trainer_circle_id: 1,
@@ -70,7 +70,7 @@ const trainingAnnouncement = {id: 51, version: 1, current_version: 1, title: '�
   versions: [{number: 1, accessible: true}], body: '培训后签字', body_lines: [{text: '培训后签字', changed: false}]};
 function demoAnnouncement() {return {...trainingAnnouncement, can_edit: mode === 'publisher',
   can_manage: mode === 'publisher', can_train: mode === 'trainer', can_followup_export: mode === 'publisher',
-  receipt: mode === 'member' ? {status: trainingSigned ? 'completed' : 'pending', confirmed_at: trainingSigned ? '2026-10-11T13:00:00' : null} : null};}
+  receipt: mode === 'member' ? {status: trainingSigned ? 'completed' : 'pending', seen_at:trainingSeen?'2026-10-11T12:00:00':null, confirmed_at: trainingSigned ? '2026-10-11T13:00:00' : null} : null};}
 const requests = [], uploads = [], missingApis = [];
 function sendJson(response, value) {
   response.writeHead(200, {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'});
@@ -111,6 +111,7 @@ async function fixtureRequest(request, response) {
   else if (route === '/api/announcements/51/receipt') {
     const chunks=[]; for await (const chunk of request) chunks.push(chunk);
     const body=JSON.parse(Buffer.concat(chunks).toString());
+    if (body.action==='read') trainingSeen=true;
     if (body.action==='confirm') {assert.equal(body.training_code,'123456');assert(body.signature?.startsWith('data:image/png;base64,'));trainingSigned=true;}
     sendJson(response, demoAnnouncement().receipt);
   } else if (route === '/api/announcements/51/training/verify') sendJson(response, {ok:true,trainer_name:'本圈培训师',expires_at:'2026-10-11T19:00:00'});
@@ -362,11 +363,14 @@ async function main() {
         await page.locator('[data-ann-current-code]').filter({hasText:'123456'}).waitFor();
         await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-tr-20261011.png'),fullPage:true});
       }else{
+        assert.match(await page.locator('.announcement-card-footer').innerText(),/待阅读/);
         await page.locator('[data-ann-open="51"]').click();
         await page.locator('#announcementReceiptForm').waitFor();
+        assert.equal(await page.locator('[data-ann-progress]').textContent(),'待培训');
         assert.equal(await page.locator('#announcementSignature').isVisible(),false);
         await page.locator('[name=training_code]').fill('123456');await page.locator('[data-ann-verify-code]').click();
         await page.locator('#announcementSignature').waitFor({state:'visible'});
+        assert.equal(await page.locator('[data-ann-progress]').textContent(),'待签字');
         assert(await page.locator('#announcementSignature').evaluate(el=>el.width)>100);
         await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-member-20261011.png'),fullPage:true});
         await page.locator('[name=acknowledged]').check();
@@ -374,6 +378,22 @@ async function main() {
         await page.mouse.move(box.x+20,box.y+30);await page.mouse.down();await page.mouse.move(box.x+140,box.y+100,{steps:8});await page.mouse.up();
         await page.getByRole('button',{name:'提交签字',exact:true}).click();
         await page.locator('[data-ann-view=history][aria-pressed=true]').waitFor();assert(trainingSigned);
+        assert.match(await page.locator('.announcement-card-footer').innerText(),/已完成/);
+        const progress=await page.evaluate(async()=>{
+          const {announcementProgress}=await import('./static/js/app/announcements.js');
+          const base={status:'published',version:1,current_version:1,effective:true,effective_on:'2026-01-01',confirmation_level:3,training_required:true,receipt:{status:'pending',seen_at:'2026-01-01'}};
+          return [
+            announcementProgress({...base,receipt:{status:'pending'}}),
+            announcementProgress(base),
+            announcementProgress({...base,receipt:{...base.receipt,training_verified_at:'2026-01-01'}}),
+            announcementProgress({...base,training_required:false,confirmation_level:2}),
+            announcementProgress({...base,receipt:{status:'completed'}}),
+            announcementProgress({...base,status:'withdrawn'}),
+            announcementProgress({...base,current_version:2}),
+            announcementProgress({...base,receipt:{status:'suspended'}}),
+          ];
+        });
+        assert.deepEqual(progress,['待阅读','待培训','待签字','待确认','已完成','已撤下','历史版本','暂缓']);
       }
       assert.deepEqual(errors,[]);if(mode!=='publisher')assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       checks.push(`announcement training ${mode}: real module DOM flow`);await page.close();

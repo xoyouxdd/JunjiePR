@@ -7,6 +7,7 @@
 | [architecture.md](architecture.md) | 现用系统与目录职责 |
 | [sqlite-schema.md](sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [identity-and-supervisor.md](identity-and-supervisor.md) | 本职与代理职务、主管绩效登记复核、日期展示及统计口径 |
+| [monthly-self-rank.md](monthly-self-rank.md) | 我的信息月结王者段位、分档、封存和手机布局 |
 | [leave-management.md](leave-management.md) | LOA、月度病假事务导入与单人备用登记 |
 | [declaration-statistics.md](declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
 | [hr-monthly-report-plan.md](hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
