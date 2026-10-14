@@ -24,7 +24,7 @@ def test_historical_member_home_is_read_only_in_the_interface() -> None:
     assert "home-read-only" in script
     assert "recognitionCard(r,i,readOnly=false)" in script
     assert "${readOnly?'':`<button class=\"withdraw-icon\"" in script
-    assert "const homeReadOnly=isHistoricalMonth||Boolean(rank.month_closed)" in script
+    assert "const homeReadOnly=isHistoricalMonth||Boolean(d.month_closed)" in script
     assert "recognitionCard(r,i,homeReadOnly)" in script
 
 

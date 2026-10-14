@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from hashlib import sha256
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
@@ -12,6 +12,7 @@ from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.role_constants import SCORED_BASE_CODES, SUPERVISOR_SCORING_START_MONTH
+from app.month_rank_policy import MIN_RANK_COHORT, MONTH_RANK_RULE_VERSION
 from app.score_queries import employee_month_scores
 from app.services.attendance import ensure_month_attendance, month_end
 from app.services.identity import base_roles_at, employee_active_on
@@ -22,16 +23,16 @@ from app.v2_models import (
 
 
 RANK_TIERS = {
-    90: ("最强王者", "你的闪光，值得被看见。"),
-    80: ("傲世宗师", "持续出色，继续闪耀。"),
-    70: ("超凡大师", "认真积累，实力渐显。"),
+    90: ("荣耀王者", "每份投入，都值得肯定。"),
+    80: ("傲世宗师", "点滴记录，汇成当月积累。"),
+    70: ("超凡大师", "认真积累，记录每份投入。"),
     60: ("至尊星耀", "稳步向前，每一步都算数。"),
     50: ("永恒钻石", "点滴积累，收获更多进步。"),
     40: ("尊贵铂金", "持续投入，成长正在发生。"),
     30: ("荣耀黄金", "点滴努力，都在积累光芒。"),
-    20: ("秩序白银", "找到自己的节奏，继续向前。"),
-    10: ("坚韧青铜", "一步一步，积累新的进步。"),
-    0: ("倔强黑铁", "每份努力都有价值，期待你的成长。"),
+    20: ("探索白银", "找到自己的节奏，继续向前。"),
+    10: ("成长青铜", "一步一步，积累新的进步。"),
+    0: ("启航新星", "每份努力都有价值，期待新的积累。"),
 }
 
 MONTH_OPENINGS = (
@@ -72,13 +73,21 @@ def build_month_comment(db: Session, snapshot) -> str:
     return f"{MONTH_OPENINGS[number - 1]}，{change}{praise}"
 
 
-def rank_band(lower_count: int, cohort_size: int) -> int | None:
-    if cohort_size < 2:
+def rank_band(lower_count: int, cohort_size: int, equal_count: int = 1) -> int | None:
+    if cohort_size < MIN_RANK_COHORT or equal_count == cohort_size:
         return None
-    # Exclude self from the denominator, ties from the numerator. Strict
-    # integer comparison avoids rounding 90% into "超过90%".
+    if not (0 <= lower_count < cohort_size and 1 <= equal_count <= cohort_size - lower_count):
+        return None
+    # Midpoint of the tied block, including self. Integer cross-multiplication
+    # retains the existing strict decile boundaries without float rounding.
     return next((tier for tier in range(90, 0, -10)
-                 if 100 * lower_count > tier * (cohort_size - 1)), 0)
+                 if 50 * (2 * lower_count + equal_count) > tier * cohort_size), 0)
+
+
+def population_status(values) -> str:
+    if len(values) < MIN_RANK_COHORT:
+        return "insufficient"
+    return "same_scores" if values[0] == values[-1] else "ranked"
 
 
 def prepare_rank_attendance(db: Session, month: str, attraction_id: int | None) -> None:
@@ -153,7 +162,8 @@ def capture_month_ranks(db: Session, closure: MonthClosure) -> int:
         population = "supervisor" if organization.base_role_code == "SUPERVISOR" else "frontline"
         values = cohorts[(organization.attraction_id, population)]
         lower = bisect_left(values, Decimal(str(score["total_score"]))) if not score["loa_excluded"] else 0
-        tier = rank_band(lower, len(values)) if not score["loa_excluded"] else None
+        equal = bisect_right(values, Decimal(str(score["total_score"]))) - lower if not score["loa_excluded"] else 0
+        tier = rank_band(lower, len(values), equal) if not score["loa_excluded"] else None
         excluded = bool(score["loa_excluded"])
         db.add(EmployeeMonthRankSnapshot(
             generation_id=generation.id, employee_id=organization.employee_id,
@@ -161,10 +171,12 @@ def capture_month_ranks(db: Session, closure: MonthClosure) -> int:
             attraction_name=organization.attraction_name or "未设置景点圈",
             base_role_code=organization.base_role_code, population=population,
             status="excluded" if excluded else ("waiting_global" if population == "supervisor"
-                else "ranked" if tier is not None else "insufficient"),
+                else population_status(values)),
             tier=None if population == "supervisor" else tier,
             cohort_size=0 if population == "supervisor" else len(values),
             lower_count=0 if population == "supervisor" else lower,
+            equal_count=0 if population == "supervisor" else equal,
+            rule_version=MONTH_RANK_RULE_VERSION,
             **{field: Decimal(str(score[field])) for field in
                ("recognition_score", "attendance_score", "deduction_score", "total_score")},
             category_scores_json=json.dumps({name: 0 if excluded else value for name, value in
@@ -263,6 +275,8 @@ def refresh_supervisor_month_ranks(db: Session, month: str) -> int:
             selected.append(row)
     if {row.attraction_id for row in selected} != circles:
         return 0  # A legacy scope lacks frozen scoring evidence.
+    if any(row.rule_version != MONTH_RANK_RULE_VERSION for row in selected):
+        return 0  # Preserve earlier calculations; never mix rule versions.
     values = sorted(row.total_score for row in selected if row.status != "excluded")
     for row in selected:
         if row.comparison_scope_json == signature:
@@ -272,8 +286,10 @@ def refresh_supervisor_month_ranks(db: Session, month: str) -> int:
         if row.status == "excluded":
             continue
         row.lower_count = bisect_left(values, row.total_score)
-        row.tier = rank_band(row.lower_count, len(values))
-        row.status = "ranked" if row.tier is not None else "insufficient"
+        row.equal_count = bisect_right(values, row.total_score) - row.lower_count
+        row.tier = rank_band(row.lower_count, len(values), row.equal_count)
+        row.rule_version = MONTH_RANK_RULE_VERSION
+        row.status = population_status(values)
         row.comment_text = build_month_comment(db, row) if row.status == "ranked" else ""
     db.flush()
     return len(selected)
@@ -307,6 +323,9 @@ def member_month_rank(db: Session, month: str, employee) -> dict:
                 "message": "该月暂无可用的月结段位数据。" if closed else (
                     "参与主管计分的各景点圈全部完成该月月结后，才能查看段位与评语。" if base == "SUPERVISOR"
                     else "所属景点圈完成该月月结后，才能查看段位与评语。")}
+    if selected.rule_version != MONTH_RANK_RULE_VERSION:
+        return {"status": "unavailable", "month": month, "month_closed": closed,
+                "message": "该月结果使用较早计算规则，暂不展示游戏段位。"}
     result = {
         "status": selected.status, "month": selected.score_month, "month_closed": closed,
         "attraction_name": selected.attraction_name,
@@ -329,10 +348,12 @@ def member_month_rank(db: Session, month: str, employee) -> dict:
             return result
     if selected.status == "ranked":
         label, message = RANK_TIERS[selected.tier]
-        result.update(tier=selected.tier, label=label, message=selected.comment_text or message)
+        result.update(tier=selected.tier, label=label, message=selected.comment_text or message,
+                      rule_version=selected.rule_version)
     else:
-        result["message"] = ("该月LOA，不参与段位比较。" if selected.status == "excluded"
-                             else "该月同计分人群人数不足，暂无可比较数据。")
+        result["message"] = ("该月LOA，不参与游戏段位生成。" if selected.status == "excluded" else
+                             "本月同类人员积分相同，不生成游戏段位。" if selected.status == "same_scores" else
+                             "本月比较人数不足10人，暂不生成游戏段位。")
     return result
 
 

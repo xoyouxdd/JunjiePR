@@ -14,12 +14,13 @@ from app.access_policy import scoped_hr_attraction_ids
 from app.organization_queries import group_display_metadata_bulk
 from app.record_payloads import deduction_payload, recognition_payload, sick_leave_payloads
 from app.role_constants import FRONTLINE_CODES, GSM_CODES, SCORED_BASE_CODES
+from app.month_rank_policy import monthly_ranks_enabled
 from app.score_queries import employee_month_scores
 from app.v2_models import Attraction, AttendanceMonthlyScore, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupMembership, ManagementScope, RecognitionAttachment, RecognitionRecord, Role, SickLeaveRecord, WorkGroup
 from app.services.attendance import ensure_month_attendance, recalculate_attendance
 from app.services.identity import acting_period_notes, base_roles_at, identity_labels, roles_at
 from app.services.performance_details import load_monthly_records
-from app.services.monthly_ranks import member_month_query_context, member_month_rank, sealed_self_score
+from app.services.monthly_ranks import member_month_query_context, sealed_self_score
 
 if TYPE_CHECKING:
     from app.v2_auth import V2User
@@ -71,6 +72,7 @@ def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
         "uncredited": sum(row["status"] == "confirmed" for row in record_items) - credited_count,
         "rejected": sum(row["status"] == "rejected" for row in record_items),
     }
+    query_context = member_month_query_context(db, month, user.employee)
     return {
         "month": month,
         "category_scores": categories,
@@ -78,8 +80,9 @@ def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
         "attendance_score": float(score["attendance_score"] or 0),
         "deduction_score": float(score["deduction_score"] or 0),
         "total_score": float(score["total_score"] or 0),
-        "month_rank": member_month_rank(db, month, user.employee),
-        **member_month_query_context(db, month, user.employee),
+        "monthly_rank_available": monthly_ranks_enabled(),
+        "month_closed": any(option["month"] == month and option["status"] == "closed" for option in query_context["query_months"]),
+        **query_context,
         "recognition_summary": recognition_summary,
         "records": record_items,
     }

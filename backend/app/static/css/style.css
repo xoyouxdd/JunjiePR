@@ -2067,6 +2067,14 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
 .member-rank-review { width:100%;box-sizing:border-box;text-align:left;border:1px solid var(--rank-line);border-radius:12px;background:linear-gradient(120deg,color-mix(in srgb,var(--rank-field) 87%,transparent),color-mix(in srgb,var(--rank-start) 78%,transparent));backdrop-filter:blur(6px);padding:14px 16px;margin-top:18px;box-shadow:inset 0 0 22px color-mix(in srgb,var(--rank-accent) 7%,transparent); }
 .member-rank-review h4 { display:flex;align-items:center;gap:6px;color:var(--rank-accent);font-size:15px;font-weight:600;margin:0 0 7px; }
 .member-rank-review .member-rank-message { color:var(--rank-text);line-height:1.8;margin:0; }
+.member-rank-entry { margin:12px 0 18px; }
+.member-rank-entry>button { min-height:44px; }
+.member-rank-panel .member-rank-entry>button { color:var(--rank-muted);background:var(--rank-field);border-color:var(--rank-line); }
+.member-rank-rules { margin:12px 0 16px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:13px;line-height:1.8; }
+.member-rank-rules summary { cursor:pointer;min-height:24px; }
+.member-rank-rules p { margin:10px 0; }
+.member-rank-panel .member-rank-rules { color:var(--rank-muted);border-color:var(--rank-line);background:color-mix(in srgb,var(--rank-field) 85%,transparent); }
+.member-rank-reference { margin:0 0 10px;text-align:center;font-size:12px;color:var(--rank-muted,var(--muted)); }
 .member-score-icon { width:17px;height:17px;flex:0 0 17px;vertical-align:middle;color:var(--rank-accent,var(--primary)); }
 .member-score-item>span { display:flex;align-items:center;justify-content:center;gap:5px; }
 .member-rank-panel .member-score-items { padding:14px 4px;background:color-mix(in srgb,var(--rank-field) 80%,transparent);border:1px solid var(--rank-line);border-radius:12px;backdrop-filter:blur(6px); }

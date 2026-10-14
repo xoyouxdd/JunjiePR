@@ -885,6 +885,8 @@ class EmployeeMonthRankSnapshot(Base):
     tier: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cohort_size: Mapped[int] = mapped_column(Integer, default=0)
     lower_count: Mapped[int] = mapped_column(Integer, default=0)
+    equal_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    rule_version: Mapped[str] = mapped_column(String(40), default="strict-lower-v1", server_default="strict-lower-v1")
     recognition_score: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     attendance_score: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     deduction_score: Mapped[Decimal] = mapped_column(Numeric(10, 2))

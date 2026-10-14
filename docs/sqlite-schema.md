@@ -1222,7 +1222,7 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 
 ### 月结个人段位快照
 
-2026.10.14.1新增两张表，启动按模型创建；幂等迁移为已有段位快照表补齐`comment_text`与`comparison_scope_json`，保留原行。关闭月结时与组织快照、审计同事务封存；主管组的跨圈关闭签名在各圈全部月结后统一写入，参与圈重开使全部主管档次失效。旧月份只依据现存组织快照和计分记录补建。表定义见`v2_models.py`的`MonthRankGeneration`与`EmployeeMonthRankSnapshot`，业务及隐私口径见[monthly-self-rank.md](monthly-self-rank.md)。`cohort_size`、`lower_count`、精确分数与联合签名是内部封存输入，dashboard及组员段位对象不直接返回这些比较数据。
+2026.10.14.1新增两张表，启动按模型创建；幂等迁移补齐`comment_text`、`comparison_scope_json`、`equal_count`和`rule_version`，保留原行。旧规则标记`strict-lower-v1`，当前规则为`midrank-v2-min10`，不静默覆盖旧结果。关闭月结时与组织快照、审计同事务封存；参与圈重开使全部主管段位失效。旧月份只依据组织快照和计分证据补建。定义见`v2_models.py`的`MonthRankGeneration`与`EmployeeMonthRankSnapshot`，口径见[monthly-self-rank.md](monthly-self-rank.md)。比较人数、低分人数、同分人数和关闭签名只用于内部计算；dashboard不下发段位结果，本人查看接口不返回比较人数或百分位，组员接口不返回任何段位。
 
 
 ### 轮岗临时协助与调整会话

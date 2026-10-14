@@ -34,6 +34,15 @@ function homeScoreIcon(name){
 
 let homeMonthOptions=[];
 let homeMonthOwner=null;
+const rankStatement='段位根据当月PR积分在同类人员中的相对分布自动生成，仅供个人参考。段位不代表个人综合工作表现，不构成独立的绩效评价结果。';
+function homeRankContent(rank,selectedMonth,d){
+  const ranked=rank.status==='ranked'&&rank.month===selectedMonth&&rank.month_closed===true&&Number.isInteger(rank.tier)&&[0,10,20,30,40,50,60,70,80,90].includes(rank.tier);
+  const waiting=['pending','waiting_global','reopened'].includes(rank.status);
+  const notice=rank.status==='ranked'&&!ranked?'所选月份暂无可用的游戏段位，请重新查看。':rank.message;
+  const rules=`<details class="member-rank-rules"><summary>了解月度勋章</summary><p>${rankStatement}</p><p>沿用PR计分人群：CM/TR及代理TA主管按月结景点圈比较；主管及代理TA GSM从2026年10月起按全部参与圈比较，各圈全部月结后生成。同分人员按同分组在积分分布中的中位位置获得相同段位，不强制分配各档人数；比较人数不足10人或全员同分时不生成段位。月结后封存，重开期间暂不展示。</p><p>仅本人主动查看，不公开排行榜，不新增奖惩或绩效评定依据。</p>${rank.rule_version?`<small>计算规则：${esc(rank.rule_version)}</small>`:''}</details>`;
+  const content=ranked?`<div class="member-rank-hero" aria-label="${esc(rank.label)}游戏段位"><span class="member-rank-month">${esc(memberHomeMonthLabel(rank.month))} · 月度PR积分</span><div class="member-rank-emblem" data-emblem-tier="${rank.tier}" aria-hidden="true"></div><div class="member-rank-copy"><h3>${esc(rank.label)}</h3><p class="member-rank-band">月度PR积分 <strong>${fmt(d.total_score)}</strong></p><section class="member-rank-review" aria-label="本月寄语"><h4>${homeScoreIcon('演出')}本月寄语</h4><p class="member-rank-message">${esc(rank.message)}</p></section></div></div>`:waiting?`<div class="member-rank-awaiting-hero"><div class="member-rank-lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></div><h3>${rank.status==='reopened'?'段位重新核算中':rank.status==='waiting_global'?'等待全圈月结':'月结后可查看'}</h3><p class="member-rank-empty">${esc(notice)}</p></div>`:`<p class="member-rank-empty">${esc(notice||'本月暂不生成游戏段位。')}</p>`;
+  return {ranked,waiting,html:content+`<p class="member-rank-reference">个人积分参考 · 仅本人可见</p>`+rules};
+}
 function homeMonthControl(selectedMonth){
   const current=memberHomeMonths()[0],years=new Map();
   for(const option of homeMonthOptions){
@@ -78,24 +87,18 @@ async function renderHome(){
   const organization=d.month_organization;
   const showScoreExplainer=!['CM','TR','TA_SUPERVISOR'].includes(state.me.base_role_code||state.me.role_code);
   const cats=['安全','礼仪','包容','效率','演出'];
-  const rank=d.month_rank||{status:'pending',message:'月结后展示本景点圈的个人段位。'};
-  const homeReadOnly=isHistoricalMonth||Boolean(rank.month_closed);
-  const ranked=rank.status==='ranked'&&rank.month===selectedMonth&&rank.month_closed===true&&Number.isInteger(rank.tier)&&[0,10,20,30,40,50,60,70,80,90].includes(rank.tier);
-  const waitingRank=['pending','waiting_global','reopened'].includes(rank.status);
-  const notice=rank.status==='ranked'&&!ranked?'所选月份暂无已月结段位，请在月份选择中切换查看。':rank.message;
-  const monthStatus=rank.status==='waiting_global'?'本圈已月结 · 段位待汇总':rank.status==='reopened'?'重新核算中':homeMonthOptions.find(option=>option.month===selectedMonth)?.status_label||(rank.month_closed?'已月结':'待月结');
-  const rankScope=rank.comparison_label||rank.attraction_name||'本景点圈';
-  const rankBand=rank.tier===0?'未超过10%':`超过${rank.tier}%`;
+  const homeReadOnly=isHistoricalMonth||Boolean(d.month_closed);
+  const monthStatus=homeMonthOptions.find(option=>option.month===selectedMonth)?.status_label||(d.month_closed?'已月结':'待月结');
   const summary=d.recognition_summary||{
-    credited:(d.records||[]).filter(r=>r.status==='confirmed'&&Number(r.credited_fraction??r.fraction)>0&&rank.status!=='excluded').length,
+    credited:(d.records||[]).filter(r=>r.status==='confirmed'&&Number(r.credited_fraction??r.fraction)>0).length,
     pending:(d.records||[]).filter(r=>r.status==='pending').length,
-    uncredited:(d.records||[]).filter(r=>r.status==='confirmed'&&(Number(r.credited_fraction??r.fraction)<=0||rank.status==='excluded')).length,
+    uncredited:(d.records||[]).filter(r=>r.status==='confirmed'&&Number(r.credited_fraction??r.fraction)<=0).length,
     rejected:(d.records||[]).filter(r=>r.status==='rejected').length,
   };
   const summaryMarkup=`<p class="home-recognition-summary" aria-label="${esc(selectedMonthLabel)}签卡汇总"><span>已计分<strong>${esc(summary.credited)}</strong>张</span>${summary.pending?`<span class="home-recognition-pending">待复核<strong>${esc(summary.pending)}</strong>张</span>`:''}${summary.uncredited?`<span>已确认未计分<strong>${esc(summary.uncredited)}</strong>张</span>`:''}${summary.rejected?`<span>不通过<strong>${esc(summary.rejected)}</strong>张</span>`:''}</p>`;
-  const rankMarkup=ranked?`<div class="member-rank-hero" aria-label="${esc(rank.label)}月结段位"><span class="member-rank-month">${esc(memberHomeMonthLabel(rank.month))} · 月结荣誉</span><div class="member-rank-emblem" data-emblem-tier="${rank.tier}" aria-hidden="true"></div><div class="member-rank-copy"><h3>${esc(rank.label)}</h3><p class="member-rank-band">你的分数${rankBand}的${esc(rank.population_label)}</p><section class="member-rank-review" aria-label="本月评语"><h4>${homeScoreIcon('演出')}本月评语</h4><p class="member-rank-message">${esc(rank.message)}</p></section></div></div>`:waitingRank?`<div class="member-rank-awaiting-hero"><div class="member-rank-lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></div><h3>${rank.status==='reopened'?'段位重新核算中':rank.status==='waiting_global'?'等待全圈月结':'月结后解锁'}</h3><p class="member-rank-empty">${esc(notice)}</p></div>`:`<p class="member-rank-empty">${esc(notice||'该月暂无可用的月结段位数据。')}</p>`;
+  const rankMarkup=d.monthly_rank_available===true?'<div class="member-rank-entry"><button type="button" class="secondary" id="homeRankView" aria-expanded="false" aria-controls="homeRankContent">查看我的月度勋章</button><div id="homeRankContent" hidden></div></div>':'';
   if(!request.write(`<div class="section-gap">
-    <section class="panel member-home-panel${ranked?' member-rank-panel':waitingRank?' member-rank-awaiting':''}" data-season="${season}"${ranked?` data-rank-tier="${rank.tier}"`:''}><div class="home-info-heading"><h2>我的信息</h2>${homeMonthControl(selectedMonth)}<span class="badge${rank.month_closed?' member-month-closed':''}">${esc(monthStatus)}</span>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div>${rankMarkup}<div class="member-info-grid">
+    <section class="panel member-home-panel" data-season="${season}"><div class="home-info-heading"><h2>我的信息</h2>${homeMonthControl(selectedMonth)}<span class="badge${d.month_closed?' member-month-closed':''}">${esc(monthStatus)}</span>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div>${rankMarkup}<div class="member-info-grid">
       <div><span>姓名 / ${organization?'月结角色':'当前角色'}</span><strong>${esc(state.me.name)} · ${esc(organization?.role_label||state.me.role_label||state.me.role_name)}</strong></div>
       <div><span>${organization?'月结景点圈':'当前景点圈'}</span><strong>${esc(organization?.attraction_name||state.me.attraction_name||'未分配')}</strong></div>
       ${homeGroupInfo(organization)}
@@ -105,10 +108,29 @@ async function renderHome(){
         <div class="member-score-item"><span>${homeScoreIcon('扣分')}扣分</span><strong>${fmtDeduction(d.deduction_score)}</strong></div>
         <div class="member-score-item member-score-total"><span>${homeScoreIcon('总分')}${isHistoricalMonth?'当月总分':'本月总分'}</span><strong>${fmt(d.total_score)}</strong></div>
       </div></div>
-    </div>${ranked?`<p class="member-rank-scope">比较范围：${esc(memberHomeMonthLabel(selectedMonth))} · ${esc(rankScope)} · ${esc(rank.population_label)}</p>`:''}${showScoreExplainer?`<details class="score-explainer"><summary>${isHistoricalMonth?`${selectedMonthLabel}绩效分怎么算的？`:'本月总分怎么算的？'}</summary><ul><li>加分：认可人签卡确认后，按认可人当日角色分值计入对应类别（安全/礼仪/包容/效率/演出等）。</li><li>全勤分：基础分 10 分；当月无病假满勤再加 2 分；病假按天扣减（0.5 天扣 0.25 分），最低 0 分。</li><li>扣分：声明/备忘录/警告等扣分记录按等级计分，作废后不再计入。</li><li>本月总分 = 加分 + 全勤分 − 扣分（仅统计已确认的有效记录）。</li><li>段位：CM/TR及代理TA主管按本景点圈比较；主管及代理TA GSM从2026年10月起，待参与主管计分的各圈全部月结后统一比较。同分不算超过，本人不进入比较分母。重开月结期间重新核算。</li></ul></details>`:''}</section>
+    </div>${showScoreExplainer?`<details class="score-explainer"><summary>${isHistoricalMonth?`${selectedMonthLabel}绩效分怎么算的？`:'本月总分怎么算的？'}</summary><ul><li>加分：认可人签卡确认后，按认可人当日角色分值计入对应类别（安全/礼仪/包容/效率/演出等）。</li><li>全勤分：基础分 10 分；当月无病假满勤再加 2 分；病假按天扣减（0.5 天扣 0.25 分），最低 0 分。</li><li>扣分：声明/备忘录/警告等扣分记录按等级计分，作废后不再计入。</li><li>本月总分 = 加分 + 全勤分 − 扣分（仅统计已确认的有效记录）。</li></ul></details>`:''}</section>
     <section class="panel"><h2>我的签卡${isHistoricalMonth?` · ${selectedMonthLabel}`:''}</h2>${summaryMarkup}<div class="mobile-records">${(d.records||[]).length?d.records.map((r,i)=>recognitionCard(r,i,homeReadOnly)).join(''):`<div class="empty">${isHistoricalMonth?`${selectedMonthLabel}暂无签卡`:'本月暂无签卡'}</div>`}</div></section>
   </div>`))return;
   bindHomeMonth();
+  const rankButton=document.getElementById('homeRankView');
+  if(rankButton)rankButton.onclick=async()=>{
+    const host=document.getElementById('homeRankContent'),panel=host.closest('.member-home-panel');
+    if(rankButton.getAttribute('aria-expanded')==='true'){
+      host.hidden=true;rankButton.setAttribute('aria-expanded','false');rankButton.textContent='查看我的月度勋章';
+      panel.classList.remove('member-rank-panel','member-rank-awaiting');panel.removeAttribute('data-rank-tier');return;
+    }
+    rankButton.disabled=true;host.hidden=false;host.innerHTML='<p class="empty" role="status" aria-busy="true">正在查询本人的月度勋章…</p>';
+    try{
+      const rank=await api('/api/self-month-rank?month='+encodeURIComponent(selectedMonth));
+      if(!request.isCurrent())return;
+      if(rank.month!==selectedMonth)throw new Error('返回的数据月份不一致，请重试。');
+      const view=homeRankContent(rank,selectedMonth,d);
+      host.innerHTML=view.html;panel.classList.toggle('member-rank-panel',view.ranked);panel.classList.toggle('member-rank-awaiting',view.waiting);
+      if(view.ranked)panel.dataset.rankTier=rank.tier;
+      rankButton.setAttribute('aria-expanded','true');rankButton.textContent='收起我的月度勋章';
+    }catch(error){if(request.isCurrent())host.innerHTML=`<p class="error" role="alert">查看失败：${esc(error.message)}，可再次点击重试。</p>`;}
+    finally{if(rankButton.isConnected)rankButton.disabled=false;}
+  };
   bindImagePreviews(app);
   bindWithdraw(app, ()=>renderHome());
   }catch(error){

@@ -48,6 +48,7 @@ EXPECTED_STEPS = (
     ("2026-10-group-codes", "ensure_group_codes"),
     ("2026-10-group-codes-resequence", "resequence_all_group_codes"),
     ("2026-10-month-rank-comments", "ensure_month_rank_comment_column"),
+    ("2026-10-month-rank-rule-version", "ensure_month_rank_rule_columns"),
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
 )
 

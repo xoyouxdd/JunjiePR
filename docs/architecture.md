@@ -31,7 +31,7 @@ GSM/TA GSM 管理范围同步在 `services/management_scopes.py`，由人员变�
 
 版本来源：`backend/app/version.py`（`年.月.日.当天第几版`，以文件为准）。用户在导航「更新记录」看到的内容来自 `backend/app/changelog.py`，按角色过滤。
 
-个人月结段位由`services/monthly_ranks.py`在原关闭事务内封存，首页`home.js`读取当前员工的段位、封存分数和评语；CM/TR按圈比较，主管及代理TA GSM在参与圈全部月结后统一跨圈比较，组员页面仅向现任负责人返回有效档次。已关闭月份不在刷新时重算；重开使原代次失效。`style.css`的`--rank-*`组件变量承载已确认的王者深色配色，不影响其他页面的全局颜色；手机信息卡分数四列两行。业务口径见[monthly-self-rank.md](monthly-self-rank.md)。
+个人月结游戏段位由`services/monthly_ranks.py`在原关闭事务内封存，开关默认关闭。首页由本人主动请求`/api/self-month-rank`查看徽章、个人积分及寄语，不公开百分位、名次或组员段位。CM/TR按圈比较，主管及代理TA GSM在参与圈全部月结后统一跨圈比较；同分中位算法和规则版本只影响游戏段位，不改PR核心积分及正式绩效。已关闭月份不在刷新时重算，重开使原代次失效。视觉复用徽章、季节背景和原组件配色，手机分数四列两行。业务口径见[monthly-self-rank.md](monthly-self-rank.md)。
 
 ## 目录职责
 

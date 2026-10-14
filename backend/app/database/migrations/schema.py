@@ -11,6 +11,14 @@ def ensure_month_rank_comment_column(db) -> None:
             db.execute(text(f"ALTER TABLE employee_month_rank_snapshots ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"))
 
 
+def ensure_month_rank_rule_columns(db) -> None:
+    columns = {row[1] for row in db.execute(text("PRAGMA table_info(employee_month_rank_snapshots)"))}
+    for name, definition in (("equal_count", "INTEGER NOT NULL DEFAULT 0"),
+                             ("rule_version", "VARCHAR(40) NOT NULL DEFAULT 'strict-lower-v1'")):
+        if columns and name not in columns:
+            db.execute(text(f"ALTER TABLE employee_month_rank_snapshots ADD COLUMN {name} {definition}"))
+
+
 def ensure_recognition_shared_evidence(db) -> None:
     """Preserve legacy attachment IDs/data while allowing one file many links."""
     unique_file = False
