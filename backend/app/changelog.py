@@ -7,6 +7,17 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.14.3", "date": "2026-10-14", "status": "candidate",
+        "items": [
+            {"summary": "我的信息新增个人月结游戏段位", "feature": "monthly_ranks",
+             "detail": "荣耀王者至启航新星十档游戏段位，复用徽章和四季背景，由本人主动查看，不展示团队百分位或名次。采用同分中位算法，同分同档，比较人数不足10人或全员同分不生成段位。沿用月结计分人群、封存与重开规则；提供简洁说明，明确仅供个人积分参考，不代表综合工作表现，不新增奖惩或绩效依据。勋章入口默认显示，由本人选择是否点击查看，结果不会自动展开。",
+             "audiences": ["CM", "TR", "TA_SUPERVISOR", "SUPERVISOR", "TA_GSM"]},
+            {"summary": "公告卡片显示当前处理步骤",
+             "detail": "公告按实际要求显示待阅读、待培训、待确认、待签字或已完成；验码后更新签字步骤，历史、暂缓及撤下状态单独提示，沿用现有阅读与签收操作。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.14.2", "date": "2026-10-14", "status": "candidate",
         "items": [
             {"summary": "我的信息新增个人月结游戏段位", "feature": "monthly_ranks",

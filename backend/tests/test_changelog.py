@@ -31,9 +31,11 @@ def test_latest_changelog_version_matches_app_version() -> None:
     assert STATIC_CACHE_VERSION == APP_VERSION
 
 
-def test_unreleased_rank_note_requires_explicit_feature_enable(monkeypatch) -> None:
+def test_rank_note_follows_default_available_and_explicit_disabled_feature(monkeypatch) -> None:
     item = next(item for item in RELEASES[0]["items"] if item.get("feature") == "monthly_ranks")
     monkeypatch.delenv("RECOGNITION_ENABLE_MONTHLY_RANKS", raising=False)
+    assert item_visible(item, "CM", set())
+    monkeypatch.setenv("RECOGNITION_ENABLE_MONTHLY_RANKS", "0")
     assert not item_visible(item, "CM", set())
     monkeypatch.setenv("RECOGNITION_ENABLE_MONTHLY_RANKS", "1")
     assert item_visible(item, "CM", set())
@@ -100,8 +102,7 @@ def test_changelog_filters_by_role() -> None:
     assert "POC" in gsm_text
     assert cm[0]["current"] is True
     assert gsm[0]["current"] is True
-    assert cm[0]["items"][0]["summary"] == "公告卡片显示当前处理步骤"
-    assert "我的信息新增个人月结游戏段位" not in cm_text
+    assert cm[0]["items"][0]["summary"] == "我的信息新增个人月结游戏段位"
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
     assert gsm[0]["items"][0]["summary"] == "公告卡片显示当前处理步骤"
@@ -158,7 +159,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["公告卡片显示当前处理步骤"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["我的信息新增个人月结游戏段位", "公告卡片显示当前处理步骤"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
@@ -181,7 +182,7 @@ def test_current_release_items_match_roles_and_permissions() -> None:
     assert item_visible(loa, "CM", set()) and item_visible(navigation, "HR_CIRCLE", set())
     assert item_visible(upgrade, "GSM", set()) and not item_visible(upgrade, "CM", set())
     assert item_visible(rotation_fix, "TR", set()) and not item_visible(rotation_fix, "CM", set())
-    assert not item_visible(RELEASES[0]["items"][0], "CM", set())
+    assert item_visible(RELEASES[0]["items"][0], "CM", set())
     mobile_rotation, review_dates = next(r for r in RELEASES if r["version"] == "2026.10.11.2")["items"]
     for role in ('TR', 'GSM'):
         assert item_visible(mobile_rotation, role, set())

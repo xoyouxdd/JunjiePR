@@ -538,10 +538,14 @@ def test_decimal_ties_negative_scores_and_skewed_distribution_remain_exact(syste
                          bisect_right(values, value) - bisect_left(values, value)) for value in values] == [30] * 8 + [80, 90]
 
 
-def test_unreleased_switch_disables_result_access_and_dashboard_delivery(system, monkeypatch):
+def test_entry_is_available_by_default_but_results_require_personal_request(system, monkeypatch):
     _, client, _, _, make, switch, _, _ = system
     switch(make("switch-person", points=12))
     monkeypatch.delenv("RECOGNITION_ENABLE_MONTHLY_RANKS", raising=False)
+    data = client.get("/api/dashboard", params={"month": MONTH}).json()
+    assert data["monthly_rank_available"] is True and "month_rank" not in data
+    assert client.get("/api/self-month-rank", params={"month": MONTH}).status_code == 200
+    monkeypatch.setenv("RECOGNITION_ENABLE_MONTHLY_RANKS", "0")
     assert client.get("/api/self-month-rank", params={"month": MONTH}).status_code == 404
     data = client.get("/api/dashboard", params={"month": MONTH}).json()
     assert data["monthly_rank_available"] is False and "month_rank" not in data

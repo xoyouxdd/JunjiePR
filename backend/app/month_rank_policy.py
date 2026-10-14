@@ -6,4 +6,4 @@ MIN_RANK_COHORT = 10
 
 
 def monthly_ranks_enabled() -> bool:
-    return os.environ.get("RECOGNITION_ENABLE_MONTHLY_RANKS", "").strip() == "1"
+    return os.environ.get("RECOGNITION_ENABLE_MONTHLY_RANKS", "1").strip() == "1"
