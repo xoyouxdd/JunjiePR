@@ -7,6 +7,23 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.16.3", "date": "2026-10-16", "status": "candidate",
+        "items": [
+            {"summary": "系统更名为FZ团队工作台",
+             "detail": "登录页、浏览器标题与公告PDF署名统一为FZ团队工作台，手机顶部及桌面简称使用FZ工作台，沿用现有Logo和首页业务布局。PR积分、账号、权限及月结规则保持原样；已添加的手机桌面入口可能需要移除后重新添加才能更新名称。",
+             "audiences": ["all"]},
+            {"summary": "认可材料与复核校验完善",
+             "detail": "新上传认可图片先验证完整性，无法读取的图片在提交时说明原因；复核不通过须填写原因。已有签卡、积分及月结规则保持原样。",
+             "audiences": ["all"]},
+            {"summary": "测试环境与备份路径隔离",
+             "detail": "独立测试环境显示固定标识，测试备份与健康报告限定在独立数据目录内；补齐可重复初始化的测试身份入口，禁止在正式环境启用。保留正式备份默认配置。",
+             "audiences": ["SYSTEM_ADMIN"]},
+            {"summary": "发布资源版本校验完善",
+             "detail": "登录页及首页的Logo纳入精确资源清单检查，逐项核对版本号、引用数量和模块映射；不允许遗漏、过期或额外资源引用，不改变现有业务逻辑。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.16.2", "date": "2026-10-16", "status": "candidate",
         "items": [
             {"summary": "系统更名为FZ团队工作台",

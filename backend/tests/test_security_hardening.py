@@ -319,7 +319,22 @@ def test_versions_come_from_a_single_source() -> None:
         login_page = client.get("/login").text
         app_response = client.get("/")
         app_page = app_response.text
-        assert login_page.count(f"v={STATIC_CACHE_VERSION}") == 4
+        # Both pages now render a brand image as well as the touch icon.
+        # Assert the exact resource multiset, not just a relaxed total count:
+        # missing, unversioned, stale, extra or duplicate references must fail.
+        for page, entrypoint in ((login_page, "login.js"), (app_page, "app.js")):
+            resources = re.findall(r'(?:src|href)="(static/[^\"]+)"', page)
+            expected_resources = [
+                "static/manifest.json",
+                "static/images/fzpr-icon.png",
+                "static/css/style.css",
+                "static/images/fzpr-icon.png",
+                f"static/js/{entrypoint}",
+            ]
+            assert sorted(resources) == sorted(
+                f"{path}?v={STATIC_CACHE_VERSION}" for path in expected_resources
+            )
+        assert login_page.count(f"v={STATIC_CACHE_VERSION}") == 5
         importmap = re.search(r'<script\b[^>]*type="importmap"[^>]*>(.*?)</script>', app_page, re.DOTALL)
         assert importmap is not None
         imports = json.loads(importmap.group(1))["imports"]
@@ -327,7 +342,7 @@ def test_versions_come_from_a_single_source() -> None:
         reachable = {"./" + path.relative_to(app_root).as_posix() for path in frontend_sources() if path != STATIC_ROOT.resolve() / "js" / "app.js"}
         assert set(imports) == reachable
         assert all(target == f"{specifier}?v={STATIC_CACHE_VERSION}" for specifier, target in imports.items())
-        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 4 + len(imports)
+        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 5 + len(imports)
         assert f'static/css/style.css?v={STATIC_CACHE_VERSION}' in app_page
         assert f'src="static/js/app.js?v={STATIC_CACHE_VERSION}"' in app_page
         assert 'type="module"' in app_page

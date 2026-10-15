@@ -34,6 +34,8 @@
 
 改静态资源时把 `APP_VERSION` 进一版（`STATIC_CACHE_VERSION` 跟它走），否则浏览器可能继续用旧 CSS/JS。用户可见的功能变更还要写入 `backend/app/changelog.py`，规则见 [changelog.md](changelog.md)。
 
+登录页和首页的资源版本合同同时检查精确引用清单与总数，包括 manifest、桌面图标、品牌 Logo、样式和入口脚本；桌面图标与品牌 Logo 虽使用同一文件，仍按两次引用校验。首页模块映射另行逐项校验，缺失、过期、无版本或额外引用均不得通过。2026.10.16.3 同步新增 Logo 后的合同，不降低资源版本或 CSP 校验要求。
+
 解包核验时至少确认 `backend/app/main.py`、`release-manifest.json` 和 `RELEASE-NOTES.md` 存在，并逐项复算清单中的 SHA-256。清单 commit 必须等于本次批准发布的提交。
 
 部署器和离线环境回滚 helper 与 PowerShell 合同脚本一并进入明确白名单及哈希清单；缺任一部署依赖即拒绝出包。只遍历白名单源码根目录，并在递归前拒绝符号链接、junction 和 reparse point，避免将包外文件收入发布包。
