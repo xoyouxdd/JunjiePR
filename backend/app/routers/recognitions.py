@@ -711,6 +711,10 @@ def apply_recognition_review(db: Session, row: RecognitionRecord, payload: dict,
     if action not in allowed_actions.get(before, set()):
         raise HTTPException(409, "记录状态已经变化，请刷新后按当前状态操作")
     review_note = str(payload.get("note") or "").strip() or None
+    if action == "reject" and not review_note:
+        raise HTTPException(400, "请填写不通过原因")
+    if review_note and len(review_note) > 1000:
+        raise HTTPException(400, "复核说明不能超过1000字")
     claimed = db.execute(
         update(RecognitionRecord)
         .where(RecognitionRecord.id == row.id, RecognitionRecord.status == before)

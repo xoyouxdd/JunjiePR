@@ -115,9 +115,17 @@ def test_models_and_live_scope_service_do_not_depend_on_database_facade() -> Non
             assert "app.v2_services" not in imports
     imports = ast.parse((APP / "database/connection.py").read_text(encoding="utf-8"))
     assert all(
-        not (node.module or "").startswith("app.")
+        not (node.module or "").startswith("app.") or node.module == "app.runtime_environment"
         for node in ast.walk(imports) if isinstance(node, ast.ImportFrom)
     )
+    # The shared path leaf must remain stdlib-only, not a route/service/ORM backdoor.
+    leaf = ast.parse((APP / "runtime_environment.py").read_text(encoding="utf-8"))
+    import sys
+    dependencies = {node.module.split('.')[0] for node in ast.walk(leaf)
+                    if isinstance(node, ast.ImportFrom) and node.module}
+    dependencies.update(alias.name.split('.')[0] for node in ast.walk(leaf)
+                        if isinstance(node, ast.Import) for alias in node.names)
+    assert dependencies <= sys.stdlib_module_names
 
 
 def test_explicit_facade_exports_reference_their_current_owners() -> None:

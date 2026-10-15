@@ -16,6 +16,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app.operations_health import BACKUP_HEALTH_STATUS_PATH
+from app.runtime_environment import validate_runtime_paths
 from app.v2_database import DB_PATH, SessionLocal
 from app.v2_models import AuditLog, Employee, SystemJobRun
 from app.v2_services import write_audit
@@ -102,6 +103,7 @@ def _quick_check(connection: sqlite3.Connection) -> None:
 def _create_backup() -> str:
     """Create one verified snapshot in the configured backup directory; never prune old files."""
     source_path = Path(DB_PATH).resolve()
+    validate_runtime_paths(data_dir=source_path.parent, health_file=BACKUP_HEALTH_STATUS_PATH)
     backup_root = BACKUP_HEALTH_STATUS_PATH.parent.resolve()
     if not source_path.is_file():
         raise FileNotFoundError("Source database is missing")

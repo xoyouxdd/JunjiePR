@@ -17,6 +17,7 @@
 - `Reset-NeverLoggedInInitialPasswords.py`：一次性恢复从未登录过的测试账号的初始密码（七位工号后四位）。只处理启用中、在职、且没有成功登录记录的账号，必须显式 `--apply`，不输出密码、姓名、工号或哈希。
 - `Start-LocalJunjiePR.ps1`：本地开发启动脚本，使用 `backend/.venv`。本地运行说明见 [../docs/getting-started.md](../docs/getting-started.md)。
 - `seed_level_accounts.py`：初始化本地演示登录账号，仅供本地使用，不进入正式包，不要在生产运行。
+- `seed_isolated_test_accounts.py`：在全新独立目录覆盖11角色及有效期代理；要求显式测试环境和口令变量，不重置已有夹具、不输出口令。优先使用该入口，见[本地增量优化](../docs/local-hardening-20261016.md)。
 - `Publish-RecognitionRelease.ps1`：本机一键发布入口，固定连接当前生产服务器，从干净提交跑测试、打包、上传、预检、部署和独立读回。专用私钥存于当前用户 `.ssh`，不在仓库。
 - `server_release.py`：当前布局的服务器端部署事务，保持原 CLI；核对完整包、运行源码及 helper 的哈希配对，取得独占发布锁，备份、停任务、切换、健康检查并处理回滚。仅在人工明确授权后由发布入口调用。
 - `deployment_runtime.py`：离线保存、恢复并验证 `.venv` 文件集合；依赖变化时安装前快照，pip 部分失败也可恢复。环境保持原路径，回滚不依赖联网安装；损坏快照或恢复失败会明确拒绝成功。快照和事务记录位于应用根目录 `.deploy-rollbacks/<stamp>/`。

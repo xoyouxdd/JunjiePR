@@ -10,6 +10,8 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 }
 
 $env:RECOGNITION_V2_DATA_DIR = $dataDir
+$env:RECOGNITION_ENVIRONMENT = "local"
+$env:RECOGNITION_BACKUP_HEALTH_STATUS_FILE = Join-Path $dataDir "backups\backup-health-status.json"
 
 $listener = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue
 if ($listener) {

@@ -5,6 +5,7 @@ import asyncio
 from datetime import date, timedelta
 from decimal import Decimal
 from io import BytesIO
+from PIL import Image
 from pathlib import Path
 import shutil
 from uuid import uuid4
@@ -221,7 +222,9 @@ def test_audit_routes_employee_circle_and_leaves_commit_to_caller(db):
 
 
 def test_attachments_keep_type_detection_stream_limit_and_explicit_storage(db, storage_dir):
-    png = b"\x89PNG\r\n\x1a\n" + b"example-payload"
+    stream = BytesIO()
+    Image.new("RGB", (4, 4), "white").save(stream, format="PNG")
+    png = stream.getvalue()
     image = asyncio.run(attachments.save_image_upload(
         db, UploadFile(BytesIO(png), filename="misnamed.jpg"), 1,
         file_dir=storage_dir, persist=False,

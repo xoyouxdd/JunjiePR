@@ -216,3 +216,37 @@ def test_concurrent_retries_and_independent_withdrawal():
             assert other.status == "pending"
             file_id = other.attachments[0].file_id
         assert client.get(f"/api/files/{file_id}?preview=true").status_code == 200
+
+
+def test_rejection_reason_is_validated_before_any_state_change():
+    with TestClient(app) as client:
+        login(client, "CMTEST01")
+        response = send(client, [entry(client, "校验原因", "EFFICIENCY")], "review-reason-validation")
+        assert response.status_code == 200, response.text
+        record_id = response.json()["records"][0]["id"]
+        login(client, "TATEST01")
+        for note in ("", "  \n\t", "原" * 1001):
+            result = client.post(f"/api/reviews/{record_id}", json={"action": "reject", "note": note})
+            assert result.status_code == 400, result.text
+            with SessionLocal() as db:
+                assert db.get(RecognitionRecord, record_id).status == "pending"
+        result = client.post(f"/api/reviews/{record_id}", json={"action": "reject", "note": "  图片与内容不符  "})
+        assert result.status_code == 200, result.text
+        with SessionLocal() as db:
+            row = db.get(RecognitionRecord, record_id)
+            assert row.status == "rejected" and row.review_note == "图片与内容不符"
+
+
+def test_forged_picture_rejected_before_creating_business_rows_or_files():
+    with TestClient(app) as client:
+        login(client, "CMTEST01")
+        item = entry(client, "损坏材料", "EFFICIENCY")
+        before_files = set(FILE_DIR.iterdir())
+        with SessionLocal() as db:
+            before = db.query(RecognitionRecord).count(), db.query(StoredFile).count()
+        result = client.post("/api/recognitions/batch", data={"entries": json.dumps([item]), "idempotency_key": "forged-picture"},
+            files={"image": ("photo.png", b"\x89PNG\r\n\x1a\nnot-a-real-picture", "image/png")})
+        assert result.status_code == 400, result.text
+        assert set(FILE_DIR.iterdir()) == before_files
+        with SessionLocal() as db:
+            assert (db.query(RecognitionRecord).count(), db.query(StoredFile).count()) == before

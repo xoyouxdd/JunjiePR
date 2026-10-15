@@ -35,6 +35,8 @@ def seed_test_accounts(db) -> None:
     # Predictable test identities are allowed only in explicitly isolated runs.
     if os.environ.get("RECOGNITION_ENABLE_TEST_ACCOUNTS", "").strip() != "1":
         return
+    from app.runtime_environment import require_test_initialization
+    require_test_initialization()
     test_password = os.environ.get("RECOGNITION_TEST_DEFAULT_PASSWORD", "").strip()
     test_admin_password = os.environ.get("RECOGNITION_TEST_ADMIN_PASSWORD", "").strip()
     if not test_password or not test_admin_password:

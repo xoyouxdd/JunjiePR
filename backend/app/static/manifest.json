@@ -1,12 +1,12 @@
 {
-  "name": "FZPR登记",
-  "short_name": "FZPR登记",
+  "name": "FZ团队工作台",
+  "short_name": "FZ工作台",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f6f7f9",
   "theme_color": "#102033",
-  "description": "FZPR登记：认可签卡绩效登记与查询系统。",
+  "description": "FZ团队工作台：团队协作、日常运营与认可成长。",
   "icons": [
     {
       "src": "images/fzpr-icon-192.png",

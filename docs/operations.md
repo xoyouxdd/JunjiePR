@@ -1,5 +1,7 @@
 # 运维
 
+本地/测试路径隔离与恢复回归见[本地增量优化](local-hardening-20261016.md)。独立数据目录默认使用本目录下的备份及健康报告，禁止指向外部；正式默认备份路径保持不变。正式若使用自定义数据目录，需明确配置`RECOGNITION_ENVIRONMENT=production`。手动快照不改计划任务的健康结果。
+
 备份、恢复演练和健康检查脚本在 `scripts/`。命令、正式路径和计划任务以脚本旁手册为准：
 
 **[scripts/README.md](../scripts/README.md)**

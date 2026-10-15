@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 import base64
 import hashlib
 import re
+from html import escape
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -22,13 +23,14 @@ from app.rotation.service import start_rotation_ticker
 from app.announcement_worker import start_worker as start_announcement_worker, stop_worker as stop_announcement_worker
 from app.v2_database import SessionLocal
 from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
+from app.runtime_environment import environment_kind, environment_label, validate_runtime_paths
 
 # Starlette 0.47+ streams file parts to a spooled temp file. The 1MB
 # max_part_size only caps non-file form fields; 100MB materials are files.
 # Starlette 0.49.1+ bounds FileResponse/StaticFiles Range parsing (GHSA-7f5h-v6xp-fcq8).
 
 
-app = FastAPI(title="认可签卡绩效登记系统 V2", version=APP_VERSION)
+app = FastAPI(title="FZ团队工作台", version=APP_VERSION)
 
 _STATIC_PAGE_CACHE: dict[str, tuple[float, bytes]] = {}
 
@@ -47,6 +49,14 @@ def render_static_page(path) -> HTMLResponse:
         _STATIC_PAGE_CACHE[str(path)] = (stat.st_mtime, html)
     else:
         html = cached[1]
+    # Keep the shared file cache environment-neutral; no scripts/inline styles needed.
+    label = environment_label()
+    if label:
+        banner = ('<aside class="environment-banner" role="note" aria-label="运行环境">'
+                  + escape(label) + ' · 模拟操作，请勿用于正式业务</aside>').encode("utf-8")
+        html = re.sub(rb'<body\b([^>]*)>', lambda match: b'<body' + match[1]
+                      + b' data-runtime-environment="' + environment_kind().encode("ascii") + b'">' + banner,
+                      html, count=1)
     headers = {"Cache-Control": "no-cache, no-store, must-revalidate"}
     import_map = re.search(rb'<script\s+type="importmap"\s*>(.*?)</script\s*>', html, re.DOTALL)
     if import_map:
@@ -198,6 +208,7 @@ async def reject_cross_site_state_changes(request: Request, call_next):
 
 @app.on_event("startup")
 def startup() -> None:
+    validate_runtime_paths()
     init_db()
     start_deduction_material_worker()
     start_rotation_ticker()
@@ -242,4 +253,4 @@ def rotation_screen_page():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": APP_VERSION}
+    return {"ok": True, "version": APP_VERSION, "environment": environment_kind()}

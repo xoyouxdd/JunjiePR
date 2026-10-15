@@ -29,17 +29,16 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert 'enterkeyhint="next"' in login
     assert 'enterkeyhint="go"' in login
     assert 'data-password-toggle' in login
-    assert 'align-items: start' not in css[css.index('.login-body {\n    min-height: 100svh'):css.index('.login-panel { width: 100%; padding: 24px 20px')]
     assert '.login-panel input:focus' in css
     assert 'box-shadow: 0 0 0 3px rgba(18,103,216,.15)' in css
     assert '.login-panel .primary:active' in css
     assert '.login-panel label:focus-within' in css
     assert '#loginMsg.message.error' in css
-    # The mobile dark band belongs to the hero, so the subtitle never straddles the colour edge.
-    assert 'clip-path: inset(-100vmax -100vmax 0 -100vmax)' in css
+    # The dark hero and light form stay within one shell at every breakpoint.
+    assert 'class="brand-mark" src="static/images/fzpr-icon.png?v=__STATIC_CACHE_VERSION__"' in login
+    assert 'background: var(--surface-dark); color: var(--text-on-dark)' in css
     assert 'linear-gradient(to bottom, var(--surface-dark) 0 38%' not in css
     assert '@media (min-width: 761px)' in css
-    assert '.login-shell .login-panel' in css
     assert 'junjiepr.login.employee_no' in login_js
     assert "passwordInput.focus()" in login_js
     assert "panel.classList.add('is-error')" in login_js

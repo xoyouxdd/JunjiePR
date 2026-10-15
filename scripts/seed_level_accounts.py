@@ -1,20 +1,7 @@
-"""初始化本地演示登录账号（不含最高管理员）。
+"""Legacy local demo initializer. Prefer seed_isolated_test_accounts.py.
 
-- 账号 1 / 密码 1111 → CM（一线员工，热力追踪）
-- 账号 2 / 密码 2222 → TA主管（热力追踪，任演示组组长，账号 1 是其组员）
-- 账号 3 / 密码 3333 → GSM（所属热力追踪，管辖三个圈；默认发布本圈公告）
-- 账号 4 / 密码 4444 → AM（管辖三个景点圈）
-- 账号 5 / 密码 5555 → HR管理员
-- 账号 6 / 密码 6666 → 热力追踪专属HR（景点圈HR）
-
-说明：
-- 系统密码策略要求至少 4 位，故密码用重复数字而不是单个数字。
-- 姓名刻意避开「测试/TEST」字样，否则每次服务启动时
-  disable_test_accounts 会把这些账号自动禁用。
-- 脚本可重复运行：已存在的员工只重置密码、解除锁定并保持启用，
-  不会覆盖其现有角色（角色以 HR 实际调整为准）。
-
-用法：python scripts/seed_level_accounts.py（在项目根目录或任意位置均可）
+Requires an isolated data directory and explicit test-account opt-in.
+Existing demo credentials are reset by this legacy tool; passwords are never printed.
 """
 from __future__ import annotations
 
@@ -51,6 +38,8 @@ DEMO_GROUP_NAME = "演示组-热力追踪"
 
 
 def main() -> None:
+    from app.runtime_environment import require_test_initialization
+    require_test_initialization()
     init_db()
     db = SessionLocal()
     try:
@@ -172,8 +161,8 @@ def main() -> None:
             db.add(GroupMembership(group_id=group.id, employee_id=member.id, starts_on=today, status="active"))
 
         db.commit()
-        for employee_no, name, role_code, password in LEVEL_ACCOUNTS:
-            print(f"账号 {employee_no} / 密码 {password} → {name}（角色 {role_code}）")
+        for employee_no, name, role_code, _ in LEVEL_ACCOUNTS:
+            print(f"账号 {employee_no} → {name}（角色 {role_code}）；口令不输出")
     finally:
         db.close()
 

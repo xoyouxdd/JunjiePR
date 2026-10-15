@@ -6,8 +6,12 @@ own transaction completion; failed uploads and flushes remove partial files.
 from __future__ import annotations
 
 import hashlib
+import warnings
 from pathlib import Path
 from uuid import uuid4
+from PIL import Image, UnidentifiedImageError
+from anyio import CapacityLimiter, to_thread
+from anyio.lowlevel import RunVar
 
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -22,6 +26,46 @@ BUSINESS_ATTACHMENT_MAX_BYTES = 100 * 1024 * 1024
 
 
 UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Follow Pillow's normal safety threshold; do not reject ordinary 48MP photos.
+# A byte-size limit alone cannot bound decompressed image resources.
+BUSINESS_IMAGE_MAX_PIXELS = 89_478_485
+_decode_limiter = RunVar[CapacityLimiter]("recognition_image_decode_limiter")
+
+
+async def _validate_image_in_worker(path: Path) -> tuple[str, str]:
+    # Per-event-loop limiter avoids sharing locks between TestClient lifespans.
+    # Bound decoding before reserving a thread, keeping other requests responsive.
+    try:
+        limiter = _decode_limiter.get()
+    except LookupError:
+        limiter = CapacityLimiter(2)
+        _decode_limiter.set(limiter)
+    return await to_thread.run_sync(validate_image_file, path, limiter=limiter)
+
+
+def validate_image_file(path: Path) -> tuple[str, str]:
+    """Verify structure and decode the preview frame before persisting a record."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(path) as image:
+                detected = {"JPEG": (".jpg", "image/jpeg"), "PNG": (".png", "image/png"),
+                            "WEBP": (".webp", "image/webp")}.get(image.format)
+                if not detected:
+                    raise HTTPException(400, "认可图片格式无效，仅支持JPG、PNG、WebP")
+                if image.width * image.height > BUSINESS_IMAGE_MAX_PIXELS:
+                    raise HTTPException(400, "认可图片像素过大，请压缩图片尺寸后重新选择")
+                image.verify()
+            with Image.open(path) as image:
+                image.load()
+            return detected
+    except HTTPException:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise HTTPException(400, "认可图片像素过大，请压缩后重新选择") from exc
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise HTTPException(400, "认可图片已损坏或无法读取，请重新选择JPG、PNG、WebP图片") from exc
 
 
 async def _stream_upload_to_path(upload: UploadFile, path: Path, *, max_bytes: int, empty_message: str, label: str) -> tuple[int, str]:
@@ -40,7 +84,7 @@ async def _stream_upload_to_path(upload: UploadFile, path: Path, *, max_bytes: i
                     raise HTTPException(400, f"{label}不能超过{max_bytes // 1024 // 1024}MB")
                 digest.update(chunk)
                 target.write(chunk)
-    except Exception:
+    except BaseException:
         path.unlink(missing_ok=True)
         raise
     if not total:
@@ -89,15 +133,18 @@ async def save_image_upload(db: Session, upload: UploadFile, uploader_id: int, *
     staging_key = f"{uuid4().hex}.upload"
     staging_path = file_dir / staging_key
     file_size, digest = await _stream_upload_to_path(upload, staging_path, max_bytes=max_bytes, empty_message="认可图片不能为空", label="认可图片")
-    with staging_path.open("rb") as source:
-        detected = detect_image_type(source.read(16))
-    if not detected:
+    try:
+        with staging_path.open("rb") as source:
+            if not detect_image_type(source.read(16)):
+                raise HTTPException(400, "认可图片格式无效，仅支持JPG、PNG、WebP")
+        detected = await _validate_image_in_worker(staging_path)
+        extension, mime_type = detected
+        storage_key = f"{uuid4().hex}{extension}"
+        path = file_dir / storage_key
+        staging_path.replace(path)
+    except BaseException:
         staging_path.unlink(missing_ok=True)
-        raise HTTPException(400, "认可图片格式无效，仅支持JPG、PNG、WebP")
-    extension, mime_type = detected
-    storage_key = f"{uuid4().hex}{extension}"
-    path = file_dir / storage_key
-    staging_path.replace(path)
+        raise
     record = StoredFile(
         storage_key=storage_key,
         original_filename=upload.filename or storage_key,

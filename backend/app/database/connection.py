@@ -1,15 +1,15 @@
 """SQLite connection, model base and configured paths; importing never creates files."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
+from app.runtime_environment import data_directory, validate_runtime_paths
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-DATA_DIR = Path(os.environ.get("RECOGNITION_V2_DATA_DIR", str(BASE_DIR / "data_v2"))).resolve()
+DATA_DIR = data_directory()
 FILE_DIR = DATA_DIR / "files"
 EXPORT_DIR = DATA_DIR / "exports"
 BACKUP_DIR = DATA_DIR / "backups"
@@ -35,6 +35,7 @@ def sqlite_pragmas(dbapi_connection, _connection_record):
 
 
 def ensure_directories() -> None:
+    validate_runtime_paths(data_dir=DATA_DIR)
     for path in (DATA_DIR, FILE_DIR, EXPORT_DIR, BACKUP_DIR):
         path.mkdir(parents=True, exist_ok=True)
 

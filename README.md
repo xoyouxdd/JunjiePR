@@ -1,8 +1,10 @@
-# JunjiePR
+# FZ团队工作台
 
-认可签卡绩效登记系统，业务代码位于 `backend/`（FastAPI + SQLite + 原生 JS）。
+FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告培训、轮岗及团队管理；业务代码位于 `backend/`（FastAPI + SQLite + 原生 JS）。仓库与内部项目标识继续使用 JunjiePR。
 
 正式入口：`https://124.220.229.9:28176/`
+
+完整展示名称为「FZ团队工作台」，手机顶部和手机桌面简称为「FZ工作台」，沿用现有 FZ Logo。PR 积分仍为业务名称；数据库、接口、运维目录及历史更新记录不因品牌更名而调整。已经添加的手机桌面入口可能需要移除后重新添加，名称更新不保证自动同步。
 
 ## 文档
 
@@ -20,6 +22,7 @@
 | [docs/announcements.md](docs/announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
 | [docs/announcement-image-generation.md](docs/announcement-image-generation.md) | 公告模板制图、照片上传和素材访问 |
 | [docs/getting-started.md](docs/getting-started.md) | 本地运行、测试、数据目录 |
+| [docs/local-hardening-20261016.md](docs/local-hardening-20261016.md) | 路径隔离、提交校验及完整角色测试夹具（未上线） |
 | [docs/release.md](docs/release.md) | 发布打包与版本号 |
 | [docs/deployment.md](docs/deployment.md) | 生产部署：本地构建与人工授权上线 |
 | [docs/operations.md](docs/operations.md) | 备份、恢复演练、健康检查 |

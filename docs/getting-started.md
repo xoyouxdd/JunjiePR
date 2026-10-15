@@ -58,6 +58,8 @@ Pop-Location
 
 不要把数据库、附件、`.env`、`.venv`、日志提交进 Git。
 
+环境检查及完整身份夹具见[本地增量优化](local-hardening-20261016.md)。`RECOGNITION_ENVIRONMENT`支持`production/local/test`；非默认数据目录未声明环境时按本地处理，备份报告和手动备份必须位于独立目录内。正式自定义数据目录须明确声明`production`。本地启动脚本已设置本地环境与报告路径，不改正式计划任务。
+
 启用测试账号时必须同时设置：
 
 - `RECOGNITION_ENABLE_TEST_ACCOUNTS=1`

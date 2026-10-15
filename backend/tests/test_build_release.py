@@ -114,6 +114,7 @@ def test_release_whitelist_excludes_tests_and_docs() -> None:
     assert "backend/requirements-dev.txt" not in names
     assert not any("requirements-dev" in name for name in names)
     assert "scripts/seed_level_accounts.py" not in names
+    assert "scripts/seed_isolated_test_accounts.py" not in names
     assert not any(name.startswith("backend/tests/") for name in names)
     assert not any(name.startswith("scripts/tests/") for name in names)
     assert not any(name.startswith("docs/") for name in names)

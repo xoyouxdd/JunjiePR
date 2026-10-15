@@ -17,6 +17,7 @@
 | [announcements.md](announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
 | [announcement-image-generation.md](announcement-image-generation.md) | 公告模板制图、个人待用素材、图片上传和访问权限 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |
+| [local-hardening-20261016.md](local-hardening-20261016.md) | 路径隔离、提交校验及完整角色测试夹具（未上线） |
 | [release.md](release.md) | 发布打包 |
 | [deployment.md](deployment.md) | 生产部署：本地构建与人工授权上线 |
 | [operations.md](operations.md) | 备份与恢复入口 |

@@ -214,7 +214,7 @@ def pdf(data, user):
     css = "body{font-family:sans-serif;color:#173f52;font-size:10pt} h1{font-size:22pt;line-height:1.35;margin:12px 0} h2{font-size:14pt} p{line-height:1.55;margin:10px 0} table{border-collapse:collapse;width:100%;font-size:10pt} th{text-align:left;background:#173f52;color:white;padding:9px} td{border-bottom:1px solid #dce6ea;padding:9px;vertical-align:top;overflow-wrap:anywhere} .muted{color:#526779} .stats{font-size:15pt;background:#edf4f7;padding:18px;line-height:1.7}"
     def page(title):
         p = document.new_page(width=595, height=842)
-        p.insert_htmlbox(fitz.Rect(40,30,355,65), f"<b>FZPR / {escape(title)}</b>", css=css)
+        p.insert_htmlbox(fitz.Rect(40,30,355,65), f"<b>FZ团队工作台 / {escape(title)}</b>", css=css)
         p.insert_htmlbox(fitz.Rect(355,30,555,65), f"<div style='text-align:right'>{escape(label)}</div>", css=css)
         p.draw_line((40,75),(555,75),color=(0.1,0.3,0.35),width=1)
         return p

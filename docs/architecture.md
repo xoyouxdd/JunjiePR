@@ -4,6 +4,8 @@
 
 `backend/` 是唯一业务系统：
 
+品牌完整名称为「FZ团队工作台」，手机顶部、`apple-mobile-web-app-title` 与 manifest 的 `short_name` 使用「FZ工作台」；浏览器标题、manifest 的 `name`、登录页及公告 PDF 署名使用完整名称。登录页与主页面复用已有 FZ Logo，首页业务布局与 PR 计分名称保持原样。内部标识 JunjiePR、接口、存储和历史记录不随展示名称变更。
+
 - 接口：FastAPI + SQLAlchemy。路由按业务域分在 `backend/app/routers/` 下（`auth`、`accounts`、`employees`、`organization`、`hr_admin`、`deductions`、`recognitions`、`sick_leaves`、`sick_leave_import`、`statistics`、`governance`、`files`、`rotation`、`announcements`、`announcement_media`）。统计路由负责参数、权限、缓存及响应，查询和明细装配交给应用服务；`v2.py` 只挂载各域。`_shared.py` 保留显式兼容导出，公共实现由各职责模块拥有
 - 数据：SQLite（默认 `backend/data_v2/`）+ 独立附件目录；表、键、索引见 [sqlite-schema.md](sqlite-schema.md)
 - 数据库职责：`database/connection.py` 唯一持有路径、Base、engine 和 SessionLocal；模型直接依赖该基础层。`database/bootstrap.py` 串行执行建表、一次性迁移及每次启动保障；种子、账号保障、分值视图与历史迁移各有所属模块。`v2_database.py` 保留显式兼容导出

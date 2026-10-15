@@ -2,20 +2,17 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
+from app.runtime_environment import backup_health_path, validate_runtime_paths
 
-BACKUP_HEALTH_STATUS_PATH = Path(
-    os.environ.get(
-        "RECOGNITION_BACKUP_HEALTH_STATUS_FILE",
-        r"C:\Server\zhaojunjie\backups\recognition-card-system-sqlite\backup-health-status.json",
-    )
-)
+
+BACKUP_HEALTH_STATUS_PATH = backup_health_path()
 
 
 def backup_health_payload() -> dict:
     """Read the fixed server health report without exposing paths or webhook data."""
+    validate_runtime_paths(health_file=BACKUP_HEALTH_STATUS_PATH)
     default = {
         "available": False,
         "ok": False,

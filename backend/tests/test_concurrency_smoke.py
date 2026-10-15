@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from io import BytesIO
+from PIL import Image
 import os
 from pathlib import Path
 import tempfile
@@ -63,6 +65,12 @@ def recognition_form(client: TestClient) -> dict:
     }
 
 
+def png_bytes() -> bytes:
+    stream = BytesIO()
+    Image.new("RGB", (4, 4), "white").save(stream, format="PNG")
+    return stream.getvalue()
+
+
 def create_pending_self_recognition() -> int:
     with TestClient(app) as client:
         login(client, "CMTEST01")
@@ -84,7 +92,7 @@ def create_pending_self_recognition() -> int:
                 "same_day_duplicate_confirmed": "true",
                 "idempotency_key": "concurrency-review-source-001",
             },
-            files={"image": ("review.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDAT\x08\xd7c\xf8\xff\xff?\x00\x05\xfe\x02\xfe\xa7\xf9\x80\x8f\x00\x00\x00\x00IEND\xaeB`\x82", "image/png")},
+            files={"image": ("review.png", png_bytes(), "image/png")},
         )
         assert response.status_code == 200, response.text
         assert response.json()["record"]["status"] == "pending"
