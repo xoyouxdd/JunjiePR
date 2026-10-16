@@ -49,7 +49,17 @@ def test_render_navigation_cancels_stale_read_requests_without_recursive_redraw(
     assert "let renderAbortController=null;" in script
     assert "renderAbortController?.abort();" in script
     assert "renderAbortController=controller;" in script
-    assert "requestOptions.signal=getViewSignal()" in script
+    # Reads now compose page cancellation with their own timeout controller.
+    # Check the complete forwarding and cleanup chain rather than the old
+    # direct assignment (writes must not inherit navigation cancellation).
+    assert "const reading=!requestOptions.method||requestOptions.method.toUpperCase()==='GET';" in script
+    assert "const parentSignal=requestOptions.signal||(reading?getViewSignal():null);" in script
+    assert "const controller=reading?new AbortController():null;" in script
+    assert "const abort=()=>controller?.abort();" in script
+    assert "if(parentSignal?.aborted)controller.abort();" in script
+    assert "parentSignal?.addEventListener('abort',abort,{once:true});requestOptions.signal=controller.signal;" in script
+    assert "const timer=reading?setTimeout(()=>{timedOut=true;controller.abort();},30000):null;" in script
+    assert "if(timer!==null)clearTimeout(timer);if(reading)parentSignal?.removeEventListener('abort',abort);" in script
     assert "clearPageResources();" in script
     assert "pageTimeout(poll,1500)" in script
     assert "if(generation!==renderGeneration) return render();" not in script

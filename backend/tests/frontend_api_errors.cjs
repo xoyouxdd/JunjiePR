@@ -8,7 +8,7 @@ function harness() {
   const timers = new Map();let nextTimer=0;
   let nextResponse;
   const context = vm.createContext({
-    AbortController, setTimeout:callback=>{timers.set(++nextTimer,callback);return nextTimer;},clearTimeout:id=>timers.delete(id),
+    AbortController, setTimeout:(callback,delay)=>{timers.set(++nextTimer,{callback,delay});return nextTimer;},clearTimeout:id=>timers.delete(id),
     getViewSignal: () => controller.signal,
     portalPath: value => '/recognition' + value,
     location: {href: ''},
@@ -25,7 +25,7 @@ function harness() {
   function reply(status, body) {
     nextResponse = {status, ok: status >= 200 && status < 300, text: async () => typeof body === 'string' ? body : JSON.stringify(body)};
   }
-  return {context, calls, controller, reply, response: value => {nextResponse = value;},expire:()=>[...timers.values()].forEach(callback=>callback())};
+  return {context, calls, controller, reply, response: value => {nextResponse = value;},expire:()=>[...timers.values()].forEach(timer=>timer.callback()),timers};
 }
 
 (async () => {
@@ -75,10 +75,39 @@ function harness() {
   slow.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
   const waiting=slow.context.api('/api/slow');slow.expire();
   await assert.rejects(waiting,error=>error.message.includes('等待超时'));
+  assert.equal(slow.timers.size,0,'Timeout cleanup must run after rejection');
   const cancelled=harness();
   cancelled.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
   const abandoned=cancelled.context.api('/api/old-page');cancelled.controller.abort();
   await assert.rejects(abandoned,error=>error.name==='AbortError');
+  assert.equal(cancelled.timers.size,0,'Navigation cancellation clears the read timer');
+  for(const method of ['GET','get']){
+    const custom=harness(),parent=new AbortController();
+    let added=0,removed=0;
+    const add=parent.signal.addEventListener.bind(parent.signal),remove=parent.signal.removeEventListener.bind(parent.signal);
+    parent.signal.addEventListener=(...args)=>{added++;return add(...args);};
+    parent.signal.removeEventListener=(...args)=>{removed++;return remove(...args);};
+    custom.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
+    const pending=custom.context.api('/api/custom',{method,signal:parent.signal});
+    const child=custom.calls[0].options.signal;
+    assert.notEqual(child,parent.signal,'Reads combine cancellation with a distinct timeout signal');
+    assert.deepEqual([...custom.timers.values()].map(timer=>timer.delay),[30000]);
+    custom.controller.abort();
+    assert.equal(child.aborted,false,'Explicit caller signal takes precedence over page signal');
+    parent.abort();await assert.rejects(pending,error=>error.name==='AbortError');
+    assert.equal(added,1);assert.equal(removed,1);assert.equal(custom.timers.size,0);
+  }
+  const already=harness();already.controller.abort();
+  already.response(options=>{assert.equal(options.signal.aborted,true);throw Object.assign(new Error('already aborted'),{name:'AbortError'});});
+  await assert.rejects(already.context.api('/api/already-aborted'),error=>error.name==='AbortError');
+  assert.equal(already.timers.size,0);
+  const writing=harness();let finishWrite;
+  writing.response(()=>new Promise(resolve=>{finishWrite=resolve;}));
+  const write=writing.context.api('/api/write-survives',{method:'POST'});
+  assert.equal(writing.calls[0].options.signal,undefined);assert.equal(writing.timers.size,0);
+  writing.controller.abort();writing.expire();
+  finishWrite({status:200,ok:true,text:async()=>'{"saved":true}'});
+  assert.equal((await write).saved,true,'Navigation and read timeout must not cancel a pending write');
   h.response(new Error('network dropped'));
   await assert.rejects(h.context.api('/api/write',{method:'POST'}),error=>error.message.includes('提交结果暂未确认'));
   h.reply(200,'<html>lost response</html>');
