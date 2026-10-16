@@ -10,6 +10,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [日常操作保护与任务验收](docs/usability-acceptance.md) | 填写保护、网络恢复、待办定位与真人手机验收 |
 | [docs/architecture.md](docs/architecture.md) | 目录职责与现用技术栈 |
 | [docs/sqlite-schema.md](docs/sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [docs/identity-and-supervisor.md](docs/identity-and-supervisor.md) | 本职与代理职务、主管绩效登记复核、日期展示及统计口径 |

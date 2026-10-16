@@ -113,7 +113,7 @@ async function postSurvivesNavigation() {
   assert.equal(post.options.signal, undefined, 'Writes must complete even after the page is left');
   const logs = await h.navigate('logs');
   const currentId = h.requestContext();
-  assert(h.calls[0].options.signal.aborted, 'Navigation cancels read-only requests');
+  assert.equal(logs.call.options.signal.aborted, false, 'The destination read remains active');
   h.reply(post, resetResult);
   await mutation;
   assert.equal(h.calls.length, 3, 'Old POST completion must not reload its former page');

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
+from app.month_closure import month_close_period_policy, month_close_work_queries
 from app.services.monthly_ranks import capture_month_ranks, prepare_rank_attendance
 from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
 from app.routers._shared import (
@@ -270,10 +271,26 @@ def retry_backup(background_tasks: BackgroundTasks, request: Request, db: Sessio
 
 
 @router.get("/action-center/{item_type}/details")
-def action_center_details(item_type: str, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+def action_center_details(item_type: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     """Expose only the concrete records behind a visible action-center item."""
     now = datetime.now()
     role_code = user.role.code
+    if item_type == "deduction_follow_up":
+        query = db.query(DeductionFollowUp).filter(DeductionFollowUp.status == "pending")
+        if role_code in GSM_CODES:
+            attractions = managed_attraction_ids(db, user.id)
+            employee_ids = db.query(Employee.id).filter(Employee.attraction_id.in_(attractions), Employee.is_active.is_(True))
+            query = query.filter(DeductionFollowUp.employee_id.in_(employee_ids))
+        elif role_code in LEADER_CODES:
+            query = query.filter(DeductionFollowUp.supervisor_id == user.id)
+        else:
+            raise HTTPException(403, "无权查看重复违规跟进明细")
+        total = query.count()
+        rows = query.order_by(DeductionFollowUp.created_at, DeductionFollowUp.id).offset((page - 1) * page_size).limit(page_size).all()
+        return {"type": item_type, "title": "重复违规待跟进明细", "total": total, "page": page, "page_size": page_size,
+                "items": [{"id": row.id, "employee_name": row.employee_name, "employee_no": row.employee_no,
+                           "occurred_on": row.occurred_on, "summary": row.deduction_type_name,
+                           "responsible": row.supervisor_name, "can_handle": row.supervisor_id == user.id} for row in rows]}
     if item_type == "backup_health":
         if role_code != "SYSTEM_ADMIN":
             raise HTTPException(403, "只有最高管理员可以查看备份健康明细")
@@ -365,6 +382,44 @@ def month_close_status(
     return month_closure_payload(db, month, attraction_id, user)
 
 
+@router.get("/month-closes/{month}/blockers/{item_type}")
+def month_close_blockers(month: str, item_type: str, attraction_id: int | None = None,
+                         page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100),
+                         db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    month = parse_score_month(month)
+    ensure_month_close_scope(db, user, attraction_id)
+    queries = month_close_work_queries(db, month, attraction_id)
+    if item_type not in queries or item_type == "circle_transfer":
+        raise HTTPException(404, "该月结项目暂无明细")
+    query = queries[item_type]
+    model = query.column_descriptions[0]["entity"]
+    total = query.count()
+    rows = query.order_by(model.id).offset((page - 1) * page_size).limit(page_size).all()
+    items = []
+    for row in rows:
+        if item_type == "recognition_review":
+            reviewer = db.get(Employee, row.assigned_reviewer_id) if row.assigned_reviewer_id else None
+            items.append({"id": row.id, "employee_name": row.employee_name, "employee_no": row.employee_no,
+                          "occurred_on": row.recognition_date, "summary": row.recognition_type_name,
+                          "responsible": reviewer.name if reviewer else "未分配，请联系业务负责人"})
+        elif item_type == "deduction_material":
+            items.append({"id": row.id, "employee_name": row.employee_name, "employee_no": row.employee_no,
+                          "occurred_on": row.occurred_on, "summary": row.deduction_type_name,
+                          "responsible": row.submitter_name, "status": row.status})
+        elif item_type == "deduction_upgrade":
+            employee = db.get(Employee, row.employee_id)
+            deduction = db.get(DeductionRecord, row.second_deduction_id)
+            items.append({"id": row.id, "employee_name": employee.name if employee else "员工记录已变化",
+                          "employee_no": employee.employee_no if employee else "", "occurred_on": deduction.occurred_on if deduction else "",
+                          "summary": f"{deduction.deduction_type_name} · 待升级工单" if deduction else "待升级工单", "responsible": row.reviewer_name})
+        else:
+            items.append({"id": row.id, "employee_name": row.employee_name, "employee_no": row.employee_no,
+                          "occurred_on": row.occurred_on, "summary": row.deduction_type_name,
+                          "responsible": row.supervisor_name})
+    return {"items": items, "total": total, "page": page, "page_size": page_size, "month": month,
+            "attraction_id": attraction_id, "type": item_type}
+
+
 @router.post("/month-closes/{month}/close")
 def close_month(
     month: str,
@@ -377,6 +432,9 @@ def close_month(
     raw_attraction_id = payload.get("attraction_id")
     attraction_id = int(raw_attraction_id) if raw_attraction_id not in (None, "") else None
     attraction = ensure_month_close_scope(db, user, attraction_id)
+    period_policy = month_close_period_policy(month)
+    if not period_policy["close_period_allowed"]:
+        raise HTTPException(400, detail={"code": "MONTH_CLOSE_PERIOD_NOT_ENDED", "message": period_policy["close_block_reason"], "latest_close_month": period_policy["latest_close_month"]})
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "关闭月结原因必填")

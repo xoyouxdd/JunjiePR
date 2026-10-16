@@ -9,6 +9,11 @@ import { toast } from './toast.js';
 
 const opt = (rows, value='id', label='name') => rows.map(x=>`<option value="${esc(x[value])}">${esc(typeof label==='function'?label(x):x[label])}</option>`).join('');
 
+function workItemDetailsHtml(data){
+  const page=Number(data.page||1),size=Number(data.page_size||50),total=Number(data.total||0);
+  return `<p class="field-hint">仅展示当前授权范围；处理沿用原权限与流程。</p><div class="work-card-list">${(data.items||[]).map(row=>`<article class="work-card"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><p>${esc(row.occurred_on)} · ${esc(row.summary)}</p><p>负责人：${esc(row.responsible||'请联系业务负责人')}</p>${row.can_handle?`<button type="button" class="secondary" data-follow-up-register="${Number(row.id)}">前往登记</button>`:''}</article>`).join('')||'<p class="empty">当前没有未完成事项</p>'}</div><div class="pagination"><button type="button" class="secondary" data-work-prev ${page<=1?'disabled':''}>上一页</button><span>第${page}页，共${total}项</span><button type="button" class="secondary" data-work-next ${page*size>=total?'disabled':''}>下一页</button></div>`;
+}
+
 const statusBadge = row => `<span class="badge status-chip ${row.status==='confirmed'||row.status==='issued'||(row.record_type==='sick_leave'&&row.status==='active')?'ok':row.status==='rejected'||row.status==='material_failed'||(row.record_type==='deduction'&&row.status==='active')?'danger':'warn'}">${esc(row.status_name || row.status)}</span>`;
 
 function splitCoveredSickRecords(rows){
@@ -72,4 +77,4 @@ function entryCard(row){
   return `<article class="work-card ${row.status==='void'?'void-row':''}"><div class="work-card-head">${person}${chip}</div><p>${esc(row.occurred_on)} · 扣分 · ${esc(row.deduction_type)} · ${points}</p><p>${esc(row.description)} ${material}</p><div class="work-card-actions">${actions}</div></article>`;
 }
 
-export { bindWithdraw, coveredSickDisclosure, entryCard, entryRow, opt, recognitionCard, sameDayDuplicateBadge, splitCoveredSickRecords, statusBadge };
+export { workItemDetailsHtml, bindWithdraw, coveredSickDisclosure, entryCard, entryRow, opt, recognitionCard, sameDayDuplicateBadge, splitCoveredSickRecords, statusBadge };

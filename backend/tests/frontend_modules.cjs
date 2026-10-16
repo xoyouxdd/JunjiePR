@@ -101,6 +101,12 @@ async function fixtureRequest(request, response) {
   } else if (route === '/api/rotation/adjust/mine') sendJson(response, {items: []});
   else if (route === '/api/options') sendJson(response, options);
   else if (route === '/api/action-center') sendJson(response, {month: '2026-10', items: [], total: 0});
+  else if (/^\/api\/month-closes\/\d{4}-\d{2}$/.test(route)) {
+    const month = route.split('/').pop(), allowed = month <= '2026-09';
+    sendJson(response, {month, attraction_name: '全部景点圈', is_closed: false, can_close: allowed,
+      can_reopen: false, checklist: [], close_period_allowed: allowed, latest_close_month: '2026-09',
+      close_block_reason: allowed ? '' : '仅可关闭上月及更早月份，当月和未来月份不能月结。'});
+  }
   else if (route === '/api/deduction-upgrades/pending') sendJson(response, {items:[]});
   else if (route === '/api/announcements/options' && trainingDemo) sendJson(response, {can_publish: mode === 'publisher', can_follow: mode === 'publisher', can_train: mode === 'trainer', can_admin: false,
     counts: {pending: 1,messages: 0,handovers: 0}, categories: ['安全 & 合规'], circles: [{id:1,name:'热力追踪'},{id:2,name:'小熊罐子'}],
@@ -126,6 +132,7 @@ async function fixtureRequest(request, response) {
   else if (route === '/api/announcements') sendJson(response, {items: trainingDemo ? [demoAnnouncement()] : [], page: 1, pages: 1, total: trainingDemo ? 1 : 0});
   else if (route === '/api/announcement-media/options') sendJson(response, {templates: [], categories: ['通用']});
   else if (route === '/api/changelog/announcement') sendJson(response, {read: true});
+  else if (route === '/api/changelog') sendJson(response, {app_version: version, role_name: '测试角色', releases: []});
   else if (route === '/api/admin/circle-hr-accounts') sendJson(response, {items: [{employee_id: 7,
     login_account: 'HR0001', name: 'HR测试员', attraction_name: '热力追踪', account_enabled: true, password_status: '已修改'}]});
   else if (route === '/api/admin/circle-hr-accounts/7/reset-password') {
@@ -184,6 +191,31 @@ async function main() {
       page.on('request', request => {if (/\/static\/js\/app\/.*\.js/.test(request.url())) loadedModules.push(request.url());});
       await page.goto(`${origin}${pagePath}`);
       await page.locator('#app h2').filter({hasText: '待办中心'}).waitFor();
+      await page.locator('.tabs-desktop [data-open-about]').click();
+      await page.locator('[data-about-version]').filter({hasText: version}).waitFor();
+      assert.match(await page.locator('[data-about-dialog]').textContent(), /建设与维护\s*赵君杰/);
+      assert.match(await page.locator('[data-about-dialog]').textContent(), /共同参与\s*张森/);
+      assert.equal(await page.locator('[data-about-dialog] img').evaluate(img => img.complete && img.naturalWidth > 0), true);
+      await page.keyboard.press('Shift+Tab');
+      assert.equal(await page.locator('[data-about-updates]').evaluate(node => node === document.activeElement), true);
+      await page.keyboard.press('Escape');
+      await page.locator('[data-about-dialog]').waitFor({state: 'detached'});
+      assert.equal(await page.locator('.tabs-desktop [data-open-about]').evaluate(node => node === document.activeElement), true);
+      await page.locator('.tabs-desktop [data-open-about]').click();
+      await page.locator('[data-about-updates]').click();
+      await page.locator('#app h2').filter({hasText: '更新记录'}).waitFor();
+      await page.locator('[data-about-dialog]').waitFor({state: 'detached'});
+      await page.locator('.tabs-desktop [data-tab="actionCenter"]').click();
+      await page.locator('.tabs-desktop [data-tab="monthClose"]').click();
+      await page.locator('#monthCloseForm [name="month"]').fill('2026-10');
+      await page.locator('#monthCloseForm [type="submit"]').click();
+      await page.locator('#monthCloseResult .notice').filter({hasText: '当月和未来月份不能月结'}).waitFor();
+      assert.equal(await page.locator('[data-month-close]').count(), 0);
+      assert.match(await page.locator('#monthCloseResult').textContent(), /未月结/);
+      await page.locator('#monthCloseForm [name="month"]').fill('2026-08');
+      await page.locator('#monthCloseForm [type="submit"]').click();
+      await page.locator('[data-month-close]').waitFor();
+      await page.locator('.tabs-desktop [data-tab="actionCenter"]').click();
       assert.equal(await page.locator('#tabs [data-tab="register"]').count(), 0, 'Admin registration is permission-gated');
       await page.locator('.tabs-desktop [data-tab="announcements"]').click();
       await page.locator('#announcementContent .empty').filter({hasText: '暂无公告'}).waitFor();
@@ -293,20 +325,51 @@ async function main() {
     const memberErrors = []; member.on('pageerror', error => memberErrors.push(error.message));
     await member.goto(`${origin}/recognition/`);
     await member.locator('#homeMonthSelect').waitFor();
+    for (const width of [320, 390]) {
+      await member.setViewportSize({width, height: 844});
+      await member.locator('[data-open-more]').click();
+      await member.locator('.mobile-more-drawer [data-open-about]').click();
+      await member.locator('[data-about-version]').filter({hasText: version}).waitFor();
+      await member.locator('.mobile-more-drawer').waitFor({state: 'hidden'});
+      assert.equal(await member.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      await member.locator('[data-about-close]').click();
+      await member.locator('[data-about-dialog]').waitFor({state: 'detached'});
+      assert.equal(await member.locator('[data-open-more]').evaluate(node => node === document.activeElement), true);
+      assert.equal(await member.locator('.app-frame').evaluate(node => node.inert), false);
+    }
+    checks.push('about dialog: desktop, 320/390px mobile, names, live version, logo, focus, Escape and existing changelog');
     assert.equal(await member.locator('#tabs [data-tab="hrEmployees"]').count(), 0, 'Members cannot navigate to HR tools');
     await member.locator('.tabs-mobile [data-tab="register"]').click();
     await member.locator('[data-batch-entry] [name="recognizer_employee_id"] option[value="7"]').waitFor({state: 'attached'});
+    await member.locator('[data-batch-entry] [name="content"]').fill('未提交保护验证');
+    await member.locator('.tabs-mobile [data-tab="home"]').click();
+    await member.locator('[data-modal-cancel]').click();
+    await member.locator('.modal-overlay').waitFor({state:'detached'});
+    assert.equal(await member.locator('[data-batch-entry] [name="content"]').inputValue(),'未提交保护验证');
+    await member.locator('.tabs-mobile [data-tab="home"]').click();
+    await member.locator('[data-modal-confirm]').click();
+    await member.locator('.modal-overlay').waitFor({state:'detached'});
+    await member.locator('.tabs-mobile [data-tab="register"]').click();
+    await member.locator('[data-batch-entry] [name="recognizer_employee_id"] option[value="7"]').waitFor({state:'attached'});
     await member.locator('[data-batch-entry] [name="content"]').fill('前端模块上传验证');
     await member.locator('[data-batch-entry] [name="occurred_attraction_id"]').selectOption('1');
     await member.locator('[data-batch-entry] [name="recognizer_employee_id"]').selectOption('7');
     await member.locator('#recognitionAlbumInput').setInputFiles({name: 'fixture.png', mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ8kAAAAASUVORK5CYII=', 'base64')});
+    await member.route('**/api/recognitions/batch',route=>route.abort('connectionfailed'),{times:1});
+    await member.locator('[data-batch-submit]').click();
+    await member.waitForFunction(()=>document.getElementById('toast').textContent.includes('提交结果暂未确认'));
+    const failedKey=await member.locator('#recognitionForm').getAttribute('data-submission-key');
+    assert(failedKey);
+    assert.equal(await member.locator('[data-batch-entry] [name="content"]').inputValue(),'前端模块上传验证');
+    await member.locator('#toast').click();
     await member.locator('[data-batch-submit]').click();
     await member.waitForFunction(() => document.getElementById('toast').textContent.includes('已提交 1 条认可'));
     assert.equal(uploads.length, 1, 'One batch submit must make one request');
     assert.equal(uploads[0].entries[0].content, '前端模块上传验证');
     assert.match(uploads[0].entries[0].recognition_date, /^\d{4}-\d{2}-\d{2}$/);
     assert(uploads[0].key && uploads[0].imageSize > 0);
+    assert.equal(uploads[0].key,failedKey,'A retry after an uncertain result must preserve the idempotency key');
     assert.equal(uploads[0].imageName, 'fixture.png');
     const fallback = await member.evaluate(async () => {
       const submission = await import('./static/js/app/submission.js');
@@ -325,6 +388,72 @@ async function main() {
     assert.match(fallback.failure, /请先选择认可图片/);
     assert.deepEqual(memberErrors, []); checks.push('mobile member registration, multipart image, date fallback and idempotency');
     await member.close();
+    mode='member';
+    const retryPage=await browser.newPage({viewport:{width:390,height:844}});
+    await retryPage.route('**/api/options',route=>route.abort('connectionfailed'),{times:1});
+    await retryPage.goto(origin+'/');
+    await retryPage.locator('#retryInitialize').waitFor();
+    assert.equal(new URL(retryPage.url()).pathname,'/');
+    await retryPage.locator('#retryInitialize').click();
+    await retryPage.locator('.tabs-mobile [data-tab="register"]').waitFor();
+    await retryPage.evaluate(async()=>{
+      const {withSubmitLock}=await import('./static/js/app/submission.js');
+      const form=document.createElement('form');form.id='submitStatusFixture';form.innerHTML='<button>提交测试</button>';
+      document.getElementById('app').append(form);
+      window.statusLock=withSubmitLock(form,()=>new Promise(resolve=>window.finishStatusLock=resolve));
+    });
+    assert.equal(await retryPage.locator('#submitStatusFixture button').isDisabled(),true);
+    assert.equal(await retryPage.locator('#submitStatusFixture button').textContent(),'正在提交…');
+    await retryPage.evaluate(async()=>{window.finishStatusLock();await window.statusLock;});
+    assert.equal(await retryPage.locator('#submitStatusFixture button').textContent(),'提交测试');
+    await retryPage.close();
+    checks.push('mobile unsaved leave cancel/confirm, uncertain write keeps content/key, startup retry and submit state');
+
+    mode='admin';
+    const workPage=await browser.newPage({viewport:{width:390,height:844}});
+    const work={id:19,employee_name:'合成员工',employee_no:'SYN19',occurred_on:'2020-01-03',summary:'合成跟进事项',responsible:'负责主管'};
+    await workPage.route('**/api/action-center',route=>route.fulfill({json:{month:'2026-10',total:2,items:[{type:'deduction_follow_up',title:'范围内重复违规待处理',count:2,tab:'entries',severity:'warning',description:'合成角色事项'}]}}));
+    await workPage.route('**/api/action-center/deduction_follow_up/details*',route=>route.fulfill({json:{type:'deduction_follow_up',title:'重复违规待跟进明细',items:[work],total:2,page:Number(new URL(route.request().url()).searchParams.get('page')||1),page_size:1}}));
+    await workPage.goto(origin+'/');
+    await workPage.locator('[data-action-type="deduction_follow_up"]').click();
+    await workPage.locator('.action-center-detail').getByText('负责人：负责主管').waitFor();
+    await workPage.locator('[data-work-next]').click();
+    await workPage.locator('.pagination').filter({hasText:'第2页'}).waitFor();
+    assert.equal(await workPage.locator('[data-follow-up-register]').count(),0);
+    assert.equal(await workPage.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await workPage.setViewportSize({width:1280,height:900});
+    await workPage.route(/\/api\/month-closes\/2026-08$/,route=>route.fulfill({json:{month:'2026-08',attraction_name:'热力追踪',is_closed:false,can_close:true,checklist:[{code:'deduction_material',name:'待补材料',count:2,target:null,responsible:'请联系登记人'}]}}));
+    await workPage.route('**/api/month-closes/2026-08/blockers/deduction_material*',route=>route.fulfill({json:{items:[work],total:2,page:Number(new URL(route.request().url()).searchParams.get('page')||1),page_size:1}}));
+    await workPage.locator('.tabs-desktop [data-tab="monthClose"]').click();
+    await workPage.locator('#monthCloseForm [name="month"]').fill('2026-08');
+    await workPage.locator('#monthCloseForm [type="submit"]').click();
+    await workPage.locator('[data-month-details="deduction_material"]').click();
+    await workPage.locator('[data-month-detail-host]').getByText('负责人：负责主管').waitFor();
+    await workPage.locator('[data-work-next]').click();
+    await workPage.locator('[data-month-detail-host] .pagination').filter({hasText:'第2页'}).waitFor();
+    await workPage.close();
+    checks.push('mobile scoped follow-up and HR month blockers show owner, history, pagination and no delegated handling');
+
+    const queuePage=await browser.newPage({viewport:{width:390,height:844}});
+    const queueScopes=[];
+    await queuePage.route('**/api/me',route=>route.fulfill({json:{...user,role_code:'SUPERVISOR',base_role_code:'SUPERVISOR',permissions:['EMPLOYEE_ADD']}}));
+    await queuePage.route('**/api/action-center',route=>route.fulfill({json:{month:'2026-10',total:201,items:[{type:'deduction_material',title:'待补充声明材料',count:201,tab:'entries',severity:'warning',description:'合成材料事项'}]}}));
+    await queuePage.route('**/api/my-entries?*',route=>route.fulfill({json:{items:[],total:0,page:1,page_size:100}}));
+    await queuePage.route('**/api/deductions/pending-materials?*',route=>{const qs=new URL(route.request().url()).searchParams;queueScopes.push(Object.fromEntries(qs));return route.fulfill({json:{items:[],total:201,page:Number(qs.get('page')),page_size:50}});});
+    await queuePage.goto(origin+'/');
+    await queuePage.locator('[data-action-type="deduction_material"]').click();
+    await queuePage.locator('[data-pending-material-scope]').waitFor();
+    assert.equal(await queuePage.locator('[data-pending-material-scope]').inputValue(),'all');
+    await queuePage.locator('[data-material-next]').click();
+    await queuePage.waitForFunction(()=>document.querySelector('[data-material-prev]')?.disabled===false);
+    assert(queueScopes.some(qs=>qs.scope==='all'&&qs.page==='2'));
+    const filteredResponse=queuePage.waitForResponse(response=>response.url().includes('pending-materials')&&response.url().includes('material_failed'));
+    await queuePage.locator('[data-pending-material-status]').selectOption('material_failed');
+    await filteredResponse;
+    assert(queueScopes.some(qs=>qs.status==='material_failed'&&qs.page==='1'));
+    assert.equal(await queuePage.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await queuePage.close();
+    checks.push('mobile material todo opens all circles, pages beyond 200 and resets page on failure filtering');
     trainingDemo = true;
     for (const trainingMode of ['publisher','trainer','member']) {
       mode=trainingMode;
@@ -353,6 +482,8 @@ async function main() {
         fs.mkdirSync(path.resolve(__dirname,'../../.handover_review'),{recursive:true});
         await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-publish-20261011.png'),fullPage:true});
         await page.locator('[data-ann-back]').click();
+        await page.locator('[data-modal-confirm]').click();
+        await page.locator('.modal-overlay').waitFor({state:'detached'});
         await page.locator('[data-ann-view=manage]').click();await page.locator('[data-ann-records="51"]').click();
         const followupExport=page.getByRole('link',{name:/下载培训跟进 Excel/});
         await followupExport.waitFor();

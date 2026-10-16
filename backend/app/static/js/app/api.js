@@ -17,14 +17,23 @@ async function readApiBody(res){
 
 async function api(url, options={}) {
   const requestOptions={...options};
-  if(!requestOptions.signal&&(!requestOptions.method||requestOptions.method==='GET')&&getViewSignal())requestOptions.signal=getViewSignal();
+  const reading=!requestOptions.method||requestOptions.method.toUpperCase()==='GET';
+  const parentSignal=requestOptions.signal||(reading?getViewSignal():null);
+  const controller=reading?new AbortController():null;let timedOut=false;
+  const abort=()=>controller?.abort();
+  if(reading){if(parentSignal?.aborted)controller.abort();else parentSignal?.addEventListener('abort',abort,{once:true});requestOptions.signal=controller.signal;}
+  // Only reads time out automatically. Cancelling a write cannot prove it failed.
+  const timer=reading?setTimeout(()=>{timedOut=true;controller.abort();},30000):null;
+  try{
   let res;
   try { res = await fetch(portalPath(url), requestOptions); }
-  catch(error) { if(error?.name==='AbortError')throw error; throw new Error('网络连接失败，请检查网络后重试；若持续发生请记录操作时间并联系管理员。'); }
-  if (res.status === 401) { location.href=portalPath('/login'); throw new Error('登录已失效'); }
+  catch(error) { if(error?.name==='AbortError'&&!timedOut)throw error;throw new Error(timedOut?'连接等待超时，请检查网络后重试。':reading?'网络连接失败，请检查网络后重试；若持续发生请记录操作时间并联系管理员。':'连接中断，提交结果暂未确认。请先查看相关记录，确认未成功后再重试。'); }
+  if (res.status === 401) { location.href=portalPath('/login'); const error=new Error('登录已失效');error.status=401;throw error; }
   const body = await readApiBody(res);
   if (!res.ok) { const detail=body.detail; const fallback=apiFallbackMessage(res.status); const error=new Error(typeof detail==='object'?(detail.message||validationErrorMessage(detail)||fallback):(detail||fallback)); error.detail=detail; error.status=res.status; throw error; }
   return body;
+  }catch(error){if(timedOut)throw new Error('连接等待超时，请检查网络后重试。');if(!reading&&!error.status)throw new Error('提交结果暂未确认，请先查看相关记录，确认未成功后再重试。');throw error;}
+  finally{if(timer!==null)clearTimeout(timer);if(reading)parentSignal?.removeEventListener('abort',abort);}
 }
 
 const json = (method, body) => ({method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});

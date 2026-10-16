@@ -125,6 +125,7 @@ function navIcon(id){
     operations:'<circle cx="12" cy="12" r="3"/><path d="M12 3.5V6M12 18v2.5M5 6.6 6.8 8M17.2 16l1.8 1.4M5 17.4 6.8 16M17.2 8l1.8-1.4"/>',
     changelog:'<circle cx="12" cy="12" r="8"/><path d="M12 8v4.2L15 14"/>',
     password:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+    about:'<circle cx="12" cy="12" r="8"/><path d="M12 11v6M12 7v.1"/>',
     more:'<circle cx="6" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/>',
     circle:'<circle cx="12" cy="12" r="8"/>',
   };
@@ -207,6 +208,21 @@ async function refreshActionBadge(){
   }catch(_){/* A badge refresh must never interrupt the existing page workflow. */}
 }
 
+function showAboutSystem(){
+  if(document.querySelector('[data-about-dialog]'))return;
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.innerHTML=`<section class="modal-card about-system" data-about-dialog role="dialog" aria-modal="true" aria-labelledby="aboutSystemTitle"><header class="about-system-heading"><h3 id="aboutSystemTitle">关于系统</h3><button type="button" class="secondary" data-about-close>关闭</button></header><div class="about-system-brand"><img src="${esc(document.querySelector('.app-brand-logo').src)}" alt="" width="62" height="62"><h2>FZ团队工作台</h2><p class="field-hint" data-about-version aria-live="polite">正在读取版本…</p></div><button type="button" class="secondary about-system-updates" data-about-updates><span>更新记录</span><span aria-hidden="true">›</span></button><dl class="about-system-credits"><div><dt>建设与维护</dt><dd>赵君杰</dd></div><div><dt>共同参与</dt><dd>张森</dd></div></dl></section>`;
+  document.body.appendChild(overlay);
+  const close=overlay.querySelector('[data-about-close]');
+  const layer=bindDialogLayer(overlay,{initialFocus:close});
+  close.onclick=()=>layer.close();
+  overlay.addEventListener('click',event=>{if(event.target===overlay)layer.close();});
+  overlay.querySelector('[data-about-updates]').onclick=()=>{layer.close();gotoTab('changelog');};
+  const version=overlay.querySelector('[data-about-version]');
+  api('/api/changelog').then(data=>{if(overlay.isConnected)version.textContent=data.app_version?`版本 ${data.app_version}`:'暂时无法读取版本';}).catch(()=>{if(overlay.isConnected)version.textContent='暂时无法读取版本';});
+}
+
 function renderTabs() {
   startAnnouncementNotifications(refreshActionBadge);
   const items=menuItems();
@@ -218,18 +234,20 @@ function renderTabs() {
     const active=group.items.some(([id])=>isTabActive(id));
     return `<section class="nav-group${active?' is-active':''}" aria-label="${esc(group.label)}"><p class="nav-group-label">${esc(group.label)}</p>${group.items.map(item=>tabButton(item)).join('')}</section>`;
   }).join('');
-  const desktopFooter=grouped.footer.length?`<div class="nav-footer">${grouped.footer.map(item=>tabButton(item)).join('')}</div>`:'';
+  const aboutButton=extraClass=>`<button type="button" class="${extraClass}" data-open-about aria-label="关于系统">${navIcon('about')}<span class="nav-label">关于系统</span></button>`;
+  const desktopFooter=`<div class="nav-footer">${grouped.footer.map(item=>tabButton(item)).join('')}${aboutButton('nav-about')}</div>`;
   const ids=mobilePrimaryIds(items);
   const primary=ids.map(id=>items.find(i=>i[0]===id));
   const overflow=items.filter(i=>!ids.includes(i[0]));
   const overflowActive=overflow.some(([id])=>id===state.tab);
   const mobileTab=([id,name])=>tabButton([id,name]).replace(`<span class="nav-label">${esc(name)}</span>`,`<span class="nav-label">${esc(MOBILE_SHORT_LABELS[name]||name)}</span>`);
-  tabs.innerHTML=`<div class="tabs-desktop">${desktopPin}<div class="nav-scroll">${desktopGroups}</div>${desktopFooter}</div><div class="tabs-mobile has-overflow">${primary.map(mobileTab).join('')}<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能" title="更多">${navIcon('more')}<span class="nav-label">更多</span></button></div><div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header>${mobileIdentityCard()}${overflow.length?`<div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div>`:''}<button type="button" class="secondary mobile-logout" data-mobile-logout>退出登录</button></div></div>`;
+  tabs.innerHTML=`<div class="tabs-desktop">${desktopPin}<div class="nav-scroll">${desktopGroups}</div>${desktopFooter}</div><div class="tabs-mobile has-overflow">${primary.map(mobileTab).join('')}<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能" title="更多">${navIcon('more')}<span class="nav-label">更多</span></button></div><div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header>${mobileIdentityCard()}${overflow.length?`<div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div>`:''}${aboutButton('secondary mobile-more-item nav-about')}<button type="button" class="secondary mobile-logout" data-mobile-logout>退出登录</button></div></div>`;
   document.body.classList.add('has-nav');
   renderPageHeading(items);
   const drawer=tabs.querySelector('.mobile-more-drawer');
   let drawerLayer=null;
   const closeDrawer=()=>{drawerLayer?.close();};
+  tabs.querySelectorAll('[data-open-about]').forEach(button=>button.onclick=()=>{closeDrawer();showAboutSystem();});
   tabs.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;closeDrawer();renderTabs();render();});
   tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawerLayer=null;leaveLayer(drawer,()=>{drawer.hidden=true;});}});});
   tabs.querySelector('[data-close-more]')?.addEventListener('click',closeDrawer);

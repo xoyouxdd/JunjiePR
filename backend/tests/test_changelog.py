@@ -102,10 +102,10 @@ def test_changelog_filters_by_role() -> None:
     assert "POC" in gsm_text
     assert cm[0]["current"] is True
     assert gsm[0]["current"] is True
-    assert cm[0]["items"][0]["summary"] == "系统更名为FZ团队工作台"
+    assert cm[0]["items"][0]["summary"] == "新增关于系统入口"
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
-    assert gsm[0]["items"][0]["summary"] == "系统更名为FZ团队工作台"
+    assert gsm[0]["items"][0]["summary"] == "新增关于系统入口"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -159,11 +159,11 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["系统更名为FZ团队工作台", "认可材料与复核校验完善"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["新增关于系统入口", "填写与网络状态提示完善"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in hr["release"]["items"]] == ["系统更名为FZ团队工作台", "认可材料与复核校验完善", "测试环境与备份路径隔离", "发布资源版本校验完善"]
+        assert [item["summary"] for item in hr["release"]["items"]] == ["新增关于系统入口", "月结月份规则统一", "备份巡检任务识别修正", "填写与网络状态提示完善", "月结阻塞事项可查看明细"]
         assert hr["read"] is False
         client.post("/api/logout")
         login(client, "TRTEST01")

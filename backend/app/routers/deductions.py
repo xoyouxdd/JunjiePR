@@ -5,7 +5,7 @@ import json
 import secrets
 from datetime import datetime
 from decimal import Decimal
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy import or_, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -688,6 +688,9 @@ def list_deductions(month: str | None = None, db: Session = Depends(get_db), use
 @router.get("/deductions/pending-materials")
 def pending_deduction_materials(
     scope: str = "mine",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    status: str = "",
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
@@ -704,10 +707,18 @@ def pending_deduction_materials(
     own_attraction_id = user.employee.attraction_id
     if scope == "mine":
         query = query.filter(DeductionRecord.attraction_id_snapshot == own_attraction_id) if own_attraction_id else query.filter(DeductionRecord.id == -1)
-    rows = query.order_by(DeductionRecord.submitted_at.desc()).limit(200).all()
+    if status not in {"", "pending_material", "material_failed"}:
+        raise HTTPException(400, "请选择待补充材料或材料生成失败")
+    if status:
+        query = query.filter(DeductionRecord.status == status)
+    total = query.count()
+    rows = query.order_by(DeductionRecord.submitted_at.desc(), DeductionRecord.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return {
         "items": [deduction_payload(row) for row in rows],
         "scope": scope,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
         "own_attraction_id": own_attraction_id,
     }
 

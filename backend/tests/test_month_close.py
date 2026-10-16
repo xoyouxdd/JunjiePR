@@ -8,6 +8,7 @@ import tempfile
 
 from fastapi.testclient import TestClient
 from PIL import Image
+import pytest
 
 
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="recognition-month-close-test-"))
@@ -23,6 +24,16 @@ from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
 
 # The old sick-leave flow remains regression-tested only with a test-only grant.
 ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")
+
+
+@pytest.fixture(autouse=True)
+def completed_fixture_months(monkeypatch):
+    # Existing scenarios use distant months for isolation; keep the real gate enabled.
+    class Clock(date):
+        @classmethod
+        def today(cls):
+            return cls(2100, 1, 10)
+    monkeypatch.setattr("app.month_closure.date", Clock)
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:
@@ -64,6 +75,60 @@ def make_pdf() -> bytes:
     stream = BytesIO()
     Image.new("RGB", (8, 8), "white").save(stream, format="PDF")
     return stream.getvalue()
+
+
+@pytest.mark.parametrize("today,month,allowed,latest", [
+    (date(2026, 1, 1), "2025-12", True, "2025-12"),
+    (date(2026, 1, 1), "2024-08", True, "2025-12"),
+    (date(2026, 1, 1), "2026-01", False, "2025-12"),
+    (date(2026, 1, 1), "2026-02", False, "2025-12"),
+    (date(2028, 3, 1), "2028-02", True, "2028-02"),
+])
+def test_completed_month_policy_calendar_boundaries(monkeypatch, today, month, allowed, latest):
+    from app.month_closure import month_close_period_policy
+    class Clock(date):
+        @classmethod
+        def today(cls):
+            return today
+    monkeypatch.setattr("app.month_closure.date", Clock)
+    policy = month_close_period_policy(month)
+    assert policy["latest_close_month"] == latest
+    assert policy["close_period_allowed"] is allowed
+    assert bool(policy["close_block_reason"]) is not allowed
+
+
+def test_api_month_gate_matches_status_and_preserves_rejected_months(monkeypatch):
+    class Clock(date):
+        @classmethod
+        def today(cls):
+            return cls(2101, 1, 10)
+    monkeypatch.setattr("app.month_closure.date", Clock)
+    with TestClient(app) as client:
+        restore_test_accounts()
+        login(client, "HR01", "HR123")
+        with SessionLocal() as db:
+            before = (db.query(MonthClosure).count(), db.query(AuditLog).filter_by(entity_type="month_close").count())
+        for month in ("2101-01", "2101-02", "2102-01"):
+            status = client.get(f"/api/month-closes/{month}").json()
+            assert status["can_close"] is False and status["close_period_allowed"] is False
+            assert status["latest_close_month"] == "2100-12"
+            rejected = client.post(f"/api/month-closes/{month}/close", json={"reason": "未结束月份不得封存"})
+            assert rejected.status_code == 400
+            assert rejected.json()["detail"]["code"] == "MONTH_CLOSE_PERIOD_NOT_ENDED"
+        with SessionLocal() as db:
+            assert (db.query(MonthClosure).count(), db.query(AuditLog).filter_by(entity_type="month_close").count()) == before
+        for month in ("2100-12", "2098-12"):
+            assert client.get(f"/api/month-closes/{month}").json()["can_close"] is True
+            closed = client.post(f"/api/month-closes/{month}/close", json={"reason": "已完成月份补结"})
+            assert closed.status_code == 200, closed.text
+        class EarlierClock(date):
+            @classmethod
+            def today(cls):
+                return cls(2100, 12, 10)
+        monkeypatch.setattr("app.month_closure.date", EarlierClock)
+        # A legacy premature seal must remain reopenable for correction.
+        assert client.get('/api/month-closes/2100-12').json()['can_reopen'] is True
+        assert client.post('/api/month-closes/2100-12/reopen', json={"reason": "复核补结"}).status_code == 200
 
 
 def test_month_close_is_scoped_to_circle_hr_and_reopen_is_controlled() -> None:
@@ -142,6 +207,11 @@ def test_global_month_close_uses_checklist_and_blocks_pending_work() -> None:
         assert preview.status_code == 200, preview.text
         assert preview.json()["attraction_name"] == "全部景点圈"
         assert any(item["code"] == "recognition_review" and item["count"] for item in preview.json()["checklist"])
+        details = client.get(f"/api/month-closes/{month}/blockers/recognition_review")
+        assert details.status_code == 200, details.text
+        pending_detail = next(row for row in details.json()["items"] if row["id"] == pending_id)
+        assert pending_detail["employee_no"] == "CMTEST01" and pending_detail["responsible"]
+        assert "image_url" not in pending_detail
         blocked = client.post(f"/api/month-closes/{month}/close", json={"attraction_id": None, "reason": "全局关闭"})
         assert blocked.status_code == 409, blocked.text
         assert blocked.json()["detail"]["code"] == "MONTH_CLOSE_CHECKLIST_INCOMPLETE"

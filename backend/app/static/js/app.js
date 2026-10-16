@@ -8,7 +8,7 @@ import { logout } from './app/auth.js';
 import { configureViews, render } from './app/context.js';
 import { renderDeclarationStatistics } from './app/declarations.js';
 import { renderEntries } from './app/entries.js';
-import { portalPath } from './app/format.js';
+import { esc } from './app/format.js';
 import { renderHome } from './app/home.js';
 import { renderCircleTransfers, renderHrGroups, renderHrScores, renderLogs, renderMonthClose } from './app/hr.js';
 import { renderHrEmployees } from './app/hr-employees.js';
@@ -21,7 +21,8 @@ import { renderRegister } from './app/registration.js';
 import { renderFrontlineReview, renderSupervisorReview, renderUpgradeReview } from './app/reviews.js';
 import { renderRotationTest } from './app/rotation.js';
 import { applyCircleTheme, installPageBindHint, installScreenWatermark, installSecurityEvents } from './app/security.js';
-import { state } from './app/state.js';
+import { app, state } from './app/state.js';
+import { installFormProtection } from './app/submission.js';
 import { renderStatistics, renderStatisticsDetail, statisticsDetailContext } from './app/statistics.js';
 import { toast } from './app/toast.js';
 
@@ -58,6 +59,7 @@ configureViews({
 });
 
 installSecurityEvents();
+installFormProtection();
 document.getElementById('logoutBtn').onclick=logout;
 
 async function initializeApp(){
@@ -75,7 +77,9 @@ async function initializeApp(){
     await render();
     void showReleaseAnnouncement().catch(error=>toast(error.message||'更新公告加载失败',true));
   }catch(error){
-    if(!location.pathname.includes('/login'))location.href=portalPath('/login');
+    if(error.status===401)return;
+    app.innerHTML=`<section class="panel"><h2>暂时无法连接系统</h2><p role="alert">${esc(error.message||'请检查网络后重试。')}</p><button type="button" class="primary" id="retryInitialize">重新连接</button></section>`;
+    document.getElementById('retryInitialize').onclick=()=>{app.innerHTML='<section class="empty" role="status">正在重新连接…</section>';void initializeApp();};
   }
 }
 

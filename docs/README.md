@@ -4,6 +4,7 @@
 
 | 文件 | 内容 |
 |---|---|
+| [日常操作保护与任务验收](usability-acceptance.md) | 填写保护、网络恢复、待办定位与真人手机验收 |
 | [architecture.md](architecture.md) | 现用系统与目录职责 |
 | [sqlite-schema.md](sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [identity-and-supervisor.md](identity-and-supervisor.md) | 本职与代理职务、主管绩效登记复核、日期展示及统计口径 |

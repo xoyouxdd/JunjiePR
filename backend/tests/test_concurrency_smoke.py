@@ -116,7 +116,12 @@ def test_concurrent_recognition_submission_is_idempotent() -> None:
         assert db.query(RecognitionRecord).filter_by(content="并发冒烟测试").count() == 1
 
 
-def test_concurrent_review_and_month_close_are_conflict_safe() -> None:
+def test_concurrent_review_and_month_close_are_conflict_safe(monkeypatch) -> None:
+    class Clock(date):
+        @classmethod
+        def today(cls):
+            return cls(2100, 1, 10)
+    monkeypatch.setattr("app.month_closure.date", Clock)
     with TestClient(app) as seed:
         login(seed, "TATEST01")
         circles = seed.get("/api/options").json()["employee_circles"]

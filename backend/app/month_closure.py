@@ -18,6 +18,18 @@ MONTH_CLOSE_ROLE_CODES = {"HR_CIRCLE", "SYSTEM_ADMIN"}
 MONTH_CLOSE_EFFECTIVE_DATE = "2026-09-01"
 
 
+def month_close_period_policy(month: str) -> dict:
+    """Completed calendar months may be closed, including historical backfills."""
+    current = date.today().replace(day=1)
+    latest = (current - timedelta(days=1)).strftime("%Y-%m")
+    allowed = parse_score_month(month) <= latest
+    return {
+        "latest_close_month": latest,
+        "close_period_allowed": allowed,
+        "close_block_reason": "" if allowed else "仅可关闭上月及更早月份，当月和未来月份不能月结。",
+    }
+
+
 def month_closure_scope(db: Session, month: str, attraction_id: int | None) -> MonthClosure | None:
     query = db.query(MonthClosure).filter(
         MonthClosure.closure_month == month,
@@ -51,7 +63,7 @@ def ensure_month_open(db: Session, month: str, attraction_id: int | None, operat
     )
 
 
-def month_close_checklist(db: Session, month: str, attraction_id: int | None) -> list[dict]:
+def month_close_work_queries(db: Session, month: str, attraction_id: int | None) -> dict:
     """Only unresolved work that can alter this month blocks the close."""
     month_start = date.fromisoformat(f"{month}-01")
     month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
@@ -63,12 +75,12 @@ def month_close_checklist(db: Session, month: str, attraction_id: int | None) ->
         RecognitionRecord.recognition_month == month,
         RecognitionRecord.status == "pending",
         *(() if attraction_id is None else (RecognitionRecord.home_attraction_id == attraction_id,)),
-    ).count()
+    )
     unresolved_materials = db.query(DeductionRecord).filter(
         DeductionRecord.deduction_month == month,
         DeductionRecord.status.in_({"pending_material", "material_processing", "material_failed"}),
         *(() if attraction_id is None else (DeductionRecord.attraction_id_snapshot == attraction_id,)),
-    ).count()
+    )
     upgrade_query = db.query(DeductionUpgradeRequest).join(
         DeductionRecord, DeductionRecord.id == DeductionUpgradeRequest.second_deduction_id
     ).filter(
@@ -77,7 +89,6 @@ def month_close_checklist(db: Session, month: str, attraction_id: int | None) ->
     )
     if attraction_id is not None:
         upgrade_query = upgrade_query.filter(DeductionRecord.attraction_id_snapshot == attraction_id)
-    upgrade_requests = upgrade_query.count()
     follow_up_query = db.query(DeductionFollowUp).filter(
         DeductionFollowUp.occurred_on.like(f"{month}%"),
         DeductionFollowUp.status == "pending",
@@ -86,7 +97,6 @@ def month_close_checklist(db: Session, month: str, attraction_id: int | None) ->
         follow_up_query = follow_up_query.filter(
             DeductionFollowUp.employee_id.in_(employee_ids) if employee_ids else DeductionFollowUp.id == -1
         )
-    follow_ups = follow_up_query.count()
     transfer_query = db.query(CircleTransferRequest).filter(
         CircleTransferRequest.status == "pending",
         CircleTransferRequest.requested_at >= datetime.combine(month_start, datetime.min.time()),
@@ -96,7 +106,18 @@ def month_close_checklist(db: Session, month: str, attraction_id: int | None) ->
         transfer_query = transfer_query.filter(
             or_(CircleTransferRequest.source_attraction_id == attraction_id, CircleTransferRequest.target_attraction_id == attraction_id)
         )
-    pending_transfers = transfer_query.count()
+    return {"recognition_review": pending_recognitions, "deduction_material": unresolved_materials,
+            "deduction_upgrade": upgrade_query, "deduction_follow_up": follow_up_query,
+            "circle_transfer": transfer_query}
+
+
+def month_close_checklist(db: Session, month: str, attraction_id: int | None) -> list[dict]:
+    queries = month_close_work_queries(db, month, attraction_id)
+    pending_recognitions = queries["recognition_review"].count()
+    unresolved_materials = queries["deduction_material"].count()
+    upgrade_requests = queries["deduction_upgrade"].count()
+    follow_ups = queries["deduction_follow_up"].count()
+    pending_transfers = queries["circle_transfer"].count()
     return [
         {"code": "recognition_review", "name": "待复核签卡", "count": pending_recognitions, "target": None, "responsible": "请联系对应主管完成复核"},
         {"code": "deduction_material", "name": "待补/生成失败材料", "count": unresolved_materials, "target": None, "responsible": "请联系登记人或主管补充材料"},
@@ -118,8 +139,9 @@ def month_closure_payload(db: Session, month: str, attraction_id: int | None, us
     effective = global_row or scope_row
     attraction = db.get(Attraction, attraction_id) if attraction_id else None
     effective_attraction = db.get(Attraction, effective.attraction_id) if effective and effective.attraction_id else None
+    period_policy = month_close_period_policy(month)
     can_close = False
-    if not effective and user.role.code in MONTH_CLOSE_ROLE_CODES:
+    if not effective and period_policy["close_period_allowed"] and user.role.code in MONTH_CLOSE_ROLE_CODES:
         if user.role.code == "SYSTEM_ADMIN":
             can_close = True
         elif attraction_id is not None and attraction_id in managed_attraction_ids(db, user.id):
@@ -135,6 +157,7 @@ def month_closure_payload(db: Session, month: str, attraction_id: int | None, us
         "closed_at": effective.closed_at.strftime("%Y-%m-%d %H:%M:%S") if effective and effective.closed_at else "",
         "close_reason": effective.close_reason if effective else "",
         "can_close": can_close,
+        **period_policy,
         "can_reopen": bool(effective and (user.role.code == "SYSTEM_ADMIN" or (user.role.code == "HR_CIRCLE" and attraction_id is not None and attraction_id in scoped_hr_attraction_ids(db, user)))),
         "reopen_target_attraction_id": effective.attraction_id if effective else attraction_id,
         "checklist": month_close_checklist(db, month, attraction_id),

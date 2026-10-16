@@ -5,6 +5,7 @@ param(
     [string]$Python = "C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe",
     [ValidateRange(1, 3650)]
     [int]$RetentionDays = 30,
+    [switch]$IncludeRecoveryBundle,
     [switch]$DryRun,
     [switch]$TestMode,
     [string]$TestRoot
@@ -192,6 +193,43 @@ try {
     $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestFile -Encoding UTF8
     $backupComplete = $true
 
+    $recoveryResult = $null
+    if ($IncludeRecoveryBundle) {
+        $helper = Join-Path $PSScriptRoot 'recovery_bundle.py'
+        if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'Recovery bundle helper missing' }
+        if (-not $TestMode) {
+            $configDir = Join-Path $livePath 'ops\recovery-config'
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+            $scheduler = New-Object -ComObject Schedule.Service
+            $scheduler.Connect()
+            foreach ($taskName in @('RecognitionCardSystem','RecognitionCardSystemWatchdog','RecognitionCardSystem-SQLiteBackup','RecognitionCardSystem-SQLiteBackupHealth')) {
+                $taskXml = [string]$scheduler.GetFolder('\').GetTask($taskName).Xml
+                [IO.File]::WriteAllText((Join-Path $configDir "$taskName.xml"), $taskXml, [Text.UTF8Encoding]::new($false))
+            }
+            $launchDir = Join-Path $configDir 'service-scripts'
+            New-Item -ItemType Directory -Path $launchDir -Force | Out-Null
+            foreach ($launchName in @('run_public_server.ps1','ensure_public_server.ps1')) {
+                $launchSource = Join-Path $livePath ('scripts\'+$launchName)
+                if (Test-Path -LiteralPath $launchSource -PathType Leaf) { Copy-Item -LiteralPath $launchSource -Destination (Join-Path $launchDir $launchName) -Force }
+            }
+            $runtime = [ordered]@{
+                environment = 'production'
+                live_root = $livePath
+                backup_root = $backupPath
+                python = $pythonPath
+                python_version = [string](& $pythonPath --version)
+                environment_variable_names = @('RECOGNITION_ENVIRONMENT','RECOGNITION_V2_DATA_DIR','RECOGNITION_BACKUP_HEALTH_STATUS_FILE')
+            }
+            $runtime | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $configDir 'runtime.json') -Encoding UTF8
+            & $pythonPath -m pip freeze --all | Set-Content -LiteralPath (Join-Path $configDir 'installed-packages.txt') -Encoding UTF8
+            if ($LASTEXITCODE -ne 0) { throw 'Installed dependency inventory failed' }
+        }
+        $recoveryOutput = & $pythonPath $helper capture --live-root $livePath --database $backupFile --store (Join-Path $backupPath 'recovery')
+        if ($LASTEXITCODE -ne 0) { throw 'Recovery capture failed; database snapshot retained, old backups not pruned' }
+        $recoveryResult = (($recoveryOutput -join '') | ConvertFrom-Json)
+        if (-not $recoveryResult.ok) { throw 'Recovery capture validation failed' }
+    }
+
     $deleted = @()
     foreach ($item in $expired) {
         $resolvedItem = Get-NormalizedPath $item.FullName
@@ -211,6 +249,7 @@ try {
         size_bytes = $backupInfo.Length
         retention_days = $RetentionDays
         deleted = $deleted
+        recovery_bundle = $recoveryResult
     } | ConvertTo-Json -Depth 4
 }
 catch {

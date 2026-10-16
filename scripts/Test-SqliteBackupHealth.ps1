@@ -11,6 +11,7 @@ param(
     [int]$AlertRepeatHours = 24,
     [string]$AlertWebhookUrlEnvironmentVariable,
     [string]$StatusFile,
+    [switch]$RequireRecoveryBundle,
     [switch]$TestMode,
     [string]$TestRoot,
     [string]$TaskStatusFile,
@@ -98,11 +99,24 @@ $pythonPath = Resolve-PythonExecutable $Python
 $now = if ($null -ne $NowUtc) { $NowUtc.ToUniversalTime() } else { [DateTime]::UtcNow }
 $issues = [Collections.Generic.List[object]]::new()
 
+$taskQueryFailed = $false
 if ($TestMode) {
     $taskSnapshot = Get-Content -Raw -LiteralPath $taskStatusPath | ConvertFrom-Json
 }
 else {
-    $scheduledTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    # CIM ScheduledTasks can return no tasks under service/SSH hosts even when
+    # Task Scheduler has them. Query its authoritative COM API; only a genuine
+    # "file not found" means missing, never swallow permission/service failures.
+    if ($TaskName -notmatch '^[A-Za-z0-9_.-]{1,100}$') { throw "Unsafe backup task name" }
+    $scheduledTask = $null
+    try {
+        $scheduler = New-Object -ComObject Schedule.Service
+        $scheduler.Connect()
+        $scheduledTask = $scheduler.GetFolder('\').GetTask($TaskName)
+    }
+    catch {
+        if ($_.Exception.GetBaseException().HResult -ne -2147024894) { $taskQueryFailed = $true }
+    }
     if ($null -eq $scheduledTask) {
         $taskSnapshot = [pscustomobject]@{
             exists = $false
@@ -114,16 +128,16 @@ else {
         }
     }
     else {
-        $taskInfo = Get-ScheduledTaskInfo -TaskName $TaskName
-        $lastRun = if ($taskInfo.LastRunTime -eq [DateTime]::MinValue) { $null } else { $taskInfo.LastRunTime.ToUniversalTime().ToString("o") }
-        $nextRun = if ($taskInfo.NextRunTime -eq [DateTime]::MinValue) { $null } else { $taskInfo.NextRunTime.ToUniversalTime().ToString("o") }
+        $lastRun = if ($scheduledTask.LastRunTime.Year -lt 2000) { $null } else { $scheduledTask.LastRunTime.ToUniversalTime().ToString("o") }
+        $nextRun = if ($scheduledTask.NextRunTime.Year -lt 2000) { $null } else { $scheduledTask.NextRunTime.ToUniversalTime().ToString("o") }
+        $stateNames = @{0='Unknown';1='Disabled';2='Queued';3='Ready';4='Running'}
         $taskSnapshot = [pscustomobject]@{
             exists = $true
-            enabled = [bool]$scheduledTask.Settings.Enabled
-            state = [string]$scheduledTask.State
+            enabled = [bool]$scheduledTask.Enabled
+            state = $stateNames[[int]$scheduledTask.State]
             last_run_time_utc = $lastRun
             next_run_time_utc = $nextRun
-            last_task_result = [long]$taskInfo.LastTaskResult
+            last_task_result = [long]$scheduledTask.LastTaskResult
         }
     }
 }
@@ -135,7 +149,10 @@ $lastRunUtc = Convert-ToUtcOrNull $taskSnapshot.last_run_time_utc
 $nextRunUtc = Convert-ToUtcOrNull $taskSnapshot.next_run_time_utc
 $lastTaskResult = if ($null -eq $taskSnapshot.last_task_result) { $null } else { [long]$taskSnapshot.last_task_result }
 
-if (-not $taskExists) {
+if ($taskQueryFailed) {
+    Add-Issue $issues 'task_query_failed' 'Task Scheduler could not be queried; task state is unverified.'
+}
+elseif (-not $taskExists) {
     Add-Issue $issues "task_missing" "The scheduled backup task does not exist."
 }
 elseif (-not $taskEnabled) {
@@ -246,6 +263,22 @@ if ($null -ne $lastRunUtc -and ($now - $lastRunUtc).TotalMinutes -gt $BackupComp
     }
 }
 
+$recoveryCheck = $null
+if ($RequireRecoveryBundle) {
+    $helper = Join-Path $PSScriptRoot 'recovery_bundle.py'
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+        Add-Issue $issues 'recovery_helper_missing' 'The recovery verification helper is missing.'
+    }
+    else {
+        $recoveryOutput = & $pythonPath $helper verify --store (Join-Path $backupPath 'recovery') --max-age-hours $MaxBackupAgeHours
+        $recoveryExitCode = $LASTEXITCODE
+        try { $recoveryCheck = (($recoveryOutput -join '') | ConvertFrom-Json) } catch { $recoveryCheck = $null }
+        if ($recoveryExitCode -ne 0 -or $null -eq $recoveryCheck -or -not $recoveryCheck.ok) {
+            Add-Issue $issues 'recovery_bundle_invalid' 'The full recovery set is missing, stale or failed integrity verification.'
+        }
+    }
+}
+
 $previousStatus = $null
 if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
     try { $previousStatus = Get-Content -Raw -LiteralPath $statusPath | ConvertFrom-Json } catch { $previousStatus = $null }
@@ -265,6 +298,7 @@ $report = [ordered]@{
         last_run_time_utc = if ($null -eq $lastRunUtc) { $null } else { $lastRunUtc.ToString("o") }
         next_run_time_utc = if ($null -eq $nextRunUtc) { $null } else { $nextRunUtc.ToString("o") }
         last_task_result = $lastTaskResult
+        query_failed = $taskQueryFailed
     }
     latest_backup = if ($null -eq $latestBackup) { $null } else { [ordered]@{
         file_name = $latestBackup.Name
@@ -282,6 +316,7 @@ $report = [ordered]@{
     }
     issues = @($issues)
     issue_fingerprint = $fingerprint
+    recovery_bundle = $recoveryCheck
     alert = [ordered]@{
         configured = -not [string]::IsNullOrWhiteSpace($AlertWebhookUrlEnvironmentVariable)
         attempted = $false

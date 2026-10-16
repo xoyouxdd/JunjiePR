@@ -51,7 +51,8 @@ async function render(){
     if(generation!==renderGeneration) return;
   } catch(e) {
     if(generation!==renderGeneration||(viewContext&&!viewContext.isCurrent())||e?.name==='AbortError') return;
-    app.innerHTML=`<section class="panel"><div class="error">${esc(e.message)}</div></section>`;
+    app.innerHTML=`<section class="panel"><div class="error" role="alert">${esc(e.message)}</div><button type="button" class="primary" data-retry-page>重新加载</button></section>`;
+    app.querySelector('[data-retry-page]').onclick=()=>render();
   }
 }
 

@@ -9,6 +9,7 @@
 - `Run-MonthlyRestoreRehearsal.ps1`：自动选择最新受管备份并调用恢复演练脚本；只在独立恢复目录验证，默认不保留副本，也不写入生产数据库。
 - `Install-DailyBackupTask.ps1`：可选安装每日 Windows 计划任务。任务使用 `SYSTEM` 服务身份，不保存账号、密码或服务器凭据。
 - `Test-SqliteBackupHealth.ps1`：统一检查计划任务是否执行、最新备份时效、清单 SHA-256/大小和真实 SQLite `quick_check`，异常时返回退出码 `2`。
+- `recovery_bundle.py`：完整应用数据恢复集，复用同哈希对象，保存数据库、附件、对应源码和恢复配置；验证每项大小及SHA-256，禁止覆盖既有目录或恢复到生产目录。
 - `Install-DailyBackupHealthTask.ps1`：安装独立于备份任务的每日健康检查，避免备份任务自身失败时无人发现。
 - `verify_readiness.py`：只读核对明确指定的 SQLite 副本，输出脱敏的账号、角色、景点圈、工作组和月结完整性摘要，供发布预检留档。
 - `purge_legacy_attendance.py`：一次性清理旧 `ATTENDANCE` 扣分类型。默认只打印影响清单，必须显式 `--apply` 才会删除。
@@ -54,6 +55,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Invoke-SqliteOnlin
 每次成功会生成一份 `recognition_v2-时间戳.db` 和相邻的 `.manifest.json`。清单包含文件大小、SHA-256、SQLite 版本和 `quick_check` 结果。保留策略只识别这个严格命名格式；删除前会再次确认解析后的文件仍位于专用备份目录中。
 
 ## 独立恢复演练
+
+### 完整恢复集
+
+线上运维任务当前从应用根目录 `ops/` 运行；脚本同步时先以真实任务定义为准，不能因为 `scripts/` 缺同名文件而判定任务缺失。`Get-ScheduledTask` 在正式环境存在漏查，巡检通过 Task Scheduler COM 读取启用状态、最近结果及时间；只有明确的任务不存在错误可记为 `task_missing`。
+
+`Invoke-SqliteOnlineBackup.ps1 -IncludeRecoveryBundle` 在在线数据库快照成功后，调用同目录的 `recovery_bundle.py` 生成 `备份目录/recovery/manifests/recovery-*.json`；附件、数据库、部署源码和恢复配置按SHA-256存到 `recovery/objects/`。现有受管`.db`和清单保留原结构，数据库保留策略不删除恢复对象。恢复对象暂不自动清理，需监测空间并按留存要求另行制定清理策略；不能手工删除仍被清单引用的对象。
+
+完整恢复集生成失败时任务失败，已经成功的数据库快照保留，旧备份不执行本次保留清理。所有有效附件必须存在且匹配数据库快照中的大小与哈希；源码必须匹配部署版本清单。任务XML、启动脚本、Python版本及依赖清单一并保存；凭据、机器级秘密、证书、反向代理及整个虚拟环境不在恢复集内。
+
+Windows文件访问被暂时拒绝时，完整恢复集最多尝试3次，间隔2秒、4秒；仅重试 `PermissionError`，哈希或结构校验失败不重试。访问持续失败仍让任务失败并由巡检报告，不修改目录权限来绕过失败。
+
+`Test-SqliteBackupHealth.ps1 -RequireRecoveryBundle` 另外核对最近恢复集不超过26小时，全部对象大小与SHA-256正确。异常继续写入现有管理员备份待办；未配置外部Webhook时，不声称已验证外部消息送达。
+
+```powershell
+$python = 'C:\Server\zhaojunjie\recognition-card-system\.venv\Scripts\python.exe'
+$helper = 'C:\Server\zhaojunjie\recognition-card-system\ops\recovery_bundle.py'
+$store = 'C:\Server\zhaojunjie\backups\recognition-card-system-sqlite\recovery'
+& $python $helper verify --store $store
+# 必须是全新目录，且位于生产和备份目录之外。
+& $python $helper restore --store $store --destination 'C:\FZRestoreTests\unique-rehearsal'
+```
+
+恢复后仍需在隔离环境验证对应版本启动、管理员登录、月度分数及附件读取；禁止把此命令当作正式回滚。原SQLite表结构演练继续使用下述脚本。
 
 先查看计划，不创建临时副本：
 

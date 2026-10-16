@@ -127,7 +127,13 @@ def test_circle_hr_sees_only_own_circle_audit_summaries() -> None:
         assert client.get("/api/admin/logs").status_code == 403
 
 
-def test_month_snapshot_correction_ledger_and_operations_aggregate() -> None:
+def test_month_snapshot_correction_ledger_and_operations_aggregate(monkeypatch) -> None:
+    from datetime import date
+    class Clock(date):
+        @classmethod
+        def today(cls):
+            return cls(2100, 1, 10)
+    monkeypatch.setattr("app.month_closure.date", Clock)
     month = "2099-05"
     with TestClient(app) as client:
         _deduction_id, cm_id = create_active_deduction(client, month)

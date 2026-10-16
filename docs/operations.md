@@ -23,6 +23,12 @@
 
 本地回归 `test_backup_runtime_paths.py` 将正式路径与发布程序合同对照，并在独立目录执行真实 SQLite 备份、巡检和恢复，验证源库不变。另有 `scripts/tests/Test-BackupHealthScenarios.ps1` 覆盖任务失败、无输出与完整性失败；本地通过不等于线上任务已修复。
 
+2026-10-16 正式核查确认：每日 SQLite 备份任务存在且执行成功，运维脚本实际位于应用根目录 `ops/`；CIM `Get-ScheduledTask` 在该环境未正确列出任务，导致巡检误报 `task_missing`。巡检现使用 Task Scheduler COM 接口读取真实任务，查询失败不伪装成任务缺失。修复保留每日02:15备份、03:30巡检及原SYSTEM身份，不替换应用任务。旧 `RecognitionCardSystemBackup` 指向旧 `data/`，不能当作当前 `data_v2/files` 的附件备份。
+
+每日 SQLite 备份通过 `-IncludeRecoveryBundle` 补充对应数据库、有效附件、部署源码/版本清单、依赖清单和任务/启动配置；巡检通过 `-RequireRecoveryBundle` 核对完整恢复集的时效及每个对象的SHA-256。内容相同的附件只存一份，详见脚本手册的完整恢复集部分。机器级秘密、证书及系统镜像不在此恢复集中；不宣称完成整机灾难恢复。
+
+本轮正式生成的首个恢复集已在全新临时目录演练：恢复1867个条目、1682份有效附件，以对应2026.10.16.3源码启动环回服务，完成隔离管理员登录、原件哈希核对、带水印附件下载与可读性验证、10名员工封存分数核对，以及管理员备份异常待办的出现/消除。演练禁用外部连接，只修改恢复副本，结束后删除副本；备份对象保持原样。此证据不是整机恢复，也不代替下一次定时触发结果。复跑中遇到间歇性文件访问拒绝，已增加仅针对该OS错误的最多3次重试，持续失败仍报错。
+
 ## 脚本一览
 
 | 脚本 | 用途 |
@@ -31,6 +37,7 @@
 | `Test-SqliteBackupRestore.ps1` | 独立目录恢复演练，不覆盖生产 |
 | `Run-MonthlyRestoreRehearsal.ps1` | 选最新备份做月度演练 |
 | `Test-SqliteBackupHealth.ps1` | 备份时效与完整性巡检 |
+| `recovery_bundle.py` | 按哈希共享对象的数据库、附件及源码恢复集；仅恢复到全新隔离目录 |
 | `Install-DailyBackupTask.ps1` | 安装每日备份任务 |
 | `Install-DailyBackupHealthTask.ps1` | 安装每日健康检查任务 |
 | `verify_readiness.py` | 只读预检脱敏摘要 |

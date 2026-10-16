@@ -7,6 +7,29 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.16.4", "date": "2026-10-16", "status": "candidate",
+        "items": [
+            {"summary": "新增关于系统入口",
+             "detail": "电脑侧栏底部和手机更多菜单新增关于系统，展示系统名称、当前版本与建设参与署名，并连接现有更新记录。",
+             "audiences": ["all"]},
+            {"summary": "月结月份规则统一",
+             "detail": "支持上月及更早月份补结，当月和未来月份不能关闭月结；页面提示、可操作状态和服务端校验统一，沿用原权限、待办检查和重开审计。",
+             "audiences": ["HR_CIRCLE", "SYSTEM_ADMIN"]},
+            {"summary": "备份巡检任务识别修正",
+             "detail": "巡检通过Windows任务计划程序接口核对每日任务，避免任务存在却误报缺失；每日备份补充当前附件、对应源码和恢复配置，复用同哈希对象，巡检同时校验完整恢复集。",
+             "audiences": ["SYSTEM_ADMIN"]},
+            {"summary": "填写与网络状态提示完善",
+             "detail": "未提交表单切页前提示确认，刷新或关闭提供浏览器离开提醒；启动网络故障可原页重试，普通提交显示进行中状态，连接中断时先核对记录再重试。",
+             "audiences": ["all"]},
+            {"summary": "待办事项与负责人定位完善",
+             "detail": "补材料待办直达全部圈协作范围，支持分页及失败筛选；主管与GSM可查看原授权范围内历史未结跟进事项及负责人，处理沿用原流程。",
+             "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM"]},
+            {"summary": "月结阻塞事项可查看明细",
+             "detail": "可按所选月份、景点圈查看待复核、待补材料、升级工单及重复违规跟进的具体事项和负责人；仅提供原授权范围的只读定位，不增加代审核权限。",
+             "audiences": ["HR_CIRCLE", "SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.16.3", "date": "2026-10-16", "status": "candidate",
         "items": [
             {"summary": "系统更名为FZ团队工作台",

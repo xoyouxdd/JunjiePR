@@ -38,6 +38,12 @@ MONTH = "2026-10"
 
 @pytest.fixture
 def system(monkeypatch):
+    from datetime import date
+    class Clock(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 1)
+    monkeypatch.setattr("app.month_closure.date", Clock)
     monkeypatch.setenv("RECOGNITION_ENABLE_MONTHLY_RANKS", "1")
     engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)

@@ -5,14 +5,17 @@ const {frontendFunctionSource} = require('./frontend_source.js');
 
 function harness() {
   const calls = [], controller = new AbortController();
+  const timers = new Map();let nextTimer=0;
   let nextResponse;
   const context = vm.createContext({
+    AbortController, setTimeout:callback=>{timers.set(++nextTimer,callback);return nextTimer;},clearTimeout:id=>timers.delete(id),
     getViewSignal: () => controller.signal,
     portalPath: value => '/recognition' + value,
     location: {href: ''},
     fetch: async (url, options) => {
       calls.push({url, options});
       if (nextResponse instanceof Error) throw nextResponse;
+      if (typeof nextResponse === 'function') return nextResponse(options);
       return nextResponse;
     },
   });
@@ -22,7 +25,7 @@ function harness() {
   function reply(status, body) {
     nextResponse = {status, ok: status >= 200 && status < 300, text: async () => typeof body === 'string' ? body : JSON.stringify(body)};
   }
-  return {context, calls, controller, reply, response: value => {nextResponse = value;}};
+  return {context, calls, controller, reply, response: value => {nextResponse = value;},expire:()=>[...timers.values()].forEach(callback=>callback())};
 }
 
 (async () => {
@@ -43,7 +46,7 @@ function harness() {
   const legacy = [{loc: ['body', 'proof']}, {loc: ['body', 'employee_id']}, {loc: ['body', 'proof']}];
   h.reply(422, {detail: legacy});
   await assert.rejects(h.context.api('/api/sick-leaves'), error => error.message === '缺勤证明未成功提交、缺勤员工未成功提交，请检查后重试。' && error.status === 422);
-  assert.equal(h.calls.at(-1).options.signal, h.controller.signal, 'Reads inherit the current page cancellation signal');
+  assert(h.calls.at(-1).options.signal instanceof AbortSignal, 'Reads have a cancellable timeout signal');
 
   h.reply(400, {detail: {message: '后端业务说明', fields: [{message: '不应覆盖业务说明'}]}});
   await assert.rejects(h.context.api('/api/test'), error => error.message === '后端业务说明');
@@ -68,5 +71,17 @@ function harness() {
   h.reply(401, {});
   await assert.rejects(h.context.api('/api/test'), error => error.message === '登录已失效');
   assert.equal(h.context.location.href, '/recognition/login');
+  const slow=harness();
+  slow.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
+  const waiting=slow.context.api('/api/slow');slow.expire();
+  await assert.rejects(waiting,error=>error.message.includes('等待超时'));
+  const cancelled=harness();
+  cancelled.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
+  const abandoned=cancelled.context.api('/api/old-page');cancelled.controller.abort();
+  await assert.rejects(abandoned,error=>error.name==='AbortError');
+  h.response(new Error('network dropped'));
+  await assert.rejects(h.context.api('/api/write',{method:'POST'}),error=>error.message.includes('提交结果暂未确认'));
+  h.reply(200,'<html>lost response</html>');
+  await assert.rejects(h.context.api('/api/write',{method:'POST'}),error=>error.message.includes('先查看相关记录'));
   console.log('API errors: real-owner proof/legacy fields, status fallbacks, invalid body, network/abort and expired login passed.');
 })().catch(error => {console.error(error); process.exitCode = 1;});
