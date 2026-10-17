@@ -201,8 +201,14 @@ def fresh_reference(tmp_path: Path):
         engine.dispose()
 
 
-def test_index_repair_step_is_registered_last() -> None:
-    assert SCHEMA_MIGRATION_STEPS[-1] == ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes")
+def test_index_repair_precedes_appended_employment_history_step() -> None:
+    repair = ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes")
+    employment = ("2026-10-employee-employment-history", "ensure_employee_employment_history")
+    # Preserve the repair's stable key and position; new unrelated migrations
+    # append after it rather than deleting, moving or rerunning old steps.
+    assert SCHEMA_MIGRATION_STEPS[-2:] == [repair, employment]
+    assert SCHEMA_MIGRATION_STEPS.count(repair) == 1
+    assert SCHEMA_MIGRATION_STEPS.count(employment) == 1
 
 
 def test_fresh_database_has_all_model_and_composite_indexes(tmp_path: Path) -> None:

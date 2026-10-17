@@ -7,6 +7,23 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.17.2", "date": "2026-10-17", "status": "candidate",
+        "items": [
+            {"summary": "个人勋章展示与更新入口优化",
+             "detail": "本人主动查看有效勋章时展示分档动画，可跳过或重播；音效默认关闭，收起、换月和离页停止播放，减少动态效果时静态展示。更新记录统一从关于系统进入，不改积分及段位算法。",
+             "audiences": ["all"]},
+            {"summary": "人员删除留档与重新入职完善",
+             "detail": "账号连续停用满7天后方可删除留档，保留员工主键及业务历史；同工号同名档案可重新注册，重新选择本职与景点圈，旧组织权限不自动延续。沿用HR范围、月结检查及审计，导出补充留档标记。",
+             "audiences": ["HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"], "permissions": ["HR_MANAGE"]},
+            {"summary": "公告签收小组显示现任负责人",
+             "detail": "有权查看的公告签收分组同时显示现任正式及代理组长，沿用有效日期和原签收范围，不扩大访问权限或改写历史签收。",
+             "audiences": ["SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM", "AM", "SYSTEM_ADMIN"]},
+            {"summary": "迁移顺序发布校验完善",
+             "detail": "任职历史迁移追加在既有病假索引修复之后，保留稳定迁移键和唯一注册校验；旧库行保留、幂等执行及全量迁移顺序仍须通过验证。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.17.1", "date": "2026-10-17", "status": "candidate",
         "items": [
             {"summary": "个人勋章展示与更新入口优化",
