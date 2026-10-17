@@ -26,11 +26,15 @@ def start_worker():
                     except Exception:
                         db.rollback()
                         logging.getLogger(__name__).exception("公告补收任务失败，将在下一周期重试")
-        _thread = threading.Thread(target=run, name="announcement-delivery", daemon=True)
-        _thread.start()
+        thread = threading.Thread(target=run, name="announcement-delivery", daemon=True)
+        thread.start()
+        # Publish only a successfully started thread; shutdown uses the same
+        # guard so it cannot stop/join a worker halfway through startup.
+        _thread = thread
 
 
 def stop_worker():
-    _stop.set()
-    if _thread:
-        _thread.join(timeout=3)
+    with _guard:
+        _stop.set()
+        if _thread:
+            _thread.join(timeout=3)

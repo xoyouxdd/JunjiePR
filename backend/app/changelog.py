@@ -7,7 +7,7 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
-        "version": "2026.10.17.2", "date": "2026-10-17", "status": "candidate",
+        "version": "2026.10.17.3", "date": "2026-10-17", "status": "candidate",
         "items": [
             {"summary": "个人勋章展示与更新入口优化",
              "detail": "本人主动查看有效勋章时展示分档动画，可跳过或重播；音效默认关闭，收起、换月和离页停止播放，减少动态效果时静态展示。更新记录统一从关于系统进入，不改积分及段位算法。",
@@ -20,6 +20,9 @@ RELEASES: list[dict] = [
              "audiences": ["SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM", "AM", "SYSTEM_ADMIN"]},
             {"summary": "迁移顺序发布校验完善",
              "detail": "任职历史迁移追加在既有病假索引修复之后，保留稳定迁移键和唯一注册校验；旧库行保留、幂等执行及全量迁移顺序仍须通过验证。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+            {"summary": "公告补收线程启停竞争修复",
+             "detail": "公告后台补收线程启动与停止使用同一互斥锁，仅公开已成功启动的线程，避免并发退出时等待尚未启动的线程；补齐交错启停、重复启停和启动失败验证，不改变公告签收规则。",
              "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
         ],
     },
