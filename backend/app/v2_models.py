@@ -64,6 +64,7 @@ class Employee(Base):
     # employee who has simply never been provisioned with an account.
     account_deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     account_deleted_by_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    employment_history: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 

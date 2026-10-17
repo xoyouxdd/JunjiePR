@@ -6,7 +6,7 @@ from app.role_constants import SCORED_BASE_CODES
 from app.services.identity import base_roles_at, duties_at_bulk, identity_labels, roles_at
 from app.services.organization import ACTING_LEADER_FIRST, group_leader_label
 from app.v2_models import Attraction, Employee, EmployeeActingDuty, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, Role, UserAccount, WorkGroup
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
@@ -157,15 +157,15 @@ def search_employee_targets(
 
 
 def login_account_archive_state(employee: Employee, account: UserAccount | None, role: Role | None) -> dict:
-    """Return non-sensitive eligibility for removing only a login account.
+    """Return non-sensitive eligibility for deleting a disabled person's login.
 
-    The employee primary key and every business row remain untouched.  Both
+    The employee primary key and every business row remain retained. Both
     the directory and the write endpoint use this same policy so the seven-day
     rule cannot be bypassed by calling the API directly.
     """
     result = {"deleted": bool(employee.account_deleted_at), "eligible": False, "reason": "", "eligible_on": ""}
     if employee.account_deleted_at:
-        result["reason"] = "账号已删除，业务档案已保留"
+        result["reason"] = "已删除·留档，业务档案已保留"
         return result
     if not account:
         result["reason"] = "该员工尚未开通登录账号"
@@ -173,28 +173,19 @@ def login_account_archive_state(employee: Employee, account: UserAccount | None,
     if not role or role.code not in REGULAR_ACCOUNT_ROLE_CODES:
         result["reason"] = "HR和最高管理员账号不支持在此删除"
         return result
-    reference_day: date | None = None
-    if not employee.is_active:
-        try:
-            reference_day = date.fromisoformat(str(employee.terminated_on or ""))
-        except ValueError:
-            result["reason"] = "离职日期未记录，暂不能删除登录账号"
-            return result
-    elif not account.enabled:
-        if not account.disabled_at:
-            result["reason"] = "停用时间未记录，暂不能删除登录账号"
-            return result
-        reference_day = account.disabled_at.date()
-    else:
-        result["reason"] = "需先离职或停用账号"
+    if account.enabled:
+        result["reason"] = "请先在账号状态中停用并保存，连续满7天后可删除"
         return result
-    eligible_on = reference_day + timedelta(days=7)
-    result["eligible_on"] = eligible_on.isoformat()
-    if date.today() < eligible_on:
-        result["reason"] = f"{eligible_on.isoformat()} 起可删除登录账号"
+    if not account.disabled_at:
+        result["reason"] = "停用时间未记录，请重新启用后停用并保存，连续满7天后可删除"
+        return result
+    eligible_at = account.disabled_at + timedelta(days=7)
+    result["eligible_on"] = eligible_at.date().isoformat()
+    if datetime.now() < eligible_at:
+        result["reason"] = f"{eligible_at:%Y-%m-%d %H:%M:%S} 起可删除（须连续停用满7天）"
         return result
     result["eligible"] = True
-    result["reason"] = "可删除登录账号；员工及所有业务档案会保留"
+    result["reason"] = "可删除；移出日常人员名单，历史数据保留并标记已删除·留档"
     return result
 
 

@@ -182,6 +182,7 @@
 | `terminated_on` | VARCHAR(10) | 是 | |
 | `account_deleted_at` | DATETIME | 是 | 登录账号已归档 |
 | `account_deleted_by_name` | VARCHAR(100) | 是 | 归档操作人姓名 |
+| `employment_history` | TEXT | 否 | JSON数组，默认`[]`；保留历次任职起止、删除时间和重新入职日期，同一员工原工号重新注册沿用主键 |
 | `created_at` | DATETIME | 否 | |
 | `updated_at` | DATETIME | 否 | |
 

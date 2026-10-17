@@ -25,6 +25,7 @@ from app.excel_export_utils import (
 )
 from app.v2_models import Attraction, Employee, EmployeeNumberHistory, Role
 from app.v2_services import base_roles_at
+from app.services.employment import employment_history
 
 
 def ordered_statistics_score_rows(data: dict) -> list[dict]:
@@ -94,10 +95,26 @@ def write_employee_number_history_sheet(wb: Workbook, db: Session, employee_ids:
         ws.append(["", "", "", "", "无", "本次导出范围内无员工号变更记录"])
     style_sheet(ws, landscape=True)
 
+    candidates = db.query(Employee).filter(Employee.id.in_(employee_ids)).order_by(Employee.employee_no).all() if employee_ids else []
+    archived = [employee for employee in candidates if employee.account_deleted_at or employment_history(employee)]
+    if archived:
+        archive_sheet = wb.create_sheet("员工留档标记")
+        archive_sheet.append(["员工号", "姓名", "人员状态", "删除时间", "说明", "重新入职日期"])
+        for employee in archived:
+            periods = employment_history(employee)
+            if not periods:
+                periods = [{"deleted_at": employee.account_deleted_at.isoformat()}]
+            for period in periods:
+                archive_sheet.append(excel_row([employee.employee_no, employee.name,
+                    "已删除·留档" if employee.account_deleted_at else "曾删除·已重新注册",
+                    period.get("deleted_at", "").replace("T", " "),
+                    "原始业务记录保留，按原权限及统计月份导出", period.get("rehired_on", "")]))
+        style_sheet(archive_sheet, landscape=True)
+
 
 def write_monthly_score_row(ws, row: dict, role, status: str = "在职") -> int:
-    status = "账号已删除·留档" if row.get("account_deleted_at") else status
     participating = not status.startswith("LOA")
+    status = "已删除·留档" if row.get("account_deleted_at") else status
     ws.append(excel_row([
         row["employee_no"],
         row["employee_name"],

@@ -31,7 +31,6 @@ function menuItems() {
   items.splice(['CM','TR'].includes(r)?1:0,0,['actionCenter','待办']);
   if(state.me.rotation_entry)items.push(['rotationTest','轮岗（测试）']);
   items.splice(Math.min(items.length,1),0,['announcements','公告中心']);
-  items.push(['changelog','更新记录']);
   items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);
   return items;
 }
@@ -87,7 +86,7 @@ function mobileIdentityCard(){
   return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></section>`;
 }
 
-const NAV_FOOTER_IDS=['changelog','password'];
+const NAV_FOOTER_IDS=['password'];
 
 const NAV_GROUP_DEFS=[
   {id:'work',label:'工作',ids:['announcements','home','review','supervisorReview','register','absence','members','entries']},
@@ -154,6 +153,7 @@ function groupedMenu(items){
 function isTabActive(id){return id===state.tab||(id==='statistics'&&state.tab==='statisticsDetail');}
 
 function currentPageMeta(items){
+  if(state.tab==='changelog') return {group:'',name:'更新记录'};
   if(state.tab==='statisticsDetail') return {group:'数据',name:'绩效明细'};
   const grouped=groupedMenu(items);
   if(grouped.pin&&grouped.pin[0]===state.tab) return {group:'',name:grouped.pin[1]};
@@ -226,7 +226,7 @@ function showAboutSystem(){
 function renderTabs() {
   startAnnouncementNotifications(refreshActionBadge);
   const items=menuItems();
-  if (!state.tab || (!items.some(i=>i[0]===state.tab) && state.tab!=='statisticsDetail')) state.tab=items[0]?.[0];
+  if (!state.tab || (!items.some(i=>i[0]===state.tab) && !['statisticsDetail','changelog'].includes(state.tab))) state.tab=items[0]?.[0];
   const tabButton=([id,name],extraClass='')=>`<button type="button" data-tab="${id}" class="${isTabActive(id)?'active':''} ${extraClass}" ${isTabActive(id)?'aria-current="page"':''} title="${esc(name)}" aria-label="${esc(name)}">${navIcon(id)}<span class="nav-label">${esc(name)}</span>${id==='announcements'?`<b class="nav-count-badge" data-announcement-badge ${(state.me.announcement_counts?.pending||0)?'':'hidden'}>${(state.me.announcement_counts?.pending||0)>99?'99+':(state.me.announcement_counts?.pending||0)}</b>`:id==='actionCenter'?`<b class="nav-count-badge" data-action-center-badge ${state.actionBadgeTotal?'':'hidden'}>${state.actionBadgeTotal>99?'99+':state.actionBadgeTotal}</b>`:''}</button>`;
   const grouped=groupedMenu(items);
   const desktopPin=grouped.pin?`<div class="nav-pin">${tabButton(grouped.pin)}</div>`:'';

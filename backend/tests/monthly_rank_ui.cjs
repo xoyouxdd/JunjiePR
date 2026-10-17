@@ -47,7 +47,7 @@ const server=http.createServer((req,res)=>{
   else if(route.startsWith('/static/')){
     const file=path.resolve(root,'.'+route.slice(7));
     if(!file.startsWith(root+path.sep)||!fs.existsSync(file)){res.writeHead(404);res.end();return;}
-    res.writeHead(200,{'Content-Type':{'.js':'text/javascript','.css':'text/css','.png':'image/png'}[path.extname(file)]||'application/octet-stream'});
+    res.writeHead(200,{'Content-Type':{'.js':'text/javascript','.css':'text/css','.png':'image/png','.wav':'audio/wav'}[path.extname(file)]||'application/octet-stream'});
     res.end(fs.readFileSync(file));
   }else if(route==='/api/me')json(res,me());
   else if(route==='/api/options')json(res,{roles:[],attractions:[],employee_circles:[],recognition_types:[],deduction_types:[]});
@@ -78,7 +78,10 @@ async function render(page){
 async function showRank(page){
   await page.locator('#homeRankView').click();
   if(previous)await page.locator('#homeRankContent [role=alert]').waitFor();
-  else await page.locator('#homeRankView[aria-expanded=true]').waitFor();
+  else {
+    await page.locator('#homeRankView[aria-expanded=true]').waitFor();
+    await page.waitForFunction(()=>!document.querySelector('.is-preparing'));
+  }
 }
 async function main(){
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -86,12 +89,112 @@ async function main(){
   let checked=0;
   try{
     const page=await browser.newPage();
+    await page.addInitScript(()=>{
+      window.__rankAudioPlays=[];
+      const nativePlay=HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play=function(){window.__rankAudioPlays.push(this);return nativePlay.call(this);};
+    });
     page.on('pageerror',e=>errors.push(e.message));
     page.on('console',m=>{if(m.type()==='error'&&!(expectedQueryFailure&&m.text().includes('status of 503')))errors.push(m.text());});
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.locator('#homeMonthSelect').waitFor();
     assert.equal(rankRequests.length,0,'Rank results are never fetched automatically');
     assert.equal(await page.locator('.member-rank-emblem').count(),0);
+    // Ceremony runs only after a valid personal result; reuse the real artwork.
+    const previewDir=path.resolve(__dirname,'../../output/medal-signatures-20261017');
+    fs.mkdirSync(previewDir,{recursive:true});
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.setViewportSize({width:390,height:1000});
+    await render(page);
+    assert.equal(await page.locator('.is-assembling').count(),1);
+    assert.equal(await page.locator('.member-rank-layer').count(),5);
+    assert.equal(await page.locator('.member-rank-shard').count(),0);
+    assert.equal(await page.locator('[data-rank-skip]').isVisible(),true);
+    await page.evaluate(()=>document.querySelector('.member-rank-hero').getAnimations({subtree:true}).forEach(animation=>{animation.pause();animation.currentTime=800;}));
+    await page.screenshot({path:path.join(previewDir,'assembling.png'),fullPage:true});
+    const sequence=await page.evaluate(()=>{
+      const hero=document.querySelector('.member-rank-hero'),duration=parseFloat(getComputedStyle(hero).getPropertyValue('--ceremony-duration'))*1000;
+      return [.14,.43,.60,.985].map(fraction=>{
+        hero.getAnimations({subtree:true}).forEach(animation=>{animation.pause();animation.currentTime=duration*fraction;});
+        const opacity=selector=>Number(getComputedStyle(hero.querySelector(selector)).opacity);
+        return {base:opacity('.member-rank-plinth'),body:opacity('[data-part="body"]'),wing:opacity('[data-part="left"]'),name:opacity('h3')};
+      });
+    });
+    assert(sequence[0].base>0&&sequence[0].body===0&&sequence[0].name===0,'Pedestal appears first');
+    assert(sequence[1].body===1&&sequence[1].wing===0,'Body lands before wings');
+    assert(sequence[2].wing===1&&sequence[2].name===0,'Wings grow before the name');
+    assert(sequence[3].name>.9,'Name pops after assembly');
+    await page.evaluate(()=>document.querySelector('.member-rank-hero').getAnimations({subtree:true}).forEach(animation=>animation.play()));
+    await page.waitForFunction(()=>!document.querySelector('.is-assembling'));
+    assert.equal(await page.locator('[data-rank-replay]').isVisible(),true);
+    assert.equal(await page.locator('[data-rank-sound]').getAttribute('aria-pressed'),'false');
+    assert.equal(await page.evaluate(()=>window.__rankAudioPlays.length),0,'Viewing a medal must never play audio');
+    const viewedRequests=rankRequests.length;
+    await page.locator('[data-rank-replay]').click();
+    await page.locator('[data-rank-skip]').click();
+    assert.equal(rankRequests.length,viewedRequests,'Replay never refetches or recomputes the result');
+    assert.equal(await page.locator('.is-assembling').count(),0);
+    assert.equal(await page.locator('[data-rank-replay]').evaluate(el=>el===document.activeElement),true);
+    // Deliver an offline, replayable preview using the same DOM, CSS and sprites.
+    let previewCss=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
+    previewCss=previewCss.replace(/url\("\.\.\/images\/ranks\/([^"\)]+)"\)/g,(_,name)=>`url("data:image/png;base64,${fs.readFileSync(path.join(root,'images/ranks',name)).toString('base64')}")`);
+    const soundData='data:audio/wav;base64,'+fs.readFileSync(path.join(root,'audio/medal-soft-seal.wav')).toString('base64');
+    const previewPanel=(await page.locator('.member-home-panel').evaluate(el=>el.outerHTML)).replace(/src="[^"]*\/static\/audio\/medal-soft-seal.wav"/,`src="${soundData}"`);
+    const homeSource=fs.readFileSync(path.join(root,'js/app/home.js'),'utf8');
+    const binding=homeSource.slice(homeSource.indexOf('const rankCeremonies='),homeSource.indexOf('function homeRankContent('));
+    const descriptions={0:'星光逐层浮现，简洁展示',10:'铜纹平稳铸成，简洁展示',20:'左右银环从两侧扣合，中央勋章显形',30:'盾身自底部铸成，金色纹路沿轮廓点亮',40:'底座浮现，主体轻落，双翼平顺展开',50:'晶徽从侧面翻转到正面，晶面扫光后定格',60:'中央星核先亮，盾身升起，双翼张开，星芒划过',70:'背后秘印先开启，主体从印中推出，双翼分两次伸展',80:'双翼先合拢包住主体，停顿蓄势后猛然展开，名字压印出现',90:'背景压暗，王座升起，主体落座、金翼展开，最后王冠落下、名字亮起'};
+    fs.writeFileSync(path.join(previewDir,'preview.html'),`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>十种月度勋章 · 逐层组成预览</title><style>${previewCss}\nbody{margin:0;padding:20px;background:#edf1f7}main{max-width:760px;margin:auto}#homeMonthSelect,#homeRankView{pointer-events:none}.rank-preview-tools{padding:18px;margin-bottom:18px;border-radius:16px;background:#fff}.rank-preview-tools label{display:grid;gap:8px;font-weight:600}.rank-preview-tools audio{width:100%;max-width:100%}.rank-preview-tools p{font-size:14px;color:#52627a;margin-bottom:0}</style><main><section class="rank-preview-tools"><label>切换勋章，查看不同组成方式<select id="previewTier">${Object.keys(names).reverse().map(value=>`<option value="${value}"${value==='20'?' selected':''}>${names[value]}</option>`).join('')}</select></label><p id="previewDescription"></p><p>白银起八种专属动作：扣环 / 铸纹 / 轻落 / 翻转 / 星核 / 秘印 / 蓄势 / 加冕</p><p>听声音可点下方“试听音效”，也可用此播放器：</p><audio controls preload="none" src="${soundData}"></audio></section>${previewPanel}</main><script>${binding}\nconst demoNames=${JSON.stringify(names)},descriptions=${JSON.stringify(descriptions)};const originalHero=document.querySelector('.member-rank-hero').outerHTML;let previewCleanup=()=>{};function showMedal(tier){previewCleanup();document.querySelector('.member-rank-hero').outerHTML=originalHero;const hero=document.querySelector('.member-rank-hero');hero.querySelector('.member-rank-stage').outerHTML=rankEmblem(tier);hero.querySelector('h3').textContent=demoNames[tier];hero.setAttribute('aria-label',demoNames[tier]+'游戏段位');document.querySelector('.member-home-panel').dataset.rankTier=tier;document.querySelector('#previewDescription').textContent=rankCeremonies[tier].name+' · '+descriptions[tier];previewCleanup=bindRankCeremony(document.querySelector('main'));}document.querySelector('#previewTier').onchange=event=>showMedal(Number(event.target.value));showMedal(20);</script></html>`);
+    await page.screenshot({path:path.join(previewDir,'mobile.png'),fullPage:true});
+    const cinema=await browser.newPage({viewport:{width:390,height:844},recordVideo:{dir:previewDir,size:{width:390,height:844}}});
+    await cinema.goto(`http://127.0.0.1:${server.address().port}/`);
+    await cinema.locator('#homeMonthSelect').waitFor();
+    await render(cinema);
+    await cinema.waitForFunction(()=>!document.querySelector('.is-assembling'));
+    await cinema.waitForTimeout(700); // Hold the completed medal in the preview recording.
+    const video=cinema.video();await cinema.close();
+    const videoPath=await video.path();fs.renameSync(videoPath,path.join(previewDir,'ceremony.webm'));
+    await page.locator('[data-rank-sample]').click();
+    await page.waitForFunction(()=>window.__rankAudioPlays.length===1&&document.querySelector('[data-rank-audio]').ended);
+    assert.equal(await page.locator('[data-rank-sound]').getAttribute('aria-pressed'),'false','A sample does not enable automatic sound');
+    assert.equal(await page.locator('[data-rank-audio]').evaluate(audio=>audio.error),null);
+    assert.equal(await page.locator('[data-rank-audio]').evaluate(audio=>audio.volume),.45);
+    await page.locator('[data-rank-sound]').click();
+    assert.equal(await page.locator('[data-rank-sound]').getAttribute('aria-pressed'),'true');
+    await page.waitForFunction(()=>document.querySelector('[data-rank-audio]').ended);
+    const played=await page.evaluate(()=>window.__rankAudioPlays.length);
+    await page.locator('[data-rank-replay]').click();
+    await page.waitForFunction(count=>window.__rankAudioPlays.length>count,played);
+    await page.locator('[data-rank-sound]').click();
+    assert.equal(await page.locator('[data-rank-audio]').evaluate(audio=>audio.paused),true);
+    await page.locator('[data-rank-skip]').click();
+    await page.locator('[data-rank-sound]').click();
+    await page.locator('#homeRankView').click();
+    assert(await page.evaluate(()=>window.__rankAudioPlays.every(audio=>audio.paused)));
+    await showRank(page);
+    assert.equal(await page.locator('[data-rank-sound]').getAttribute('aria-pressed'),'false','A newly opened result is muted again');
+    await page.locator('[data-rank-skip]').click();
+    // All ten use different structural sequences and finishing effects, not just recoloring.
+    const compositions=new Set(),effects=new Set();
+    for(tier of [0,10,20,30,40,50,60,70,80,90]){
+      await render(page);
+      const recipe=await page.locator('.member-rank-stage').evaluate(stage=>({
+        layers:[...stage.querySelectorAll('.member-rank-layer')].map(layer=>layer.dataset.layerShape).join(','),
+        effect:[...stage.closest('.member-rank-hero').getAnimations({subtree:true})].map(animation=>animation.animationName).join(','),
+        transforms:[...stage.querySelectorAll('.member-rank-layer')].map(layer=>getComputedStyle(layer).transform),
+      }));
+      compositions.add(recipe.layers);effects.add(recipe.effect);
+      const signature={20:'rank-silver-close-left',30:'rank-forge-trace',40:'rank-body-gentle',50:'rank-diamond-turn',60:'rank-star-ignite',70:'rank-seal-open',80:'rank-wing-wrap-left',90:'rank-royal-crown'}[tier];
+      if(signature)assert(recipe.effect.includes(signature),'Each medal has its own visible action: '+tier);
+      else assert(recipe.transforms.every(transform=>transform==='none'),'First two medals remain simple');
+      await page.locator('[data-rank-skip]').click();
+    }
+    assert.equal(compositions.size,10);assert.equal(effects.size,10);
+    tier=90;
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await render(page);
+    assert.equal(await page.locator('.is-assembling').count(),0);
+    await page.locator('[data-rank-replay]').click();
+    assert.equal(await page.locator('.is-assembling').count(),0);
     for(identity of ['CM','TR','TA_SUPERVISOR','SUPERVISOR','TA_GSM']){
       for(const width of [320,390,768,1280]){
         await page.setViewportSize({width,height:1000});
@@ -139,6 +242,7 @@ async function main(){
       await render(page);
       assert.equal(await page.locator('.member-rank-panel').count(),0);
       assert.equal(await page.locator('.member-rank-emblem').count(),0);
+      assert.equal(await page.locator('[data-rank-replay]').count(),0);
       assert.equal(await page.locator('.member-rank-empty').textContent(),messages[status]);
     }
     status='ranked';tier=90;previous=true;await render(page);
@@ -160,7 +264,8 @@ async function main(){
     assert.equal(await page.locator('.home-recognition-pending').count(),0);
     assert.equal(await page.locator('#homeMonthSelect').count(),1);
     assert.equal(await page.locator('#homeQueryRetry').count(),0);
-    assert.equal(await page.locator('.member-home-panel button').count(),1);
+    assert.equal(await page.locator('#homeRankView').count(),1);
+    assert.equal(await page.locator('[data-rank-replay]').isVisible(),true);
     assert.equal(await page.locator('#homeMonthSelect optgroup[label="2025年"]').count(),1);
     await page.locator('#homeMonthSelect').selectOption('2025-12');
     await showRank(page);

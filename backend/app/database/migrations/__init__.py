@@ -7,6 +7,7 @@ from .schema import (
     ensure_account_status_password_timestamp,
     ensure_submission_payload_digest,
     ensure_login_account_archive_columns,
+    ensure_employee_employment_history,
     ensure_recognition_same_day_duplicate_columns,
     ensure_deduction_statement_upgrade_columns,
     ensure_recognition_credit_cap_and_poc_columns,

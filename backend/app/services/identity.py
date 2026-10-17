@@ -8,6 +8,7 @@ from __future__ import annotations
 from calendar import monthrange
 from datetime import date
 from decimal import Decimal
+from app.services.employment import employment_history, previously_employed_on
 
 from fastapi import HTTPException
 from sqlalchemy import case, func, or_
@@ -413,6 +414,8 @@ def recognition_score_for_role(db: Session, role_id: int, on_date: str) -> Decim
 
 
 def employee_active_on(employee: Employee, on_date: str) -> bool:
+    if previously_employed_on(employee, on_date):
+        return True
     if employee.hired_on and employee.hired_on > on_date:
         return False
     if employee.terminated_on and employee.terminated_on <= on_date:
@@ -422,6 +425,8 @@ def employee_active_on(employee: Employee, on_date: str) -> bool:
 
 def employed_on(employee: Employee, on_date: str) -> bool:
     """Whether the employee had not yet left on a (possibly past) date."""
+    if employment_history(employee):
+        return employee_active_on(employee, on_date)
     if employee.terminated_on:
         return employee.terminated_on > on_date
     return employee.is_active

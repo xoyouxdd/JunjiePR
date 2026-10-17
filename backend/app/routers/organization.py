@@ -119,11 +119,9 @@ def hr_organization(db: Session = Depends(get_db), user: V2User = Depends(requir
     """员工管理: per circle, its 主管, its groups with members, and the unassigned."""
     today_value = date.today().isoformat()
     allowed_attractions = scoped_hr_attraction_ids(db, user)
-    # Hide departed employees whose login account has been archived only in
-    # this management tree; retain employee/history rows for other queries.
-    employee_query = db.query(Employee).filter(
-        or_(Employee.is_active.is_(True), Employee.account_deleted_at.is_(None))
-    )
+    # Archived personnel leave the daily tree, including legacy active entries;
+    # employee/history rows remain available for historical queries and exports.
+    employee_query = db.query(Employee).filter(Employee.account_deleted_at.is_(None))
     if allowed_attractions is not None:
         employee_query = employee_query.filter(Employee.attraction_id.in_(allowed_attractions))
     employees = employee_query.order_by(Employee.name, Employee.employee_no).all()

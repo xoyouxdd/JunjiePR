@@ -17,7 +17,7 @@ from app.v2_database import get_db
 from app.v2_models import (Announcement, AnnouncementAsset, AnnouncementDelivery,
     AnnouncementFavorite, AnnouncementGrant, AnnouncementHandover, AnnouncementMedia,
     AnnouncementNotification, AnnouncementProject, AnnouncementProjectMember,
-    AnnouncementVersion, Attraction, Employee, EmployeeLOAPeriod, GroupMembership, StoredFile, UserAccount, WorkGroup)
+    AnnouncementVersion, Attraction, Employee, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, StoredFile, UserAccount, WorkGroup)
 from app.v2_services import base_roles_at, direct_member_ids, duties_at_bulk, role_at
 
 CATEGORIES = ["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动", "培训"]
@@ -290,6 +290,28 @@ def delivery_payload(db, row):
             "signature_url": f"/api/files/{row.signature_file_id}?preview=true" if row.signature_file_id else None,
             "signing_statement": row.signing_statement, **training.receipt_fields(db, row.id),
             "overdue": row.status == "pending" and bool(row.due_on and row.due_on < date.today().isoformat())}
+
+
+def record_group_leaders(db, groups):
+    """Current contacts only, for groups already admitted by receipt scope checks."""
+    group_ids = {group["id"] for group in groups if group["id"] is not None}
+    names = {}
+    today = date.today().isoformat()
+    # Match group_leader_of_type's effective-date and latest-assignment rules,
+    # but fetch both types for all visible groups in one query.
+    rows = db.query(GroupLeaderAssignment, Employee.name).join(
+        Employee, Employee.id == GroupLeaderAssignment.leader_employee_id
+    ).filter(
+        GroupLeaderAssignment.group_id.in_(group_ids),
+        GroupLeaderAssignment.status == "active",
+        GroupLeaderAssignment.starts_on <= today,
+        or_(GroupLeaderAssignment.ends_on.is_(None), GroupLeaderAssignment.ends_on >= today),
+        GroupLeaderAssignment.leader_type.in_({"formal", "acting"}),
+    ).order_by(GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc()).all() if group_ids else []
+    for assignment, name in rows:
+        names.setdefault((assignment.group_id, assignment.leader_type), name)
+    return [{**group, "formal_leader_name": names.get((group["id"], "formal"), ""),
+             "acting_leader_name": names.get((group["id"], "acting"), "")} for group in groups]
 
 
 def grouped_records(db, rows):

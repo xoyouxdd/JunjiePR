@@ -15,6 +15,7 @@ from app.database.migrations.schema import (
     ensure_account_status_password_timestamp,
     ensure_submission_payload_digest,
     ensure_login_account_archive_columns,
+    ensure_employee_employment_history,
     ensure_recognition_same_day_duplicate_columns,
     ensure_deduction_statement_upgrade_columns,
     ensure_recognition_credit_cap_and_poc_columns,
@@ -69,6 +70,7 @@ MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-10-month-rank-comments', ensure_month_rank_comment_column),
     ('2026-10-month-rank-rule-version', ensure_month_rank_rule_columns),
     ('2026-09-sick-leave-index-repair', ensure_sick_leave_record_indexes),
+    ('2026-10-employee-employment-history', ensure_employee_employment_history),
 )
 SCHEMA_MIGRATION_STEPS = [(key, runner.__name__) for key, runner in MIGRATION_RUNNERS]
 

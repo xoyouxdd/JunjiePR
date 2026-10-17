@@ -20,6 +20,7 @@ from app.services.audit import write_audit
 from app.services.identity import base_role_at, duties_at_bulk, role_at
 from app.services.employee_commands import EmployeeEditContext, apply_employee_edit
 from app.services.employee_status import employee_circle_id
+from app.services.employment import restart_employment
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.services import loa_commands
@@ -441,6 +442,19 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), d
 
 @router.post("/hr/employees")
 def create_employee(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    try:
+        db.rollback()
+        db.execute(text("BEGIN IMMEDIATE"))
+        return _create_employee(payload, request, db, user)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "该员工号刚刚已被注册，请刷新后确认") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _create_employee(payload: dict, request: Request, db: Session, user: V2User):
     employee_no = str(payload.get("employee_no") or "").strip()
     name = str(payload.get("name") or "").strip()
     role = db.query(Role).filter(Role.code == str(payload.get("role_code") or "")).first()
@@ -449,12 +463,36 @@ def create_employee(payload: dict, request: Request, db: Session = Depends(get_d
     if len(employee_no) != 7 or not employee_no.isdigit():
         raise HTTPException(400, "员工号必须为7位纯数字")
     ensure_hr_role_allowed(user, role.code)
-    if db.query(Employee).filter(Employee.employee_no == employee_no).first() or db.query(UserAccount).filter(UserAccount.login_account == employee_no).first():
+    existing = db.query(Employee).filter(Employee.employee_no == employee_no).first()
+    if db.query(UserAccount).filter(UserAccount.login_account == employee_no).first() or (existing and not existing.account_deleted_at):
         raise HTTPException(400, "该员工号已存在，不能重复创建账号")
     attraction_id = employee_circle_id(db, payload.get("attraction_id"))
     ensure_scoped_hr_attraction(db, user, attraction_id)
-    employee = Employee(employee_no=employee_no, name=name, attraction_id=attraction_id, is_active=True, hired_on=str(payload.get("hired_on") or date.today().isoformat()))
-    db.add(employee)
+    rehire = bool(existing)
+    previous_deleted_at = None
+    if existing:
+        ensure_scoped_hr_employee(db, user, existing)
+        old_role = role_at(db, existing.id)
+        if old_role:
+            ensure_hr_role_allowed(user, old_role.code)
+        if db.query(UserAccount).filter(UserAccount.employee_id == existing.id).first():
+            raise HTTPException(409, "该历史档案仍有关联账号，请先核对")
+        if name != existing.name:
+            raise HTTPException(409, "该工号属于已删除档案，但姓名不一致，请核对是否为同一人员")
+        if role.code in {"TA_SUPERVISOR", "TA_GSM"}:
+            raise HTTPException(400, "重新入职请先选择本职，注册后再设置代理职务")
+        starts_on = parse_iso_date(str(payload.get("starts_on") or payload.get("hired_on") or date.today().isoformat()), "入职日期").isoformat()
+        if starts_on != date.today().isoformat():
+            raise HTTPException(400, "重新注册以本次入职当天生效，请使用今天的入职日期")
+        ensure_month_open(db, starts_on[:7], existing.attraction_id, "重新入职注册")
+        ensure_month_open(db, starts_on[:7], attraction_id, "重新入职注册")
+        previous_deleted_at = existing.account_deleted_at.isoformat()
+        restart_employment(db, existing, attraction_id, starts_on)
+        employee = existing
+    else:
+        starts_on = str(payload.get("starts_on") or date.today().isoformat())
+        employee = Employee(employee_no=employee_no, name=name, attraction_id=attraction_id, is_active=True, hired_on=str(payload.get("hired_on") or date.today().isoformat()))
+        db.add(employee)
     db.flush()
     ends_on = str(payload.get("ends_on") or "").strip() or None
     return_role = db.query(Role).filter(Role.code == str(payload.get("return_role_code") or "")).first() if ends_on else None
@@ -466,12 +504,12 @@ def create_employee(payload: dict, request: Request, db: Session = Depends(get_d
         EmployeeRoleAssignment(
             employee_id=employee.id,
             role_id=role.id,
-            starts_on=str(payload.get("starts_on") or date.today().isoformat()),
+            starts_on=starts_on,
             ends_on=ends_on,
             assignment_type="temporary" if ends_on else "permanent",
             return_role_id=return_role.id if return_role else None,
             status="active",
-            reason="HR新建员工",
+            reason="HR重新入职注册" if rehire else "HR新建员工",
             created_by=user.id,
         )
     )
@@ -492,7 +530,9 @@ def create_employee(payload: dict, request: Request, db: Session = Depends(get_d
             credential_initialized=True,
         )
     )
-    write_audit(db, user.employee, "新建员工", "employee", employee.id, after={"employee_no": employee_no, "role": role.name}, ip_address=client_ip(request))
+    write_audit(db, user.employee, "重新入职注册" if rehire else "新建员工", "employee", employee.id,
+                before={"previous_deleted_at": previous_deleted_at} if rehire else None,
+                after={"employee_no": employee_no, "role": role.name, "rehired": rehire, "history_retained": True}, ip_address=client_ip(request))
     db.commit()
     invalidate_data_caches()
     return {
@@ -500,6 +540,7 @@ def create_employee(payload: dict, request: Request, db: Session = Depends(get_d
         "employee": employee_payload(db, employee),
         "temporary_password": temporary_password,
         "must_change_password": True,
+        "rehired": rehire,
     }
 
 

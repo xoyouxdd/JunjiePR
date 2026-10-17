@@ -28,7 +28,7 @@ from app.v2_models import (Announcement, AnnouncementVersion, AnnouncementDelive
     AnnouncementTrainingConfig, AnnouncementTrainer, AnnouncementTrainingCode, AnnouncementTrainingReceipt, AnnouncementTrainingAttempt,
     AnnouncementHandover, AnnouncementResponsibility, AnnouncementResponsibilityHandover, AnnouncementFavorite, AnnouncementGrant, AnnouncementProjectMember,
     AnnouncementProject, AnnouncementAsset, Employee, EmployeeLOAPeriod, EmployeeRoleAssignment,
-    GroupMembership, Role, StoredFile, UserAccount, WorkGroup)
+    GroupLeaderAssignment, GroupMembership, Role, StoredFile, UserAccount, WorkGroup)
 from app.v2_crypto import hash_password
 from app import announcements as domain
 
@@ -605,6 +605,38 @@ def test_missing_or_changed_signature_blocks_report_instead_of_omitting_evidence
 
 
 
+def test_record_group_leaders_use_current_assignments_only(client):
+    today = date.today()
+    with SessionLocal() as db:
+        people = db.query(Employee).order_by(Employee.id).limit(4).all()
+        circle = people[0].attraction_id or db.query(WorkGroup).first().attraction_id
+        groups = [WorkGroup(name=f"负责人展示测试{i}", code=f"CONTACT{i}", attraction_id=circle) for i in range(3)]
+        db.add_all(groups)
+        db.flush()
+        def assignment(group, person, kind, starts=-1, ends=None, status="active"):
+            db.add(GroupLeaderAssignment(group_id=group.id, leader_employee_id=person.id, leader_type=kind,
+                starts_on=(today+timedelta(days=starts)).isoformat(),
+                ends_on=(today+timedelta(days=ends)).isoformat() if ends is not None else None, status=status))
+        assignment(groups[0], people[0], "formal", starts=-3)
+        assignment(groups[0], people[1], "formal", starts=0)
+        assignment(groups[0], people[2], "acting", ends=0)
+        assignment(groups[0], people[3], "acting", starts=1)
+        assignment(groups[1], people[0], "formal", starts=-3, ends=-1)
+        assignment(groups[1], people[1], "acting", status="ended")
+        assignment(groups[2], people[3], "acting")
+        db.flush()
+        visible = [{"id": group.id, "name": group.name} for group in groups[:2]] + [{"id": None, "name": "未分组"}]
+        result = domain.record_group_leaders(db, visible)
+        assert result[0]["formal_leader_name"] == people[1].name
+        assert result[0]["acting_leader_name"] == people[2].name
+        assert result[1]["formal_leader_name"] == result[1]["acting_leader_name"] == ""
+        assert result[2]["formal_leader_name"] == result[2]["acting_leader_name"] == ""
+        assert groups[2].id not in {group["id"] for group in result}
+        acting_only = domain.record_group_leaders(db, [{"id": groups[2].id}])[0]
+        assert acting_only["formal_leader_name"] == "" and acting_only["acting_leader_name"] == people[3].name
+        # Synthetic assignments are rolled back when the session closes.
+
+
 def test_group_distribution_is_ordered_scoped_and_uses_current_valid_memberships(client):
     login(client, "TAGSMTEST01")
     circles = ok(client.get("/api/announcements/options"))["publisher"]["circles"]
@@ -638,6 +670,7 @@ def test_group_distribution_is_ordered_scoped_and_uses_current_valid_memberships
     assert data["scoped"] and data["group_basis"] == "当前小组"
     assert other_person not in {r["employee_id"] for r in data["items"]}
     assert all(g["attraction_id"] == own_circle for g in data["groups"])
+    assert all("formal_leader_name" in g and "acting_leader_name" in g for g in data["groups"])
     own_groups = [g["id"] for g in data["groups"] if g["id"]]
     assert own_groups.index(group_ids[0]) < own_groups.index(group_ids[1])
     signed = next(r for r in data["items"] if r["employee_id"] == person_a)
@@ -656,6 +689,8 @@ def test_group_distribution_is_ordered_scoped_and_uses_current_valid_memberships
     assert transferred["group_id"] is None and transferred["status"] == "pending"
     assert transferred["attraction_id"] == own_circle
     assert group_ids[2] not in {g["id"] for g in data["groups"]}
+    ungrouped = next(g for g in data["groups"] if g["key"] == transferred["group_key"])
+    assert ungrouped["formal_leader_name"] == ungrouped["acting_leader_name"] == ""
 
 
 def test_report_layout_keeps_scoped_counts_and_full_content(client):

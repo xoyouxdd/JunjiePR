@@ -141,6 +141,13 @@ def ensure_submission_payload_digest(db) -> None:
     db.commit()
 
 
+def ensure_employee_employment_history(db) -> None:
+    columns = {row[1] for row in db.execute(text("PRAGMA table_info(employees)"))}
+    if "employment_history" not in columns:
+        db.execute(text("ALTER TABLE employees ADD COLUMN employment_history TEXT NOT NULL DEFAULT '[]'"))
+    db.commit()
+
+
 def ensure_login_account_archive_columns(db) -> None:
     """Add account-removal timestamps without touching employee history.
 

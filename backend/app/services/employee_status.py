@@ -36,9 +36,24 @@ def apply_profile_and_status(context: EmployeeEditContext) -> None:
     requested_status = str(context.payload.get("employment_status") or "").strip().lower()
     if requested_status and requested_status not in {"active", "loa", "terminated"}:
         raise HTTPException(400, "人员状态无效")
+    if context.employee.account_deleted_at:
+        raise HTTPException(409, "该人员已删除留档，不能修改或重新启用")
+    if context.employee.is_active and (requested_status == "terminated" or
+            (not requested_status and "is_active" in context.payload and not bool(context.payload["is_active"]))):
+        context.ensure_current_month_open("修改人员状态")
+        raise HTTPException(400, "离职已合并为删除；请先停用账号，连续满7天后使用删除")
     _apply_profile(context)
     _apply_employment_status(context, requested_status)
     _apply_account_status(context)
+
+
+def archive_employee_profile(context: EmployeeEditContext) -> None:
+    """The authorized seven-day deletion endpoint owns this status transition."""
+    _apply_employment_status(context, "terminated")
+    if context.attendance_state_changed:
+        context.changed_months.add(context.today.strftime("%Y-%m"))
+    loa_commands.recalculate_changed_months(context.db, context.employee, context.changed_months)
+    context.employee.updated_at = datetime.now()
 
 
 def _apply_profile(context: EmployeeEditContext) -> None:

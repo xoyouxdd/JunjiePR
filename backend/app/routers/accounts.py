@@ -1,15 +1,20 @@
 """Login account, password and account-name endpoints."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, require_permissions
 from app.v2_crypto import account_reset_password, hash_password
 from app.v2_database import CIRCLE_HR_ACCOUNTS, get_db
 from app.v2_models import Attraction, Employee, Role, UserAccount, UserSession
 from app.v2_services import managed_attraction_ids, role_at, roles_at, write_audit
+from app.services.employee_commands import EmployeeEditContext
+from app.services.employee_status import archive_employee_profile
+from app.services.employment import retain_deleted_employment
+from app.services.identity import base_role_at
+from app.month_closure import ensure_month_open
 from app.routers._shared import (
     CIRCLE_HR_MANAGED_ROLE_CODES,
     REGULAR_ACCOUNT_ROLE_CODES,
@@ -37,11 +42,11 @@ def account_password_status(account: UserAccount | None) -> tuple[str, str]:
 
 def account_login_state(account: UserAccount | None, employee: Employee) -> tuple[str, str]:
     if employee.account_deleted_at:
-        return "账号已删除·留档", "archived"
+        return "已删除·留档", "archived"
     if not account:
         return "未开通账号", "unprovisioned"
     if not employee.is_active:
-        return "员工已离职（不可登录）", "employee_inactive"
+        return "人员已停用（不可登录）", "employee_inactive"
     if not account.enabled:
         return "账号已停用", "disabled"
     if account.locked_until and account.locked_until > datetime.now():
@@ -360,7 +365,17 @@ def archive_employee_login_account(
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("HR_MANAGE")),
 ):
-    """Remove only credentials and sessions after seven days; keep all data."""
+    """Archive the employee and remove credentials atomically; retain history."""
+    try:
+        db.rollback()
+        db.execute(text("BEGIN IMMEDIATE"))
+        return _archive_employee(employee_id, request, payload, db, user)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _archive_employee(employee_id: int, request: Request, payload: dict | None, db: Session, user: V2User):
     employee = db.get(Employee, employee_id)
     if not employee:
         raise HTTPException(404, "员工不存在")
@@ -372,16 +387,24 @@ def archive_employee_login_account(
         "login_account": account.login_account,
         "employee_active": employee.is_active,
         "account_enabled": account.enabled,
+        "account_disabled_at": account.disabled_at.isoformat() if account.disabled_at else "",
     }
+    context = EmployeeEditContext(
+        db=db, employee=employee, payload={"reason": str((payload or {}).get("reason") or "停用满7天后删除，历史数据留档")},
+        user=user, existing_role=role, existing_base_role=base_role_at(db, employee.id),
+        today=date.today(), loa_today=date.today(), month_gate=ensure_month_open, ip_address=client_ip(request),
+    )
+    archive_employee_profile(context)
     revoked_sessions = db.query(UserSession).filter(UserSession.account_id == account.id).delete(synchronize_session=False)
     db.delete(account)
     employee.account_deleted_at = datetime.now()
     employee.account_deleted_by_name = user.name
+    retain_deleted_employment(employee)
     employee.updated_at = datetime.now()
     write_audit(
         db,
         user.employee,
-        "删除停用登录账号",
+        "删除人员（留档）",
         "employee_login_archive",
         employee.id,
         before=before,
@@ -393,8 +416,10 @@ def archive_employee_login_account(
             "sessions_revoked": int(revoked_sessions),
             "employee_archive_retained": True,
             "business_history_retained": True,
+            "employee_active": employee.is_active,
+            "archive_marker": "已删除·留档",
         },
-        reason=str((payload or {}).get("reason") or "离职/停用满7天后删除登录账号，保留员工与业务档案"),
+        reason=str((payload or {}).get("reason") or "连续停用满7天后删除，保留员工与业务档案"),
         ip_address=client_ip(request),
     )
     db.commit()

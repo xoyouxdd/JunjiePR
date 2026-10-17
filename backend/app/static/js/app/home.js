@@ -1,8 +1,8 @@
 // Member home-month selection, score summary and recognition history.
 import { api } from './api.js';
-import { beginViewRequest } from './context.js';
+import { beginViewRequest, registerPageCleanup } from './context.js';
 import { bindImagePreviews } from './files.js';
-import { esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths } from './format.js';
+import { esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, portalPath } from './format.js';
 import { bindWithdraw, recognitionCard } from './records.js';
 import { app, state } from './state.js';
 
@@ -35,12 +35,83 @@ function homeScoreIcon(name){
 let homeMonthOptions=[];
 let homeMonthOwner=null;
 const rankStatement='段位根据当月PR积分在同类人员中的相对分布自动生成，仅供个人参考。段位不代表个人综合工作表现，不构成独立的绩效评价结果。';
+const rankCeremonies={
+  0:{kind:'dawn',name:'星光初升',layers:['dawn-base','dawn-body','dawn-top']},
+  10:{kind:'bronze',name:'铜纹铸印',layers:['quarter-base','quarter-low','quarter-high','quarter-top']},
+  20:{kind:'silver',name:'银环扣合',layers:['silver-base','silver-body','silver-left','silver-right','silver-crest']},
+  30:{kind:'gold',name:'金纹铸成',layers:['gold-base','gold-body','gold-left','gold-right','gold-crest']},
+  40:{kind:'platinum',name:'轻落展翼',layers:['platinum-base','platinum-body','platinum-left','platinum-right','platinum-crest']},
+  50:{kind:'diamond',name:'晶徽翻转',layers:['diamond-base','diamond-body','diamond-left','diamond-right','diamond-crest']},
+  60:{kind:'star',name:'星核唤醒',layers:['star-base','star-body','star-left','star-right','star-crest']},
+  70:{kind:'master',name:'秘印解封',layers:['master-base','master-body','master-left','master-right','master-crest']},
+  80:{kind:'grand',name:'绯翼蓄势',layers:['grand-base','grand-body','grand-left','grand-right','grand-crest']},
+  90:{kind:'royal',name:'王者加冕',layers:['royal-base','royal-body','royal-left','royal-right','royal-crest']},
+};
+function rankEmblem(tier){
+  const ceremony=rankCeremonies[tier];
+  const silver='<svg class="rank-silver-ring" viewBox="0 0 100 100"><path class="rank-ring-left" d="M50 10a40 40 0 0 0 0 80"/><path class="rank-ring-right" d="M50 10a40 40 0 0 1 0 80"/></svg>';
+  const forge='<svg class="rank-forge" viewBox="0 0 100 100"><path d="M50 10 80 26 73 66 50 91 27 66 20 26Z"/><path d="M50 24v53M34 36l16 15 16-15"/></svg>';
+  const seal='<svg class="rank-seal" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/><circle cx="50" cy="50" r="37"/><path d="M50 4v18M50 78v18M4 50h18M78 50h18M17 17l13 13M70 70l13 13M17 83l13-13M70 30l13-13M50 16 80 33v34L50 84 20 67V33Z"/></svg>';
+  return `<div class="member-rank-stage" data-ceremony="${tier}" data-kind="${ceremony.kind}" aria-hidden="true"><div class="member-rank-scene"></div><div class="member-rank-plinth"></div><div class="member-rank-pressure"></div><span class="member-rank-sound-cue"></span><span class="member-rank-end-cue"></span>${silver}${forge}${seal}<div class="rank-star-core"></div><div class="rank-charge"></div><div class="rank-facet-light"></div>${ceremony.layers.map((shape,index)=>`<i class="member-rank-layer" data-layer-shape="${shape}" data-step="${index}" data-part="${tier>=20?['base','body','left','right','crest'][index]:'layer'}" data-emblem-tier="${tier}"></i>`).join('')}<div class="member-rank-emblem" data-emblem-tier="${tier}"></div><div class="member-rank-sweep"></div></div>`;
+}
+function bindRankCeremony(host){
+  const hero=host.querySelector('.member-rank-hero');
+  if(!hero)return;
+  const skip=hero.querySelector('[data-rank-skip]'),replay=hero.querySelector('[data-rank-replay]'),sound=hero.querySelector('[data-rank-sound]');
+  const sample=hero.querySelector('[data-rank-sample]'),chime=hero.querySelector('[data-rank-audio]'),audioStatus=hero.querySelector('[data-rank-audio-status]');
+  const reduced=window.matchMedia('(prefers-reduced-motion: reduce)');
+  let dismissed=false,disposed=false,soundEnabled=false,playSequence=0;
+  chime.volume=.45;
+  const stopSound=()=>{++playSequence;chime.pause();if(chime.readyState)chime.currentTime=0;if(audioStatus.textContent==='正在播放轻柔音效…')audioStatus.textContent='音效已停止';};
+  const playSound=()=>{
+    if(disposed)return;
+    stopSound();
+    const sequence=playSequence;
+    audioStatus.textContent='正在播放轻柔音效…';
+    chime.play().catch(()=>{if(!disposed&&sequence===playSequence)audioStatus.textContent='未能播放，请点“试听音效”重试，并确认本机声音已开启。';});
+  };
+  chime.onended=()=>{audioStatus.textContent=soundEnabled?'音效已开启，重播时随动作播放':'试听结束；动画仍保持静音';};
+  chime.onerror=()=>{audioStatus.textContent='音效文件未能加载，动画仍可正常查看';};
+  const finish=()=>{dismissed=true;stopSound();hero.classList.remove('is-preparing','is-assembling');skip.hidden=true;replay.hidden=false;};
+  const cleanup=()=>{disposed=true;finish();};
+  const play=()=>{
+    finish();
+    if(disposed)return;
+    if(reduced.matches){if(soundEnabled)playSound();return;}
+    // Restart the CSS timeline on this result only; no timers or global listeners.
+    void hero.offsetWidth;
+    hero.classList.add('is-assembling');skip.hidden=false;replay.hidden=true;
+  };
+  sound.onclick=()=>{
+    soundEnabled=!soundEnabled;sound.setAttribute('aria-pressed',String(soundEnabled));sound.textContent=soundEnabled?'音效：开':'音效：关';
+    if(soundEnabled)playSound();else{stopSound();audioStatus.textContent='音效已关闭';}
+  };
+  sample.onclick=playSound;
+  hero.addEventListener('animationstart',event=>{if(event.animationName==='rank-sound-cue'&&soundEnabled)playSound();});
+  skip.onclick=()=>{finish();replay.focus({preventScroll:true});};
+  replay.onclick=()=>{play();if(!skip.hidden)skip.focus({preventScroll:true});};
+  hero.addEventListener('animationcancel',event=>{
+    if(event.animationName==='rank-ceremony-end'&&reduced.matches)finish();
+  });
+  hero.addEventListener('animationend',event=>{
+    if(event.animationName==='rank-ceremony-end'){
+      const restoreFocus=document.activeElement===skip;
+      finish();if(restoreFocus)replay.focus({preventScroll:true});
+    }
+  });
+  if(reduced.matches){finish();return cleanup;}
+  hero.classList.add('is-preparing');skip.hidden=false;replay.hidden=true;
+  const artwork=new Image();
+  artwork.src=getComputedStyle(hero.querySelector('.member-rank-emblem')).backgroundImage.slice(5,-2);
+  artwork.decode().then(()=>{if(!disposed&&!dismissed&&hero.isConnected&&!host.hidden)play();}).catch(finish);
+  return cleanup;
+}
 function homeRankContent(rank,selectedMonth,d){
   const ranked=rank.status==='ranked'&&rank.month===selectedMonth&&rank.month_closed===true&&Number.isInteger(rank.tier)&&[0,10,20,30,40,50,60,70,80,90].includes(rank.tier);
   const waiting=['pending','waiting_global','reopened'].includes(rank.status);
   const notice=rank.status==='ranked'&&!ranked?'所选月份暂无可用的游戏段位，请重新查看。':rank.message;
   const rules=`<details class="member-rank-rules"><summary>了解月度勋章</summary><p>${rankStatement}</p><p>沿用PR计分人群：CM/TR及代理TA主管按月结景点圈比较；主管及代理TA GSM从2026年10月起按全部参与圈比较，各圈全部月结后生成。同分人员按同分组在积分分布中的中位位置获得相同段位，不强制分配各档人数；比较人数不足10人或全员同分时不生成段位。月结后封存，重开期间暂不展示。</p><p>仅本人主动查看，不公开排行榜，不新增奖惩或绩效评定依据。</p>${rank.rule_version?`<small>计算规则：${esc(rank.rule_version)}</small>`:''}</details>`;
-  const content=ranked?`<div class="member-rank-hero" aria-label="${esc(rank.label)}游戏段位"><span class="member-rank-month">${esc(memberHomeMonthLabel(rank.month))} · 月度PR积分</span><div class="member-rank-emblem" data-emblem-tier="${rank.tier}" aria-hidden="true"></div><div class="member-rank-copy"><h3>${esc(rank.label)}</h3><p class="member-rank-band">月度PR积分 <strong>${fmt(d.total_score)}</strong></p><section class="member-rank-review" aria-label="本月寄语"><h4>${homeScoreIcon('演出')}本月寄语</h4><p class="member-rank-message">${esc(rank.message)}</p></section></div></div>`:waiting?`<div class="member-rank-awaiting-hero"><div class="member-rank-lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></div><h3>${rank.status==='reopened'?'段位重新核算中':rank.status==='waiting_global'?'等待全圈月结':'月结后可查看'}</h3><p class="member-rank-empty">${esc(notice)}</p></div>`:`<p class="member-rank-empty">${esc(notice||'本月暂不生成游戏段位。')}</p>`;
+  const content=ranked?`<div class="member-rank-hero" aria-label="${esc(rank.label)}游戏段位"><span class="member-rank-month">${esc(memberHomeMonthLabel(rank.month))} · 月度PR积分</span>${rankEmblem(rank.tier)}<div class="member-rank-copy"><h3>${esc(rank.label)}</h3><p class="member-rank-band">月度PR积分 <strong>${fmt(d.total_score)}</strong></p><section class="member-rank-review" aria-label="本月寄语"><h4>${homeScoreIcon('演出')}本月寄语</h4><p class="member-rank-message">${esc(rank.message)}</p></section></div><div class="member-rank-motion"><button type="button" data-rank-skip hidden>跳过动画</button><button type="button" data-rank-replay>重播动画</button><button type="button" data-rank-sound aria-pressed="false" title="点击开启并试听，重播动画时同步播放">音效：关</button><button type="button" data-rank-sample>试听音效</button></div><p class="member-rank-audio-status" data-rank-audio-status role="status"></p><audio data-rank-audio preload="none" src="${esc(portalPath('/static/audio/medal-soft-seal.wav'))}"></audio></div>`:waiting?`<div class="member-rank-awaiting-hero"><div class="member-rank-lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></div><h3>${rank.status==='reopened'?'段位重新核算中':rank.status==='waiting_global'?'等待全圈月结':'月结后可查看'}</h3><p class="member-rank-empty">${esc(notice)}</p></div>`:`<p class="member-rank-empty">${esc(notice||'本月暂不生成游戏段位。')}</p>`;
   return {ranked,waiting,html:content+`<p class="member-rank-reference">个人积分参考 · 仅本人可见</p>`+rules};
 }
 function homeMonthControl(selectedMonth){
@@ -62,7 +133,9 @@ function homeQueryState(request,selectedMonth,error){
   if(error)document.getElementById('homeQueryRetry').onclick=()=>renderHome();
 }
 
+let homeRankCleanup=null;
 async function renderHome(){
+  homeRankCleanup?.();homeRankCleanup=null;
   const request=beginViewRequest();
   const currentMonth=memberHomeMonths()[0];
   if(homeMonthOwner!==state.me.id){
@@ -116,7 +189,9 @@ async function renderHome(){
   if(rankButton)rankButton.onclick=async()=>{
     const host=document.getElementById('homeRankContent'),panel=host.closest('.member-home-panel');
     if(rankButton.getAttribute('aria-expanded')==='true'){
+      homeRankCleanup?.();homeRankCleanup=null;
       host.hidden=true;rankButton.setAttribute('aria-expanded','false');rankButton.textContent='查看我的月度勋章';
+      host.querySelector('.member-rank-hero')?.classList.remove('is-preparing','is-assembling');
       panel.classList.remove('member-rank-panel','member-rank-awaiting');panel.removeAttribute('data-rank-tier');return;
     }
     rankButton.disabled=true;host.hidden=false;host.innerHTML='<p class="empty" role="status" aria-busy="true">正在查询本人的月度勋章…</p>';
@@ -127,6 +202,7 @@ async function renderHome(){
       const view=homeRankContent(rank,selectedMonth,d);
       host.innerHTML=view.html;panel.classList.toggle('member-rank-panel',view.ranked);panel.classList.toggle('member-rank-awaiting',view.waiting);
       if(view.ranked)panel.dataset.rankTier=rank.tier;
+      if(view.ranked){homeRankCleanup=bindRankCeremony(host);registerPageCleanup(homeRankCleanup);}
       rankButton.setAttribute('aria-expanded','true');rankButton.textContent='收起我的月度勋章';
     }catch(error){if(request.isCurrent())host.innerHTML=`<p class="error" role="alert">查看失败：${esc(error.message)}，可再次点击重试。</p>`;}
     finally{if(rankButton.isConnected)rankButton.disabled=false;}

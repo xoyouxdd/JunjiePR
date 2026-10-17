@@ -50,7 +50,21 @@ EXPECTED_STEPS = (
     ("2026-10-month-rank-comments", "ensure_month_rank_comment_column"),
     ("2026-10-month-rank-rule-version", "ensure_month_rank_rule_columns"),
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
+    ("2026-10-employee-employment-history", "ensure_employee_employment_history"),
 )
+
+
+def test_employment_history_migration_preserves_legacy_rows_and_is_idempotent():
+    from app.database.migrations.schema import ensure_employee_employment_history
+    engine = create_engine('sqlite://')
+    with Session(engine) as db:
+        db.execute(text('CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT)'))
+        db.execute(text("INSERT INTO employees (id, name) VALUES (1, 'legacy')"))
+        db.commit()
+        ensure_employee_employment_history(db)
+        ensure_employee_employment_history(db)
+        assert db.execute(text('SELECT name, employment_history FROM employees')).one() == ('legacy', '[]')
+    engine.dispose()
 
 
 @pytest.fixture

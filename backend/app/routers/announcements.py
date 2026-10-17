@@ -719,7 +719,7 @@ def records(id: int, version: int | None = None, db: Session = Depends(get_db), 
     rows = query.order_by(AnnouncementDelivery.employee_no, AnnouncementDelivery.id).all()
     items, groups = domain.grouped_records(db, rows)
     active = [d for d in rows if d.status not in {"suspended", "exited"}]
-    result = {"announcement": domain.payload(db, user, row, revision), "items": items, "groups": groups,
+    result = {"announcement": domain.payload(db, user, row, revision), "items": items, "groups": domain.record_group_leaders(db, groups),
               "group_basis": "当前小组", "handover": domain.handover_overview(db, row, user),
               "counts": {"required": len(active), "completed": sum(bool(d.confirmed_at) for d in active),
                          "pending": sum(not d.confirmed_at for d in active), "suspended": sum(d.status == "suspended" for d in rows),

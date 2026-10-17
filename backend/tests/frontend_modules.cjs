@@ -126,7 +126,14 @@ async function fixtureRequest(request, response) {
     assert.equal(JSON.parse(Buffer.concat(chunks).toString()).hours,6);
     sendJson(response,{id:1,code:'123456',expires_at:'2026-10-11T19:00:00'});
   } else if (route === '/api/announcements/51/training') sendJson(response,{title:trainingAnnouncement.title,version:1,items:[],groups:[],sessions:[]});
-  else if (route === '/api/announcements/51/records') sendJson(response,{announcement:demoAnnouncement(),items:[],groups:[],counts:{required:0,completed:0,pending:0,suspended:0,exited:0},handover:{owner:{name:'测试GSM',employee_no:'GSM1'},history:[]}});
+  else if (route === '/api/announcements/51/records') {
+    const groups=[{id:1,formal_leader_name:'测试组长<甲>',acting_leader_name:'测试代理乙'},
+      {id:2,formal_leader_name:'正式组长丙',acting_leader_name:''},
+      {id:3,formal_leader_name:'',acting_leader_name:''},
+      {id:4,formal_leader_name:'',acting_leader_name:'代理组长丁'}].map(g=>({...g,key:'group:'+g.id,name:'测试小组'+g.id,attraction_name:'热力追踪',required:1,completed:0}));
+    const items=groups.map(g=>({id:g.id,employee_name:'合成人员',employee_no:'SYN'+g.id,group_key:g.key,status:'pending',role_label:'CM'}));
+    sendJson(response,{announcement:demoAnnouncement(),items,groups,counts:{required:4,completed:0,pending:4,suspended:0,exited:0},handover:{owner:{name:'测试GSM',employee_no:'GSM1'},history:[]}});
+  }
   else if (route === '/api/announcements/options') sendJson(response, {can_publish: false, can_follow: false,
     can_admin: false, counts: {pending: 0, messages: 0, handovers: 0}, categories: ['通用']});
   else if (route === '/api/announcements') sendJson(response, {items: trainingDemo ? [demoAnnouncement()] : [], page: 1, pages: 1, total: trainingDemo ? 1 : 0});
@@ -191,6 +198,7 @@ async function main() {
       page.on('request', request => {if (/\/static\/js\/app\/.*\.js/.test(request.url())) loadedModules.push(request.url());});
       await page.goto(`${origin}${pagePath}`);
       await page.locator('#app h2').filter({hasText: '待办中心'}).waitFor();
+      assert.equal(await page.locator('#tabs [data-tab="changelog"]').count(),0);
       await page.locator('.tabs-desktop [data-open-about]').click();
       await page.locator('[data-about-version]').filter({hasText: version}).waitFor();
       assert.match(await page.locator('[data-about-dialog]').textContent(), /建设与维护\s*赵君杰/);
@@ -204,6 +212,7 @@ async function main() {
       await page.locator('.tabs-desktop [data-open-about]').click();
       await page.locator('[data-about-updates]').click();
       await page.locator('#app h2').filter({hasText: '更新记录'}).waitFor();
+      assert.equal(await page.locator('#pageHeading h1').textContent(),'更新记录');
       await page.locator('[data-about-dialog]').waitFor({state: 'detached'});
       await page.locator('.tabs-desktop [data-tab="actionCenter"]').click();
       await page.locator('.tabs-desktop [data-tab="monthClose"]').click();
@@ -337,7 +346,13 @@ async function main() {
       assert.equal(await member.locator('[data-open-more]').evaluate(node => node === document.activeElement), true);
       assert.equal(await member.locator('.app-frame').evaluate(node => node.inert), false);
     }
-    checks.push('about dialog: desktop, 320/390px mobile, names, live version, logo, focus, Escape and existing changelog');
+    assert.equal(await member.locator('#tabs [data-tab="changelog"]').count(),0);
+    await member.locator('[data-open-more]').click();
+    await member.locator('.mobile-more-drawer [data-open-about]').click();
+    await member.locator('[data-about-updates]').click();
+    await member.locator('#app h2').filter({hasText:'更新记录'}).waitFor();
+    await member.locator('[data-about-dialog]').waitFor({state:'detached'});
+    checks.push('about dialog: desktop, 320/390px mobile, sole changelog entry, names, live version, logo, focus and Escape');
     assert.equal(await member.locator('#tabs [data-tab="hrEmployees"]').count(), 0, 'Members cannot navigate to HR tools');
     await member.locator('.tabs-mobile [data-tab="register"]').click();
     await member.locator('[data-batch-entry] [name="recognizer_employee_id"] option[value="7"]').waitFor({state: 'attached'});
@@ -488,6 +503,16 @@ async function main() {
         const followupExport=page.getByRole('link',{name:/下载培训跟进 Excel/});
         await followupExport.waitFor();
         assert.match(await followupExport.getAttribute('href'),/followup-export\?version=1/);
+        const leaders=page.locator('.announcement-group-leaders');
+        assert.deepEqual(await leaders.allTextContents(),['组长：测试组长<甲>　｜　代理组长：测试代理乙','组长：正式组长丙','负责人未设置','代理组长：代理组长丁']);
+        for(const width of [320,390,1280]){
+          await page.setViewportSize({width,height:900});
+          assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+        }
+        await page.locator('[data-ann-record-group]').selectOption('group:2');
+        assert.equal(await leaders.count(),1);
+        assert.equal(await leaders.first().textContent(),'组长：正式组长丙');
+        await page.locator('[data-ann-record-group]').selectOption('');
       }else if(mode==='trainer'){
         await page.locator('[data-ann-view=training]').click();await page.locator('[data-ann-training="51"]').click();
         await page.locator('[name=hours]').selectOption('6');await page.getByRole('button',{name:'生成培训码',exact:true}).click();
@@ -530,6 +555,42 @@ async function main() {
       checks.push(`announcement training ${mode}: real module DOM flow`);await page.close();
     }
     trainingDemo=false;
+    mode='admin';
+    const personnel=await browser.newPage({viewport:{width:1280,height:900}});
+    const person={id:77,employee_no:'SYN77',name:'合成人员',role_code:'CM',base_role_code:'CM',base_role_name:'CM',
+      attraction_id:1,attraction_name:'热力追踪',employment_status:'active',is_active:true,account_enabled:true,
+      login_account:'SYN77',account_deletion_eligible:false,account_deletion_reason:'请先停用并保存，连续满7天后可删除'};
+    let archived=false,editBody;
+    await personnel.route('**/api/hr/organization',route=>route.fulfill({json:{circles:[{id:1,name:'热力追踪',gsm_names:[],ta_gsm_names:[],groups:[],supervisors:[],managers:[],inactive:[],unassigned:archived?[]:[person]}],others:[],warnings:[]}}));
+    await personnel.route('**/api/hr/employees/77',route=>{assert.equal(route.request().method(),'PUT');editBody=route.request().postDataJSON();person.account_enabled=editBody.account_enabled;person.account_deletion_reason='2026-10-24 12:00:00 起可删除（须连续停用满7天）';return route.fulfill({json:{ok:true,warnings:[]}});});
+    await personnel.route('**/api/hr/employees/77/account',route=>{assert.equal(route.request().method(),'DELETE');archived=true;return route.fulfill({json:{ok:true,archive_retained:true}});});
+    await personnel.goto(origin+'/');
+    await personnel.locator('.tabs-desktop [data-tab="hrEmployees"]').click();
+    await personnel.locator('[data-hr-edit="77"]').click();
+    await personnel.locator('[data-modal-form]').waitFor();
+    assert.equal(await personnel.locator('[name="employment_status"] option[value="terminated"]').count(),0);
+    assert.equal(await personnel.locator('[data-delete-login-account]').isDisabled(),true);
+    await personnel.setViewportSize({width:390,height:844});
+    assert.equal(await personnel.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await personnel.locator('[name="enabled"]').selectOption('false');
+    await personnel.locator('[data-modal-form] button[type="submit"]').click();
+    await personnel.locator('[data-modal-form]').waitFor({state:'detached'});
+    assert.equal(editBody.account_enabled,false);assert.equal(editBody.employment_status,'active');
+    await personnel.locator('[data-hr-edit="77"]').click();
+    assert.equal(await personnel.locator('[data-delete-login-account]').isDisabled(),true);
+    assert.match(await personnel.locator('[data-modal-form]').textContent(),/连续停用满7天/);
+    await personnel.locator('[data-modal-cancel]').click();
+    await personnel.locator('[data-modal-form]').waitFor({state:'detached'});
+    person.account_deletion_eligible=true;person.account_deletion_reason='可删除，历史数据留档';
+    await personnel.evaluate(async()=>{const {renderHrEmployees}=await import('./static/js/app/hr-employees.js');await renderHrEmployees();});
+    await personnel.locator('[data-hr-edit="77"]').click();
+    assert.equal(await personnel.locator('[data-delete-login-account]').textContent(),'删除');
+    await personnel.locator('[data-delete-login-account]').click();
+    await personnel.locator('[data-modal-confirm]').click();
+    await personnel.locator('[data-modal-form]').waitFor({state:'detached'});
+    await personnel.locator('[data-hr-person="77"]').waitFor({state:'detached'});
+    assert(archived);await personnel.close();
+    checks.push('employee editor: no departure option, disable/save, wait reason, delete confirmation and removal at mobile width');
     mode = 'password';
     const password = await browser.newPage();
     await password.goto(`${origin}/`);
