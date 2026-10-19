@@ -1,4 +1,4 @@
-import { api, json } from './api.js';
+import { api, apiFallbackMessage, json, readApiBody } from './api.js';
 import { beginViewRequest, registerPageCleanup } from './context.js';
 import { confirmModal } from './dialogs.js';
 import { attachmentControl, bindImagePreviews, imagePreviewButton } from './files.js';
@@ -14,6 +14,36 @@ import { renderAnnouncementPosterEditor } from './announcement-media.js';
 const announcementLevel={1:'阅读',2:'确认',3:'签字'};
 const announcementStatus={pending:'待查收',completed:'已查收',suspended:'暂缓',exited:'退出范围',superseded:'已替换',withdrawn:'已撤下',expired:'已过期'};
 const announcementDate=value=>String(value||'—').replace('T',' ').slice(0,19);
+function bindAnnouncementExportDownloads(host,isCurrent){
+  const panel=host.querySelector('.announcement-export-panel');
+  if(!panel)return;
+  const links=[...panel.querySelectorAll('.announcement-export-link')],controller=new AbortController();
+  let busy=false;
+  registerPageCleanup(()=>controller.abort());
+  links.forEach(link=>link.onclick=async event=>{
+    event.preventDefault();
+    if(busy)return;
+    busy=true;panel.setAttribute('aria-busy','true');
+    links.forEach(item=>item.setAttribute('aria-disabled','true'));
+    const title=link.querySelector('strong'),hint=link.querySelector('small'),oldTitle=title.textContent,oldHint=hint.textContent;
+    title.textContent='正在生成报告…';hint.textContent='正在整理记录与签名，请稍候';
+    try{
+      const response=await fetch(link.href,{credentials:'same-origin',signal:controller.signal});
+      if(response.status===401){location.href=portalPath('/login');return;}
+      if(!response.ok){const body=await readApiBody(response);throw new Error(typeof body.detail==='string'?body.detail:apiFallbackMessage(response.status));}
+      const blob=await response.blob();
+      if(!isCurrent())return;
+      if(!['application/pdf','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(blob.type))throw new Error('服务器未返回有效报告，请稍后重试');
+      const match=/filename="?([^";]+)"?/i.exec(response.headers.get('Content-Disposition')||'');
+      const url=URL.createObjectURL(blob),download=document.createElement('a');
+      download.href=url;download.download=match?match[1]:`公告签收报告.${blob.type==='application/pdf'?'pdf':'xlsx'}`;
+      document.body.appendChild(download);download.click();download.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+      toast('报告已生成，已发起下载');
+    }catch(error){if(error.name!=='AbortError'&&isCurrent())toast(error.message||'导出失败，请稍后重试',true);}
+    finally{busy=false;panel.removeAttribute('aria-busy');links.forEach(item=>item.removeAttribute('aria-disabled'));title.textContent=oldTitle;hint.textContent=oldHint;}
+  });
+}
 function announcementProgress(a){
   const receipt=a.receipt;
   if(a.status==='withdrawn')return '已撤下';
@@ -170,6 +200,7 @@ async function renderAnnouncements(){
         <div class="actions"><button type="button" class="secondary" data-ann-remind ${a.version!==a.current_version||!a.effective?'disabled':''}>提醒全部待签</button>${a.can_edit&&a.training_required&&a.version===a.current_version?'<button type="button" class="secondary" data-ann-trainers>培训师授权</button>':''}${a.can_edit?`<button type="button" class="secondary" data-ann-edit ${a.status==='withdrawn'?'disabled':''}>更新</button><button type="button" class="secondary" data-ann-withdraw ${a.status==='withdrawn'?'disabled':''}>撤下</button>`:''}</div>
         <details class="announcement-extra"><summary>历史版本</summary><div class="actions" id="announcementRecordVersions"></div></details><div id="announcementOperation"></div>
         ${handoverPanel}`;
+      bindAnnouncementExportDownloads(host,()=>request.isCurrent()&&token===seq);
       const renderGroups=()=>{
         const key=host.querySelector('[data-ann-record-group]').value,trainer=host.querySelector('[data-ann-record-trainer]').value;
         const target=host.querySelector('[data-ann-record-groups]');

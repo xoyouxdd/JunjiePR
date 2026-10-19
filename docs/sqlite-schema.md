@@ -1,6 +1,6 @@
 # SQLite 表、键、索引
 
-对照当前本地候选程序 `2026.10.09.3`。权威定义在代码里，本文件只记录现在落地的结构：
+对照本地候选程序 `2026.10.19.1`。权威定义在代码里，本文件只记录现在落地的结构：
 
 - 表与字段：`backend/app/v2_models.py`；轮岗模块的表在 `backend/app/rotation/models.py`
 - 连接、Base 与会话：`backend/app/database/connection.py`
@@ -8,7 +8,7 @@
 - 一次性补丁与额外索引：`backend/app/database/migrations/`（schema、sick_leave、organization），按 `registry.py` 的有序 callable 执行
 - 月度分值视图：`backend/app/database/score_view.py`；旧 `v2_database.py` 导入入口保留兼容
 
-此次职责拆分不改变表、列、约束、索引、视图内容或已有迁移 step key；历史迁移函数内部提交及执行器登记提交保持原样，不将其描述为一个整体可回滚事务。
+原有职责拆分不改变表、列、约束、索引、视图内容或已有迁移 step key；历史迁移函数内部提交及执行器登记提交保持原样，不将其描述为一个整体可回滚事务。2026-10-19新增两张本人荣誉偏好表，由启动建表逻辑幂等创建，不修改旧业务表与月结快照。
 
 改模型或迁移后，同步改本文件。不要对着生产库手改结构。
 
@@ -16,7 +16,7 @@
 
 - 库文件：`backend/data_v2/recognition_v2.db`（可用 `RECOGNITION_V2_DATA_DIR` 改到隔离目录）
 - 连接：`PRAGMA foreign_keys=ON`、`journal_mode=WAL`、`synchronous=NORMAL`、`busy_timeout=30000`
-- 主键：除迁移登记表外均为 `id INTEGER PRIMARY KEY`
+- 主键：通常为 `id INTEGER PRIMARY KEY`；荣誉装扮以`employee_id`为主键，月度荣誉偏好以`employee_id + score_month`为联合主键。
 - 日期：`YYYY-MM-DD`（`VARCHAR(10)`）；月份：`YYYY-MM`（`VARCHAR(7)`）
 - 员工身份以 `employees.id` 为准。工号可变，业务行不要靠工号当主键。
 - 附件字节不在库页内，只在 `stored_files` 记元数据，文件在数据目录的 `files/`。
@@ -33,6 +33,8 @@
 | `schema_migration_steps` | 一次性结构补丁登记 |
 | `month_rank_generations` | 月结范围的段位封存代次，`closure_id`唯一，关闭时间与月结行匹配才有效 |
 | `employee_month_rank_snapshots` | 个人月度分组、封存分数、段位、评语与跨圈关闭联合签名；代次＋员工唯一，员工＋月份查询索引 |
+| `employee_honor_styles` | 本人装扮偏好，员工主键＋`skin`；启动时幂等建表，不参与计分 |
+| `employee_honor_memories` | 本人月度精选原文及收藏，员工＋月份联合主键，`selected_record_id`引用认可主键，读取时复核本人／月份／有效状态 |
 | `roles` | 角色 |
 | `permissions` | 权限点 |
 | `role_permissions` | 角色-权限 |

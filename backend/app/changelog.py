@@ -7,6 +7,29 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.19.1", "date": "2026-10-19", "status": "candidate",
+        "items": [
+            {"summary": "HR月报三套专业模板更新",
+             "detail": "管理纪要、数据简报、团队月刊共用原有月报数据与权限，按内容分页，保留可编辑文字、表格和图表。三套使用独立示意图，活动页使用上传照片；按版面尺寸压缩并复用图片。沿用月结快照、草稿标记、预览指纹和导出审计。",
+             "audiences": ["GSM", "AM", "OM", "SYSTEM_ADMIN"], "permissions": ["HR_MONTHLY_REPORT"]},
+            {"summary": "Excel导出阅读与体积优化",
+             "detail": "月度导出默认进入总览，人员完整表前置，保留原工作表及全部明细；低频列可展开，小组归属直接查看。修正组织视图姓名工号列位，复用相同水印图片；沿用原有权限、分值和月结规则。",
+             "audiences": ["all"], "permissions": ["DATA_EXPORT"]},
+            {"summary": "声明统计导出长内容与打印优化",
+             "detail": "中文列宽、长说明换行及打印表头统一处理，原有汇总与逐条明细完整保留。",
+             "audiences": ["all"], "permissions": ["DECLARATION_STATS_EXPORT"]},
+            {"summary": "缺勤导入反馈优先显示未覆盖说明",
+             "detail": "未覆盖说明置于首张工作表，保留原文件全部工作表和行列，方便核对未匹配与LOA保护原因。",
+             "audiences": ["all"], "permissions": ["SICK_LEAVE_IMPORT"]},
+            {"summary": "我的荣誉典藏与高光回顾",
+             "detail": "本人月度勋章新增荣誉典藏、高光回顾和八款自由装扮；装扮、精选原文和收藏随账号保存。仅使用本人已确认的有效认可，原文完整保留，寄语逐条关联来源；月结未完成或重开期间暂不生成寄语。名称调整为流光铂金、璀璨星耀、无双王者，保留荣耀黄金，不改变计分、分档、月结或权限。",
+             "audiences": ["CM", "TR", "TA_SUPERVISOR", "SUPERVISOR", "TA_GSM"], "feature": "monthly_ranks"},
+            {"summary": "公告导出内容与签收分组优化",
+             "detail": "首页集中展示发布内容与签收概况，后续按小组编排负责人、成员签字及时间；未签与代签标明系统可核对的原因。图片按展示尺寸压缩复用，保留原签收数据和导出权限。",
+             "audiences": ["SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM", "AM", "OM", "HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.17.3", "date": "2026-10-17", "status": "candidate",
         "items": [
             {"summary": "个人勋章展示与更新入口优化",

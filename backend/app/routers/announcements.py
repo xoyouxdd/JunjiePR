@@ -754,10 +754,12 @@ def export(id: int, request: Request, format: Literal["pdf", "xlsx"] = "pdf", ve
 
 def export_report(id, request, format, version, db, user, followup=False):
     from app.announcement_exports import export_records
+    from app.announcement_export_data import prepare_export_data
     data = records(id, version, db, user)
     announcement = get_announcement(db, id)
     revision = db.query(AnnouncementVersion).filter_by(announcement_id=id, number=data["announcement"]["version"]).one()
     data["announcement"] = domain.payload(db, user, announcement, revision, True)
+    data = prepare_export_data(db, data)
     try:
         content = export_records(data, format, user, followup=followup)
     except ValueError as exc:

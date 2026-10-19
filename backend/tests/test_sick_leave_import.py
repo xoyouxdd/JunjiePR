@@ -453,7 +453,7 @@ def test_preview_end_to_end_reports_unmatched_and_serves_marked_file(monkeypatch
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             exported = load_workbook(BytesIO(download.content))
-            assert exported.sheetnames == ["员工事务", "未覆盖说明"]
+            assert exported.sheetnames == ["未覆盖说明", "员工事务"]
             notes = list(exported["未覆盖说明"].iter_rows(min_row=2, values_only=True))
             assert [(row[0], row[2], row[3], row[8]) for row in notes] == [(5, "09999999", "9999999", "系统中不存在该员工号")]
             assert exported["员工事务"].cell(row=5, column=1).fill.fgColor.rgb.endswith("FFC7CE")

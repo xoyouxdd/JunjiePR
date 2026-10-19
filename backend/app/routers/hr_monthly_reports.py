@@ -14,8 +14,8 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.hr_monthly_report import require_report, report_data, TEMPLATES, SECTIONS
-from app.hr_monthly_pptx import build_pptx
+from app.hr_monthly_report import require_report, report_data, TEMPLATES, TEMPLATE_DESCRIPTIONS, SECTIONS
+from app.hr_monthly_pptx import build_pptx, TEMPLATE_VERSION
 from app.v2_auth import current_user, V2User
 from app.v2_database import get_db
 from app.v2_models import Attraction
@@ -74,7 +74,7 @@ def digest(data):
 @router.get("/hr-monthly-reports/options")
 def options(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     require_report(user)
-    return {"templates": [{"id": k, "name": v} for k, v in TEMPLATES.items()], "sections": [{"id": k, "name": v} for k, v in SECTIONS.items()], "attractions": [{"id": r.id, "name": r.name} for r in db.query(Attraction).filter(Attraction.employee_circle.is_(True)).order_by(Attraction.id).all()]}
+    return {"templates": [{"id": k, "name": v, "description": TEMPLATE_DESCRIPTIONS[k]} for k, v in TEMPLATES.items()], "sections": [{"id": k, "name": v} for k, v in SECTIONS.items()], "attractions": [{"id": r.id, "name": r.name} for r in db.query(Attraction).filter(Attraction.employee_circle.is_(True)).order_by(Attraction.id).all()]}
 
 
 @router.get("/hr-monthly-reports/preview")
@@ -84,18 +84,35 @@ def preview(month: str, attraction_id: int | None = None, db: Session = Depends(
     return {"report": data, "digest": digest(data)}
 
 
-def prepare_photo(raw):
+def prepare_photo(raw, display_box=(1600, 1600)):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(raw)) as source:
                 if source.format not in {"PNG", "JPEG", "WEBP"} or source.width * source.height > 12_000_000:
                     raise HTTPException(400, "照片仅支持PNG、JPEG、WebP，像素不超过1200万")
-                photo = ImageOps.exif_transpose(source).convert("RGB")
-                photo.thumbnail((2000, 2000))
-                out = BytesIO()
-                photo.save(out, "PNG")
-                return {"bytes": out.getvalue(), "width": photo.width, "height": photo.height}
+                image = ImageOps.exif_transpose(source)
+                alpha = image.mode in {"RGBA", "LA"} or "transparency" in image.info
+                photo = image.convert("RGBA" if alpha else "RGB")
+                photo.thumbnail(display_box, Image.Resampling.LANCZOS)
+                if alpha and photo.getextrema()[3] == (255, 255):
+                    # An opaque RGBA photo does not need a lossless alpha channel.
+                    alpha = False
+                    photo = photo.convert("RGB")
+                png = BytesIO()
+                if source.format != "JPEG" or alpha:
+                    photo.save(png, "PNG", compress_level=3)
+                content, extension, content_type = png.getvalue(), "png", "image/png"
+                if not alpha:
+                    jpeg = BytesIO()
+                    photo.save(jpeg, "JPEG", quality=85, optimize=True, progressive=True)
+                    if source.format == "JPEG" or len(jpeg.getvalue()) < len(content):
+                        content, extension, content_type = jpeg.getvalue(), "jpg", "image/jpeg"
+                if extension == "png":
+                    png = BytesIO()
+                    photo.save(png, "PNG", optimize=True)
+                    content = png.getvalue()
+                return {"bytes": content, "width": photo.width, "height": photo.height, "extension": extension, "content_type": content_type}
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise HTTPException(400, "照片无效或过大") from exc
 
@@ -111,9 +128,11 @@ def generate(db, user, config, raw_photos):
         candidates = {r["employee_id"] for r in data["candidates"]}
         if not set(config.excellent_ids) <= candidates:
             raise HTTPException(400, "优秀员工必须从当前报告候选中确认")
-        photos = [prepare_photo(raw) for raw in raw_photos] if "photos" in config.sections else []
+        # Resolution follows the actual single/two/four-photo display size.
+        display_box = (1680, 1000) if len(raw_photos) == 1 else (1000, 360) if len(raw_photos) > 8 else (1000, 700)
+        photos = [prepare_photo(raw, display_box) for raw in raw_photos] if "photos" in config.sections else []
         content = build_pptx(data, config.template, set(config.sections), set(config.excellent_ids), config.notes, config.birthday, photos, config.photo_caption, watermark_label(user.employee.employee_no))
-        write_audit(db, user.employee, "导出HR月报", "hr_monthly_report_export", config.month, after={"attraction_id": config.attraction_id, "template": config.template, "template_version": "1", "sections": config.sections, "excellent_ids": config.excellent_ids, "photo_count": len(photos), "data_digest": current_digest, "generated_at": data["generated_at"], "draft": data["draft"], "summary": data["summary"]})
+        write_audit(db, user.employee, "导出HR月报", "hr_monthly_report_export", config.month, after={"attraction_id": config.attraction_id, "template": config.template, "template_version": TEMPLATE_VERSION, "sections": config.sections, "excellent_ids": config.excellent_ids, "photo_count": len(photos), "data_digest": current_digest, "generated_at": data["generated_at"], "draft": data["draft"], "summary": data["summary"]})
         db.commit()
         filename = f'HR月报_{config.month}_{data["scope_name"]}_{TEMPLATES[config.template]}{"_草稿" if data["draft"] else ""}.pptx'
         return Response(content, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation", headers={"Content-Disposition": content_disposition("hr-monthly-report.pptx", filename), "Cache-Control": "no-store"})

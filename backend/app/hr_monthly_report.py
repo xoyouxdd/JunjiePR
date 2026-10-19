@@ -14,7 +14,8 @@ from app.v2_models import Attraction, RecognitionRecord, DeductionRecord, Employ
 from app.services.identity import base_roles_at
 
 REPORT_ROLES = frozenset({"GSM", "AM", "OM", "SYSTEM_ADMIN"})
-TEMPLATES = {"forest": "森林都市", "minimal": "简约汇报", "warm": "温暖团队"}
+TEMPLATES = {"forest": "管理纪要", "minimal": "数据简报", "warm": "团队月刊"}
+TEMPLATE_DESCRIPTIONS = {"forest": "正式管理汇报，重点摘要与完整表格便于核对。", "minimal": "数据分析汇报，图表比较突出，长名称自动使用明细版式。", "warm": "团队月度展示，刊物式文字与照片编排，保留完整数据。"}
 SECTIONS = {"overview": "月度概览", "deductions": "减分分类", "recognitions": "加分分类", "issuers": "认可发放", "recognition_stats": "认可统计及趋势", "groups": "小组分排名", "excellent": "优秀员工", "rankings": "PR排名", "notes": "工作与规则说明", "photos": "团队活动", "birthdays": "生日祝福", "closing": "结束页"}
 
 

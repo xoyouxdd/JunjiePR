@@ -9,6 +9,7 @@ CM/TR和本职CM/TR的TA主管在本人登记入口，默认一条，最多五�
 `POST /api/recognitions/batch` 使用multipart：entries为JSON数组，image为一张图片，idempotency_key为提交标识。
 前后端均限制1～5条，服务端禁止指定其他员工，逐条复用原登记验证、日期身份分值、历史景点快照、月结限制及复核路由。
 图片在获得数据库写锁前完成暂存；全部记录、附件关联、逐条审计、提交回执同一事务提交，失败回滚并清理本次图片。
+认可照片支持JPG/JPEG、PNG、WebP及iPhone常见的HEIC/HEIF。服务端按实际编码识别，即使照片被命名为.jpeg也不依赖后缀判断；保留原始文件，浏览器预览生成带水印的JPEG。图片大小、像素限制和损坏校验继续生效。
 同批及既有同日重复登记仍须确认，表扬信每月一次限制保持不变。已提交请求重试返回原记录；同标识不同内容拒绝。
 
 认可业务仍为独立RecognitionRecord，不新增业务表。照片为一份StoredFile，各条使用独立RecognitionAttachment关联。

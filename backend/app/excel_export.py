@@ -26,6 +26,7 @@ from app.excel_export_utils import (
 from app.v2_models import Attraction, Employee, EmployeeNumberHistory, Role
 from app.v2_services import base_roles_at
 from app.services.employment import employment_history
+from app.excel_presentation import add_personnel_groups, append_export_context, finalize_statistics_workbook, present_detail
 
 
 def ordered_statistics_score_rows(data: dict) -> list[dict]:
@@ -214,6 +215,7 @@ def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role]
         if not score:
             continue
         row_number = write_monthly_score_row(ws, score, export_roles.get(int(node["employee_id"])))
+        ws.cell(row_number, 1).value, ws.cell(row_number, 2).value = ws.cell(row_number, 2).value, ws.cell(row_number, 1).value
         current_employee_rows.append(row_number)
         for cell in ws[row_number]:
             cell.fill = employee_fill
@@ -228,6 +230,7 @@ def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role]
             cell.font = Font(bold=True, color="666666")
         for row in sorted(data["loa_rows"], key=lambda item: (str(item.get("attraction_name") or ""), str(item.get("employee_name") or ""), str(item.get("employee_no") or ""))):
             row_number = write_monthly_score_row(ws, row, loa_roles.get(int(row["employee_id"])), "LOA（当月不参与计分）")
+            ws.cell(row_number, 1).value, ws.cell(row_number, 2).value = ws.cell(row_number, 2).value, ws.cell(row_number, 1).value
             ws.row_dimensions[row_number].outlineLevel = 1
             for cell in ws[row_number]:
                 cell.fill = loa_fill
@@ -255,6 +258,7 @@ def append_supervisor_score_sheets(wb: Workbook, db: Session, data: dict, month:
     write_organization_score_sheet(wb.create_sheet("主管月度综合分"), data, roles, roles)
     ordered = sorted(data["scores"], key=lambda row: (-float(row.get("total_score") or 0), str(row.get("employee_no") or "")))
     write_monthly_score_detail_sheet(wb.create_sheet("主管月度综合分明细"), ordered, data["loa_rows"], roles, roles)
+    add_personnel_groups(wb["主管月度综合分明细"], data)
 
 
 def write_monthly_score_detail_sheet(ws, rows: list[dict], loa_rows: list[dict], export_roles: dict[int, Role], loa_roles: dict[int, Role]) -> None:
@@ -477,6 +481,16 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
         apply_score_format(ws, (9,))
         apply_date_format(ws, (10,))
     write_employee_number_history_sheet(wb, db, ranking_employee_ids)
+    present_detail(ws)
+    context = wb.create_sheet("导出说明")
+    context.append(["项目", "内容"])
+    append_export_context(context, [("统计日期", f"{data.get('start_date', '')} 至 {data.get('end_date', '')}"),
+                                    ("景点圈", data.get("attraction_name", "")),
+                                    ("排名类别", category), ("排序方式", data.get("sort_by", "")),
+                                    ("导出人数", len(data["rows"]))])
+    context.column_dimensions["A"].width = 24
+    context.column_dimensions["B"].width = 64
+    configure_sheet(context)
     return wb
 
 
@@ -526,6 +540,8 @@ def build_statistics_workbook(
             ("在职计分人数", len(data["scores"])),
             ("整月LOA人数", len(data["loa_rows"])),
             ("小组平均分口径", f"{title_label}筛选后小组综合分 ÷ 筛选后人数"),
+            ("组织归属依据", data.get("organization_basis") or "未提供"),
+            ("数据更新时间", data.get("data_updated_at") or "未提供"),
         ],
         2,
     )
@@ -594,6 +610,7 @@ def build_statistics_workbook(
     write_organization_score_sheet(ws, data, export_roles, loa_roles)
     ws_monthly_detail = wb.create_sheet("月度综合分明细")
     write_monthly_score_detail_sheet(ws_monthly_detail, ordered_scores, data["loa_rows"], export_roles, loa_roles)
+    add_personnel_groups(ws_monthly_detail, data)
     ws_loa = wb.create_sheet("LOA明细")
     write_loa_detail_sheet(ws_loa, data.get("loa_periods", []), export_employees, export_roles)
     ws_hierarchy = wb.create_sheet("层级绩效明细")
@@ -682,6 +699,7 @@ def build_statistics_workbook(
             detail_sheet.cell(detail_row_number, 1).font = link_font
             ws5.cell(void_row_number, 3).hyperlink = f"#'{detail_sheet_name}'!A{detail_row_number}"
             ws5.cell(void_row_number, 3).font = link_font
+    finalize_statistics_workbook(wb)
     return wb, attraction_label, title_label
 
 

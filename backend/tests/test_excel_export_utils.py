@@ -48,7 +48,7 @@ def test_style_sheet_column_width_uses_cjk_display_width() -> None:
     assert ws.page_setup.fitToWidth == 1
     assert ws["A1"].fill.fgColor.rgb in ("00D9EAF7", "D9EAF7")
     assert ws["A1"].alignment.wrap_text is True
-    assert ws.row_dimensions[1].height == 24
+    assert ws.row_dimensions[1].height == 42  # Wrapped CJK header has room for two lines.
     assert ws.protection.sheet is False
 
 

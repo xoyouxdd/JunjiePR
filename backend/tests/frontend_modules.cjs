@@ -503,6 +503,30 @@ async function main() {
         const followupExport=page.getByRole('link',{name:/下载培训跟进 Excel/});
         await followupExport.waitFor();
         assert.match(await followupExport.getAttribute('href'),/followup-export\?version=1/);
+        let exportRequests=0,exportFailure=false,releaseExport;
+        const exportGate=new Promise(resolve=>{releaseExport=resolve;});
+        await page.route('**/api/announcements/51/export?**',async route=>{
+          exportRequests++;
+          if(exportFailure){await route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({detail:'签字凭据摘要不匹配，导出已停止'})});return;}
+          await exportGate;
+          await route.fulfill({status:200,contentType:'application/pdf',headers:{'Content-Disposition':'attachment; filename="announcement-51-v1.pdf"'},body:'%PDF-1.4\npreview fixture'});
+        });
+        const pdfExport=page.locator('.announcement-export-pdf');
+        await pdfExport.click();
+        await page.getByText('正在生成报告…',{exact:true}).waitFor();
+        assert.equal(await pdfExport.getAttribute('aria-disabled'),'true');
+        await pdfExport.evaluate(el=>el.click());
+        await page.locator('.announcement-export-excel').evaluate(el=>el.click());
+        const downloadResult=page.waitForEvent('download');releaseExport();
+        assert.equal((await downloadResult).suggestedFilename(),'announcement-51-v1.pdf');
+        await page.getByRole('link',{name:/下载签收 PDF/}).waitFor();
+        assert.equal(exportRequests,1);
+        exportFailure=true;
+        await pdfExport.click();
+        await page.getByText('签字凭据摘要不匹配，导出已停止',{exact:true}).waitFor();
+        assert.equal(await pdfExport.getAttribute('aria-disabled'),null);
+        assert.equal(exportRequests,2);
+        checks.push('announcement report download busy state, duplicate-click guard, filename and integrity failure');
         const leaders=page.locator('.announcement-group-leaders');
         assert.deepEqual(await leaders.allTextContents(),['组长：测试组长<甲>　｜　代理组长：测试代理乙','组长：正式组长丙','负责人未设置','代理组长：代理组长丁']);
         for(const width of [320,390,1280]){

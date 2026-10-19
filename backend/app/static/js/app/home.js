@@ -5,6 +5,7 @@ import { bindImagePreviews } from './files.js';
 import { esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, portalPath } from './format.js';
 import { bindWithdraw, recognitionCard } from './records.js';
 import { app, state } from './state.js';
+import { mountHonors } from './honors.js';
 
 // 首页"我的信息"：组员显示所在小组与主管/代理主管；主管显示所带小组。
 function homeGroupInfo(organization){
@@ -52,9 +53,9 @@ function rankEmblem(tier){
   const silver='<svg class="rank-silver-ring" viewBox="0 0 100 100"><path class="rank-ring-left" d="M50 10a40 40 0 0 0 0 80"/><path class="rank-ring-right" d="M50 10a40 40 0 0 1 0 80"/></svg>';
   const forge='<svg class="rank-forge" viewBox="0 0 100 100"><path d="M50 10 80 26 73 66 50 91 27 66 20 26Z"/><path d="M50 24v53M34 36l16 15 16-15"/></svg>';
   const seal='<svg class="rank-seal" viewBox="0 0 100 100"><circle cx="50" cy="50" r="46"/><circle cx="50" cy="50" r="37"/><path d="M50 4v18M50 78v18M4 50h18M78 50h18M17 17l13 13M70 70l13 13M17 83l13-13M70 30l13-13M50 16 80 33v34L50 84 20 67V33Z"/></svg>';
-  return `<div class="member-rank-stage" data-ceremony="${tier}" data-kind="${ceremony.kind}" aria-hidden="true"><div class="member-rank-scene"></div><div class="member-rank-plinth"></div><div class="member-rank-pressure"></div><span class="member-rank-sound-cue"></span><span class="member-rank-end-cue"></span>${silver}${forge}${seal}<div class="rank-star-core"></div><div class="rank-charge"></div><div class="rank-facet-light"></div>${ceremony.layers.map((shape,index)=>`<i class="member-rank-layer" data-layer-shape="${shape}" data-step="${index}" data-part="${tier>=20?['base','body','left','right','crest'][index]:'layer'}" data-emblem-tier="${tier}"></i>`).join('')}<div class="member-rank-emblem" data-emblem-tier="${tier}"></div><div class="member-rank-sweep"></div></div>`;
+  return `<div class="member-rank-stage" data-ceremony="${tier}" data-kind="${ceremony.kind}" aria-hidden="true"><div class="member-rank-scene"></div><div class="member-rank-plinth"></div><div class="member-rank-pressure"></div><span class="member-rank-sound-cue"></span><span class="member-rank-end-cue"></span>${silver}${forge}${seal}<div class="rank-star-core"></div><div class="rank-charge"></div><div class="rank-facet-light"></div><div class="member-rank-pieces">${ceremony.layers.map((shape,index)=>`<i class="member-rank-layer" data-layer-shape="${shape}" data-step="${index}" data-part="${tier>=20?['base','body','left','right','crest'][index]:'layer'}" data-emblem-tier="${tier}"></i>`).join('')}</div><div class="member-rank-emblem" data-emblem-tier="${tier}"></div><div class="member-rank-sweep"></div></div>`;
 }
-function bindRankCeremony(host){
+function bindRankCeremony(host,{autoplay=true}={}){
   const hero=host.querySelector('.member-rank-hero');
   if(!hero)return;
   const skip=hero.querySelector('[data-rank-skip]'),replay=hero.querySelector('[data-rank-replay]'),sound=hero.querySelector('[data-rank-sound]');
@@ -99,12 +100,15 @@ function bindRankCeremony(host){
       finish();if(restoreFocus)replay.focus({preventScroll:true});
     }
   });
-  if(reduced.matches){finish();return cleanup;}
+  const motionChange=()=>{if(reduced.matches)finish();};
+  reduced.addEventListener('change',motionChange);
+  const dispose=()=>{reduced.removeEventListener('change',motionChange);cleanup();};
+  if(reduced.matches||!autoplay){finish();return dispose;}
   hero.classList.add('is-preparing');skip.hidden=false;replay.hidden=true;
   const artwork=new Image();
   artwork.src=getComputedStyle(hero.querySelector('.member-rank-emblem')).backgroundImage.slice(5,-2);
   artwork.decode().then(()=>{if(!disposed&&!dismissed&&hero.isConnected&&!host.hidden)play();}).catch(finish);
-  return cleanup;
+  return dispose;
 }
 function homeRankContent(rank,selectedMonth,d){
   const ranked=rank.status==='ranked'&&rank.month===selectedMonth&&rank.month_closed===true&&Number.isInteger(rank.tier)&&[0,10,20,30,40,50,60,70,80,90].includes(rank.tier);
@@ -200,9 +204,12 @@ async function renderHome(){
       if(!request.isCurrent())return;
       if(rank.month!==selectedMonth)throw new Error('返回的数据月份不一致，请重试。');
       const view=homeRankContent(rank,selectedMonth,d);
-      host.innerHTML=view.html;panel.classList.toggle('member-rank-panel',view.ranked);panel.classList.toggle('member-rank-awaiting',view.waiting);
+      panel.classList.toggle('member-rank-panel',view.ranked);panel.classList.toggle('member-rank-awaiting',view.waiting);
       if(view.ranked)panel.dataset.rankTier=rank.tier;
-      if(view.ranked){homeRankCleanup=bindRankCeremony(host);registerPageCleanup(homeRankCleanup);}
+      homeRankCleanup=mountHonors(host,{month:selectedMonth,rank,cardHTML:view.html,bindCeremony:bindRankCeremony,isCurrent:()=>request.isCurrent(),onMonth:async month=>{
+        state.homeMonth=month;await renderHome();
+        if(state.tab==='home'&&state.homeMonth===month)document.getElementById('homeRankView')?.click();
+      }});registerPageCleanup(homeRankCleanup);
       rankButton.setAttribute('aria-expanded','true');rankButton.textContent='收起我的月度勋章';
     }catch(error){if(request.isCurrent())host.innerHTML=`<p class="error" role="alert">查看失败：${esc(error.message)}，可再次点击重试。</p>`;}
     finally{if(rankButton.isConnected)rankButton.disabled=false;}

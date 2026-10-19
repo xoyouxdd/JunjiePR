@@ -1,0 +1,23 @@
+{
+  "version": "2",
+  "name": "数据简报",
+  "layouts": {
+    "cover": 1,
+    "overview": 2,
+    "classification": 3,
+    "table4": 4,
+    "table5": 5,
+    "table7": 6,
+    "group-chart": 7,
+    "trend": 8,
+    "photo1": 9,
+    "photo2": 10,
+    "photo4": 11,
+    "text": 12,
+    "closing": 13,
+    "group-editorial": 14,
+    "stats-trend": 15,
+    "issuer-chart": 16,
+    "excellent-editorial": 17
+  }
+}

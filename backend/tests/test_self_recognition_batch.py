@@ -5,6 +5,7 @@ import tempfile
 from datetime import date
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
+import pytest
 
 os.environ["RECOGNITION_V2_DATA_DIR"] = tempfile.mkdtemp(prefix="pr-batch-")
 os.environ["RECOGNITION_ENABLE_TEST_ACCOUNTS"] = "1"
@@ -40,6 +41,35 @@ def entry(client, content="独立表现", code="SAFETY"):
 def send(client, items, key):
     return client.post("/api/recognitions/batch", data={"entries": json.dumps(items), "idempotency_key": key},
                        files={"image": ("evidence.png", picture(), "image/png")})
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_iphone_heif_with_jpeg_filename_can_be_registered_and_previewed(batch):
+    out = BytesIO()
+    Image.new("RGB", (24, 32), "blue").save(out, format="HEIF")
+    photo = out.getvalue()
+    with TestClient(app) as client:
+        login(client, "CMTEST01")
+        item = dict(entry(client, "手机照片兼容"), same_day_duplicate_confirmed=True)
+        key = f"iphone-heif-{batch}"
+        data = {"entries": json.dumps([item]), "idempotency_key": key} if batch else {**item, "idempotency_key": key}
+        response = client.post("/api/recognitions/batch" if batch else "/api/recognitions", data=data,
+                               files={"image": ("IMG_4845.jpeg", photo, "image/jpeg")})
+        assert response.status_code == 200, response.text
+        record = response.json()["records"][0] if batch else response.json()["record"]
+        with SessionLocal() as db:
+            attachment = db.query(RecognitionAttachment).filter_by(recognition_id=record["id"]).one()
+            stored = db.get(StoredFile, attachment.file_id)
+            assert stored.extension == ".heic" and stored.mime_type == "image/heic"
+            assert stored.original_filename == "IMG_4845.jpeg"
+            assert (FILE_DIR / stored.storage_key).read_bytes() == photo
+            file_id = stored.id
+        preview = client.get(f"/api/files/{file_id}?preview=true")
+        assert preview.status_code == 200, preview.text
+        assert preview.headers["content-type"].startswith("image/jpeg")
+        with Image.open(BytesIO(preview.content)) as image:
+            image.load()
+            assert image.size == (24, 32)
 
 
 def test_five_rows_one_photo_and_retry_conflict():

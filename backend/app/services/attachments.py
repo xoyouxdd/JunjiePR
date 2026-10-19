@@ -10,6 +10,7 @@ import warnings
 from pathlib import Path
 from uuid import uuid4
 from PIL import Image, UnidentifiedImageError
+from pillow_heif import get_file_mimetype, register_heif_opener
 from anyio import CapacityLimiter, to_thread
 from anyio.lowlevel import RunVar
 
@@ -17,6 +18,10 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.v2_models import StoredFile
+
+
+register_heif_opener()
+RECOGNITION_IMAGE_FORMATS = "JPG/JPEG、PNG、WebP、HEIC/HEIF"
 
 
 BUSINESS_ATTACHMENT_EFFECTIVE_DATE = "2026-09-01"
@@ -52,8 +57,13 @@ def validate_image_file(path: Path) -> tuple[str, str]:
             with Image.open(path) as image:
                 detected = {"JPEG": (".jpg", "image/jpeg"), "PNG": (".png", "image/png"),
                             "WEBP": (".webp", "image/webp")}.get(image.format)
+                if image.format == "HEIF":
+                    with path.open("rb") as source:
+                        detected = detect_image_type(source.read(16))
+                    if detected and detected[0] not in {".heic", ".heif"}:
+                        detected = None
                 if not detected:
-                    raise HTTPException(400, "认可图片格式无效，仅支持JPG、PNG、WebP")
+                    raise HTTPException(400, f"认可图片格式无效，仅支持{RECOGNITION_IMAGE_FORMATS}")
                 if image.width * image.height > BUSINESS_IMAGE_MAX_PIXELS:
                     raise HTTPException(400, "认可图片像素过大，请压缩图片尺寸后重新选择")
                 image.verify()
@@ -65,7 +75,7 @@ def validate_image_file(path: Path) -> tuple[str, str]:
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise HTTPException(400, "认可图片像素过大，请压缩后重新选择") from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
-        raise HTTPException(400, "认可图片已损坏或无法读取，请重新选择JPG、PNG、WebP图片") from exc
+        raise HTTPException(400, f"认可图片已损坏或无法读取，请重新选择{RECOGNITION_IMAGE_FORMATS}图片") from exc
 
 
 async def _stream_upload_to_path(upload: UploadFile, path: Path, *, max_bytes: int, empty_message: str, label: str) -> tuple[int, str]:
@@ -126,6 +136,12 @@ def detect_image_type(content: bytes) -> tuple[str, str] | None:
         return ".png", "image/png"
     if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
         return ".webp", "image/webp"
+    if len(content) >= 12 and content[4:8] == b"ftyp":
+        mime_type = get_file_mimetype(content)
+        if mime_type in {"image/heic", "image/heic-sequence"}:
+            return ".heic", "image/heic"
+        if mime_type in {"image/heif", "image/heif-sequence"}:
+            return ".heif", "image/heif"
     return None
 
 
@@ -136,7 +152,7 @@ async def save_image_upload(db: Session, upload: UploadFile, uploader_id: int, *
     try:
         with staging_path.open("rb") as source:
             if not detect_image_type(source.read(16)):
-                raise HTTPException(400, "认可图片格式无效，仅支持JPG、PNG、WebP")
+                raise HTTPException(400, f"认可图片格式无效，仅支持{RECOGNITION_IMAGE_FORMATS}")
         detected = await _validate_image_in_worker(staging_path)
         extension, mime_type = detected
         storage_key = f"{uuid4().hex}{extension}"

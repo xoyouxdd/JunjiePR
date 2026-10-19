@@ -177,8 +177,8 @@ def test_void_filter_export_and_security_watermarks() -> None:
         exported = client.get("/api/statistics/export", params={"month": month, "attraction_id": circle_id, "title": "CM"})
         assert exported.status_code == 200, exported.text
         workbook = load_workbook(BytesIO(exported.content))
-        assert workbook.sheetnames == ["导出说明", "月度综合分", "月度综合分明细", "LOA明细", "层级绩效明细", "员工号变更对照", "签卡明细", "扣分明细", "病假明细", "作废操作记录", "主管月度综合分", "主管月度综合分明细"]
-        assert workbook.active.title == "层级绩效明细"
+        assert workbook.sheetnames == ["导出说明", "月度综合分明细", "月度综合分", "主管月度综合分明细", "主管月度综合分", "签卡明细", "扣分明细", "病假明细", "LOA明细", "层级绩效明细", "作废操作记录", "员工号变更对照"]
+        assert workbook.active.title == "导出说明"
         assert "认可数据" in str(workbook["导出说明"]["A1"].value)
         export_context = {row[0].value: row[1].value for row in workbook["导出说明"].iter_rows(min_row=2)}
         assert export_context["统计月份"] == month
@@ -197,7 +197,7 @@ def test_void_filter_export_and_security_watermarks() -> None:
         assert supervisor_export_row[8].value == "小组汇总"
         assert workbook["月度综合分"].row_dimensions[supervisor_export_row[0].row].collapsed is True
         detail_headers = [cell.value for cell in workbook["月度综合分明细"][1]]
-        assert detail_headers == ["员工号", "姓名", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态", "备注"]
+        assert detail_headers == ["员工号", "姓名", "Title", "景点圈", "签卡加分", "全勤分", "扣分", "综合分", "人员状态", "工号状态", "备注", "小组"]
         assert workbook["月度综合分明细"].auto_filter.ref
         assert "当月已确认认可次数" in [cell.value for cell in workbook["签卡明细"][1]]
         assert "记录编号" in [cell.value for cell in workbook["签卡明细"][1]]
@@ -1311,8 +1311,8 @@ def test_v2234_imported_recognizers_are_available_from_policy_start() -> None:
     script = read_frontend_source()
     assert 'data-evidence-camera' in script
     assert 'data-evidence-album' in script
-    assert 'data-evidence-camera-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" capture="environment"' in script
-    assert 'data-evidence-album-input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"' in script
+    assert 'data-evidence-camera-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment"' in script
+    assert 'data-evidence-album-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"' in script
     assert 'data-image-preview' in script
     assert 'openImagePreview' in script
     assert "data.append('image',file,file.name)" in script
@@ -1369,7 +1369,7 @@ def test_same_day_recognition_warning_and_editable_hierarchy_export() -> None:
         assert exported.status_code == 200, exported.text
         workbook = load_workbook(BytesIO(exported.content), data_only=False)
         hierarchy = workbook["层级绩效明细"]
-        assert workbook.active.title == "层级绩效明细"
+        assert workbook.active.title == "导出说明"
         assert workbook.calculation.fullCalcOnLoad is True
         assert workbook.calculation.forceFullCalc is True
         detail_rows = [row for row in hierarchy.iter_rows(min_row=2) if row[13].value == "明细"]

@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from copy import copy
+from math import ceil
 from urllib.parse import quote
 
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 TITLE_FILL = PatternFill("solid", fgColor="1F4E78")
-TITLE_FONT = Font(bold=True, size=16, color="FFFFFF")
+TITLE_FONT = Font(name="Microsoft YaHei", bold=True, size=16, color="FFFFFF")
 LABEL_FILL = PatternFill("solid", fgColor="F3F7FB")
 KPI_FILL = PatternFill("solid", fgColor="D9EAF7")
 THIN_BORDER = Border(
-    left=Side(style="thin"),
-    right=Side(style="thin"),
-    top=Side(style="thin"),
-    bottom=Side(style="thin"),
+    left=Side(style="thin", color="DCE4EC"),
+    right=Side(style="thin", color="DCE4EC"),
+    top=Side(style="thin", color="DCE4EC"),
+    bottom=Side(style="thin", color="DCE4EC"),
 )
 BODY_ALIGNMENT = Alignment(vertical="center", wrap_text=True)
 
@@ -46,14 +48,23 @@ def style_sheet(ws, *, landscape: bool = False) -> None:
         cell.fill = fill
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
+    fonts = {}
     for column in ws.columns:
         width = max(display_width(cell.value) for cell in column)
         ws.column_dimensions[column[0].column_letter].width = min(max(width + 2, 10), 42)
         for cell in column:
             cell.border = THIN_BORDER
             cell.alignment = BODY_ALIGNMENT
-    for row_idx in range(1, (ws.max_row or 1) + 1):
-        ws.row_dimensions[row_idx].height = 24
+            # Styles are shared by openpyxl. Clone each distinct font once,
+            # rather than deepcopying thousands of identical cell fonts.
+            key = cell._style.fontId
+            if key not in fonts:
+                font = copy(cell.font)
+                font.name = "Microsoft YaHei"
+                font.scheme = None
+                fonts[key] = font
+            cell.font = fonts[key]
+    fit_row_heights(ws)
     configure_sheet(ws, freeze="A2", landscape=landscape)
 
 
@@ -67,10 +78,45 @@ def configure_sheet(ws, *, freeze="A2", landscape=False) -> None:
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.page_setup.orientation = "landscape" if landscape else "portrait"
+    ws.print_title_rows = "1:1"
+    ws.print_options.horizontalCentered = False
     ws.page_margins.left = 0.25
     ws.page_margins.right = 0.25
     ws.page_margins.top = 0.5
     ws.page_margins.bottom = 0.5
+
+
+def fit_row_heights(ws, *, start_row: int = 1) -> None:
+    """Fit wrapped source text without changing values or formula cells.
+
+    Excel itself caps a row at 409pt. Values longer than this remain intact
+    in their cells and can be read in the formula bar; never truncate them.
+    """
+    for row in ws.iter_rows(min_row=start_row):
+        lines = 1
+        for cell in row:
+            if cell.data_type == "f" or cell.value is None:
+                continue
+            # Leave room for CJK font metrics, punctuation, cell padding and zoom.
+            width = max(8, ((ws.column_dimensions[cell.column_letter].width or 13) - 2) * 0.8)
+            lines = max(lines, sum(max(1, ceil(display_width(part) / width))
+                                   for part in str(cell.value).split("\n")))
+        ws.row_dimensions[row[0].row].height = min(409, max(24, lines * 18 + 6))
+
+
+def fold_columns(ws, labels: set[str], *, header_row: int = 1) -> None:
+    """Keep low-frequency fields in place, expandable via Excel's outline +."""
+    for cell in ws[header_row]:
+        if cell.value in labels:
+            dimension = ws.column_dimensions[cell.column_letter]
+            dimension.hidden = True
+            dimension.outlineLevel = 1
+            ws.sheet_format.outlineLevelCol = 1
+            ws.column_dimensions.max_outline = 1
+            if cell.column > 1:
+                ws.column_dimensions[ws.cell(header_row, cell.column - 1).column_letter].collapsed = True
+    ws.sheet_properties.outlinePr.summaryRight = False
+    ws.sheet_view.showOutlineSymbols = True
 
 
 def add_banded_table(ws, ref, name) -> None:

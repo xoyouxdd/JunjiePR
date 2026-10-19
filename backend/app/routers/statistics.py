@@ -6,6 +6,10 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from time import monotonic
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
+from sqlalchemy.exc import IntegrityError
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -18,21 +22,91 @@ from app.role_constants import SCORED_BASE_CODES
 from app.data_cache import PR_RANKING_CACHE_SECONDS, STATISTICS_CACHE_SECONDS, _pr_ranking_cache_lock, _pr_ranking_response_cache, _statistics_cache_lock, _statistics_response_cache
 from app.excel_export import append_supervisor_score_sheets, build_pr_rankings_workbook, build_statistics_workbook
 from app.excel_export_utils import content_disposition
+from app.excel_presentation import finalize_statistics_workbook, save_export_workbook
 from app.score_queries import employee_month_scores
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
-from app.v2_models import Attraction, AuditLog, Employee
+from app.v2_models import Attraction, AuditLog, Employee, EmployeeHonorMemory, EmployeeHonorStyle
 from app.v2_watermark import watermark_workbook
 from app.services.attendance import ensure_month_attendance
 from app.services.audit import write_audit
 from app.services.organization import direct_member_ids
 from app.services.monthly_ranks import member_month_rank
+from app.services.honors import honor_records, self_honors
 from app.services.monthly_statistics import dashboard_payload, statistics_hierarchy, statistics_payload
 from app.services.performance_details import member_records_payload, member_score_detail_payload, member_score_summary_payload, statistics_details_payload
 from app.services.performance_rankings import gsm_recognizer_ranking_payload, pr_ranking_payload, ranking_employees, ranking_group_labels
 from app.services.statistics_trends import TREND_DEFAULT_MONTHS, TREND_MAX_MONTHS, TREND_SCORE_FIELDS, statistics_trend_payload as _statistics_trend_payload, trend_month_keys
 
 router = APIRouter()
+
+
+class HonorPreferenceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skin: Literal["sea", "gold", "moon", "ice", "jade", "copper", "forest", "minimal"] | None = None
+    selected_record_id: StrictInt | None = None
+    favorite: StrictBool | None = None
+
+
+def honor_month(response: Response, month: str | None, user: V2User) -> str:
+    headers = {"Cache-Control": "private, no-store", "Vary": "Cookie"}
+    response.headers.update(headers)
+    if not monthly_ranks_enabled():
+        raise HTTPException(404, "月度荣誉功能暂不可用", headers=headers)
+    if user.base_role.code not in SCORED_BASE_CODES:
+        raise HTTPException(403, "仅可查看本人的月度荣誉", headers=headers)
+    value = parse_score_month(month or date.today().strftime("%Y-%m"))
+    if value > date.today().strftime("%Y-%m"):
+        raise HTTPException(400, "仅可查看当前及历史月份", headers=headers)
+    return value
+
+
+@router.get("/self-honors")
+def get_self_honors(response: Response, month: str | None = None,
+                    db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    return self_honors(db, honor_month(response, month, user), user.employee)
+
+
+@router.put("/self-honors")
+def save_self_honors(payload: HonorPreferenceUpdate, response: Response, month: str | None = None,
+                     db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    month = honor_month(response, month, user)
+    fields = payload.model_fields_set
+    if not fields:
+        raise HTTPException(400, "请选择要保存的装扮或回顾")
+    if ("skin" in fields and payload.skin is None) or ("favorite" in fields and payload.favorite is None):
+        raise HTTPException(422, "装扮和收藏状态不能为空")
+    if payload.selected_record_id is not None:
+        ids = {row.id for row in honor_records(db, month, user.id)}
+        if payload.selected_record_id not in ids:
+            raise HTTPException(400, "只能选择本人本月已确认的有效认可")
+    if "favorite" in fields and payload.favorite:
+        current = self_honors(db, month, user.employee)
+        if current["letter_state"] != "ready":
+            raise HTTPException(409, "本月回顾尚未生成，暂不能收藏")
+    if payload.skin is not None:
+        style = db.get(EmployeeHonorStyle, user.id)
+        if style is None:
+            style = EmployeeHonorStyle(employee_id=user.id)
+            db.add(style)
+        style.skin = payload.skin
+    if fields & {"selected_record_id", "favorite"}:
+        memory = db.get(EmployeeHonorMemory, (user.id, month))
+        if memory is None:
+            memory = EmployeeHonorMemory(employee_id=user.id, score_month=month)
+            db.add(memory)
+        if "selected_record_id" in fields:
+            memory.selected_record_id = payload.selected_record_id
+        if "favorite" in fields:
+            memory.favorite = payload.favorite
+    write_audit(db, user.employee, "honor_preference", "employee", user.id,
+                after={"month": month, **payload.model_dump(exclude_unset=True)})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "设置刚刚被其他页面更新，请刷新后重试")
+    return self_honors(db, month, user.employee)
 
 
 @router.get("/dashboard")
@@ -129,10 +203,14 @@ def export_pr_rankings(
     if user.role.code not in {"GSM", "AM", "OM"}:
         raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
     data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id, population)
+    if data["total"] > len(data["rows"]):
+        data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, data["total"], attraction_id, population)
+    if data["total"] != len(data["rows"]):
+        raise HTTPException(409, "排名数据已变化，请重新导出以取得完整记录")
     wb = build_pr_rankings_workbook(db, data, category)
     watermark_workbook(wb, user.employee.employee_no)
     output = BytesIO()
-    wb.save(output)
+    save_export_workbook(wb, output)
     output.seek(0)
     write_audit(db, user.employee, "导出PR排名", "pr_ranking_export", category, after={"start_date": start_date, "end_date": end_date, "subtype_id": subtype_id, "sort_by": sort_by, "keyword": keyword, "row_count": len(data["rows"])})
     db.commit()
@@ -287,9 +365,10 @@ def export_statistics(month: str, attraction_id: int | None = None, keyword: str
     if data["title"] != "SUPERVISOR" and not (keyword or "").strip():
         supervisor_data = statistics_payload(db, month, attraction_id, None, "SUPERVISOR", user, include_records=True)
         append_supervisor_score_sheets(wb, db, supervisor_data, month)
+    finalize_statistics_workbook(wb)
     watermark_workbook(wb, user.employee.employee_no)
     output = BytesIO()
-    wb.save(output)
+    save_export_workbook(wb, output)
     output.seek(0)
     write_audit(db, user.employee, "导出统计数据", "statistics_export", month, after={"attraction_id": attraction_id, "title": data["title"], "keyword": keyword or "", "employee_count": len(data["scores"])})
     db.commit()

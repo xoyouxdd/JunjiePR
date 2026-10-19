@@ -12,7 +12,9 @@
 | [leave-management.md](leave-management.md) | LOA、月度病假事务导入与单人备用登记 |
 | [declaration-statistics.md](declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
 | [hr-monthly-report-plan.md](hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
+| [excel-export-presentation.md](excel-export-presentation.md) | Excel总览、完整明细、低频列折叠与同批次核对 |
 | [local-update-20261011.md](local-update-20261011.md) | 10月11日讨论与本地落实清单 |
+| [local-update-20261019.md](local-update-20261019.md) | 10月19日导出优化、我的荣誉与名称落实复查 |
 | [rotation.md](rotation.md) | 轮岗（测试）：入口、模拟账号、规则、个人确认、平板大屏布局、现场调整、TR临时授权、吃饭选择、同步与测试时钟 |
 | [self-recognition-batch.md](self-recognition-batch.md) | 本人认可多条登记与共用照片 |
 | [announcements.md](announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |

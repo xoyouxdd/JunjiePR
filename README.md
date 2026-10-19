@@ -15,9 +15,11 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 | [docs/sqlite-schema.md](docs/sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [docs/identity-and-supervisor.md](docs/identity-and-supervisor.md) | 本职与代理职务、主管绩效登记复核、日期展示及统计口径 |
 | [docs/monthly-self-rank.md](docs/monthly-self-rank.md) | 个人月结游戏段位、同分中位算法、隐私和未发布开关 |
+| [docs/local-update-20261019.md](docs/local-update-20261019.md) | 10月19日导出优化、我的荣誉与名称落实复查 |
 | [docs/leave-management.md](docs/leave-management.md) | LOA、月度病假事务导入与单人备用登记 |
 | [docs/declaration-statistics.md](docs/declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
 | [docs/hr-monthly-report-plan.md](docs/hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
+| [docs/excel-export-presentation.md](docs/excel-export-presentation.md) | Excel总览、完整明细、低频列折叠与同批次核对 |
 | [docs/rotation.md](docs/rotation.md) | 轮岗（测试）：入口、模拟账号、规则、个人确认、平板大屏布局、现场调整、TR临时授权、吃饭选择、同步与测试时钟 |
 | [docs/self-recognition-batch.md](docs/self-recognition-batch.md) | 本人认可多条登记与共用照片 |
 | [docs/announcements.md](docs/announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |

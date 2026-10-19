@@ -653,7 +653,14 @@ def download_unmatched_sick_leave_file(token: str, db: Session = Depends(get_db)
         cell.font = Font(bold=True)
     for column in sheet.columns:
         sheet.column_dimensions[column[0].column_letter].width = min(max(len(str(cell.value or "")) for cell in column) + 2, 36)
+    from app.excel_export_utils import fit_row_heights, style_sheet
+    from app.excel_presentation import save_export_workbook
+    for source_ws in workbook:
+        fit_row_heights(source_ws)
+    style_sheet(sheet, landscape=True)
+    workbook.move_sheet(sheet, offset=-workbook.sheetnames.index(sheet.title))
+    workbook.active = 0
     buffer = BytesIO()
-    workbook.save(buffer)
+    save_export_workbook(workbook, buffer)
     buffer.seek(0)
     return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=\"sick-leave-unmatched.xlsx\""})

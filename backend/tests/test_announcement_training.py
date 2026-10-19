@@ -177,18 +177,18 @@ def test_publisher_export_keeps_followup_snapshots_and_group_order(client):
     response = client.get(f"/api/announcements/{a['id']}/followup-export")
     assert response.status_code == 200
     book = load_workbook(BytesIO(response.content))
-    assert book.active.title == "跟进记录"
+    assert book.active.title == book.worksheets[1].title
     assert "-followup.xlsx" in response.headers["content-disposition"]
-    sheet = book["跟进记录"]
-    headers = [c.value for c in sheet[6]]
-    assert headers[:4] == ["景点圈","小组","工号","姓名"]
-    rows = list(sheet.iter_rows(min_row=7,values_only=True))
-    assert [(r[0],r[1],r[2]) for r in rows] == [(r["attraction_name"],r["group_name"],r["employee_no"]) for r in data["items"]]
-    signed = next(r for r in rows if r[2]=="CMTEST01")
+    sheet = book["凭据核对"]
+    headers = [c.value for c in sheet[1]]
+    rows = list(sheet.iter_rows(min_row=2,values_only=True))
+    assert {r[0] for r in rows} == {r["employee_no"] for r in data["items"]}
+    signed = next(r for r in rows if r[0]=="CMTEST01")
     record = dict(zip(headers,signed))
     assert record["跟进培训师"] == tr["name"] and record["培训师工号"] == "TRTEST01" and record["培训批次"] == code["id"]
-    assert record["验码时间"] and record["签字时间"] and sheet.freeze_panes == "E7"
-    assert "签字声明" not in headers and sheet.column_dimensions["I"].hidden
+    assert record["验码时间"] and record["签字时间"] and sheet.freeze_panes == "C2"
+    assert record["签字声明"] and record["SHA256"] and sheet.sheet_state == "hidden"
+    assert any(s["G6"].value == "跟进培训师" for s in book.worksheets[1:-1])
     assert code["code"] not in str(rows)
     from pathlib import Path
     target = Path(__file__).resolve().parents[2]/".handover_review"/"announcement-training-followup-20261011.xlsx"

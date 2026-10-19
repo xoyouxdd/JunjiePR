@@ -18,7 +18,13 @@ let tier=90,identity='CM',status='ranked',previous=false,hostile=false,expectedQ
 const rankRequests=[];
 const month=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;};
 const previousMonth=()=>{const d=new Date();d.setMonth(d.getMonth()-1,1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;};
-const names={90:'荣耀王者',80:'傲世宗师',70:'超凡大师',60:'至尊星耀',50:'永恒钻石',40:'尊贵铂金',30:'荣耀黄金',20:'探索白银',10:'成长青铜',0:'启航新星'};
+const names={90:'无双王者',80:'傲世宗师',70:'超凡大师',60:'璀璨星耀',50:'永恒钻石',40:'流光铂金',30:'荣耀黄金',20:'探索白银',10:'成长青铜',0:'启航新星'};
+const honorPreferences={skin:'sea',selected_record_id:3,favorite:false};
+function honorsData(selected){
+  const ready=!['pending','reopened','waiting_global','unavailable'].includes(status);
+  const records=['核对交接安排并完成复核','帮助游客确认路线','整理现场分组与任务交接','工作认真，继续保持','确认游客路线并完成交接'].map((content,index)=>({id:index+1,date:selected+'-08',category:'效率',content,recognizer:'模拟认可人',cap_reason:index===4?'本月类别已封顶':'',status:'confirmed'}));
+  return {month:selected,...honorPreferences,records,letter_state:ready?'ready':'waiting',history:[{month:selected,status,tier,label:names[tier]}],letter:ready?{title:'本月，值得留下的一页',paragraphs:['本月，你的认真留在具体的记录里。','认可记录写下：“核对交接安排并完成复核”。','谢谢你的投入，愿这些时刻值得珍藏。'],source_ids:[1,2,3]}:null};
+}
 const messages={pending:'所属景点圈完成该月月结后，才能查看段位与评语。',reopened:'该月份已重开，段位重新核算中。',excluded:'该月LOA，不参与段位比较。',insufficient:'本月比较人数不足10人，暂不生成游戏段位。',same_scores:'本月同类人员积分相同，不生成游戏段位。',unavailable:'该月暂无可用的月结段位数据。',waiting_global:'待参与主管计分的各景点圈全部月结后，统一展示主管与TA GSM段位。'};
 function dashboardData(selected){
   const closed=status!=='pending'&&status!=='reopened';
@@ -53,6 +59,10 @@ const server=http.createServer((req,res)=>{
   else if(route==='/api/options')json(res,{roles:[],attractions:[],employee_circles:[],recognition_types:[],deduction_types:[]});
   else if(route==='/api/dashboard')json(res,dashboardData(url.searchParams.get('month')));
   else if(route==='/api/self-month-rank'){rankRequests.push(url.search);json(res,dashboardData(url.searchParams.get('month')).month_rank);}
+  else if(route==='/api/self-honors'){
+    if(req.method==='PUT'){let body='';req.on('data',part=>body+=part);req.on('end',()=>{Object.assign(honorPreferences,JSON.parse(body));json(res,honorsData(url.searchParams.get('month')));});}
+    else json(res,honorsData(url.searchParams.get('month')));
+  }
   else if(route==='/api/member-score-summary')json(res,{month:url.searchParams.get('month'),rows:[{
     employee_id:2,employee_name:'测试组员',employee_no:'CM002',role_name:'CM',
     recognition_score:3,deduction_score:0,attendance_score:12,total_score:15,
@@ -132,6 +142,40 @@ async function main(){
     const viewedRequests=rankRequests.length;
     await page.locator('[data-rank-replay]').click();
     await page.locator('[data-rank-skip]').click();
+    // The approved three-tab UI is the real frontend, not a standalone mockup.
+    for(const width of [320,390,1280]){
+      await page.setViewportSize({width,height:1000});
+      await page.locator('[data-honor-tab="memory"]').click();
+      await page.locator('.honor-letter details summary').click();
+      assert.equal(await page.locator('.honor-letter details .honor-source').count(),3);
+      if(await page.locator('[data-honor-record]').count()===3)await page.locator('[data-honor-all]').click();
+      assert.equal(await page.locator('[data-honor-record]').count(),5);
+      await page.locator('[data-honor-record="5"]').click();
+      await page.locator('.honor-feedback').filter({hasText:'已保存'}).waitFor();
+      assert((await page.locator('.honor-source').innerText()).includes('本月类别已封顶'));
+      await page.locator('[data-honor-mode="letter"]').click();
+      await page.locator('[data-honor-favorite]').click();
+      await page.locator('.honor-feedback').filter({hasText:'已保存'}).waitFor();
+      await page.screenshot({path:path.join(out,`honor-memory-${width}.png`),fullPage:true});
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'Memory fits mobile');
+      await page.locator('[data-honor-tab="skins"]').click();
+      assert.equal(await page.locator('[data-honor-skin-choice]').count(),8);
+      for(const skin of ['sea','gold','moon','ice','jade','copper','forest','minimal']){
+        await page.locator(`[data-honor-skin-choice="${skin}"]`).click();
+        await page.locator(`.honor-display[data-honor-skin="${skin}"]`).waitFor();
+        assert.equal(await page.locator('.is-assembling').count(),0,'A skin change does not replay');
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,`${skin} fits ${width}px`);
+      }
+      await page.locator('[data-honor-skin-choice="moon"]').click();
+      await page.locator('.honor-display[data-honor-skin="moon"]').waitFor();
+      assert.equal(await page.locator('[data-honor-skin-choice="moon"]').getAttribute('aria-pressed'),'true');
+      await page.evaluate(()=>window.scrollTo(0,0));
+      await page.screenshot({path:path.join(out,`honor-skins-${width}.png`),fullPage:true});
+      await page.locator('[data-honor-tab="collection"]').click();
+    }
+    await page.locator('[data-rank-replay]').click();
+    await page.locator('[data-rank-skip]').click();
+    assert.equal(await page.locator('[data-rank-sound]').getAttribute('aria-pressed'),'false');
     assert.equal(rankRequests.length,viewedRequests,'Replay never refetches or recomputes the result');
     assert.equal(await page.locator('.is-assembling').count(),0);
     assert.equal(await page.locator('[data-rank-replay]').evaluate(el=>el===document.activeElement),true);
@@ -359,6 +403,46 @@ async function main(){
     assert.equal(await page.locator('#homeMonthSelect').inputValue(),month());
     assert((await page.locator('.member-rank-month').textContent()).includes(`${Number(month().slice(5))}月`));
     await page.unroute(personalRoute,olderRank);
+    // An older honor load/save must not repaint a different month.
+    const honorRoute=/\/api\/self-honors\?/;
+    let releaseHonor,markHonor;
+    const honorGate=new Promise(resolve=>{releaseHonor=resolve;});
+    const honorStarted=new Promise(resolve=>{markHonor=resolve;});
+    const olderHonor=async route=>{
+      const selected=new URL(route.request().url()).searchParams.get('month');
+      if(selected==='2025-12'){markHonor();await honorGate;}
+      await route.fulfill({json:honorsData(selected)});
+    };
+    await page.route(honorRoute,olderHonor);
+    await page.locator('#homeMonthSelect').selectOption('2025-12');
+    await page.locator('#homeRankView').waitFor();await showRank(page);await honorStarted;
+    await page.locator('#homeMonthSelect').selectOption(month());
+    await page.locator('#homeRankView').waitFor();await showRank(page);
+    const oldHonorResponse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/self-honors'&&new URL(response.url()).searchParams.get('month')==='2025-12');
+    releaseHonor();await (await oldHonorResponse).finished();
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await page.locator('#homeMonthSelect').inputValue(),month());
+    assert(!(await page.locator('.honor-history').innerText()).includes('2025年12月'));
+    await page.unroute(honorRoute,olderHonor);
+    let releaseSave,markSave;
+    const saveGate=new Promise(resolve=>{releaseSave=resolve;});
+    const saveStarted=new Promise(resolve=>{markSave=resolve;});
+    const olderSave=async route=>{
+      const selected=new URL(route.request().url()).searchParams.get('month');
+      if(route.request().method()==='PUT'){markSave();await saveGate;}
+      await route.fulfill({json:honorsData(selected)});
+    };
+    await page.route(honorRoute,olderSave);
+    await page.locator('[data-honor-tab="skins"]').click();
+    await page.locator('[data-honor-skin-choice="gold"]').click();await saveStarted;
+    await page.locator('#homeMonthSelect').selectOption('2025-12');
+    await page.locator('#homeRankView').waitFor();await showRank(page);
+    const oldSaveResponse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/self-honors'&&response.request().method()==='PUT');
+    releaseSave();await (await oldSaveResponse).finished();
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await page.locator('#homeMonthSelect').inputValue(),'2025-12');
+    assert.equal(await page.locator('[data-honor-tab="collection"][aria-selected="true"]').count(),1);
+    await page.unroute(honorRoute,olderSave);
     await page.locator('#homeRankView').click();
     assert.equal(await page.locator('#homeRankContent').isVisible(),false);
     assert.equal(await page.locator('.member-rank-panel').count(),0);

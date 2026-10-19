@@ -71,6 +71,22 @@ class Employee(Base):
     attraction = relationship("Attraction")
 
 
+class EmployeeHonorStyle(Base):
+    """Self-only presentation preference; never participates in scoring."""
+
+    __tablename__ = "employee_honor_styles"
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), primary_key=True)
+    skin: Mapped[str] = mapped_column(String(20), default="sea")
+
+
+class EmployeeHonorMemory(Base):
+    __tablename__ = "employee_honor_memories"
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), primary_key=True)
+    score_month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    selected_record_id: Mapped[int | None] = mapped_column(ForeignKey("recognition_records.id"), nullable=True)
+    favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class EmployeeNumberHistory(Base):
     """Immutable employee-number change trail; all business rows keep employee_id."""
 

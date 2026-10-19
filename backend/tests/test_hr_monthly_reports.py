@@ -105,6 +105,96 @@ def test_all_role_guards():
             assert client.get("/api/hr-monthly-reports/options").status_code == (200 if allowed else 403)
 
 
+def test_authorized_roles_can_export_each_new_direction():
+    with TestClient(app) as client:
+        for account, password in (("GSMTEST01", "1234"), ("AMTEST01", "1234"), ("OMTEST01", "1234"), ("HR01", "HR123")):
+            login(client, account, password)
+            options = client.get("/api/hr-monthly-reports/options").json()
+            assert [r["name"] for r in options["templates"]] == ["管理纪要", "数据简报", "团队月刊"]
+            preview = client.get("/api/hr-monthly-reports/preview?month=2026-09").json()
+            for template in ("forest", "minimal", "warm"):
+                result = client.post("/api/hr-monthly-reports/export", data={"config": json.dumps({"month": "2026-09", "template": template, "sections": ["overview"], "preview_digest": preview["digest"]})})
+                assert result.status_code == 200
+                with zipfile.ZipFile(BytesIO(result.content)) as archive:
+                    assert len([n for n in archive.namelist() if n.startswith('ppt/slides/report') and n.endswith('.xml')]) == 2
+
+
+def test_photos_choose_encoding_and_strip_metadata():
+    from PIL import Image
+    from app.routers.hr_monthly_reports import prepare_photo
+    raw = BytesIO()
+    Image.effect_noise((1200, 800), 70).convert('RGB').save(raw, 'PNG')
+    photo = prepare_photo(raw.getvalue(), (1000, 700))
+    assert photo['extension'] == 'jpg'
+    assert len(photo['bytes']) < len(raw.getvalue()) / 2
+    with Image.open(BytesIO(photo['bytes'])) as image:
+        assert image.size == (1000, 667)
+        assert not image.getexif()
+    transparent = BytesIO()
+    Image.new('RGBA', (100, 80), (0, 120, 180, 80)).save(transparent, 'PNG')
+    assert prepare_photo(transparent.getvalue())['content_type'] == 'image/png'
+    opaque = BytesIO()
+    Image.effect_noise((600, 400), 60).convert('RGBA').save(opaque, 'PNG')
+    assert prepare_photo(opaque.getvalue())['content_type'] == 'image/jpeg'
+
+
+def test_chart_ticks_distinguish_small_counts_and_negative_fractional_scores():
+    from app.hr_monthly_layouts import LayoutReport
+    report = LayoutReport('minimal', 'CONFIDENTIAL', '2026-09')
+    _, rels = report.add('classification', '有效次数')
+    report.chart(rels, ['安全'], [('CM/TR', [1])])
+    _, rels = report.add('group-chart', '小组分排名')
+    report.chart(rels, ['甲组', '乙组'], [('平均分', [-.25, .4])], '0.00', True)
+    with zipfile.ZipFile(BytesIO(report.finish())) as archive:
+        count = ET.fromstring(archive.read('ppt/charts/report1.xml'))
+        assert float(count.find('.//c:valAx/c:majorUnit', NS).get('val')) >= 1
+        score = ET.fromstring(archive.read('ppt/charts/report2.xml'))
+        assert float(score.find('.//c:valAx/c:scaling/c:min', NS).get('val')) <= -.25
+        assert float(score.find('.//c:valAx/c:scaling/c:max', NS).get('val')) >= .4
+        fmt = score.find('.//c:valAx/c:numFmt', NS)
+        assert fmt.get('sourceLinked') == '0' and '.' in fmt.get('formatCode')
+
+
+def test_long_content_chart_clones_and_photo_reuse():
+    from copy import deepcopy
+    from openpyxl import load_workbook
+    from app.routers.hr_monthly_reports import prepare_photo
+    from PIL import Image
+    with TestClient(app) as client:
+        login(client)
+        data = client.get('api/hr-monthly-reports/preview?month=2026-09').json()['report']
+    data = deepcopy(data)
+    long_name = '测试用超长中文与English姓名需要完整保留不能截断'
+    data['rankings'] = [{'category': 'CM', 'attraction_name': '跨景点模拟范围', 'rows': [{'rank': i + 1, 'employee_name': long_name, 'employee_no': str(700000 + i), 'recognition_score': 1, 'deduction_score': 2, 'attendance_score': 12, 'total_score': 11} for i in range(31)]}]
+    data['recognitions'] = [{'attraction_name': '模拟景点圈', 'category': 'CM', 'type': f'类型{i:02d}', 'count': i + 1} for i in range(15)]
+    data['groups'] = [{'name': '特别长的小组名字用于确认完整分页而非缩小字体', 'attraction_name': '跨景点模拟范围', 'employee_count': 12, 'average': 23.45}]
+    photo = BytesIO()
+    Image.new('RGB', (800, 400), 'navy').save(photo, 'PNG')
+    for theme in ('forest', 'minimal', 'warm'):
+        content = build_pptx(data, theme, {'recognitions', 'rankings', 'groups', 'photos'}, set(), '', '', [prepare_photo(photo.getvalue())] * 12, '模拟测试', 'CONFIDENTIAL')
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            roots = [ET.fromstring(archive.read(n)) for n in archive.namelist() if n.startswith('ppt/slides/report') and n.endswith('.xml')]
+            rank_rows = [row for root in roots if 'PR排名：CM' in ''.join(root.itertext()) for row in root.findall('.//a:tbl/a:tr', NS)[1:]]
+            assert len(rank_rows) == 31
+            for row in rank_rows:
+                assert ''.join(t.text or '' for t in row.findall('a:tc', NS)[1].findall('.//a:t', NS)) == long_name
+                assert min(int(s.get('sz')) for s in row.findall('.//a:rPr', NS)) >= 1800
+            for root in roots:
+                for frame in root.findall('.//p:graphicFrame', NS):
+                    if frame.find('.//a:tbl', NS) is not None:
+                        y = int(frame.find('p:xfrm/a:off', NS).get('y'))
+                        h = int(frame.find('p:xfrm/a:ext', NS).get('cy'))
+                        assert (y + h) / 9525 <= 610
+            charts = [ET.fromstring(archive.read(n)) for n in archive.namelist() if n.startswith('ppt/charts/report') and n.endswith('.xml')]
+            assert len(charts) == 3
+            assert sum(len(c.findall('.//c:ser', NS)[0].findall('c:cat/c:strRef/c:strCache/c:pt', NS)) for c in charts) == 15
+            assert len([n for n in archive.namelist() if n.startswith('ppt/media/activity-')]) == 1
+            assert len([p for root in roots for p in root.findall('.//p:pic', NS) if p.find('p:nvPicPr/p:cNvPr', NS).get('name') == '活动照片']) == 12
+            for name in [n for n in archive.namelist() if n.endswith('.xlsx')]:
+                book = load_workbook(BytesIO(archive.read(name)))
+                assert not any(c.data_type == 'f' for row in book.active for c in row)
+
+
 def test_native_charts_tables_pagination_and_photos(tmp_path):
     from PIL import Image
     from openpyxl import load_workbook
@@ -128,7 +218,7 @@ def test_native_charts_tables_pagination_and_photos(tmp_path):
             ranks = [s for s in slides if "PR排名：CM" in ''.join(t.text or '' for t in s.findall('.//a:t', NS))]
             assert all("CONFIDENTIAL TEST" in ''.join(t.text or '' for t in s.findall('.//a:t', NS)) for s in slides)
             assert "示例" not in ''.join(t.text or '' for s in slides for t in s.findall('.//a:t', NS))
-            assert len(ranks) == 3
+            assert len(ranks) == 4  # Six readable 18pt rows per page, no shrinking.
             assert sum(len(s.findall('.//a:tbl/a:tr', NS)) - 1 for s in ranks) == 19
             pics = [p for s in slides for p in s.findall('.//p:pic', NS) if p.find('p:nvPicPr/p:cNvPr', NS).get('name') == '活动照片']
             assert len(pics) == 5
@@ -137,7 +227,8 @@ def test_native_charts_tables_pagination_and_photos(tmp_path):
                 assert int(ext.get('cx')) == int(ext.get('cy')) * 2
                 assert int(ext.get('cy')) > 1000000
             books = [n for n in archive.namelist() if n.endswith('.xlsx')]
-            assert len(books) == 3
+            charts = [n for n in archive.namelist() if n.startswith('ppt/charts/report') and n.endswith('.xml')]
+            assert len(books) == len(charts) == 4  # Overview + two classifications + trend.
             for name in books:
                 workbook = load_workbook(BytesIO(archive.read(name)))
                 assert not any('示例' in str(c.value) for row in workbook.active for c in row)

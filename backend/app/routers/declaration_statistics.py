@@ -12,6 +12,8 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from app.excel_export_utils import content_disposition, excel_row
+from app.excel_export_utils import configure_sheet, fit_row_heights, display_width
+from app.excel_presentation import present_detail, save_export_workbook
 # Keep the existing query imports available to API callers during extraction.
 from app.services.declaration_statistics import (
     MATERIAL_LABELS, STATUS_LABELS, UPGRADE_LABELS, checked_month, declaration_payload,
@@ -58,9 +60,13 @@ def build_declaration_workbook(data: dict) -> Workbook:
             cell.font = Font(color="FFFFFF", bold=True)
         for col in ws.columns:
             letter = col[0].column_letter
-            ws.column_dimensions[letter].width = min(45, max(13, max(len(str(cell.value or "")) for cell in col) + 2))
+            ws.column_dimensions[letter].width = min(45, max(13, max(display_width(cell.value) for cell in col) + 2))
             for cell in col:
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
+        configure_sheet(ws, freeze="A4" if ws is summary else "C2", landscape=True)
+        ws.print_title_rows = "1:3" if ws is summary else "1:1"
+        fit_row_heights(ws)
+    present_detail(detail)
     return wb
 
 
@@ -76,7 +82,7 @@ def export_declaration_statistics(
     workbook = build_declaration_workbook(data)
     watermark_workbook(workbook, user.employee.employee_no)
     output = BytesIO()
-    workbook.save(output)
+    save_export_workbook(workbook, output)
     output.seek(0)
     write_audit(db, user.employee, "导出声明登记统计", "declaration_statistics_export", data["month"], after={"attraction_id": attraction_id, "level_id": level_id, "type_id": type_id, "status": status, "keyword": keyword, "record_count": data["total_records"]}, ip_address=client_ip(request))
     db.commit()

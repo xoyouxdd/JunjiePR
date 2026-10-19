@@ -455,7 +455,7 @@ def test_reports_preserve_snapshot_formula_safety_and_actual_signature_evidence(
         full = "".join(page.get_text() for page in document)
         assert "签字凭据" in full and "SHA256" in full and "V1" in full and old_name in full
         assert "公告正文" in full and "检查护栏" in full
-        assert document.page_count >= 3
+        assert "如何阅读" not in full
         # Retain a locally inspectable QA artifact outside production data.
         output = Path(__file__).resolve().parents[2]/"output"/"pdf"
         output.mkdir(parents=True, exist_ok=True)
@@ -465,17 +465,17 @@ def test_reports_preserve_snapshot_formula_safety_and_actual_signature_evidence(
     excel = client.get(f"/api/announcements/{a['id']}/export?format=xlsx")
     assert excel.status_code == 200
     workbook = load_workbook(BytesIO(excel.content))
-    assert workbook.active.title == "签收总览"
-    assert workbook.sheetnames == ["签收总览","签收记录","跟进记录","公告内容"]
-    sheet = workbook["签收记录"]
+    assert workbook.active.title == "公告与总览"
+    assert workbook["凭据核对"].sheet_state == "hidden"
+    sheet = workbook["凭据核对"]
     dangerous = [c for row in sheet for c in row if isinstance(c.value,str) and c.value.startswith("=")]
     assert dangerous and all(c.data_type == "s" for c in dangerous)
     assert old_name in [c.value for row in sheet for c in row]
-    assert sheet.freeze_panes == "E7"
-    assert sheet.column_dimensions["J"].hidden
-    assert "$A$1:$I$" + str(sheet.max_row) in str(sheet.print_area)
+    assert sheet.freeze_panes == "C2"
+    assert sum(len(s._images) for s in workbook) == 1
+    assert all(s.freeze_panes == "C7" for s in workbook.worksheets[1:-1])
     (output/"announcement-receipt-integration.xlsx").write_bytes(excel.content)
-    assert "公告内容" in workbook.sheetnames
+    assert "检查护栏" in str([c.value for row in workbook.active for c in row])
 
 
 def test_concurrent_repeated_publication_and_signature_have_one_evidence_row(client):
@@ -717,19 +717,18 @@ def test_report_layout_keeps_scoped_counts_and_full_content(client):
     user = SimpleNamespace(name="模拟导出人", employee=SimpleNamespace(employee_no="0000001"))
     raw = spreadsheet(data, user)
     book = load_workbook(BytesIO(raw))
-    assert book.active.title == "签收总览"
+    assert book.active.title == "公告与总览"
     groups = report_groups(data)
     assert len(groups) == 4
-    totals = [sum(book.active.cell(r,c).value for r in range(7,11)) for c in range(3,8)]
+    header = next(row[0].row for row in book.active if row[0].value == "景点圈")
+    totals = [sum(book.active.cell(r,c).value for r in range(header+1,header+5)) for c in range(3,8)]
     assert totals == [12,6,6,6,6]
-    sheet = book["签收记录"]
-    assert sheet.max_row == 30 and sheet["C7"].value == "0090000" and sheet["C7"].data_type == "s"
-    assert isinstance(sheet["F7"].value, datetime) and isinstance(sheet["H7"].value, datetime)
-    assert sheet["F7"].number_format == "yyyy-mm-dd hh:mm"
-    assert sheet.column_dimensions["J"].hidden and book["跟进记录"].max_column == 11
-    assert [c.value for c in book["跟进记录"][6]] != [c.value for c in sheet[6]]
-    body_values = [row[1].value or "" for row in book["公告内容"] if row[0].value in {"正文","续"}]
-    assert "\n".join(body_values) == announcement["body"]
+    sheet = book.worksheets[1]
+    assert sheet["A7"].value == "0090000\n模拟人员1" and sheet["A7"].data_type == "s"
+    assert isinstance(sheet["E7"].value, datetime) and isinstance(sheet["H7"].value, datetime)
+    assert sheet["E7"].number_format == "yyyy-mm-dd hh:mm:ss"
+    assert book["凭据核对"].sheet_state == "hidden"
+    assert all(line in str([c.value for row in book.active for c in row]) for line in announcement["body"].splitlines() if line)
     content = pdf(data, user)
     target = Path(__file__).resolve().parents[2]/".handover_review"/"announcement-export-20261013"
     target.mkdir(parents=True, exist_ok=True)
@@ -747,9 +746,11 @@ def test_report_layout_keeps_scoped_counts_and_full_content(client):
         assert "尚无接收记录" in "".join(p.get_text() for p in document)
     long_data = {**empty,"announcement": {**announcement,"body": "\n".join(f"段落{i:04d}：逐项核对培训要求。" for i in range(120))}}
     long_book = load_workbook(BytesIO(spreadsheet({**long_data,"announcement": {**long_data["announcement"],"change_summary": "长变更"*300}},user)))
-    content_sheet = long_book["公告内容"]
+    content_sheet = long_book["公告与总览"]
     assert all(d.height <= 409 for d in content_sheet.row_dimensions.values())
-    assert "".join(row[1].value for row in content_sheet if str(row[0].value).startswith("变更")) == "长变更"*300
+    values = [str(row[0].value or "") for row in content_sheet]
+    start = values.index("变更")+1
+    assert "".join(values[start:start+9]) == "长变更"*300
     with fitz.open(stream=pdf(long_data,user),filetype="pdf") as document:
         full = "".join(p.get_text() for p in document)
         assert all(f"段落{i:04d}" in full for i in range(120))
