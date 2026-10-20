@@ -99,6 +99,9 @@ async function bindSelfRecognitionBatch(form,imageField){
   const container=form.querySelector('[data-batch-entries]'),add=form.querySelector('[data-batch-add]'),submit=form.querySelector('[data-batch-submit]');
   const evidenceInputs=[...form.querySelectorAll('[data-evidence-input]')],evidenceName=form.querySelector('[data-evidence-name]');
   evidenceInputs.forEach(input=>input.onchange=()=>{if(input.files?.length){evidenceInputs.filter(other=>other!==input).forEach(other=>{other.value='';});evidenceName.textContent=`本次全部记录共用：${input.files[0].name}`;}});
+  const closeOtherPickers=event=>form.querySelectorAll('[data-batch-recognizer][open]').forEach(picker=>{if(!picker.contains(event.target))picker.open=false;});
+  document.addEventListener('click',closeOtherPickers);
+  registerPageCleanup(()=>document.removeEventListener('click',closeOtherPickers));
   let sequence=0;
   function update(){const cards=[...container.children];cards.forEach((card,i)=>{card.querySelector('[data-entry-title]').textContent=`登记 ${i+1}`;card.querySelector('[data-entry-remove]').disabled=cards.length===1;});form.querySelector('[data-batch-count]').textContent=`${cards.length}/5 条`;add.disabled=cards.length>=5;submit.textContent=cards.length===1?'提交认可':`提交 ${cards.length} 条认可`;}
   async function append(){
@@ -107,10 +110,40 @@ async function bindSelfRecognitionBatch(form,imageField){
     card.innerHTML=`<legend data-entry-title></legend><button type="button" class="secondary" data-entry-remove>删除此条</button><div class="grid two"><label>认可日期<input name="recognition_date" type="date" value="${today()}" required></label><label>认可类型<select name="recognition_type_id" required>${opt((state.options.recognition_types||[]).filter(row=>!row.dedicated_entry))}</select></label></div><label>认可内容<input name="content" maxlength="20" required placeholder="请输入20字以内的认可内容"></label><div class="grid two"><label>发生景点<select name="occurred_attraction_id" required><option value="">请选择</option>${opt(state.options.recognition_venues||[])}</select></label><label>认可人 / 签卡人<select name="recognizer_employee_id" required><option value="">正在加载…</option></select></label></div><span class="field-hint" data-entry-score>分值按认可人当日角色自动计算</span>`;
     container.append(card);bindDateSubmissionFallbacks(card);update();
     const dateInput=card.querySelector('[name=recognition_date]'),type=card.querySelector('[name=recognition_type_id]'),recognizer=card.querySelector('[name=recognizer_employee_id]'),hint=card.querySelector('[data-entry-score]');let rows=[],requestVersion=0,loading=false;
+    // Keep the original select as the serialization and validation owner.
+    // Native optgroup menus cannot collapse on iOS, so expose grouped details.
+    recognizer.classList.add('recognizer-native-select');recognizer.tabIndex=-1;recognizer.setAttribute('aria-hidden','true');
+    const picker=document.createElement('details');picker.className='batch-recognizer-picker';picker.dataset.batchRecognizer=String(id);
+    picker.innerHTML='<summary><span data-batch-recognizer-value>正在加载…</span><span class="batch-recognizer-chevron" aria-hidden="true">⌄</span></summary><div class="batch-recognizer-menu"></div>';
+    recognizer.after(picker);
+    const pickerSummary=picker.querySelector('summary'),pickerValue=picker.querySelector('[data-batch-recognizer-value]'),pickerMenu=picker.querySelector('.batch-recognizer-menu');
+    const keepPickerVisible=()=>requestAnimationFrame(()=>{
+      if(!picker.open||!card.isConnected||!page.isCurrent())return;
+      const top=(document.querySelector('.app-topbar')?.getBoundingClientRect().bottom||0)+10;
+      let bottom=innerHeight-12;
+      [document.getElementById('tabs'),form.querySelector('.form-sticky-actions')].forEach(node=>{if(!node)return;const r=node.getBoundingClientRect();if(r.width&&r.top>top&&r.bottom<=innerHeight+1)bottom=Math.min(bottom,r.top-10);});
+      const r=picker.getBoundingClientRect();if(r.top<top||r.bottom>bottom)window.scrollBy(0,r.top-top);
+    });
+    picker.addEventListener('toggle',event=>{if(event.target===picker&&picker.open)keepPickerVisible();});
+    pickerSummary.onclick=event=>{if(loading||form.dataset.batchSubmitting)event.preventDefault();};
+    picker.onkeydown=event=>{if(event.key==='Escape'){event.preventDefault();picker.open=false;pickerSummary.focus();}};
+    recognizer.oninvalid=event=>{event.preventDefault();if(!loading){picker.open=true;pickerSummary.focus();}};
+    function renderPicker(candidates,special){
+      picker.open=false;
+      const people=items=>items.map(row=>`<button type="button" class="batch-recognizer-person" data-batch-recognizer-option="${esc(row.id)}" aria-pressed="false">${esc(`${row.name} · ${row.role_name} · ${fmt(row.score)}分`)}</button>`).join('');
+      pickerMenu.innerHTML=special?people(candidates):batchRecognizerGroups(candidates).map(group=>`<details class="batch-recognizer-group"><summary>${esc(group.label)}<span class="batch-recognizer-chevron" aria-hidden="true">⌄</span></summary><div>${people(group.rows)}</div></details>`).join('');
+      if(!candidates.length)pickerMenu.innerHTML='<p class="field-hint">当前日期暂无可选签卡人</p>';
+      pickerMenu.querySelectorAll('.batch-recognizer-group').forEach(group=>group.addEventListener('toggle',()=>{if(group.open){pickerMenu.querySelectorAll('.batch-recognizer-group').forEach(other=>{if(other!==group)other.open=false;});keepPickerVisible();}}));
+      pickerMenu.querySelectorAll('[data-batch-recognizer-option]').forEach(button=>button.onclick=()=>{
+        recognizer.value=button.dataset.batchRecognizerOption;
+        recognizer.dispatchEvent(new Event('change',{bubbles:true}));
+        picker.open=false;pickerMenu.querySelectorAll('.batch-recognizer-group').forEach(group=>{group.open=false;});pickerSummary.focus();
+      });
+    }
     card.querySelector('[data-entry-remove]').onclick=()=>{if(container.children.length>1&&!form.dataset.batchSubmitting){card.remove();update();}};
-    function options(){const selectedType=state.options.recognition_types.find(x=>String(x.id)===type.value),special=selectedType?.fixed_score!=null?selectedType.code:null;const candidates=rows.filter(x=>special?String(x.id)===`special:${special}`:!x.special&&x.id!==state.me.id);recognizer.innerHTML='<option value="">请选择</option>'+(special?opt(candidates,'id',x=>`${x.name} · ${x.role_name} · ${fmt(x.score)}分`):groupedRecognizerOptions(candidates));if(special&&candidates.length)recognizer.value=String(candidates[0].id);score();}
-    function score(){const row=rows.find(x=>String(x.id)===recognizer.value);hint.textContent=row?`${row.name} · 当日分值：${fmt(row.score)}分`:'分值按认可人当日角色自动计算';}
-    async function load(){const version=++requestVersion;loading=true;recognizer.innerHTML='<option value="">正在加载…</option>';hint.textContent='正在获取当日认可人…';try{const value=submittedDateValue(dateInput);if(!value)throw new Error('请填写有效认可日期');const result=await api('/api/recognizers?'+new URLSearchParams({attraction_id:state.me.attraction_id,recognition_date:value}));if(version!==requestVersion||!card.isConnected||!page.isCurrent())return;rows=result;options();}catch(error){if(version!==requestVersion||!page.isCurrent())return;rows=[];recognizer.innerHTML='<option value="">请选择日期后重试</option>';hint.textContent=error.message||'认可人加载失败，请重新选择日期';}finally{if(version===requestVersion)loading=false;}}
+    function options(){const selectedType=state.options.recognition_types.find(x=>String(x.id)===type.value),special=selectedType?.fixed_score!=null?selectedType.code:null;const candidates=rows.filter(x=>special?String(x.id)===`special:${special}`:!x.special&&x.id!==state.me.id);recognizer.innerHTML='<option value="">请选择</option>'+(special?opt(candidates,'id',x=>`${x.name} · ${x.role_name} · ${fmt(x.score)}分`):groupedRecognizerOptions(candidates));if(special&&candidates.length)recognizer.value=String(candidates[0].id);renderPicker(candidates,special);score();}
+    function score(){const row=rows.find(x=>String(x.id)===recognizer.value);hint.textContent=row?`${row.name} · 当日分值：${fmt(row.score)}分`:'分值按认可人当日角色自动计算';pickerValue.textContent=row?`${row.name} · ${row.role_name} · ${fmt(row.score)}分`:'请选择';pickerMenu.querySelectorAll('[data-batch-recognizer-option]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.batchRecognizerOption===recognizer.value)));}
+    async function load(){const version=++requestVersion;loading=true;picker.open=false;picker.setAttribute('aria-busy','true');pickerValue.textContent='正在加载…';recognizer.innerHTML='<option value="">正在加载…</option>';hint.textContent='正在获取当日认可人…';try{const value=submittedDateValue(dateInput);if(!value)throw new Error('请填写有效认可日期');const result=await api('/api/recognizers?'+new URLSearchParams({attraction_id:state.me.attraction_id,recognition_date:value}));if(version!==requestVersion||!card.isConnected||!page.isCurrent())return;rows=result;options();}catch(error){if(version!==requestVersion||!page.isCurrent())return;rows=[];recognizer.innerHTML='<option value="">请选择日期后重试</option>';pickerMenu.innerHTML='';pickerValue.textContent='请选择日期后重试';hint.textContent=error.message||'认可人加载失败，请重新选择日期';}finally{if(version===requestVersion){loading=false;picker.removeAttribute('aria-busy');}}}
     dateInput.addEventListener('change',load);type.onchange=options;recognizer.onchange=score;card._isLoading=()=>loading;await load();
   }
   add.onclick=append;await append();

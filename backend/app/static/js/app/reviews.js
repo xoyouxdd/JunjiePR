@@ -35,12 +35,13 @@ async function renderReview(showHistory=false, offset=0){
   const hint=showHistory?`已处理记录（已确认和不通过，共${total}条）`:`待复核记录（共${total}条，最早提交的在前）`;
   const pager=(total>limit||pageOffset>0||hasMore)?`<div class="pagination"><button type="button" id="reviewPrev" class="secondary" ${pageOffset<=0?'disabled':''}>上一页</button><span>本页${rows.length}条 · 共${total}条</span><button type="button" id="reviewNext" class="secondary" ${hasMore?'':'disabled'}>下一页</button></div>`:'';
   if(!request.write(`<section class="panel"><div class="record-line"><div><h2>${supervisorQueue?'主管复核':'复核'}</h2><p>${hint}</p></div><button type="button" class="secondary" id="reviewHistoryToggle">${showHistory?'返回待处理':'查看已处理历史'}</button></div>${mobileQuery.matches?`<div class="work-card-list">${cards}</div>`:table}${pager}</section>`))return;
-  const handleLayoutChange=()=>{clearPageResources();renderReview(showHistory,pageOffset);};
+  const reload=(history,offset)=>{const owner=captureViewContext(app,{latest:false});clearPageResources();void renderReview(history,offset).catch(error=>{if(error?.name!=='AbortError'&&owner.isCurrent())toast(error.message||'加载复核记录失败，请重试',true);});};
+  const handleLayoutChange=()=>reload(showHistory,pageOffset);
   mobileQuery.addEventListener?.('change',handleLayoutChange);
   registerPageCleanup(()=>mobileQuery.removeEventListener?.('change',handleLayoutChange));
-  document.getElementById('reviewHistoryToggle').onclick=()=>{clearPageResources();renderReview(!showHistory,0);};
-  document.getElementById('reviewPrev')?.addEventListener('click',()=>{if(pageOffset<=0)return;clearPageResources();renderReview(showHistory,Math.max(0,pageOffset-limit));});
-  document.getElementById('reviewNext')?.addEventListener('click',()=>{if(!hasMore)return;clearPageResources();renderReview(showHistory,pageOffset+limit);});
+  document.getElementById('reviewHistoryToggle').onclick=()=>reload(!showHistory,0);
+  document.getElementById('reviewPrev')?.addEventListener('click',()=>{if(pageOffset<=0)return;reload(showHistory,Math.max(0,pageOffset-limit));});
+  document.getElementById('reviewNext')?.addEventListener('click',()=>{if(!hasMore)return;reload(showHistory,pageOffset+limit);});
   bindFilePreviews(app);
   bindReviewActions(showHistory,pageOffset);
 }

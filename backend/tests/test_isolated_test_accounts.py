@@ -16,7 +16,9 @@ ROLES = {"CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM", "AM", "OM",
 
 
 def run_seed(env):
-    return subprocess.run([sys.executable, str(SCRIPT)], env=env, capture_output=True,
+    # The parent decodes UTF-8; force the child to emit UTF-8 on Windows too,
+    # including rejection paths whose Chinese diagnostics use stderr.
+    return subprocess.run([sys.executable, str(SCRIPT)], env={**env, "PYTHONUTF8": "1"}, capture_output=True,
                           text=True, encoding="utf-8", timeout=45)
 
 

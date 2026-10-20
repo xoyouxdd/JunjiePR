@@ -4,6 +4,7 @@
 
 | 文件 | 内容 |
 |---|---|
+| [ui-system-review-20261020.md](ui-system-review-20261020.md) | 常用页面统一优化、手机日期与折叠签卡人修复、前后对照及后续建议 |
 | [announcement-ui-review-20261020.md](announcement-ui-review-20261020.md) | 公告中心UI/UX改造、权限边界、真实浏览器验收与兼容性 |
 | [日常操作保护与任务验收](usability-acceptance.md) | 填写保护、网络恢复、待办定位与真人手机验收 |
 | [architecture.md](architecture.md) | 现用系统与目录职责 |

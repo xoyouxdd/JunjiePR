@@ -102,10 +102,28 @@
 #app[data-workspace-ui] [data-entry-remove] { width: auto; justify-self: end; padding-inline: 12px; font-size: 13px; }
 #app[data-workspace-ui] [data-entry-remove]:disabled { color: var(--text-faint); background: transparent; border-color: transparent; }
 #app[data-workspace-ui] .recognizer-trigger { min-height: 44px; border-radius: 9px; }
+.batch-recognizer-picker { min-width: 0; position: relative; }
+.batch-recognizer-picker > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 46px; padding: 10px 12px; border: 1px solid #cdd7e4; border-radius: 9px; background: var(--panel); color: var(--text); font-size: 16px; font-weight: 500; list-style: none; cursor: pointer; }
+.batch-recognizer-picker summary::-webkit-details-marker { display: none; }
+.batch-recognizer-picker [data-batch-recognizer-value] { min-width: 0; overflow-wrap: anywhere; }
+.batch-recognizer-chevron { flex: 0 0 auto; color: var(--text-faint); }
+.batch-recognizer-picker[open] > summary { border-color: var(--primary); }
+.batch-recognizer-picker[open] > summary > .batch-recognizer-chevron,.batch-recognizer-group[open] > summary > .batch-recognizer-chevron { transform: rotate(180deg); }
+.batch-recognizer-menu { max-height: 340px; max-height: min(340px,max(140px,calc(100dvh - 280px))); overflow-y: auto; overscroll-behavior: contain; margin-top: 6px; padding: 6px; border: 1px solid #cdd7e4; border-radius: 11px; background: var(--panel); box-shadow: 0 8px 24px rgb(16 32 51 / 7%); }
+.batch-recognizer-group > summary { display: flex; align-items: center; justify-content: space-between; min-height: 46px; padding: 10px; border-radius: 6px; background: var(--surface-soft); color: var(--text-label); font-size: 14px; font-weight: 600; list-style: none; cursor: pointer; }
+.batch-recognizer-group + .batch-recognizer-group { margin-top: 5px; }
+.batch-recognizer-group > div { display: grid; gap: 2px; padding-block: 4px; }
+.batch-recognizer-person { display: block; width: 100%; min-height: 46px; padding: 10px 12px; border: 0; border-radius: 7px; background: var(--panel); color: var(--text); text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.batch-recognizer-person:is(:hover,[aria-pressed=true]) { background: var(--info-bg); color: var(--primary-dark); }
+.batch-recognizer-picker summary:focus-visible,.batch-recognizer-person:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 #app[data-workspace-ui] :is(.recognizer-person,.recognizer-group-toggle) { min-height: 44px; }
 #app[data-workspace-ui] .hr-report-sections { gap: 8px; }
 #app[data-workspace-ui] .hr-report-sections > label { min-height: 44px; padding: 9px 12px; border-radius: 9px; }
 #app[data-workspace-ui] .hr-tool-panel > summary { min-height: 52px; }
+#app[data-workspace-ui] .hr-tool-panel > summary > .badge { flex-shrink: 0; white-space: nowrap; }
+#app[data-workspace-ui] .report-materials { margin-top: 14px; border-top: 1px solid var(--workspace-border); }
+#app[data-workspace-ui] .report-materials > summary { min-height: 46px; padding-block: 12px; color: var(--text-label); }
+#app[data-workspace-ui] .report-materials-fields { display: grid; gap: 14px; padding-block: 4px 12px; }
 #app[data-workspace-ui] :is(.home-info-heading,.statistics-page-heading,.statistics-detail-heading,.pr-page-heading) { flex-wrap: wrap; gap: 10px; }
 #app[data-workspace-ui] .home-month-control select { min-height: 44px; }
 /* The content title is the page title; sidebar and mobile navigation keep location. */
@@ -114,11 +132,15 @@
   #app[data-workspace-ui] #recognitionForm { max-width: 900px; }
   #app[data-workspace-ui] [data-batch-entries] { max-width: 900px; }
 }
+@media (min-width: 1200px) {
+  #app[data-workspace-ui] .hr-report-page .statistics-filter { grid-template-columns: repeat(3,minmax(0,1fr)); }
+}
 @media (min-width: 761px) and (max-width: 1199px) {
   #app[data-workspace-ui] :is(.entry-filter,.statistics-filter,.pr-ranking-filter) { grid-template-columns: repeat(2,minmax(0,1fr)); }
   #app[data-workspace-ui] .entry-filter > button { align-self: end; }
 }
 @media (max-width: 760px) {
+  body:has(#app[data-workspace-ui] .form-sticky-actions) .toast { bottom: calc(148px + env(safe-area-inset-bottom)); }
   #app[data-workspace-ui] :is(button,summary) { min-height: 44px; }
   #app[data-workspace-ui] .section-gap { gap: 12px; }
   #app[data-workspace-ui] .panel { padding: 16px 14px; border-radius: 13px; }
@@ -159,8 +181,12 @@
   #app[data-workspace-ui] .hr-report-page .table-wrap table { min-width: 620px; table-layout: auto; }
   #app[data-workspace-ui] .hr-report-page :is(th,td) { padding: 10px 12px; font-size: 13px; }
 }
-@media (min-width: 360px) and (max-width: 760px) {
-  #app[data-workspace-ui] [data-batch-entry] .grid.two:has([name=recognition_date]) { grid-template-columns: repeat(2,minmax(0,1fr)); }
+/* iOS date inputs may retain a localized intrinsic width. Give each field a
+   full mobile row rather than compressing its text or covering the next input. */
+@media (max-width: 760px) {
+  #app[data-workspace-ui] [data-batch-entry] .grid.two:has([name=recognition_date]) { grid-template-columns: minmax(0,1fr); }
+  #app[data-workspace-ui] [data-batch-entry] .grid.two > label { min-width: 0; }
+  #app[data-workspace-ui] input[type=date]::-webkit-date-and-time-value { min-width: 0; text-align: left; }
 }
 @media (hover:hover) {
   #app[data-workspace-ui] button.secondary:hover { background: #eaf0f7; border-color: #c8d5e4; }

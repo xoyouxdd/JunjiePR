@@ -55,7 +55,7 @@ const user = {id: 1, name: '测试管理员', employee_no: '1000001', role_name:
   attraction_id: 1, attraction_name: '热力追踪', must_change_password: false};
 const options = {roles: [{code: 'CM', name: 'CM'}], attractions: [{id: 1, name: '热力追踪'}],
   employee_circles: [{id: 1, name: '热力追踪'}], recognition_venues: [{id: 1, name: '热力追踪'}],
-  recognition_types: [{id: 1, name: '安全', code: 'safety'}], deduction_types: []};
+  recognition_types: [{id: 1, name: '安全', code: 'safety'}, {id: 2,name:'表扬信',code:'LETTER',fixed_score:1,monthly_limit:1}], deduction_types: []};
 let mode = 'admin', delayedReset = false, releaseReset, resetStarted;
 const reviewRecord = {id: 71, employee_name: '复核测试主管', employee_no: 'SUP71',
   recognition_date: '2026-10-08', submitted_at: '2026-10-11 12:50:34',
@@ -161,6 +161,7 @@ async function fixtureRequest(request, response) {
     {id: 8, name: '迷宫测试员', role_name: 'TA主管', score: .5, group_key:'circle:2',group_label:'矮人迷宫',group_order:1},
     {id: 9, name: '小熊测试员', role_name: '主管', score: .5, group_key:'circle:3',group_label:'小熊罐子',group_order:2},
     {id: 10, name: '经理测试员', role_name: 'GSM', score: 1, group_key:'tagsm_plus',group_label:'TAGSM及以上',group_order:3},
+    {id:'special:LETTER',name:'表扬信',role_name:'固定分值',score:1,special:true},
   ]);
   else if (route === '/api/recognitions/batch') {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
@@ -365,8 +366,37 @@ async function main() {
     assert.deepEqual(await signer.locator('optgroup').evaluateAll(nodes=>nodes.map(node=>node.label)),
       ['热力追踪','矮人迷宫','小熊罐子','TAGSM及以上']);
     assert.deepEqual(await signer.locator('optgroup option').evaluateAll(nodes=>nodes.map(node=>node.value)),['7','8','9','10']);
-    await signer.selectOption('8');
+    const firstCard=member.locator('[data-batch-entry]').first(), picker=firstCard.locator('[data-batch-recognizer]');
+    await picker.locator(':scope > summary').click();
+    assert.equal(await picker.locator('.batch-recognizer-group[open]').count(),0,'Groups start collapsed');
+    assert.deepEqual(await picker.locator('.batch-recognizer-group > summary').allTextContents(),['热力追踪⌄','矮人迷宫⌄','小熊罐子⌄','TAGSM及以上⌄']);
+    const secondGroup=picker.locator('.batch-recognizer-group').nth(1);
+    await secondGroup.locator(':scope > summary').click();
+    await secondGroup.locator('[data-batch-recognizer-option="8"]').waitFor({state:'visible'});
+    await secondGroup.locator(':scope > summary').click();
+    assert.equal(await secondGroup.getAttribute('open'),null,'Groups can close without selecting');
+    await secondGroup.locator(':scope > summary').click();
+    await secondGroup.locator('[data-batch-recognizer-option="8"]').click();
+    assert.equal(await picker.getAttribute('open'),null,'Selecting closes the picker');
+    assert.equal(await signer.inputValue(),'8');
+    assert((await picker.locator(':scope > summary').innerText()).includes('迷宫测试员'));
     assert((await member.locator('[data-entry-score]').innerText()).includes('0.50分'));
+    await picker.locator(':scope > summary').click();
+    assert.equal(await picker.locator('.batch-recognizer-group[open]').count(),0,'Groups reset after choosing');
+    await picker.locator(':scope > summary').press('Escape');
+    assert.equal(await picker.getAttribute('open'),null);
+    await firstCard.locator('[name=recognition_type_id]').selectOption('2');
+    assert.equal(await signer.inputValue(),'special:LETTER','Fixed score keeps automatic special recognizer');
+    assert.equal(await picker.locator('.batch-recognizer-group').count(),0);
+    await firstCard.locator('[name=recognition_type_id]').selectOption('1');
+    for(const width of [320,375,390,430]){
+      await member.setViewportSize({width,height:844});
+      const boxes=await firstCard.evaluate(card=>{const date=card.querySelector('[name=recognition_date]').getBoundingClientRect(),type=card.querySelector('[name=recognition_type_id]').getBoundingClientRect();return {bottom:date.bottom,top:type.top,left:date.left,right:type.right,width:innerWidth};});
+      assert(boxes.top>=boxes.bottom,'Date and category have separate mobile rows');
+      assert(boxes.left>=0&&boxes.right<=boxes.width,'Date and category stay inside viewport');
+    }
+    await member.setViewportSize({width:390,height:844});
+    await signer.selectOption('8');
     await member.locator('[data-batch-add]').click();
     const secondSigner=member.locator('[data-batch-entry]').nth(1).locator('[name="recognizer_employee_id"]');
     await secondSigner.locator('optgroup option[value="10"]').waitFor({state:'attached'});
@@ -374,7 +404,7 @@ async function main() {
     await secondSigner.selectOption('10');
     assert.equal(await signer.inputValue(),'8','Batch entries keep independent signer choices');
     await member.locator('[data-batch-entry]').nth(1).locator('[data-entry-remove]').click();
-    checks.push('CM/TR batch signer groups: all circles and managers, complete candidates, score and independent entries');
+    checks.push('CM/TR batch: collapsed signer groups, expand/close, choose, Escape, special type, independent rows, 320/375/390/430px date layout');
     await member.locator('[data-batch-entry] [name="content"]').fill('未提交保护验证');
     await member.locator('.tabs-mobile [data-tab="home"]').click();
     await member.locator('[data-modal-cancel]').click();
@@ -465,6 +495,73 @@ async function main() {
     await workPage.locator('[data-month-detail-host]').getByText('负责人：负责主管').waitFor();
     await workPage.locator('[data-work-next]').click();
     await workPage.locator('[data-month-detail-host] .pagination').filter({hasText:'第2页'}).waitFor();
+    // Changing scope invalidates both actions and pending responses from the old scope.
+    await workPage.locator('#monthCloseForm [name="month"]').fill('2026-07');
+    assert.equal(await workPage.locator('[data-month-close]').count(),0);
+    let releaseMonth;
+    const monthGate=new Promise(resolve=>releaseMonth=resolve);
+    await workPage.route(/\/api\/month-closes\/2026-07(?:\?|$)/,async route=>{await monthGate;await route.fulfill({json:{month:'2026-07',attraction_name:'旧范围',is_closed:false,can_close:true,checklist:[]}});});
+    const oldMonthResponse=workPage.waitForResponse(response=>response.url().includes('/month-closes/2026-07'));
+    await workPage.locator('#monthCloseForm [type="submit"]').click();
+    await workPage.locator('#monthCloseForm [name="month"]').fill('2026-06');
+    releaseMonth();await oldMonthResponse;
+    await workPage.waitForLoadState('networkidle');
+    assert.match(await workPage.locator('#monthCloseResult').textContent(),/筛选条件已变化/);
+    assert.equal(await workPage.locator('[data-month-close]').count(),0);
+    await workPage.locator('#monthCloseForm [type="submit"]').click();
+    await workPage.locator('[data-month-close]').click();
+    await workPage.locator('[data-modal-input]').fill('合成原因');
+    await workPage.evaluate(()=>{const input=document.querySelector('#monthCloseForm [name="month"]');input.value='2026-05';input.dispatchEvent(new Event('input',{bubbles:true}));});
+    const writesBefore=requests.filter(r=>r.method==='POST'&&r.url.includes('/month-closes/')).length;
+    await workPage.locator('[data-modal-confirm]').click();
+    await workPage.locator('.modal-overlay').waitFor({state:'detached'});
+    assert.equal(requests.filter(r=>r.method==='POST'&&r.url.includes('/month-closes/')).length,writesBefore,'An outdated confirmation cannot write to the old month');
+    await workPage.locator('#monthCloseForm [type="submit"]').click();
+    await workPage.locator('[data-month-close]').waitFor();
+    await workPage.evaluate(()=>{const b=document.querySelector('[data-month-close]');b.click();b.click();});
+    assert.equal(await workPage.locator('[data-modal-input]').count(),1,'Rapid clicks must open only one confirmation');
+    let releaseClose;const closeGate=new Promise(resolve=>releaseClose=resolve);
+    await workPage.route('**/api/month-closes/2026-05/close',async route=>{await closeGate;await route.fulfill({status:409,json:{detail:'合成冲突，请重新查询'}});});
+    const closeStarted=workPage.waitForRequest(request=>request.method()==='POST'&&request.url().includes('/2026-05/close'));
+    await workPage.locator('[data-modal-input]').fill('合成关闭原因');
+    await workPage.locator('[data-modal-confirm]').click();await closeStarted;
+    await workPage.locator('.modal-overlay').waitFor({state:'detached'});
+    await workPage.locator('#monthCloseForm [type="submit"]').click();
+    await workPage.locator('[data-month-close]').click();
+    assert.equal(await workPage.locator('[data-modal-input]').count(),0,'Requery cannot bypass an in-flight month-close write lock');
+    const closeFailed=workPage.waitForResponse(response=>response.url().includes('/2026-05/close'));
+    releaseClose();await closeFailed;await workPage.waitForLoadState('networkidle');
+    await workPage.locator('[data-month-close]').click();
+    await workPage.locator('[data-modal-input]').waitFor();
+    await workPage.locator('[data-modal-cancel]').click();
+    checks.push('month-close filter invalidates old actions, delayed reads and outdated confirmation');
+    await workPage.route('**/api/hr-monthly-reports/options',route=>route.fulfill({json:{attractions:[],templates:[{id:'formal',name:'正式',description:'合成模板'}],sections:[{id:'photos',name:'活动照片'}]}}));
+    await workPage.route('**/api/hr-monthly-reports/preview?*',route=>route.fulfill({json:{digest:'synthetic',report:{month:new URL(route.request().url()).searchParams.get('month'),attraction_id:null,scope_name:'合成范围',draft:true,organization_basis:'合成口径',summary:{employee_count:0,recognition_count:0,deduction_count:0,recognition_rate:null,recognition_score:0,deduction_score:0},warnings:[],circles:[],candidates:[],deductions:[],recognitions:[],issuers:[],groups:[],rankings:[]}}}));
+    await workPage.evaluate(async()=>{const {state}=await import('./static/js/app/state.js');state.me.permissions.push('HR_MONTHLY_REPORT');const {renderTabs,gotoTab}=await import('./static/js/app/navigation.js');renderTabs();gotoTab('hrMonthlyReport');});
+    await workPage.locator('#hrReportExport:not([disabled])').waitFor();
+    await workPage.locator('.report-materials > summary').click();
+    await workPage.locator('#hrReportNotes').fill('合成月报说明保留验证');
+    await workPage.locator('#hrReportPhotos').setInputFiles({name:'synthetic.jpg',mimeType:'image/jpeg',buffer:Buffer.from('synthetic-photo')});
+    await workPage.locator('.tabs-desktop [data-tab="actionCenter"]').click();
+    await workPage.locator('[data-modal-cancel]').click();
+    assert.equal(await workPage.locator('#hrReportNotes').inputValue(),'合成月报说明保留验证');
+    assert.equal(await workPage.locator('#hrReportPhotos').evaluate(input=>input.files.length),1);
+    let releaseExport;const exportGate=new Promise(resolve=>releaseExport=resolve);let exportRequests=0;
+    await workPage.route('**/api/hr-monthly-reports/export',async route=>{exportRequests++;await exportGate;await route.fulfill({status:500,json:{detail:'合成导出失败'}});});
+    await workPage.locator('#hrReportExport').click();
+    await workPage.locator('#hrReportFilter [name="month"]').fill('2026-04');
+    await workPage.locator('#hrReportFilter [type="submit"]').click();
+    await workPage.locator('#hrReportPreview h3').filter({hasText:'2026-04'}).waitFor();
+    assert(await workPage.locator('#hrReportExport').isDisabled(),'A new preview must not unlock an active export');
+    await workPage.evaluate(()=>document.getElementById('hrReportExport').onclick());
+    assert.equal(exportRequests,1);
+    releaseExport();await workPage.locator('#hrReportExport:not([disabled])').waitFor();
+    assert.equal(await workPage.locator('#hrReportNotes').inputValue(),'合成月报说明保留验证');
+    assert.equal(await workPage.locator('#hrReportPhotos').evaluate(input=>input.files.length),1);
+    await workPage.locator('.tabs-desktop [data-tab="actionCenter"]').click();
+    await workPage.locator('[data-modal-confirm]').click();
+    await workPage.locator('#hrReportFilter').waitFor({state:'detached'});
+    checks.push('monthly report draft leave protection, failure retains text/files, preview cannot unlock active export');
     await workPage.close();
     checks.push('mobile scoped follow-up and HR month blockers show owner, history, pagination and no delegated handling');
 

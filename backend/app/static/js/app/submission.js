@@ -8,7 +8,7 @@ function clearFormEdits(form){editedForms.delete(form);}
 function pendingForms(){return [...editedForms].filter(form=>{if(!form.isConnected){editedForms.delete(form);return false;}return true;});}
 function installFormProtection(){
   let prompting=false,approved=null;
-  const remember=event=>{const form=event.target.closest?.('form.form-stack');if(form)editedForms.add(form);};
+  const remember=event=>{const form=event.target.closest?.('form.form-stack,[data-form-draft]');if(form)editedForms.add(form);};
   document.addEventListener('input',remember,true);
   document.addEventListener('change',remember,true);
   document.addEventListener('reset',event=>queueMicrotask(()=>clearFormEdits(event.target)),true);

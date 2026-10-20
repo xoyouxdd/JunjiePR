@@ -7,6 +7,17 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.20.3", "date": "2026-10-20", "status": "candidate",
+        "items": [
+            {"summary": "常用工作页面统一阅读与操作体验",
+             "detail": "统一待办、登记、复核、人员与数据页面的表单、按钮、列表和触达尺寸；手机筛选分列，统计表固定组织列缩窄，保留全部数据列和表内横向查看。公告与荣誉保留专属视觉；切换月结条件时清除旧操作，月报补充资料增加离页保护与导出防重复。统计、权限、接口、排序和业务规则不变。",
+             "audiences": ["all"]},
+            {"summary": "手机认可登记排版与签卡人分组改进",
+             "detail": "手机日期与认可类型分行，避免iOS原生日期控件挤压。签卡人分组默认收起，可展开、关闭，选人后菜单收起；每条独立选择，固定分值、本人排除与当日分值规则不变。完善复核页面切换尺寸后的取消请求反馈。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.20.2", "date": "2026-10-20", "status": "candidate",
         "items": [
             {"summary": "公告中心阅读与操作体验升级",
