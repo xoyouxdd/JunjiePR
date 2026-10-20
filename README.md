@@ -10,6 +10,8 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/mobile-upload-compatibility.md](docs/mobile-upload-compatibility.md) | 手机浏览器图片上传共用链路、实收测试与真机验收边界 |
+| [docs/uc-upload-review-20261020.md](docs/uc-upload-review-20261020.md) | iPhone UC选图读取兼容、批量上传诊断及验证边界 |
 | [docs/ui-system-review-20261020.md](docs/ui-system-review-20261020.md) | 常用UI统一走查、手机登记修复、前后对照和优化建议 |
 | [docs/announcement-ui-review-20261020.md](docs/announcement-ui-review-20261020.md) | 公告中心UI/UX改造、权限边界与实际浏览器验收 |
 | [日常操作保护与任务验收](docs/usability-acceptance.md) | 填写保护、网络恢复、待办定位与真人手机验收 |

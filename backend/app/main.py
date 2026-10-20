@@ -90,10 +90,18 @@ def browser_family(user_agent: str) -> str:
         return "baidu"
     if "micromessenger" in value:
         return "wechat"
-    if "safari" in value and "chrome" not in value:
-        return "safari"
-    if "chrome" in value:
+    if "mqqbrowser" in value or "qqbrowser" in value:
+        return "qq"
+    if "huaweibrowser" in value:
+        return "huawei"
+    if any(marker in value for marker in ("edg/", "edga/", "edgios/")):
+        return "edge"
+    if "firefox/" in value or "fxios/" in value:
+        return "firefox"
+    if "chrome" in value or "crios/" in value:
         return "chrome"
+    if "safari" in value:
+        return "safari"
     return "other"
 
 
@@ -122,11 +130,13 @@ async def validation_error_response(request: Request, exc: RequestValidationErro
             "fallback": "提交内容不完整，请检查认可登记表单后重试。",
         },
     }
+    supported_paths["/api/recognitions/batch"] = supported_paths["/api/recognitions"]
+    recognition_upload = request.url.path in {"/api/recognitions", "/api/recognitions/batch"}
     config = supported_paths.get(request.url.path)
     if request.method != "POST" or not config:
         return await request_validation_exception_handler(request, exc)
     client_image_ready = False
-    if request.url.path == "/api/recognitions":
+    if recognition_upload:
         try:
             form = await request.form()
             client_image_ready = str(form.get("image_client_ready", "")).strip() == "1"
@@ -137,7 +147,7 @@ async def validation_error_response(request: Request, exc: RequestValidationErro
         location = error.get("loc", ())
         field = str(location[-1]) if location else "unknown"
         message = config["messages"].get(field, config["fallback"])
-        if request.url.path == "/api/recognitions" and field == "image" and client_image_ready:
+        if recognition_upload and field == "image" and client_image_ready:
             message = "当前浏览器不支持本次图片上传，请更换浏览器后重新选择图片；如需继续使用，请上报浏览器兼容问题。"
         fields.append({"field": field, "message": message})
     unique_fields = []
@@ -167,9 +177,9 @@ async def validation_error_response(request: Request, exc: RequestValidationErro
         db.close()
     response_code = config["code"]
     has_image_failure = any(item["field"] == "image" for item in unique_fields)
-    if request.url.path == "/api/recognitions" and has_image_failure and client_image_ready:
+    if recognition_upload and has_image_failure and client_image_ready:
         response_code = "RECOGNITION_IMAGE_BROWSER_INCOMPATIBLE"
-    elif request.url.path == "/api/recognitions" and not has_image_failure:
+    elif recognition_upload and not has_image_failure:
         response_code = "RECOGNITION_VALIDATION_ERROR"
     return JSONResponse(status_code=422, content={"detail": {"code": response_code, "fields": unique_fields}})
 

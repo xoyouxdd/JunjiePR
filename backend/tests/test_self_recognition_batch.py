@@ -283,3 +283,59 @@ def test_forged_picture_rejected_before_creating_business_rows_or_files():
         assert set(FILE_DIR.iterdir()) == before_files
         with SessionLocal() as db:
             assert (db.query(RecognitionRecord).count(), db.query(StoredFile).count()) == before
+
+
+@pytest.mark.parametrize("browser", ["BaiduBrowser", "baiduboxapp", "UCBrowser", "MicroMessenger", "MQQBrowser", "CriOS", "Safari"])
+@pytest.mark.parametrize("batch", [False, True])
+def test_branded_user_agent_does_not_change_upload_rules(browser, batch):
+    # Server boundary test with synthetic user agents, not physical client certification.
+    with TestClient(app) as client:
+        login(client, "CMTEST01")
+        item = dict(entry(client, "浏览器上传边界"), same_day_duplicate_confirmed=True)
+        key = f"browser-upload-{browser}-{batch}"
+        data = {"entries": json.dumps([item]), "idempotency_key": key} if batch else {**item, "idempotency_key": key}
+        data["image_client_ready"] = "1"
+        photo = picture()
+        response = client.post("/api/recognitions/batch" if batch else "/api/recognitions", data=data,
+            files={"image": ("合成认可.png", photo, "image/png")}, headers={"User-Agent": f"Mozilla/5.0 {browser}/fixture"})
+        assert response.status_code == 200, response.text
+        record = response.json()["records"][0] if batch else response.json()["record"]
+        assert record["status"] == "pending"
+        with SessionLocal() as db:
+            attachment = db.query(RecognitionAttachment).filter_by(recognition_id=record["id"]).one()
+            stored = db.get(StoredFile, attachment.file_id)
+            assert stored.original_filename == "合成认可.png"
+            assert (FILE_DIR / stored.storage_key).read_bytes() == photo
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_confirmed_missing_image_does_not_consume_key_or_create_records(batch):
+    with TestClient(app) as client:
+        login(client, "CMTEST01")
+        item = dict(entry(client, "缺图重传边界"), same_day_duplicate_confirmed=True)
+        key = f"missing-image-retry-{batch}"
+        data = {"entries": json.dumps([item]), "idempotency_key": key} if batch else {**item, "idempotency_key": key}
+        data["image_client_ready"] = "1"
+        target = "/api/recognitions/batch" if batch else "/api/recognitions"
+        with SessionLocal() as db:
+            before = db.query(RecognitionRecord).count(), db.query(StoredFile).count()
+            original_groups = [(r.id, r.same_day_duplicate_group, r.same_day_duplicate_sequence) for r in db.query(RecognitionRecord).order_by(RecognitionRecord.id)]
+        rejected = client.post(target, data=data)
+        assert rejected.status_code == (422 if batch else 400)
+        if batch:
+            assert rejected.json()["detail"]["code"] == "RECOGNITION_IMAGE_BROWSER_INCOMPATIBLE"
+        else:
+            assert rejected.json()["detail"] == "CM/TR本人登记必须上传1张认可图片"
+        with SessionLocal() as db:
+            assert (db.query(RecognitionRecord).count(), db.query(StoredFile).count()) == before
+            assert [(r.id, r.same_day_duplicate_group, r.same_day_duplicate_sequence) for r in db.query(RecognitionRecord).order_by(RecognitionRecord.id)] == original_groups
+        photo = picture()
+        first = client.post(target, data=data, files={"image": ("fixture.png", photo, "image/png")})
+        retry = client.post(target, data=data, files={"image": ("fixture.png", photo, "image/png")})
+        assert first.status_code == retry.status_code == 200
+        first_row = first.json()["records"][0] if batch else first.json()["record"]
+        retry_row = retry.json()["records"][0] if batch else retry.json()["record"]
+        assert first_row["id"] == retry_row["id"]
+        with SessionLocal() as db:
+            assert db.query(RecognitionRecord).count() == before[0] + 1
+            assert db.query(StoredFile).count() == before[1] + 1

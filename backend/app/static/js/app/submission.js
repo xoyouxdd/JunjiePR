@@ -1,6 +1,7 @@
 // Date fallbacks, readable image payloads, idempotency keys and per-form submit locks.
 import { pad2 } from './format.js';
 import { confirmModal } from './dialogs.js';
+import { api } from './api.js';
 
 // Keep drafts in the current page only; never persist business text or files.
 const editedForms=new Set();
@@ -41,7 +42,25 @@ function bindDateSubmissionFallbacks(root=document){root.querySelectorAll('input
 
 function requireSubmittedDate(data,input,label){const value=submittedDateValue(input);if(!value)throw new Error(`${label}未成功读取，请重新选择日期后提交。`);data.set(input.name,value);return value;}
 
-function readableEvidenceFile(form){const input=[...form.querySelectorAll('[data-evidence-input]')].find(item=>{try{return Boolean(item.files?.length)}catch(_){return false;}});let file=null;try{file=input?.files?.[0]||null}catch(_){file=null;}if(!file||typeof file.name!=='string'||!file.name||!Number.isFinite(file.size)||file.size<=0)return null;return file;}
+const selectedEvidenceFiles=new WeakMap();
+function rememberEvidenceFile(input){selectedEvidenceFiles.delete(input);const file=selectedEvidenceFile(input);try{if(file&&input.value)selectedEvidenceFiles.set(input,{file,value:input.value});}catch(_){}return file;}
+function clearEvidenceFile(input){selectedEvidenceFiles.delete(input);input.value='';}
+
+function selectedEvidenceFile(input){
+  const usable=file=>{try{return file&&typeof file.name==='string'&&file.name&&Number.isFinite(file.size)&&file.size>0&&typeof file.slice==='function';}catch(_){return false;}};
+  let files;try{files=input.files;}catch(_){}
+  try{const file=files?.[0];if(usable(file))return file;}catch(_){}
+  try{const file=files?.item?.(0);if(usable(file))return file;}catch(_){}
+  // Read the same user-selected native file, never a path string or a fabricated image.
+  // Some embedded pickers expose a native form file without a usable indexed FileList.
+  try{if(input.form&&input.name){const native=new FormData(input.form);const files=typeof native.getAll==='function'?native.getAll(input.name):[native.get(input.name)];for(const file of files)if(usable(file))return file;}}catch(_){}
+  // Keep only the file explicitly selected in this input. A clear or new selection
+  // invalidates it; a temporarily unavailable picker bridge must not lose the file.
+  try{const saved=selectedEvidenceFiles.get(input);if(saved&&input.value&&input.value===saved.value&&usable(saved.file))return saved.file;}catch(_){}
+  return null;
+}
+
+function readableEvidenceFile(form){for(const input of form.querySelectorAll('[data-evidence-input]')){const file=selectedEvidenceFile(input);if(file)return file;}return null;}
 
 function evidenceSelectionAttempted(form){return [...form.querySelectorAll('[data-evidence-input]')].some(input=>{try{return Boolean(input.files?.length||input.value)}catch(_){return Boolean(input.value);}});}
 
@@ -51,9 +70,44 @@ function recognitionImageIssueMessage(form){if(!evidenceSelectionAttempted(form)
 
 function recognitionImageFailureMessage(error){const fields=Array.isArray(error?.detail)?error.detail.map(item=>item?.loc?.[item.loc.length-1]):[];if(error?.detail?.code==='RECOGNITION_IMAGE_BROWSER_INCOMPATIBLE')return recognitionBrowserCompatibilityMessage();if(error?.detail?.code==='RECOGNITION_IMAGE_VALIDATION_ERROR'||(error?.status===422&&fields.includes('image')))return '图片未成功读取，请重新选择图片后提交。';return '';}
 
-function submissionData(form){if(!form.dataset.submissionKey)form.dataset.submissionKey=newSubmissionKey();const data=new FormData(form);form.querySelectorAll('input[type="date"][name]').forEach(input=>{const value=submittedDateValue(input);if(value)data.set(input.name,value);});const evidence=readableEvidenceFile(form);if(evidence)data.set('image',evidence,evidence.name);else data.delete('image');data.delete('image_camera');data.delete('image_album');data.set('idempotency_key',form.dataset.submissionKey);return data;}
+function appendRecognitionImage(data,file,forceBlob=false){
+  const failure=()=>new Error('图片未成功加入提交，请重新选择图片后重试。');
+  if(!file||typeof file.name!=='string'||!file.name||!Number.isFinite(file.size)||file.size<=0)throw failure();
+  const ready=()=>{try{const image=data.get('image');return image&&typeof image!=='string'&&image.name===file.name&&image.size===file.size&&typeof image.slice==='function'&&(typeof data.getAll!=='function'||data.getAll('image').length===1);}catch(_){return false;}};
+  // A fresh multipart file part must exist, not just a filename or ready flag.
+  data.delete('image');data.delete('image_client_ready');
+  if(!forceBlob){try{data.append('image',file,file.name);}catch(_){}}
+  if(!ready()){
+    data.delete('image');
+    // Some picker bridges hand out a File wrapper their multipart encoder cannot
+    // accept. A native Blob slice preserves all original bytes and explicit name.
+    try{const blob=file.slice(0,file.size,file.type||'application/octet-stream');if(blob.size===file.size)data.append('image',blob,file.name);}catch(_){}
+    if(!ready()){data.delete('image');throw failure();}
+  }
+  data.set('image_client_ready','1');
+}
 
-function recognitionSubmissionData(form,imageRequired=true){if(!form.dataset.submissionKey)form.dataset.submissionKey=newSubmissionKey();const file=readableEvidenceFile(form);if(imageRequired&&!file)throw new Error(recognitionImageIssueMessage(form));const data=new FormData();form.querySelectorAll('[name]').forEach(control=>{if(control.disabled||control.type==='file'||!control.name)return;if((control.type==='checkbox'||control.type==='radio')&&!control.checked)return;data.append(control.name,control.value);});form.querySelectorAll('input[type="date"][name]').forEach(input=>{const value=submittedDateValue(input);if(value)data.set(input.name,value);});if(file){data.append('image',file,file.name);data.set('image_client_ready','1');}data.set('idempotency_key',form.dataset.submissionKey);return data;}
+async function sendRecognitionImage(url,data){
+  try{return await api(url,{method:'POST',body:data});}
+  catch(error){
+    const detail=error?.detail,fields=Array.isArray(detail?.fields)?detail.fields.map(row=>row?.field):[];
+    const missingImage=detail?.code==='RECOGNITION_IMAGE_BROWSER_INCOMPATIBLE'||(detail?.code==='RECOGNITION_IMAGE_VALIDATION_ERROR'&&fields.includes('image'))||(Array.isArray(detail)&&detail.some(row=>row?.loc?.[0]==='body'&&row.loc[row.loc.length-1]==='image'));
+    // Keep the legacy single-entry API response unchanged; this exact pre-write
+    // missing-file error is the only HTTP 400 eligible for reconstruction.
+    const legacyMissingImage=url==='/api/recognitions'&&error?.status===400&&detail==='CM/TR本人登记必须上传1张认可图片';
+    // A schema rejection happens before any business write. Retry only this
+    // confirmed failure, once, using the exact original fields and idempotency key.
+    if(!legacyMissingImage&&(error?.status!==422||!missingImage))throw error;
+    const retry=new FormData();
+    for(const [key,value] of data){if(key!=='image'&&key!=='image_client_ready')retry.append(key,value);}
+    appendRecognitionImage(retry,data.get('image'),true);
+    return await api(url,{method:'POST',body:retry});
+  }
+}
+
+function submissionData(form){if(!form.dataset.submissionKey)form.dataset.submissionKey=newSubmissionKey();const data=new FormData(form);form.querySelectorAll('input[type="date"][name]').forEach(input=>{const value=submittedDateValue(input);if(value)data.set(input.name,value);});const evidence=readableEvidenceFile(form);if(evidence)appendRecognitionImage(data,evidence);else data.delete('image');data.delete('image_camera');data.delete('image_album');data.set('idempotency_key',form.dataset.submissionKey);return data;}
+
+function recognitionSubmissionData(form,imageRequired=true){if(!form.dataset.submissionKey)form.dataset.submissionKey=newSubmissionKey();const file=readableEvidenceFile(form);if(imageRequired&&!file)throw new Error(recognitionImageIssueMessage(form));const data=new FormData();form.querySelectorAll('[name]').forEach(control=>{if(control.disabled||control.type==='file'||!control.name)return;if((control.type==='checkbox'||control.type==='radio')&&!control.checked)return;data.append(control.name,control.value);});form.querySelectorAll('input[type="date"][name]').forEach(input=>{const value=submittedDateValue(input);if(value)data.set(input.name,value);});if(file)appendRecognitionImage(data,file);data.set('idempotency_key',form.dataset.submissionKey);return data;}
 
 function clearSubmissionKey(form,keepEdits=false){delete form.dataset.submissionKey;if(!keepEdits)clearFormEdits(form);}
 
@@ -67,4 +121,4 @@ async function withSubmitLock(form, action){
   try{return await action();}finally{clearTimeout(timer);status.remove();delete form.dataset.submitting;if(button){button.disabled=!!disabled;button.textContent=label;button.removeAttribute('aria-busy');}}
 }
 
-export { bindDateSubmissionFallbacks, clearFormEdits, clearSubmissionKey, installFormProtection, newSubmissionKey, normalizeSubmitDate, readableEvidenceFile, recognitionImageFailureMessage, recognitionImageIssueMessage, recognitionSubmissionData, requireSubmittedDate, submissionData, submittedDateValue, withSubmitLock };
+export { appendRecognitionImage, sendRecognitionImage, bindDateSubmissionFallbacks, clearFormEdits, clearSubmissionKey, installFormProtection, newSubmissionKey, normalizeSubmitDate, readableEvidenceFile, selectedEvidenceFile, rememberEvidenceFile, clearEvidenceFile, recognitionImageFailureMessage, recognitionImageIssueMessage, recognitionSubmissionData, requireSubmittedDate, submissionData, submittedDateValue, withSubmitLock };

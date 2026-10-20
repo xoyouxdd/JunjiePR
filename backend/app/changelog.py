@@ -7,6 +7,14 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.20.4", "date": "2026-10-20", "status": "candidate",
+        "items": [
+            {"summary": "手机浏览器认可图片上传兼容补强",
+             "detail": "认可登记增加标准FileList.item与原生表单文件读取后备路径，页面内保留已选文件对象；重新选择和清空后作废旧对象。单条与批量统一检查multipart图片字段，文件包装不兼容时用原字节Blob重建，后端明确缺图时同幂等键只重传一次，网络结果未知不自动重试；仅接受真实非空文件，不把路径文字当图片，不跳过格式、安全及大小校验。批量入口补齐图片接收失败诊断，保留原有权限、计分、复核和提交幂等规则；兼容复查同步修复WebKit关闭关于系统后的焦点回位。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.20.3", "date": "2026-10-20", "status": "candidate",
         "items": [
             {"summary": "常用工作页面统一阅读与操作体验",

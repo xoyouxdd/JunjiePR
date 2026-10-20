@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+import pytest
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -25,6 +26,25 @@ def test_uc_is_classified_before_chromium_user_agents() -> None:
     assert browser_family("Mozilla/5.0 Chrome/128.0 Mobile Safari/537.36") == "chrome"
 
 
+@pytest.mark.parametrize("markers,expected", [
+    ("Safari/605.1 UCBrowser/fixture", "uc"),
+    ("Chrome/fixture baiduboxapp/fixture", "baidu"),
+    ("Safari/605.1 BaiduBrowser/fixture", "baidu"),
+    ("Safari/605.1 MicroMessenger/fixture MQQBrowser/fixture", "wechat"),
+    ("Chrome/fixture MQQBrowser/fixture", "qq"),
+    ("Chrome/fixture HuaweiBrowser/fixture", "huawei"),
+    ("Safari/605.1 EdgiOS/fixture", "edge"),
+    ("Chrome/fixture EdgA/fixture", "edge"),
+    ("Safari/605.1 FxiOS/fixture", "firefox"),
+    ("Safari/605.1 CriOS/fixture", "chrome"),
+    ("Safari/605.1", "safari"),
+    ("UnknownFixture/1", "other"),
+])
+def test_mobile_browser_diagnostics_are_identification_only(markers, expected):
+    # Synthetic markers test classification, not the actual branded clients.
+    assert browser_family("Mozilla/5.0 " + markers) == expected
+
+
 def test_recognition_rebuilds_file_payload_and_has_browser_compatibility_fallback() -> None:
     script = read_frontend_source()
 
@@ -34,7 +54,7 @@ def test_recognition_rebuilds_file_payload_and_has_browser_compatibility_fallbac
     assert "form.querySelectorAll('[name]').forEach(control=>" in script
     assert "data.append('image',file,file.name)" in script
     assert "if(imageRequired&&!file)" in script
-    assert "if(file){data.append('image',file,file.name)" in script
+    assert "if(file)appendRecognitionImage(data,file)" in script
     assert "function recognitionImageIssueMessage(form)" in script
     assert "当前浏览器不支持本次图片上传" in script
     assert "请先选择认可图片后提交。" in script
@@ -51,13 +71,14 @@ def test_recognition_validation_returns_auditable_confirmed_compatibility_error(
     assert '"client_image_ready": client_image_ready' in source
 
 
-def test_confirmed_missing_image_gets_a_clear_compatibility_message() -> None:
+@pytest.mark.parametrize("path", ["/api/recognitions", "/api/recognitions/batch"])
+def test_confirmed_missing_image_gets_a_clear_compatibility_message(path) -> None:
     init_db()
     request = Request(
         {
             "type": "http",
             "method": "POST",
-            "path": "/api/recognitions",
+            "path": path,
             "headers": [(b"user-agent", b"Mozilla/5.0 ExampleBrowser/9.0 Mobile")],
             "client": ("127.0.0.1", 12345),
         }
@@ -73,13 +94,14 @@ def test_confirmed_missing_image_gets_a_clear_compatibility_message() -> None:
     assert "当前浏览器不支持本次图片上传" in payload["detail"]["fields"][0]["message"]
 
 
-def test_unconfirmed_missing_image_keeps_the_normal_error_message() -> None:
+@pytest.mark.parametrize("path", ["/api/recognitions", "/api/recognitions/batch"])
+def test_unconfirmed_missing_image_keeps_the_normal_error_message(path) -> None:
     init_db()
     request = Request(
         {
             "type": "http",
             "method": "POST",
-            "path": "/api/recognitions",
+            "path": path,
             "headers": [(b"user-agent", b"Mozilla/5.0 ExampleBrowser/9.0 Mobile")],
             "client": ("127.0.0.1", 12346),
         }

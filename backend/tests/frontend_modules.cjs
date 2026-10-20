@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const {createHash} = require('node:crypto');
-const {chromium} = require('playwright');
+const {chromium, webkit, firefox} = require('playwright');
 
 // Serve the real app shell and its complete native-module graph. All API data
 // below is synthetic; the test does not start the backend or open its database.
@@ -168,8 +168,9 @@ async function fixtureRequest(request, response) {
     const form = await new Request('http://fixture/upload', {method: 'POST', headers: request.headers,
       body: Buffer.concat(chunks)}).formData();
     uploads.push({entries: JSON.parse(form.get('entries')), key: form.get('idempotency_key'),
-      imageName: form.get('image').name, imageSize: form.get('image').size});
-    sendJson(response, {records: [{id: 99}], encouragement_options: []});
+      imageName: form.get('image').name, imageSize: form.get('image').size,
+      imageBytes:Array.from(new Uint8Array(await form.get('image').arrayBuffer())),clientImageReady:form.get('image_client_ready')});
+    sendJson(response, {records: JSON.parse(form.get('entries')).map((_,i)=>({id:99+i})), encouragement_options: []});
   } else {
     missingApis.push(route); response.writeHead(404, {'Content-Type': 'application/json'});
     response.end(JSON.stringify({detail: `Unexpected fixture API: ${route}`}));
@@ -189,7 +190,10 @@ async function main() {
   const origin = `http://127.0.0.1:${server.address().port}`;
   let browser;
   try {
-    browser = await chromium.launch({headless: true, ...(executablePath ? {executablePath} : {})});
+    const engine=process.env.FRONTEND_TEST_ENGINE||'edge';
+    const browserType={edge:chromium,webkit,firefox}[engine];
+    assert(browserType,`Unknown frontend test engine: ${engine}`);
+    browser = await browserType.launch({headless: true, ...(engine==='edge'&&executablePath ? {executablePath} : {})});
     for (const pagePath of ['/', '/recognition/', '/recognition', '/recognition/?fixture_crlf=1']) {
       mode = 'admin';
       const page = await browser.newPage({viewport: {width: 1280, height: 900}});
@@ -420,21 +424,73 @@ async function main() {
     await member.locator('[data-batch-entry] [name="recognizer_employee_id"]').selectOption('7');
     await member.locator('#recognitionAlbumInput').setInputFiles({name: 'fixture.png', mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ8kAAAAASUVORK5CYII=', 'base64')});
+    const pickerCompatibility=await member.evaluate(async()=>{
+      const {selectedEvidenceFile,readableEvidenceFile,rememberEvidenceFile,clearEvidenceFile}=await import('./static/js/app/submission.js');
+      const input=document.getElementById('recognitionAlbumInput'),file=input.files[0];
+      Object.defineProperty(input,'files',{configurable:true,get:()=>({0:file,item:()=>{throw new Error('item bridge unavailable');}})});
+      const indexedFirst=selectedEvidenceFile(input)===file;
+      Object.defineProperty(input,'files',{configurable:true,get:()=>({length:1,item:()=>file})});
+      const itemFallback=selectedEvidenceFile(input)===file;
+      Object.defineProperty(input,'files',{configurable:true,get:()=>{throw new Error('synthetic native picker bridge');}});
+      input.dispatchEvent(new Event('change',{bubbles:true}));
+      const recovered=readableEvidenceFile(input.form);
+      const empty=document.createElement('form');empty.innerHTML='<input type="file" name="image_album" data-evidence-input>';
+      document.body.append(empty);Object.defineProperty(empty.firstChild,'value',{get:()=> 'C:\\fakepath\\unreadable.jpg'});
+      const pathRejected=readableEvidenceFile(empty)===null;empty.remove();
+      const volatile=document.createElement('form');volatile.innerHTML='<input type="file" name="image_album" data-evidence-input>';
+      document.body.append(volatile);const volatileInput=volatile.firstChild;let selection='C:\\fakepath\\fixture.png';
+      Object.defineProperty(volatileInput,'value',{configurable:true,get:()=>selection,set:value=>{selection=value;}});
+      Object.defineProperty(volatileInput,'files',{configurable:true,get:()=>[file]});rememberEvidenceFile(volatileInput);
+      Object.defineProperty(volatileInput,'files',{configurable:true,get:()=>{throw new Error('picker lost access after selection');}});
+      const retainedSelection=readableEvidenceFile(volatile)===file;
+      rememberEvidenceFile(volatileInput);const changedSelectionRejected=readableEvidenceFile(volatile)===null;
+      Object.defineProperty(volatileInput,'files',{configurable:true,get:()=>[file]});rememberEvidenceFile(volatileInput);
+      Object.defineProperty(volatileInput,'files',{configurable:true,get:()=>[]});clearEvidenceFile(volatileInput);
+      const clearedSelectionRejected=readableEvidenceFile(volatile)===null;volatile.remove();
+      return {retainedSelection,changedSelectionRejected,clearedSelectionRejected,indexedFirst,itemFallback,pathRejected,name:recovered.name,bytes:Array.from(new Uint8Array(await recovered.arrayBuffer()))};
+    });
+    assert(pickerCompatibility.retainedSelection);
+    assert(pickerCompatibility.changedSelectionRejected,'A failed new selection cannot reuse the old file');
+    assert(pickerCompatibility.clearedSelectionRejected,'A cleared selection cannot reuse the old file');
+    assert(pickerCompatibility.indexedFirst);
+    assert(pickerCompatibility.itemFallback);
+    assert(pickerCompatibility.pathRejected,'A path string must never be accepted as image content');
+    assert.equal(pickerCompatibility.name,'fixture.png');
+    assert.deepEqual(pickerCompatibility.bytes,Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ8kAAAAASUVORK5CYII=','base64')));
+    await member.locator('[data-batch-add]').click();
+    const secondUploadEntry=member.locator('[data-batch-entry]').nth(1);
+    await secondUploadEntry.locator('[name="content"]').fill('第二条共用照片验证');
+    await secondUploadEntry.locator('[name="occurred_attraction_id"]').selectOption('1');
+    await secondUploadEntry.locator('[name="recognizer_employee_id"]').selectOption('7');
     await member.route('**/api/recognitions/batch',route=>route.abort('connectionfailed'),{times:1});
     await member.locator('[data-batch-submit]').click();
     await member.waitForFunction(()=>document.getElementById('toast').textContent.includes('提交结果暂未确认'));
     const failedKey=await member.locator('#recognitionForm').getAttribute('data-submission-key');
     assert(failedKey);
-    assert.equal(await member.locator('[data-batch-entry] [name="content"]').inputValue(),'前端模块上传验证');
+    assert.equal(await member.locator('[data-batch-entry] [name="content"]').first().inputValue(),'前端模块上传验证');
     await member.locator('#toast').click();
     await member.locator('[data-batch-submit]').click();
-    await member.waitForFunction(() => document.getElementById('toast').textContent.includes('已提交 1 条认可'));
+    await member.waitForFunction(() => document.getElementById('toast').textContent.includes('已提交 2 条认可'));
     assert.equal(uploads.length, 1, 'One batch submit must make one request');
     assert.equal(uploads[0].entries[0].content, '前端模块上传验证');
+    assert.equal(uploads[0].entries.length,2);
+    assert.equal(uploads[0].entries[1].content,'第二条共用照片验证');
     assert.match(uploads[0].entries[0].recognition_date, /^\d{4}-\d{2}-\d{2}$/);
     assert(uploads[0].key && uploads[0].imageSize > 0);
     assert.equal(uploads[0].key,failedKey,'A retry after an uncertain result must preserve the idempotency key');
     assert.equal(uploads[0].imageName, 'fixture.png');
+    assert.deepEqual(uploads[0].imageBytes,pickerCompatibility.bytes,'The server must receive the exact original image bytes');
+    assert.equal(uploads[0].clientImageReady,'1');
+    await member.locator('#recognitionAlbumInput').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(pickerCompatibility.bytes)});
+    const invalidReplacement=await member.evaluate(async()=>{
+      const {readableEvidenceFile}=await import('./static/js/app/submission.js');
+      const camera=document.getElementById('recognitionCameraInput');
+      Object.defineProperty(camera,'value',{configurable:true,get:()=> 'C:\\fakepath\\unreadable.jpg'});
+      Object.defineProperty(camera,'files',{configurable:true,get:()=>[new File([],'unreadable.jpg',{type:'image/jpeg'})]});
+      camera.dispatchEvent(new Event('change',{bubbles:true}));
+      return {oldCleared:document.getElementById('recognitionAlbumInput').value==='',noOldFile:readableEvidenceFile(camera.form)===null};
+    });
+    assert(invalidReplacement.oldCleared&&invalidReplacement.noOldFile,'An unreadable replacement must not silently submit the previous photo');
     const fallback = await member.evaluate(async () => {
       const submission = await import('./static/js/app/submission.js');
       const form = document.createElement('form');
@@ -450,7 +506,7 @@ async function main() {
     assert.equal(fallback.date, '2026-10-09'); assert.equal(fallback.key, fallback.repeatedKey);
     assert.equal(fallback.cleared, ''); assert.equal(fallback.invalidDate, '');
     assert.match(fallback.failure, /请先选择认可图片/);
-    assert.deepEqual(memberErrors, []); checks.push('mobile member registration, multipart image, date fallback and idempotency');
+    assert.deepEqual(memberErrors, []); checks.push('mobile member registration: native FileList.item/form fallback, exact image bytes, two entries, date fallback and idempotency');
     await member.close();
     mode='member';
     const retryPage=await browser.newPage({viewport:{width:390,height:844}});
@@ -460,6 +516,9 @@ async function main() {
     assert.equal(new URL(retryPage.url()).pathname,'/');
     await retryPage.locator('#retryInitialize').click();
     await retryPage.locator('.tabs-mobile [data-tab="register"]').waitFor();
+    // Open a real view and wait for it, rather than racing an asynchronous home render.
+    await retryPage.locator('.tabs-mobile [data-tab="register"]').click();
+    await retryPage.locator('[data-batch-entry] [name="recognizer_employee_id"] option[value="7"]').waitFor({state:'attached'});
     await retryPage.evaluate(async()=>{
       const {withSubmitLock}=await import('./static/js/app/submission.js');
       const form=document.createElement('form');form.id='submitStatusFixture';form.innerHTML='<button>提交测试</button>';
@@ -739,7 +798,7 @@ async function main() {
     assert.equal(await password.locator('#requiredPasswordForm button[type="submit"]').isDisabled(), true);
     checks.push('first-login password gate'); await password.close();
     assert.deepEqual(missingApis, [], 'Every fixture business request must have an intentional mock');
-    console.log(JSON.stringify({status: 'passed', modules: moduleFiles.length, checks, uploads: uploads.length}, null, 2));
+    console.log(JSON.stringify({status: 'passed', engine, modules: moduleFiles.length, checks, uploads: uploads.length}, null, 2));
   } finally {
     releaseReset?.();
     if (browser) await browser.close();

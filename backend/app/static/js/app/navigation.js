@@ -215,14 +215,14 @@ async function refreshActionBadge(){
   }catch(_){/* A badge refresh must never interrupt the existing page workflow. */}
 }
 
-function showAboutSystem(){
+function showAboutSystem(trigger){
   if(document.querySelector('[data-about-dialog]'))return;
   const overlay=document.createElement('div');
   overlay.className='modal-overlay';
   overlay.innerHTML=`<section class="modal-card about-system" data-about-dialog role="dialog" aria-modal="true" aria-labelledby="aboutSystemTitle"><header class="about-system-heading"><h3 id="aboutSystemTitle">关于系统</h3><button type="button" class="secondary" data-about-close>关闭</button></header><div class="about-system-brand"><img src="${esc(document.querySelector('.app-brand-logo').src)}" alt="" width="62" height="62"><h2>FZ团队工作台</h2><p class="field-hint" data-about-version aria-live="polite">正在读取版本…</p></div><button type="button" class="secondary about-system-updates" data-about-updates><span>更新记录</span><span aria-hidden="true">›</span></button><dl class="about-system-credits"><div><dt>建设与维护</dt><dd>赵君杰</dd></div><div><dt>共同参与</dt><dd>张森</dd></div></dl></section>`;
   document.body.appendChild(overlay);
   const close=overlay.querySelector('[data-about-close]');
-  const layer=bindDialogLayer(overlay,{initialFocus:close});
+  const layer=bindDialogLayer(overlay,{initialFocus:close,onClose:()=>{const target=trigger?.getClientRects().length?trigger:tabs.querySelector('[data-open-more]');target?.focus({preventScroll:true});}});
   close.onclick=()=>layer.close();
   overlay.addEventListener('click',event=>{if(event.target===overlay)layer.close();});
   overlay.querySelector('[data-about-updates]').onclick=()=>{layer.close();gotoTab('changelog');};
@@ -257,7 +257,7 @@ function renderTabs() {
   const drawer=tabs.querySelector('.mobile-more-drawer');
   let drawerLayer=null;
   const closeDrawer=()=>{drawerLayer?.close();};
-  tabs.querySelectorAll('[data-open-about]').forEach(button=>button.onclick=()=>{closeDrawer();showAboutSystem();});
+  tabs.querySelectorAll('[data-open-about]').forEach(button=>button.onclick=()=>{closeDrawer();showAboutSystem(button);});
   tabs.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;closeDrawer();renderTabs();render();});
   tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawerLayer=null;leaveLayer(drawer,()=>{drawer.hidden=true;});}});});
   tabs.querySelector('[data-close-more]')?.addEventListener('click',closeDrawer);
