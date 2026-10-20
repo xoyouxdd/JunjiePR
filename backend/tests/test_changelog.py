@@ -100,14 +100,14 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    assert cm[0]["current"] is True  # Personal honors now also concern CM users.
-    assert any("我的荣誉" in item["summary"] for item in cm[0]["items"])
-    assert gsm[0]["current"] is True  # DATA_EXPORT grants visibility of the Excel note.
+    assert cm[0]["current"] is True  # Announcement UI improvements concern every account.
+    assert any("公告中心" in item["summary"] for item in cm[0]["items"])
+    assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert cm[0]["items"][0]["summary"] == "我的荣誉典藏与高光回顾"
+    assert cm[0]["items"][0]["summary"] == "公告中心阅读与操作体验升级"
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
-    assert gsm[0]["items"][0]["summary"] == "Excel导出阅读与体积优化"
+    assert gsm[0]["items"][0]["summary"] == "公告中心阅读与操作体验升级"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -157,16 +157,16 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in cm["release"]["items"]] == ["我的荣誉典藏与高光回顾"]
+        assert [item["summary"] for item in cm["release"]["items"]] == ["公告中心阅读与操作体验升级", "认可登记兼容带MPF信息的JPEG照片"]
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["我的荣誉典藏与高光回顾"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["公告中心阅读与操作体验升级", "认可登记兼容带MPF信息的JPEG照片"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in hr["release"]["items"]] == [
-            "HR月报三套专业模板更新", "Excel导出阅读与体积优化", "声明统计导出长内容与打印优化", "缺勤导入反馈优先显示未覆盖说明", "公告导出内容与签收分组优化"]
+            "公告中心阅读与操作体验升级", "认可登记兼容带MPF信息的JPEG照片"]
         assert hr["read"] is False
         client.post("/api/logout")
         login(client, "OMTEST01")
@@ -187,7 +187,7 @@ def test_current_release_items_match_roles_and_permissions() -> None:
     assert item_visible(rotation_fix, "TR", set()) and not item_visible(rotation_fix, "CM", set())
     medal = next(r for r in RELEASES if r['version'] == '2026.10.17.3')['items'][0]
     assert item_visible(medal, "CM", set())
-    current = next(item for item in RELEASES[0]['items'] if item['summary']=='HR月报三套专业模板更新')
+    current = next(item for item in next(release for release in RELEASES if release['version']=='2026.10.19.1')['items'] if item['summary']=='HR月报三套专业模板更新')
     for role in ('GSM', 'AM', 'OM', 'SYSTEM_ADMIN'):
         assert item_visible(current, role, {'HR_MONTHLY_REPORT'})
         assert not item_visible(current, role, set())

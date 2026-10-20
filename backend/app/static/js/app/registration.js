@@ -11,6 +11,20 @@ import { app, has, state } from './state.js';
 import { bindDateSubmissionFallbacks, clearSubmissionKey, newSubmissionKey, readableEvidenceFile, recognitionImageFailureMessage, recognitionImageIssueMessage, recognitionSubmissionData, requireSubmittedDate, submissionData, submittedDateValue, withSubmitLock } from './submission.js';
 import { toast } from './toast.js';
 
+function batchRecognizerGroups(rows){
+  const groups=new Map();
+  rows.forEach(row=>{
+    const key=row.group_key||'other';
+    if(!groups.has(key))groups.set(key,{label:row.group_label||'其他',order:row.group_order??99,rows:[]});
+    groups.get(key).rows.push(row);
+  });
+  return [...groups.values()].sort((a,b)=>a.order-b.order);
+}
+
+function groupedRecognizerOptions(rows){
+  return batchRecognizerGroups(rows).map(group=>`<optgroup label="${esc(group.label)}">${opt(group.rows,'id',row=>`${row.name} · ${row.role_name} · ${fmt(row.score)}分`)}</optgroup>`).join('');
+}
+
 async function renderRegister(){
   const request=beginViewRequest();
   // 正式GSM、TA GSM可为主管加分扣分；代理TA GSM期间的主管只能本人登记，由AM或正式GSM复核。
@@ -94,7 +108,7 @@ async function bindSelfRecognitionBatch(form,imageField){
     container.append(card);bindDateSubmissionFallbacks(card);update();
     const dateInput=card.querySelector('[name=recognition_date]'),type=card.querySelector('[name=recognition_type_id]'),recognizer=card.querySelector('[name=recognizer_employee_id]'),hint=card.querySelector('[data-entry-score]');let rows=[],requestVersion=0,loading=false;
     card.querySelector('[data-entry-remove]').onclick=()=>{if(container.children.length>1&&!form.dataset.batchSubmitting){card.remove();update();}};
-    function options(){const selectedType=state.options.recognition_types.find(x=>String(x.id)===type.value),special=selectedType?.fixed_score!=null?selectedType.code:null;const candidates=rows.filter(x=>special?String(x.id)===`special:${special}`:!x.special&&x.id!==state.me.id);recognizer.innerHTML='<option value="">请选择</option>'+opt(candidates,'id',x=>`${x.name} · ${x.role_name} · ${fmt(x.score)}分`);if(special&&candidates.length)recognizer.value=String(candidates[0].id);score();}
+    function options(){const selectedType=state.options.recognition_types.find(x=>String(x.id)===type.value),special=selectedType?.fixed_score!=null?selectedType.code:null;const candidates=rows.filter(x=>special?String(x.id)===`special:${special}`:!x.special&&x.id!==state.me.id);recognizer.innerHTML='<option value="">请选择</option>'+(special?opt(candidates,'id',x=>`${x.name} · ${x.role_name} · ${fmt(x.score)}分`):groupedRecognizerOptions(candidates));if(special&&candidates.length)recognizer.value=String(candidates[0].id);score();}
     function score(){const row=rows.find(x=>String(x.id)===recognizer.value);hint.textContent=row?`${row.name} · 当日分值：${fmt(row.score)}分`:'分值按认可人当日角色自动计算';}
     async function load(){const version=++requestVersion;loading=true;recognizer.innerHTML='<option value="">正在加载…</option>';hint.textContent='正在获取当日认可人…';try{const value=submittedDateValue(dateInput);if(!value)throw new Error('请填写有效认可日期');const result=await api('/api/recognizers?'+new URLSearchParams({attraction_id:state.me.attraction_id,recognition_date:value}));if(version!==requestVersion||!card.isConnected||!page.isCurrent())return;rows=result;options();}catch(error){if(version!==requestVersion||!page.isCurrent())return;rows=[];recognizer.innerHTML='<option value="">请选择日期后重试</option>';hint.textContent=error.message||'认可人加载失败，请重新选择日期';}finally{if(version===requestVersion)loading=false;}}
     dateInput.addEventListener('change',load);type.onchange=options;recognizer.onchange=score;card._isLoading=()=>loading;await load();

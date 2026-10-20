@@ -44,14 +44,16 @@ def send(client, items, key):
 
 
 @pytest.mark.parametrize("batch", [False, True])
-def test_iphone_heif_with_jpeg_filename_can_be_registered_and_previewed(batch):
+@pytest.mark.parametrize("format", ["HEIF", "MPO"])
+def test_iphone_heif_with_jpeg_filename_can_be_registered_and_previewed(batch, format):
     out = BytesIO()
-    Image.new("RGB", (24, 32), "blue").save(out, format="HEIF")
+    extra = {"save_all": True, "append_images": [Image.new("RGB", (24, 32), "white")]} if format == "MPO" else {}
+    Image.new("RGB", (24, 32), "blue").save(out, format=format, **extra)
     photo = out.getvalue()
     with TestClient(app) as client:
         login(client, "CMTEST01")
         item = dict(entry(client, "手机照片兼容"), same_day_duplicate_confirmed=True)
-        key = f"iphone-heif-{batch}"
+        key = f"iphone-photo-{format}-{batch}"
         data = {"entries": json.dumps([item]), "idempotency_key": key} if batch else {**item, "idempotency_key": key}
         response = client.post("/api/recognitions/batch" if batch else "/api/recognitions", data=data,
                                files={"image": ("IMG_4845.jpeg", photo, "image/jpeg")})
@@ -60,7 +62,8 @@ def test_iphone_heif_with_jpeg_filename_can_be_registered_and_previewed(batch):
         with SessionLocal() as db:
             attachment = db.query(RecognitionAttachment).filter_by(recognition_id=record["id"]).one()
             stored = db.get(StoredFile, attachment.file_id)
-            assert stored.extension == ".heic" and stored.mime_type == "image/heic"
+            extension, mime = (".heic", "image/heic") if format == "HEIF" else (".jpg", "image/jpeg")
+            assert stored.extension == extension and stored.mime_type == mime
             assert stored.original_filename == "IMG_4845.jpeg"
             assert (FILE_DIR / stored.storage_key).read_bytes() == photo
             file_id = stored.id

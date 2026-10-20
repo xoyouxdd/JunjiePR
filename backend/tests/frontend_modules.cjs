@@ -156,7 +156,12 @@ async function fixtureRequest(request, response) {
   } else if (route === '/api/supervisor-reviews/71' || route === '/api/reviews/71') {
     sendJson(response, {record: {...reviewRecord}});
   }
-  else if (route === '/api/recognizers') sendJson(response, [{id: 7, name: '主管测试员', role_name: '主管', score: 1}]);
+  else if (route === '/api/recognizers') sendJson(response, [
+    {id: 7, name: '主管测试员', role_name: '主管', score: 1, group_key:'circle:1',group_label:'热力追踪',group_order:0},
+    {id: 8, name: '迷宫测试员', role_name: 'TA主管', score: .5, group_key:'circle:2',group_label:'矮人迷宫',group_order:1},
+    {id: 9, name: '小熊测试员', role_name: '主管', score: .5, group_key:'circle:3',group_label:'小熊罐子',group_order:2},
+    {id: 10, name: '经理测试员', role_name: 'GSM', score: 1, group_key:'tagsm_plus',group_label:'TAGSM及以上',group_order:3},
+  ]);
   else if (route === '/api/recognitions/batch') {
     const chunks = []; for await (const chunk of request) chunks.push(chunk);
     const form = await new Request('http://fixture/upload', {method: 'POST', headers: request.headers,
@@ -227,7 +232,7 @@ async function main() {
       await page.locator('.tabs-desktop [data-tab="actionCenter"]').click();
       assert.equal(await page.locator('#tabs [data-tab="register"]').count(), 0, 'Admin registration is permission-gated');
       await page.locator('.tabs-desktop [data-tab="announcements"]').click();
-      await page.locator('#announcementContent .empty').filter({hasText: '暂无公告'}).waitFor();
+      await page.locator('#announcementContent .ann-empty').filter({hasText: '待查收已清空'}).waitFor();
       assert.equal(await page.locator('#pageHeading h1').textContent(), '公告中心');
       await page.evaluate(async () => {
         const entryUrl = new URL(document.querySelector('script[type="module"][src]').src);
@@ -356,6 +361,20 @@ async function main() {
     assert.equal(await member.locator('#tabs [data-tab="hrEmployees"]').count(), 0, 'Members cannot navigate to HR tools');
     await member.locator('.tabs-mobile [data-tab="register"]').click();
     await member.locator('[data-batch-entry] [name="recognizer_employee_id"] option[value="7"]').waitFor({state: 'attached'});
+    const signer = member.locator('[data-batch-entry]').first().locator('[name="recognizer_employee_id"]');
+    assert.deepEqual(await signer.locator('optgroup').evaluateAll(nodes=>nodes.map(node=>node.label)),
+      ['热力追踪','矮人迷宫','小熊罐子','TAGSM及以上']);
+    assert.deepEqual(await signer.locator('optgroup option').evaluateAll(nodes=>nodes.map(node=>node.value)),['7','8','9','10']);
+    await signer.selectOption('8');
+    assert((await member.locator('[data-entry-score]').innerText()).includes('0.50分'));
+    await member.locator('[data-batch-add]').click();
+    const secondSigner=member.locator('[data-batch-entry]').nth(1).locator('[name="recognizer_employee_id"]');
+    await secondSigner.locator('optgroup option[value="10"]').waitFor({state:'attached'});
+    assert.equal(await secondSigner.locator('optgroup').count(),4);
+    await secondSigner.selectOption('10');
+    assert.equal(await signer.inputValue(),'8','Batch entries keep independent signer choices');
+    await member.locator('[data-batch-entry]').nth(1).locator('[data-entry-remove]').click();
+    checks.push('CM/TR batch signer groups: all circles and managers, complete candidates, score and independent entries');
     await member.locator('[data-batch-entry] [name="content"]').fill('未提交保护验证');
     await member.locator('.tabs-mobile [data-tab="home"]').click();
     await member.locator('[data-modal-cancel]').click();
@@ -499,7 +518,7 @@ async function main() {
         await page.locator('[data-ann-back]').click();
         await page.locator('[data-modal-confirm]').click();
         await page.locator('.modal-overlay').waitFor({state:'detached'});
-        await page.locator('[data-ann-view=manage]').click();await page.locator('[data-ann-records="51"]').click();
+        if(await page.locator('.ann-workspaces>summary').count())await page.locator('.ann-workspaces>summary').click();await page.locator('[data-ann-view=manage]').click();await page.locator('[data-ann-records="51"]').click();
         const followupExport=page.getByRole('link',{name:/下载培训跟进 Excel/});
         await followupExport.waitFor();
         assert.match(await followupExport.getAttribute('href'),/followup-export\?version=1/);
@@ -538,12 +557,12 @@ async function main() {
         assert.equal(await leaders.first().textContent(),'组长：正式组长丙');
         await page.locator('[data-ann-record-group]').selectOption('');
       }else if(mode==='trainer'){
-        await page.locator('[data-ann-view=training]').click();await page.locator('[data-ann-training="51"]').click();
+        if(await page.locator('.ann-workspaces>summary').count())await page.locator('.ann-workspaces>summary').click();await page.locator('[data-ann-view=training]').click();await page.locator('[data-ann-training="51"]').click();
         await page.locator('[name=hours]').selectOption('6');await page.getByRole('button',{name:'生成培训码',exact:true}).click();
         await page.locator('[data-ann-current-code]').filter({hasText:'123456'}).waitFor();
         await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-tr-20261011.png'),fullPage:true});
       }else{
-        assert.match(await page.locator('.announcement-card-footer').innerText(),/待阅读/);
+        assert.match(await page.locator('.ann-receipt-state').innerText(),/待阅读/);
         await page.locator('[data-ann-open="51"]').click();
         await page.locator('#announcementReceiptForm').waitFor();
         assert.equal(await page.locator('[data-ann-progress]').textContent(),'待培训');
@@ -554,11 +573,11 @@ async function main() {
         assert(await page.locator('#announcementSignature').evaluate(el=>el.width)>100);
         await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-training-member-20261011.png'),fullPage:true});
         await page.locator('[name=acknowledged]').check();
-        const box=await page.locator('#announcementSignature').boundingBox();
+        await page.locator('#announcementSignature').scrollIntoViewIfNeeded();const box=await page.locator('#announcementSignature').boundingBox();
         await page.mouse.move(box.x+20,box.y+30);await page.mouse.down();await page.mouse.move(box.x+140,box.y+100,{steps:8});await page.mouse.up();
         await page.getByRole('button',{name:'提交签字',exact:true}).click();
-        await page.locator('[data-ann-view=history][aria-pressed=true]').waitFor();assert(trainingSigned);
-        assert.match(await page.locator('.announcement-card-footer').innerText(),/已完成/);
+        try{await page.locator('[data-ann-view=history][aria-pressed=true]').waitFor();}catch(error){await page.screenshot({path:path.resolve(__dirname,'../../.handover_review/announcement-submit-failure.png'),fullPage:true});console.error(await page.locator('#toast').innerText(),await page.locator('#announcementContent').innerText());throw error;}assert(trainingSigned);
+        assert.match(await page.locator('.ann-receipt-state').innerText(),/已完成/);
         const progress=await page.evaluate(async()=>{
           const {announcementProgress}=await import('./static/js/app/announcements.js');
           const base={status:'published',version:1,current_version:1,effective:true,effective_on:'2026-01-01',confirmation_level:3,training_required:true,receipt:{status:'pending',seen_at:'2026-01-01'}};

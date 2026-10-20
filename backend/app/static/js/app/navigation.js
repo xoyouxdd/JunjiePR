@@ -5,7 +5,7 @@ import { logout } from './auth.js';
 import { render } from './context.js';
 import { bindDialogLayer, leaveLayer } from './dialogs.js';
 import { esc } from './format.js';
-import { has, state, tabs } from './state.js';
+import { app, has, state, tabs } from './state.js';
 
 // 本职计分（CM/TR代理TA主管、主管含代理TA GSM）但菜单按管理角色显示时，补上本人成绩入口。
 function isActingFrontline(){return ['CM','TR','SUPERVISOR'].includes(state.me?.base_role_code)&&!['CM','TR'].includes(state.me?.role_code);}
@@ -126,6 +126,13 @@ function navIcon(id){
     password:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
     about:'<circle cx="12" cy="12" r="8"/><path d="M12 11v6M12 7v.1"/>',
     more:'<circle cx="6" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18" cy="12" r="1.5"/>',
+    search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+    filter:'<path d="M4 6h16M7 12h10M10 18h4"/>',
+    inbox:'<path d="m5 5-2 9v6h18v-6l-2-9H5Z"/><path d="M3 14h5l2 3h4l2-3h5"/>',
+    bookmark:'<path d="M6 4h12v17l-6-4-6 4V4Z"/>',
+    check:'<path d="m5 12 4 4L19 6"/>',
+    chevron:'<path d="m8 5 7 7-7 7"/>',
+    grid:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
     circle:'<circle cx="12" cy="12" r="8"/>',
   };
   return `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner[id]||inner.circle}</svg>`;
@@ -227,6 +234,9 @@ function renderTabs() {
   startAnnouncementNotifications(refreshActionBadge);
   const items=menuItems();
   if (!state.tab || (!items.some(i=>i[0]===state.tab) && !['statisticsDetail','changelog'].includes(state.tab))) state.tab=items[0]?.[0];
+  // Presentation scope only; navigation membership and permissions stay intact.
+  app.dataset.view=state.tab;
+  app.toggleAttribute('data-workspace-ui',!['announcements','rotationTest'].includes(state.tab));
   const tabButton=([id,name],extraClass='')=>`<button type="button" data-tab="${id}" class="${isTabActive(id)?'active':''} ${extraClass}" ${isTabActive(id)?'aria-current="page"':''} title="${esc(name)}" aria-label="${esc(name)}">${navIcon(id)}<span class="nav-label">${esc(name)}</span>${id==='announcements'?`<b class="nav-count-badge" data-announcement-badge ${(state.me.announcement_counts?.pending||0)?'':'hidden'}>${(state.me.announcement_counts?.pending||0)>99?'99+':(state.me.announcement_counts?.pending||0)}</b>`:id==='actionCenter'?`<b class="nav-count-badge" data-action-center-badge ${state.actionBadgeTotal?'':'hidden'}>${state.actionBadgeTotal>99?'99+':state.actionBadgeTotal}</b>`:''}</button>`;
   const grouped=groupedMenu(items);
   const desktopPin=grouped.pin?`<div class="nav-pin">${tabButton(grouped.pin)}</div>`:'';
@@ -256,4 +266,4 @@ function renderTabs() {
 
 function gotoTab(tab){state.tab=tab;renderTabs();render();}
 
-export { gotoTab, menuItems, mobilePrimaryIds, refreshActionBadge, renderTabs, renderUserBadge, setActionBadge };
+export { gotoTab, menuItems, mobilePrimaryIds, navIcon, refreshActionBadge, renderTabs, renderUserBadge, setActionBadge };

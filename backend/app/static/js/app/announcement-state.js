@@ -14,8 +14,9 @@ function setAnnouncementBadge(counts){
   if(!state.me)return;
   state.me.announcement_counts=counts;
   document.querySelectorAll('[data-announcement-badge]').forEach(el=>{el.textContent=counts.pending>99?'99+':String(counts.pending);el.hidden=!counts.pending;});
-  document.querySelectorAll('[data-ann-pending]').forEach(el=>el.textContent=counts.pending);
-  document.querySelectorAll('[data-ann-messages]').forEach(el=>el.textContent=counts.messages);
+  for(const [selector,value] of [['[data-ann-pending]',counts.pending],['[data-ann-messages]',counts.messages]])document.querySelectorAll(selector).forEach(el=>{el.textContent=el.hasAttribute('data-ann-compact')&&value>99?'99+':value;el.title=String(value);});
+  const status=document.querySelector('[data-ann-center-status]');
+  if(status){if(counts.pending>0){const number=document.createElement('strong');number.dataset.annPending='';number.textContent=String(counts.pending);status.replaceChildren(number,' 条公告待查收');}else status.textContent='当前无待查收';}
 }
 
 

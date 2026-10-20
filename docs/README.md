@@ -4,6 +4,7 @@
 
 | 文件 | 内容 |
 |---|---|
+| [announcement-ui-review-20261020.md](announcement-ui-review-20261020.md) | 公告中心UI/UX改造、权限边界、真实浏览器验收与兼容性 |
 | [日常操作保护与任务验收](usability-acceptance.md) | 填写保护、网络恢复、待办定位与真人手机验收 |
 | [architecture.md](architecture.md) | 现用系统与目录职责 |
 | [sqlite-schema.md](sqlite-schema.md) | SQLite 表、主键、外键、索引 |

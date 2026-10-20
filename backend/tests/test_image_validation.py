@@ -31,6 +31,27 @@ def test_normal_phone_formats_keep_original_bytes(tmp_path, format, extension):
     assert (tmp_path / row.storage_key).read_bytes() == data
 
 
+def test_mpf_jpeg_upload_keeps_original_and_previews_primary_frame(tmp_path):
+    from app.v2_watermark import watermark_image
+    stream = BytesIO()
+    Image.new("RGB", (24, 32), "blue").save(stream, format="MPO", save_all=True,
+        append_images=[Image.new("RGB", (24, 32), "white")])
+    data = stream.getvalue()
+    assert Image.open(BytesIO(data)).format == "MPO"
+    row = save(tmp_path, data)
+    assert (row.extension, row.mime_type) == (".jpg", "image/jpeg")
+    assert row.sha256 == hashlib.sha256(data).hexdigest()
+    path = tmp_path / row.storage_key
+    assert path.read_bytes() == data
+    preview, mime = watermark_image(path, "TEST", max_dimension=1920)
+    assert mime == "image/jpeg"
+    with Image.open(BytesIO(preview)) as image:
+        image.load()
+        assert image.size == (24, 32)
+        red, green, blue = image.convert("RGB").getpixel((12, 16))
+        assert blue > red + 50 and blue > green + 50
+
+
 @pytest.mark.parametrize("filename,mime_type", [
     ("IMG_4845.jpeg", "image/jpeg"), ("photo.heic", "image/heic"),
     ("photo.heif", "application/octet-stream"),
@@ -73,6 +94,15 @@ def test_heif_pixel_limit_is_not_bypassed(tmp_path, monkeypatch):
 def test_truncated_or_forged_images_leave_no_files(tmp_path, data):
     with pytest.raises(HTTPException) as exc:save(tmp_path, data)
     assert exc.value.status_code == 400
+    assert not list(tmp_path.iterdir())
+
+
+def test_rejection_logs_stage_without_image_content_or_filename(tmp_path, caplog):
+    with pytest.raises(HTTPException):
+        save(tmp_path, b"private-photo-content-not-an-image")
+    assert "stage=file_signature" in caplog.text
+    assert "private-photo-content" not in caplog.text
+    assert "phone-photo.jpg" not in caplog.text
     assert not list(tmp_path.iterdir())
 
 

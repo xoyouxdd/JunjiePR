@@ -9,6 +9,9 @@ const tiers={frontline:'CM / TR',lead:'TA LEAD / LEAD',gsm:'TA GSM / GSM',am:'AM
 const circles=[{id:1,name:'热力追踪'},{id:2,name:'矮人迷宫'},{id:3,name:'小熊罐子'}];
 const roles=[['CM','CM'],['TR','TR'],['TA_SUPERVISOR','TA LEAD'],['SUPERVISOR','LEAD'],['TA_GSM','TA GSM'],['GSM','GSM'],['AM','AM'],['HR_CIRCLE','HR'],['SYSTEM_ADMIN','系统管理员'],['POC','项目POC'],['GSM_ADMIN','最高管理员1'],['AM_ADMIN','最高管理员2'],['GSM_POC','GSM兼项目POC'],['GSM_OTHER','GSM查看他人签收']];
 let role=roles[0],level=3,training=true;
+let designCase=null,baseline=false;
+const baselineFiles=new Map();
+function setBaseline(enabled){baseline=enabled;if(enabled&&!baselineFiles.size){const {execFileSync}=require('node:child_process');for(const file of ['index.html','js/app/announcements.js','js/app/announcement-state.js','js/app/navigation.js'])baselineFiles.set(file,execFileSync('git',['show',`HEAD:backend/app/static/${file}`],{cwd:path.resolve(__dirname,'../..')}));}}
 const adminRoles=new Set(['SYSTEM_ADMIN','GSM_ADMIN','AM_ADMIN']);
 const publishRoles=new Set(['TA_GSM','GSM','AM','POC','GSM_ADMIN','AM_ADMIN','GSM_POC','GSM_OTHER']),followRoles=new Set(['TA_SUPERVISOR','SUPERVISOR','TA_GSM','GSM','AM','GSM_ADMIN','AM_ADMIN','GSM_POC','GSM_OTHER']);
 const people=Array.from({length:24},(_,i)=>({id:100+i,name:i===0?'较长姓名的培训师示例':'测试培训师'+(i+1),employee_no:String(1000000+i),attraction_id:i%3+1,role_codes:['TR'],publisher:{circles:[],projects:[],tiers:Object.keys(tiers),categories}}));
@@ -30,8 +33,8 @@ function announcement(){return {id:51,version:2,current_version:2,title:'UI验�
 function json(res,data){res.writeHead(200,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));}
 const missing=[];
 async function handler(req,res){const url=new URL(req.url,'http://fixture'),r=url.pathname;
-  if(r==='/'){res.writeHead(200,{'Content-Type':'text/html'});res.end(fs.readFileSync(path.join(root,'index.html'),'utf8').replaceAll('__STATIC_CACHE_VERSION__','layout-fixture'));return;}
-  if(r.startsWith('/static/')){const p=path.resolve(root,'.'+r.slice(7));if(!p.startsWith(root+path.sep)||!fs.existsSync(p)){res.writeHead(404);res.end();return;}res.writeHead(200,{'Content-Type':{'.js':'text/javascript','.css':'text/css','.png':'image/png'}[path.extname(p)]||'application/octet-stream'});res.end(fs.readFileSync(p));return;}
+  if(r==='/'){res.writeHead(200,{'Content-Type':'text/html'});res.end((baseline?baselineFiles.get('index.html').toString():fs.readFileSync(path.join(root,'index.html'),'utf8')).replaceAll('__STATIC_CACHE_VERSION__','layout-fixture'));return;}
+  if(r.startsWith('/static/')){const p=path.resolve(root,'.'+r.slice(7));if(!p.startsWith(root+path.sep)||!fs.existsSync(p)){res.writeHead(404);res.end();return;}res.writeHead(200,{'Content-Type':{'.js':'text/javascript','.css':'text/css','.png':'image/png'}[path.extname(p)]||'application/octet-stream'});res.end(baseline&&baselineFiles.has(r.slice(8))?baselineFiles.get(r.slice(8)):fs.readFileSync(p));return;}
   if(r==='/favicon.ico'){res.writeHead(204);res.end();return;}
   const publisher={circles:role[0]==='POC'?[]:[1,2,3],projects:['POC','GSM_POC'].includes(role[0])?[{id:1,name:'暑期活动项目',tiers:Object.keys(tiers),categories}]:[],tiers:Object.keys(tiers),categories};
   if(r==='/api/me'){const base={TA_SUPERVISOR:'CM',TA_GSM:'SUPERVISOR',POC:'CM',GSM_POC:'GSM',GSM_OTHER:'GSM',GSM_ADMIN:'GSM',AM_ADMIN:'AM'}[role[0]]||role[0];json(res,{id:1,name:'UI验收模拟用户',employee_no:'1999999',role_name:role[1],role_code:role[0]==='POC'?'CM':role[0],base_role_code:base,role_codes:[base,...(role[0]==='POC'?[]:[role[0]])],attraction_id:1,attraction_name:'热力追踪',permissions:adminRoles.has(role[0])?['SYSTEM_ADMIN']:[],must_change_password:false});}
@@ -40,9 +43,9 @@ async function handler(req,res){const url=new URL(req.url,'http://fixture'),r=ur
   else if(r==='/api/dashboard')json(res,{records:[],attendance_score:12,total_score:12});
   else if(r==='/api/action-center'||r==='/api/deduction-upgrades/pending')json(res,{items:[],total:0});
   else if(r==='/api/changelog/announcement')json(res,{read:true});
-  else if(r==='/api/announcements/options')json(res,{can_publish:publishRoles.has(role[0]),can_follow:followRoles.has(role[0]),can_train:role[0]==='TR',can_admin:adminRoles.has(role[0]),can_handover:publishRoles.has(role[0])||adminRoles.has(role[0]),circles,tiers,categories,publisher,counts:{pending:2,messages:2,handovers:0}});
+  else if(r==='/api/announcements/options'){if(designCase?.optionsGate)await designCase.optionsGate;if(designCase?.optionsFail){res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({detail:'模拟网络连接暂不可用'}));return;}json(res,{can_publish:publishRoles.has(role[0]),can_follow:followRoles.has(role[0]),can_train:role[0]==='TR',can_admin:adminRoles.has(role[0]),can_handover:publishRoles.has(role[0])||adminRoles.has(role[0]),circles,tiers,categories,publisher,counts:{pending:designCase?.pending??2,messages:designCase?.messages??2,handovers:0}});}
   else if(r==='/api/announcements/summary')json(res,{pending:2,messages:2,handovers:0});
-  else if(r==='/api/announcements')json(res,{items:[announcement()],total:1,page:1,pages:1});
+  else if(r==='/api/announcements'){if(designCase?.listGate)await designCase.listGate;if(designCase?.listFail){res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({detail:'模拟公告读取失败，请重试'}));return;}let list=designCase?designCase.items:[announcement()];if(designCase){const q=url.searchParams.get('q')||'',category=url.searchParams.get('category')||'';list=list.filter(a=>(!q||(a.title+a.summary+a.body).includes(q))&&(!category||a.category===category));}json(res,{items:list,total:list.length,page:1,pages:1});}
   else if(r==='/api/announcements/51')json(res,announcement());
   else if(r==='/api/announcements/51/receipt')json(res,receipt);
   else if(r==='/api/announcements/51/records')json(res,{announcement:announcement(),items,groups:[group],group_basis:'当前小组',counts:{required:2,completed:1,pending:1,suspended:0,exited:0},handover:ownRoles.has(role[0])||adminRoles.has(role[0])?{scope_key:'mock-training',owners:responsibilityMock().owners,owner:{name:'UI验收模拟负责人',employee_no:'1999999'},history:[{id:1,status:'accepted',from:people[0],to:people[1],requested_by:people[0],reason:'模拟正式项目交接，核对正文、培训要求及待签人员。',requested_at:'2026-10-10T09:00:00',completed_at:'2026-10-10T10:00:00'}]}:null});
@@ -69,7 +72,7 @@ const server=http.createServer((req,res)=>handler(req,res).catch(e=>{res.writeHe
 const results=[];
 async function capture(page,options){await page.evaluate(()=>{document.querySelectorAll('main, .main-content, .content').forEach(e=>e.scrollTop=0);window.scrollTo(0,0);});await page.screenshot(options);}
 async function measure(page,view,width){
-  const result=await page.evaluate(()=>{const center=document.querySelector('.announcement-center'),panel=center.querySelector('.panel'),box=panel.getBoundingClientRect();const fields=[...center.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=file]),select:not([multiple])')].filter(e=>e.getBoundingClientRect().height>0);return {overflow:document.documentElement.scrollWidth>innerWidth+1,panelWidth:box.width,padding:getComputedStyle(panel).paddingLeft,fieldHeights:fields.map(e=>Math.round(e.getBoundingClientRect().height)),fieldFonts:fields.map(e=>parseFloat(getComputedStyle(e).fontSize)),tabRows:new Set([...center.querySelectorAll('[data-ann-view]')].map(e=>Math.round(e.getBoundingClientRect().top))).size,smallButtons:[...center.querySelectorAll('button:not(.announcement-image-button),.announcement-tool-link')].filter(e=>e.getBoundingClientRect().height>0&&e.getBoundingClientRect().height<43).map(e=>e.textContent.trim()),signatureWidth:center.querySelector('canvas')?.getBoundingClientRect().width||0,formWidth:center.querySelector('form.form-stack')?.getBoundingClientRect().width||0};});
+  const result=await page.evaluate(()=>{const center=document.querySelector('.announcement-center'),panel=center.querySelector('.panel'),box=panel.getBoundingClientRect();const fields=[...center.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=file]),select:not([multiple])')].filter(e=>e.getBoundingClientRect().height>0);return {overflow:document.documentElement.scrollWidth>innerWidth+1,panelWidth:box.width,padding:getComputedStyle(panel).paddingLeft,fieldHeights:fields.map(e=>Math.round(e.getBoundingClientRect().height)),fieldFonts:fields.map(e=>parseFloat(getComputedStyle(e).fontSize)),tabRows:new Set([...center.querySelectorAll('.ann-personal-tabs [data-ann-view]')].map(e=>Math.round(e.getBoundingClientRect().top))).size,smallButtons:[...center.querySelectorAll('button:not(.announcement-image-button),.announcement-tool-link')].filter(e=>e.getBoundingClientRect().height>0&&e.getBoundingClientRect().height<43).map(e=>e.textContent.trim()),signatureWidth:center.querySelector('canvas')?.getBoundingClientRect().width||0,formWidth:center.querySelector('form.form-stack')?.getBoundingClientRect().width||0};});
   results.push({role:role[1],width,view,...result});
   assert.equal(result.overflow,false,`${role[1]} ${width} ${view}: page overflow`);
   if(process.env.ANNOUNCEMENT_UI_STRICT!=='0'){
@@ -81,6 +84,7 @@ async function measure(page,view,width){
   }
 }
 async function guardedClick(page,locator){
+  if(!await locator.isVisible()&&await locator.getAttribute('data-ann-view'))await page.locator('.ann-workspaces>summary').click();
   await locator.click();
   const confirm=page.locator('[data-modal-confirm]');
   if(await confirm.count()){await confirm.click();await page.locator('.modal-overlay').waitFor({state:'detached'});}
@@ -128,4 +132,5 @@ async function main(){await new Promise(resolve=>server.listen(0,'127.0.0.1',res
   }}assert.deepEqual(missing,[]);fs.writeFileSync(path.join(out,'audit.json'),JSON.stringify(results,null,2));console.log(JSON.stringify({roles:roles.length,viewports:5,views:results.length,strict:process.env.ANNOUNCEMENT_UI_STRICT!=='0',warnings:results.filter(r=>r.tabRows>1||r.smallButtons.length||r.fieldHeights.some(h=>h<44)||r.width<=760&&r.fieldFonts.some(f=>f<16)).length}));
   }finally{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 }
-main().catch(e=>{console.error(e);fs.writeFileSync(path.join(out,'audit.json'),JSON.stringify(results,null,2));process.exitCode=1;});
+if(require.main===module)main().catch(e=>{console.error(e);fs.writeFileSync(path.join(out,'audit.json'),JSON.stringify(results,null,2));process.exitCode=1;});
+module.exports={server,announcement,categories,setBaseline,setCase:value=>{designCase=value;},setRole:code=>{role=roles.find(item=>item[0]===code);},missing};

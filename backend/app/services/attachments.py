@@ -6,6 +6,7 @@ own transaction completion; failed uploads and flushes remove partial files.
 from __future__ import annotations
 
 import hashlib
+import logging
 import warnings
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +23,7 @@ from app.v2_models import StoredFile
 
 register_heif_opener()
 RECOGNITION_IMAGE_FORMATS = "JPG/JPEG、PNG、WebP、HEIC/HEIF"
+logger = logging.getLogger(__name__)
 
 
 BUSINESS_ATTACHMENT_EFFECTIVE_DATE = "2026-09-01"
@@ -55,7 +57,10 @@ def validate_image_file(path: Path) -> tuple[str, str]:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(path) as image:
-                detected = {"JPEG": (".jpg", "image/jpeg"), "PNG": (".png", "image/png"),
+                # MPF metadata can make a valid JPEG open as MPO (for example
+                # multi-picture camera exports). Keep its original JPEG bytes;
+                # validation and watermarked previews use the primary frame.
+                detected = {"JPEG": (".jpg", "image/jpeg"), "MPO": (".jpg", "image/jpeg"), "PNG": (".png", "image/png"),
                             "WEBP": (".webp", "image/webp")}.get(image.format)
                 if image.format == "HEIF":
                     with path.open("rb") as source:
@@ -63,6 +68,7 @@ def validate_image_file(path: Path) -> tuple[str, str]:
                     if detected and detected[0] not in {".heic", ".heif"}:
                         detected = None
                 if not detected:
+                    logger.warning("recognition_image_rejected stage=decoded_format format=%s width=%s height=%s", image.format, image.width, image.height)
                     raise HTTPException(400, f"认可图片格式无效，仅支持{RECOGNITION_IMAGE_FORMATS}")
                 if image.width * image.height > BUSINESS_IMAGE_MAX_PIXELS:
                     raise HTTPException(400, "认可图片像素过大，请压缩图片尺寸后重新选择")
@@ -75,6 +81,7 @@ def validate_image_file(path: Path) -> tuple[str, str]:
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise HTTPException(400, "认可图片像素过大，请压缩后重新选择") from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        logger.warning("recognition_image_rejected stage=decode error_type=%s", type(exc).__name__)
         raise HTTPException(400, f"认可图片已损坏或无法读取，请重新选择{RECOGNITION_IMAGE_FORMATS}图片") from exc
 
 
@@ -151,7 +158,9 @@ async def save_image_upload(db: Session, upload: UploadFile, uploader_id: int, *
     file_size, digest = await _stream_upload_to_path(upload, staging_path, max_bytes=max_bytes, empty_message="认可图片不能为空", label="认可图片")
     try:
         with staging_path.open("rb") as source:
-            if not detect_image_type(source.read(16)):
+            header = source.read(16)
+            if not detect_image_type(header):
+                logger.warning("recognition_image_rejected stage=file_signature bytes=%s container_mime=%s", file_size, get_file_mimetype(header) or "unrecognized")
                 raise HTTPException(400, f"认可图片格式无效，仅支持{RECOGNITION_IMAGE_FORMATS}")
         detected = await _validate_image_in_worker(staging_path)
         extension, mime_type = detected
