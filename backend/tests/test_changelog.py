@@ -166,7 +166,8 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in hr["release"]["items"]] == [
-            "公告中心阅读与操作体验升级", "认可登记兼容带MPF信息的JPEG照片"]
+            "公告中心阅读与操作体验升级", "认可登记兼容带MPF信息的JPEG照片",
+            "首页新增样式的发布版本校验完善"]
         assert hr["read"] is False
         client.post("/api/logout")
         login(client, "OMTEST01")
@@ -315,3 +316,10 @@ def test_docs_indexes_list_every_docs_file() -> None:
     root_index = (repo / "README.md").read_text(encoding="utf-8")
     assert [name for name in sorted(files) if name not in docs_index] == []
     assert [name for name in sorted(files) if f"docs/{name}" not in root_index] == []
+
+
+def test_resource_contract_release_note_requires_admin_role_and_permission() -> None:
+    item = next(r for r in RELEASES if r["version"] == "2026.10.20.2")["items"][-1]
+    assert item_visible(item, "SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
+    assert not item_visible(item, "SYSTEM_ADMIN", set())
+    assert not item_visible(item, "GSM", {"SYSTEM_ADMIN"})

@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.20.2", "date": "2026-10-20", "status": "candidate",
+        "items": [
+            {"summary": "公告中心阅读与操作体验升级",
+             "detail": "待查收、已查收、收藏、消息采用轻量导航，管理、培训、交接与授权按原权限进入工作区；发布入口与标题整合。搜索和分类支持清除与重试，公告卡片突出标题、真实查收状态、版本及截止时间。完善各栏目空状态、加载和异常提示；优化手机触达、正文阅读和验码后签字衔接，支持减少动态效果。沿用既有接口、权限、数据结构及签收规则。",
+             "audiences": ["all"]},
+            {"summary": "认可登记兼容带MPF信息的JPEG照片",
+             "detail": "修复部分JPEG照片被解码器识别为MPO后无法提交的问题；保留原始照片，按主画面校验和生成预览。图片校验失败增加不含照片内容及文件名的技术诊断日志。恢复CM/TR快速登记中签卡人的景点圈分组，TAGSM及以上单独分组；沿用人员范围、图片大小、像素限制及原有计分复核规则。",
+             "audiences": ["all"]},
+            {"summary": "首页新增样式的发布版本校验完善",
+             "detail": "同步工作台和公告样式的精确资源清单与版本引用总数，继续拒绝缺失、未带版本、过期、重复或额外引用；保留模块映射与CSP摘要校验，不改变业务规则或权限。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.20.1", "date": "2026-10-20", "status": "candidate",
         "items": [
             {"summary": "公告中心阅读与操作体验升级",
