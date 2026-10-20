@@ -7,6 +7,14 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.20.5", "date": "2026-10-20", "status": "candidate",
+        "items": [
+            {"summary": "手机筛选对齐与导出记录显示修复",
+             "detail": "统一景点数据、PR排名、我的登记记录和声明统计的手机筛选控件高度、间距与原生外观，修复日期和月份控件挤压相邻字段的问题；窄屏改为单列，登记记录与PR搜索使用整行。本人最近导出记录默认收起，展开后手机逐条显示，保留原有六个字段和全部记录，桌面保留表格；不改变筛选值、权限、接口、统计及导出规则。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.20.4", "date": "2026-10-20", "status": "candidate",
         "items": [
             {"summary": "手机浏览器认可图片上传兼容补强",

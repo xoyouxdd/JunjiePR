@@ -26,7 +26,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 PYTHON = sys.executable
-BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "deduction_type_picker_ui.cjs", "frontend_modules.cjs", "monthly_rank_ui.cjs", "recognition_upload_ui.cjs", "rotation_confirmation_ui.cjs", "rotation_adjustment_ui.cjs", "rotation_tablet_ui.cjs"}
+BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "deduction_type_picker_ui.cjs", "frontend_modules.cjs", "mobile_filter_layout_ui.cjs", "monthly_rank_ui.cjs", "recognition_upload_ui.cjs", "rotation_confirmation_ui.cjs", "rotation_adjustment_ui.cjs", "rotation_tablet_ui.cjs"}
 ESM_VM_TESTS = {"view_lifecycle.cjs"}
 
 
