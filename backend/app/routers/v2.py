@@ -26,6 +26,7 @@ from app.routers import (
     sick_leaves,
     sick_leave_import,
     statistics,
+    video_learning,
 )
 
 from app.routers._shared import is_previewable_image, preview_kind  # noqa: F401  (re-exported)
@@ -52,5 +53,6 @@ for _module in (
     sick_leaves,
     sick_leave_import,
     statistics,
+    video_learning,
 ):
     router.include_router(_module.router)

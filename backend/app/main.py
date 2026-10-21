@@ -22,6 +22,7 @@ from app.deduction_materials import start_deduction_material_worker
 from app.rotation.service import start_rotation_ticker
 from app.announcement_worker import start_worker as start_announcement_worker, stop_worker as stop_announcement_worker
 from app.v2_database import SessionLocal
+from app.video_worker import start_worker as start_video_worker, stop_worker as stop_video_worker
 from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 from app.runtime_environment import environment_kind, environment_label, validate_runtime_paths
 
@@ -223,6 +224,7 @@ def startup() -> None:
     start_deduction_material_worker()
     start_rotation_ticker()
     start_announcement_worker()
+    start_video_worker()
     db = SessionLocal()
     try:
         process_role_expirations(db)
@@ -233,6 +235,7 @@ def startup() -> None:
 @app.on_event("shutdown")
 def shutdown_announcements():
     stop_announcement_worker()
+    stop_video_worker()
 
 
 app.include_router(v2.router)

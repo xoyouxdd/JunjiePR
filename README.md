@@ -10,6 +10,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/video-learning.md](docs/video-learning.md) | 视频学习、分片续传、压缩封面、个人水印及验证边界 |
 | [docs/mobile-filter-alignment-20261020.md](docs/mobile-filter-alignment-20261020.md) | 四页手机筛选对齐、导出历史完整展示与三引擎验证 |
 | [docs/mobile-upload-compatibility.md](docs/mobile-upload-compatibility.md) | 手机浏览器图片上传共用链路、实收测试与真机验收边界 |
 | [docs/uc-upload-review-20261020.md](docs/uc-upload-review-20261020.md) | iPhone UC选图读取兼容、批量上传诊断及验证边界 |

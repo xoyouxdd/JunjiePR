@@ -37,6 +37,10 @@ def audit_attraction_id(db: Session, entity_type: str, entity_id) -> int | None:
     if entity_type == "recognition":
         row = db.get(RecognitionRecord, key)
         return row.home_attraction_id if row else None
+    if entity_type == "video_learning":
+        from app.video_models import LearningVideo
+        row = db.get(LearningVideo, key)
+        return row.attraction_id if row else None
     if entity_type == "deduction":
         row = db.get(DeductionRecord, key)
         return row.attraction_id_snapshot if row else None

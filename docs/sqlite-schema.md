@@ -2,7 +2,7 @@
 
 对照本地候选程序 `2026.10.19.1`。权威定义在代码里，本文件只记录现在落地的结构：
 
-- 表与字段：`backend/app/v2_models.py`；轮岗模块的表在 `backend/app/rotation/models.py`
+- 表与字段：`backend/app/v2_models.py`；轮岗模块的表在 `backend/app/rotation/models.py`；视频学习在 `backend/app/video_models.py`
 - 连接、Base 与会话：`backend/app/database/connection.py`
 - 启动建库与每次启动保障：`backend/app/database/bootstrap.py`、`reference_data.py`、`accounts.py`
 - 一次性补丁与额外索引：`backend/app/database/migrations/`（schema、sick_leave、organization），按 `registry.py` 的有序 callable 执行
@@ -1232,3 +1232,11 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 
 - `rotation_assist_grants`：TR员工、授权者及名称、本圈、真实签发及到期时间、撤销状态。授权码从数据目录 `rotation-assist.key` 派生，不明文落库。重新下发撤销该TR此前有效授权。
 - `rotation_adjust_sessions`：实际员工、可选授权ID、登录令牌哈希、真实到期时间。与轮岗专用账号会话独立；TR每次写入核验关联授权。
+
+## 视频学习圈关联
+
+2026-10-21新增`learning_video_circles`，`video_id + attraction_id`联合主键，分别外键到视频和景点。保存发布时选中的受众圈快照；全选不代表未来自动扩圈。原`learning_videos.attraction_id`保留为历史单圈与审计归档锚点，无关联行时按旧单圈读取。视频文件不按圈复制；新版本继承原圈集合。全部新增表由现有create_all幂等创建。
+
+## 视频观看受众
+
+最新观看范围以`learning_video_audiences`为准：video_id主键、local_attraction_id外键、codes文本JSON白名单、revision用于乐观并发校验、replaces_revision用于新旧版本范围核对。创建表为追加式，不改旧视频列；原圈关联表保留筛选/旧样例兼容，不能替代层级授权。

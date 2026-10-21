@@ -4,6 +4,7 @@
 
 | 文件 | 内容 |
 |---|---|
+| [video-learning.md](video-learning.md) | 视频学习、分片续传、压缩封面、个人水印及验证边界 |
 | [mobile-filter-alignment-20261020.md](mobile-filter-alignment-20261020.md) | 四页手机筛选对齐、导出历史完整展示与三引擎验证 |
 | [mobile-upload-compatibility.md](mobile-upload-compatibility.md) | 手机浏览器图片上传共用链路、实收测试与真机验收边界 |
 | [uc-upload-review-20261020.md](uc-upload-review-20261020.md) | iPhone UC选图读取兼容、批量上传诊断及验证边界 |

@@ -25,6 +25,7 @@ import { app, state } from './app/state.js';
 import { installFormProtection } from './app/submission.js';
 import { renderStatistics, renderStatisticsDetail, statisticsDetailContext } from './app/statistics.js';
 import { toast } from './app/toast.js';
+import { renderVideoLearning } from './app/video-learning.js';
 
 configureViews({
   home: renderHome,
@@ -56,6 +57,7 @@ configureViews({
   hrMonthlyReport: renderHrMonthlyReport,
   rotationTest: renderRotationTest,
   announcements: renderAnnouncements,
+  videoLearning: renderVideoLearning,
 });
 
 installSecurityEvents();

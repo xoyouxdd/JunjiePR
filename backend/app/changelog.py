@@ -7,6 +7,14 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.21.1", "date": "2026-10-21", "status": "candidate",
+        "items": [
+            {"summary": "新增按景点授权的视频学习",
+             "detail": "新增视频学习入口，LEAD/TA LEAD仅面向本圈TR，TA GSM/GSM及以上可单选或多选本圈TR、本圈LEAD、所有TR、所有LEAD、所有GSM、AM和OM，TR不含CM；发布者可随时调整当前视频受众并保留审计，旧窗口修改冲突会提示重新核对；支持分片续传、后台压缩、响度均衡、真实画面加标题封面及预览发布。观看前确认保密提示，个人工号烧入播放视频；支持继续观看、倍速、清晰度、画面亮度与音量设置；补齐经关于系统跳转及上传页内返回的未提交保护；后台刷新不打断编辑，防止重复确认与旧清晰度请求覆盖，发布按钮与当前权限一致，管理员本圈范围按发布者解释。原片不向观看者提供，调动、停用、撤下和会话过期后按当前权限校验；学习进度不纳入绩效或培训完成认定。水印提高追溯能力，不承诺阻止所有录屏或后期处理。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.20.5", "date": "2026-10-20", "status": "candidate",
         "items": [
             {"summary": "手机筛选对齐与导出记录显示修复",

@@ -228,6 +228,88 @@
   #app[data-workspace-ui] .hr-report-page :is(th,td) { padding: 10px 12px; font-size: 13px; }
 }
 /* Narrow phones need a full row for localized date text and its native picker. */
+/* Video learning shares the workspace shell and native form/button tokens. */
+#app .video-learning { max-width: 1140px; margin-inline: auto; }
+#app .video-heading, #app .video-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#app .video-heading { margin-bottom: 14px; }
+#app .video-heading p { margin: 5px 0 0; }
+#app .video-tabs { display: flex; flex-wrap: wrap; gap: 20px; border-bottom: 1px solid var(--workspace-border); margin-bottom: 18px; }
+#app .video-tabs button { border-radius: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); padding: 10px 0; min-height: 44px; }
+#app .video-tabs button, #app .video-heading > button, #app button[data-video-back], #app button[data-upload-back] { width: auto; flex: 0 0 auto; }
+#app .video-tabs .video-tab-active { color: var(--primary); border-bottom-color: var(--primary); }
+#app .video-search { display: grid; grid-template-columns: minmax(0,1fr) minmax(140px,220px) auto; gap: 10px; margin-bottom: 20px; align-items: end; }
+#app .video-search label { min-width: 0; }
+#app .video-search :is(input,select) { width: 100%; min-width: 0; box-sizing: border-box; min-height: 46px; }
+#app .video-section-heading { margin-bottom: 12px; }
+#app .video-section-heading h3 { margin: 0; }
+#app .video-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 18px; }
+#app .video-card { min-width: 0; border: 1px solid var(--workspace-border); border-radius: 12px; background: var(--panel); overflow: hidden; }
+#app button.video-card-open { display: block; width: 100%; padding: 0; background: transparent; text-align: left; border: 0; color: var(--text); white-space: normal; }
+#app .video-thumb { position: relative; aspect-ratio: 16/9; background: var(--surface-soft); }
+#app .video-thumb img { width: 100%; height: 100%; display: block; object-fit: contain; }
+#app .video-duration { position: absolute; right: 8px; bottom: 8px; background: #102033db; color: #fff; font-size: 12px; padding: 2px 6px; border-radius: 5px; }
+#app .video-cover-placeholder { height: 100%; display: grid; align-content: center; justify-items: center; gap: 8px; color: var(--text-secondary); }
+#app .video-cover-placeholder svg { width: 28px; height: 28px; }
+#app .video-card-copy { padding: 13px 14px; }
+#app .video-card-copy h3 { margin: 0; overflow-wrap: anywhere; font-size: 16px; }
+#app .video-card-copy p { margin: 6px 0 0; color: var(--text-secondary); font-size: 12px; }
+#app .video-card-copy .video-progress-label { color: var(--primary); }
+#app .video-empty { padding: 42px 16px; text-align: center; color: var(--text-secondary); }
+#app .video-empty > svg { width: 32px; height: 32px; margin-bottom: 10px; }
+#app .video-empty h3 { color: var(--text); margin: 0; }
+#app .video-pagination { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
+#app .video-detail-heading { margin: 18px 0; }
+#app .video-detail-heading h2 { overflow-wrap: anywhere; }
+#app .video-learning .field-hint, #app .video-card-copy p { overflow-wrap: anywhere; }
+#app .video-player-wrap { position: relative; background: #102033; border-radius: 12px; overflow: hidden; }
+#app .video-player-wrap video { display: block; width: 100%; max-height: 65vh; aspect-ratio: 16/9; object-fit: contain; background: #102033; }
+#app .video-player-gate { position: absolute; inset: 0; background: #102033e8; color: #f3f6fa; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; padding: 16px; text-align: center; }
+#app .video-player-gate[hidden] { display: none; }
+#app .video-player-gate p { margin: 0; max-width: 36em; }
+#app .video-play-settings { border: 1px solid var(--workspace-border); border-radius: 10px; padding: 12px 16px; margin-top: 14px; }
+#app .video-play-settings summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+#app .video-play-settings summary::after { content: '⌄'; margin-left: auto; color: var(--text-secondary); }
+#app .video-settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 20px; padding-top: 10px; }
+#app .video-settings-grid label { display: grid; gap: 7px; min-width: 0; }
+#app .video-settings-grid :is(select,input) { width: 100%; min-width: 0; }
+#app .video-settings-grid input[type=range] { padding: 0; accent-color: var(--primary); }
+#app .video-description { padding-top: 18px; }
+#app .video-description p { white-space: pre-wrap; overflow-wrap: anywhere; }
+#app .video-management { padding-top: 18px; margin-top: 18px; border-top: 1px solid var(--workspace-border); }
+#app .video-manage-actions, #app .video-upload-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+#app .video-file-field { padding: 16px; border: 1px dashed var(--workspace-border); border-radius: 10px; background: var(--surface-soft); }
+#app .video-search .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+#app .video-file-field input { max-width: 100%; min-width: 0; }
+#app .video-upload-progress { width: 100%; height: 8px; accent-color: var(--primary); }
+:is(#app,.form-modal) .video-audience { min-width: 0; margin: 0; padding: 14px; border: 1px solid var(--workspace-border); border-radius: 10px; }
+:is(#app,.form-modal) .video-audience legend { font-weight: 600; padding-inline: 5px; }
+:is(#app,.form-modal) .video-audience > button { min-height: 44px; width: auto; margin-bottom: 10px; }
+:is(#app,.form-modal) .video-audience-options { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,180px),1fr)); gap: 8px; }
+:is(#app,.form-modal) .video-audience-options label { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 10px; border: 1px solid var(--workspace-border); border-radius: 8px; }
+:is(#app,.form-modal) .video-audience-options input[type=checkbox] { flex: 0 0 18px; width: 18px; height: 18px; min-height: 18px; padding: 0; accent-color: var(--primary); }
+:is(#app,.form-modal) .video-audience-options span { min-width: 0; overflow-wrap: anywhere; }
+:is(#app,.form-modal) .video-audience-options label:has(:checked) { border-color: var(--primary); background: var(--surface-soft); }
+.video-notice p { line-height: 1.8; }
+.video-notice-icon { color: var(--primary); padding-bottom: 12px; }
+.video-notice-icon svg { width: 30px; height: 30px; }
+.video-consent-label { display: flex; gap: 10px; align-items: center; min-height: 44px; }
+.video-consent-label input { width: 18px; height: 18px; flex-shrink: 0; }
+@media (max-width: 900px) { #app .video-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 560px) {
+  #app .video-grid { grid-template-columns: minmax(0,1fr); }
+  #app .video-search { grid-template-columns: minmax(0,1fr) auto; }
+  #app .video-search > label:first-child { grid-column: 1/-1; }
+  #app .video-heading h2 { font-size: 23px; }
+  #app .video-heading > button { padding-inline: 12px; }
+  #app .video-player-gate { font-size: 13px; gap: 8px; }
+  #app .video-settings-grid { gap: 12px; }
+  #app .video-settings-grid select { min-height: 46px; }
+  #app .video-manage-actions > button { flex: 1 1 40%; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  #app .video-card { transition: border-color 160ms; }
+  #app .video-card:hover { border-color: var(--primary); }
+}
 @media (max-width: 359px) {
   #app[data-workspace-ui] :is(.entry-filter,.statistics-filter,.pr-ranking-filter) { grid-template-columns: minmax(0,1fr); }
 }

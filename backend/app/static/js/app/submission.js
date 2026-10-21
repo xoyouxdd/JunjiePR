@@ -15,7 +15,7 @@ function installFormProtection(){
   document.addEventListener('reset',event=>queueMicrotask(()=>clearFormEdits(event.target)),true);
   window.addEventListener('beforeunload',event=>{if(pendingForms().length){event.preventDefault();event.returnValue='';}});
   document.addEventListener('click',async event=>{
-    const target=event.target.closest?.('[data-tab],[data-register-mode],[data-register-target],[data-mobile-logout],#logoutBtn,[data-ann-back],[data-ann-view],[data-ann-compose],[data-ann-new],[data-ann-resume]');
+    const target=event.target.closest?.('[data-tab],[data-register-mode],[data-register-target],[data-mobile-logout],#logoutBtn,[data-ann-back],[data-ann-view],[data-ann-compose],[data-ann-new],[data-ann-resume],[data-about-updates]');
     if(!target)return;
     if(approved===target){approved=null;return;}
     const forms=pendingForms();if(!forms.length)return;

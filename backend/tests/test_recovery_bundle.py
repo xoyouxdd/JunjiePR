@@ -53,6 +53,37 @@ def test_capture_deduplicates_and_restores_database_code_and_attachments(fixture
     assert recovery.digest(database) == source_hash
 
 
+def test_learning_video_persistence_and_ephemeral_cache_boundaries(fixture,tmp_path):
+    live,database,store=fixture
+    directory=live/'data_v2/files/learning-videos/videos/1';directory.mkdir(parents=True)
+    for name in ('source.mov','master-720.mp4','cover.jpg'):
+        (directory/name).write_bytes(b'video')
+    (directory/'master-1080.new.mp4').write_bytes(b'partial')
+    cache=live/'data_v2/files/learning-videos/playbacks/demo';cache.mkdir(parents=True);(cache/'video.mp4').write_bytes(b'cache')
+    uploads=live/'data_v2/files/learning-videos/uploads';uploads.mkdir();(uploads/'demo.part').write_bytes(b'partial')
+    with sqlite3.connect(database) as db:
+        db.execute('CREATE TABLE learning_videos(id INTEGER,status TEXT,original_bytes INTEGER,profiles TEXT)')
+        db.execute('INSERT INTO learning_videos VALUES(1,?,?,?)',('published',5,json.dumps({'720':{'bytes':5}})))
+        db.execute('CREATE TABLE learning_video_circles(video_id INTEGER,attraction_id INTEGER,PRIMARY KEY(video_id,attraction_id))')
+        db.executemany('INSERT INTO learning_video_circles VALUES(1,?)',[(1,),(2,),(3,)])
+        db.execute('CREATE TABLE learning_video_audiences(video_id INTEGER PRIMARY KEY,local_attraction_id INTEGER,codes TEXT,revision INTEGER,replaces_revision INTEGER)')
+        db.execute('INSERT INTO learning_video_audiences VALUES(1,1,?,2,NULL)',(json.dumps(['all_tr','all_lead']),))
+    manifest=Path(recovery.capture(live,database,store)['manifest'])
+    data=json.loads(manifest.read_text(encoding='utf-8'))
+    assert 'data_v2/files/learning-videos/videos/1/source.mov' in data['entries']
+    assert 'data_v2/files/learning-videos/videos/1/master-720.mp4' in data['entries']
+    assert 'data_v2/files/learning-videos/videos/1/cover.jpg' in data['entries']
+    assert not any('/playbacks/' in name or '/uploads/' in name or '.new.mp4' in name for name in data['entries'])
+    recovery.restore(store,tmp_path/'video-restore',manifest)
+    assert (tmp_path/'video-restore/data_v2/files/learning-videos/videos/1/source.mov').read_bytes()==b'video'
+    with sqlite3.connect(tmp_path/'video-restore/data_v2/recognition_v2.db') as db:
+        assert db.execute('SELECT attraction_id FROM learning_video_circles WHERE video_id=1 ORDER BY attraction_id').fetchall()==[(1,),(2,),(3,)]
+        assert db.execute('SELECT local_attraction_id,codes,revision FROM learning_video_audiences WHERE video_id=1').fetchone()==(1,json.dumps(['all_tr','all_lead']),2)
+    (directory/'source.mov').unlink()
+    with pytest.raises(ValueError,match='learning video'):
+        recovery.capture(live,database,store)
+
+
 @pytest.mark.parametrize('failure', ['missing', 'content', 'size'])
 def test_capture_rejects_missing_or_changed_active_attachment(fixture, failure):
     live, database, store = fixture

@@ -603,6 +603,9 @@ async function main() {
     await workPage.locator('#hrReportPhotos').setInputFiles({name:'synthetic.jpg',mimeType:'image/jpeg',buffer:Buffer.from('synthetic-photo')});
     await workPage.locator('.tabs-desktop [data-tab="actionCenter"]').click();
     await workPage.locator('[data-modal-cancel]').click();
+    // Dismissal resolves before the 160ms exit animation removes the layer.
+    // Wait for that lifecycle to finish before testing another leave dialog.
+    await workPage.locator('.modal-overlay').waitFor({state:'detached'});
     assert.equal(await workPage.locator('#hrReportNotes').inputValue(),'合成月报说明保留验证');
     assert.equal(await workPage.locator('#hrReportPhotos').evaluate(input=>input.files.length),1);
     let releaseExport;const exportGate=new Promise(resolve=>releaseExport=resolve);let exportRequests=0;

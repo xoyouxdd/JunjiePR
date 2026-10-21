@@ -114,6 +114,8 @@ def capture(live: Path, database: Path, store: Path, *, test_mode=False) -> dict
         if [r[0] for r in db.execute('PRAGMA quick_check')] != ['ok']:
             raise ValueError('Database snapshot integrity check failed')
         expected_files = db.execute("SELECT storage_key,sha256,file_size FROM stored_files WHERE status='active'").fetchall()
+        has_videos = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='learning_videos'").fetchone()
+        videos = db.execute("SELECT id,status,original_bytes,profiles FROM learning_videos").fetchall() if has_videos else []
     expected = {}
     for key, sha, size in expected_files:
         key = relative(key)
@@ -121,6 +123,17 @@ def capture(live: Path, database: Path, store: Path, *, test_mode=False) -> dict
         if not source.is_file() or source.stat().st_size != size:
             raise ValueError('An active attachment is missing or has an unexpected size')
         expected['data_v2/files/' + key] = sha.lower()
+    for video_id, status, original_bytes, profiles in videos:
+        directory = live / 'data_v2/files/learning-videos/videos' / str(int(video_id))
+        files = {'source.mov': original_bytes}
+        if status in {'ready', 'published', 'withdrawn'}:
+            files.update({f'master-{quality}.mp4': profile['bytes'] for quality, profile in json.loads(profiles).items()})
+            files['cover.jpg'] = None
+        for filename, size in files.items():
+            source = checked(directory / relative(filename))
+            if not source.is_file() or (size is not None and source.stat().st_size != size):
+                raise ValueError('A learning video source or published derivative is missing or has an unexpected size')
+            expected[relative(source.relative_to(live).as_posix())] = digest(source)
     provenance = live / 'release-manifest.json'
     if not provenance.is_file() and not test_mode:
         raise ValueError('The deployed version manifest is required')
@@ -136,6 +149,12 @@ def capture(live: Path, database: Path, store: Path, *, test_mode=False) -> dict
     for tree in ('app', 'data_v2/files'):
         for source in walk_files(live / tree):
             name = relative(source.relative_to(live).as_posix())
+            # Only this feature's regenerable personal cache and incomplete
+            # uploads are excluded. Existing active attachments always win.
+            if name not in expected and (name.startswith('data_v2/files/learning-videos/playbacks/')
+                or name.startswith('data_v2/files/learning-videos/uploads/')
+                or (name.startswith('data_v2/files/learning-videos/videos/') and (source.name == 'cover.new.jpg' or re.fullmatch(r'(?:frame(?:-[0-9a-f]{32})?\.jpg|master-(?:720|1080)(?:\.[0-9a-f]{32})?\.new\.mp4)', source.name)))):
+                continue
             entries[name] = put_object(source, objects, expected.get(name))
     for name in ('requirements.txt', 'release-manifest.json'):
         source = live / name

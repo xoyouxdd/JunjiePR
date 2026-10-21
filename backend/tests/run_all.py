@@ -11,8 +11,9 @@ Usage (from the repository root, matching docs/getting-started.md):
 
 The default includes Python, Node.js, and Playwright/Edge DOM fixtures. Use
 --suite python, --suite node, or --suite browser for focused checks. Browser
-fixtures need Playwright resolvable from backend/ and an installed Edge; they
-do not start an application server or connect to a deployed application.
+fixtures need Playwright resolvable from backend/ and an installed Edge. Most
+serve synthetic API responses; video learning starts its own isolated local
+API and FFmpeg fixture. None connects to a deployed application by default.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 PYTHON = sys.executable
-BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "deduction_type_picker_ui.cjs", "frontend_modules.cjs", "mobile_filter_layout_ui.cjs", "monthly_rank_ui.cjs", "recognition_upload_ui.cjs", "rotation_confirmation_ui.cjs", "rotation_adjustment_ui.cjs", "rotation_tablet_ui.cjs"}
+BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "deduction_type_picker_ui.cjs", "frontend_modules.cjs", "mobile_filter_layout_ui.cjs", "monthly_rank_ui.cjs", "recognition_upload_ui.cjs", "rotation_confirmation_ui.cjs", "rotation_adjustment_ui.cjs", "rotation_tablet_ui.cjs", "video_learning_ui.cjs"}
 ESM_VM_TESTS = {"view_lifecycle.cjs"}
 
 
