@@ -165,7 +165,8 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in hr["release"]["items"]] == ["新增按景点授权的视频学习"]
+        assert [item["summary"] for item in hr["release"]["items"]] == [
+            "新增按景点授权的视频学习", "视频处理依赖改为项目内独立识别"]
         assert hr["read"] is False
         client.post("/api/logout")
         login(client, "OMTEST01")
@@ -318,6 +319,13 @@ def test_docs_indexes_list_every_docs_file() -> None:
 
 def test_resource_contract_release_note_requires_admin_role_and_permission() -> None:
     item = next(r for r in RELEASES if r["version"] == "2026.10.20.2")["items"][-1]
+    assert item_visible(item, "SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
+    assert not item_visible(item, "SYSTEM_ADMIN", set())
+    assert not item_visible(item, "GSM", {"SYSTEM_ADMIN"})
+
+
+def test_video_runtime_release_note_requires_admin_role_and_permission() -> None:
+    item = next(r for r in RELEASES if r["version"] == "2026.10.21.2")["items"][-1]
     assert item_visible(item, "SYSTEM_ADMIN", {"SYSTEM_ADMIN"})
     assert not item_visible(item, "SYSTEM_ADMIN", set())
     assert not item_visible(item, "GSM", {"SYSTEM_ADMIN"})

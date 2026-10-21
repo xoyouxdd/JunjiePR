@@ -7,6 +7,17 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.21.2", "date": "2026-10-21", "status": "candidate",
+        "items": [
+            {"summary": "新增按景点授权的视频学习",
+             "detail": "新增视频学习入口，LEAD/TA LEAD仅面向本圈TR，TA GSM/GSM及以上可选择本圈TR、本圈LEAD、所有TR、所有LEAD、所有GSM、AM和OM，TR不含CM；支持调整受众及冲突校验、分片续传、后台压缩、响度均衡、真实画面封面和预览发布。观看前确认保密提示，个人工号烧入视频；支持继续观看、倍速、清晰度、亮度和音量设置。媒体请求按当前账号、会话与范围校验，原片不公开；学习进度不纳入绩效或培训完成认定。水印提高追溯能力，不承诺阻止所有录屏或后期处理。",
+             "audiences": ["all"]},
+            {"summary": "视频处理依赖改为项目内独立识别",
+             "detail": "支持从部署根目录tools/ffmpeg/bin识别FFmpeg和FFprobe，显式配置优先，保留PATH后备；运行工具及许可证单独校验部署，不进入应用包，不修改系统PATH或新增服务。保留视频权限、原片隔离、转码和个人水印规则。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.21.1", "date": "2026-10-21", "status": "candidate",
         "items": [
             {"summary": "新增按景点授权的视频学习",

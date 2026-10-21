@@ -20,11 +20,16 @@ MAX_SECONDS = 1200
 CHUNK_BYTES = 4 * 1024 * 1024
 MIN_FREE_BYTES = 2 * 1024**3
 STORAGE_LIMIT = 50 * 1024**3
+PROJECT_TOOL_DIR = Path(__file__).resolve().parent.parent / "tools" / "ffmpeg" / "bin"
 
 
 def tool(name):
     configured = os.getenv("RECOGNITION_" + name.upper(), "")
-    found = configured if configured and Path(configured).is_file() else shutil.which(name)
+    # Deployed app/ lives directly below the production root. Keep this
+    # dependency private to the application, without changing system PATH.
+    private = PROJECT_TOOL_DIR / (name + (".exe" if os.name == "nt" else ""))
+    found = (configured if configured and Path(configured).is_file()
+             else str(private) if private.is_file() else shutil.which(name))
     if not found:
         raise RuntimeError("视频处理工具未配置，请联系管理员配置FFmpeg和FFprobe")
     return str(found)

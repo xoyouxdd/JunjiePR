@@ -39,6 +39,8 @@
 
 无新UI框架/Python包。需FFmpeg、FFprobe（libx264、AAC、drawtext）和中文字体。默认PATH；可配置 `RECOGNITION_FFMPEG`、`RECOGNITION_FFPROBE`、`RECOGNITION_VIDEO_FONT`，Windows默认微软雅黑。前端摘要需HTTPS或localhost Web Crypto。正式服务器依赖尚未检查，不假定与本机相同。
 
+2026.10.21.2发布补强：工具解析依次为有效显式环境变量、应用部署根目录的`tools/ffmpeg/bin/ffmpeg.exe`及`ffprobe.exe`、已有PATH。源码开发布局对应`backend/tools/ffmpeg/bin`，本机仍可使用既有PATH。服务器已只读确认缺少两工具，用户授权在项目内独立安装；FFmpeg运行文件、所需DLL、LICENSE和README单独配套哈希清单，预检编码器/滤镜并实际生成合成视频，不放入应用ZIP，不改系统或用户PATH、不装服务。字体沿用服务器已有微软雅黑。工具安装不覆盖已有同名目录；应用发布仍沿用原在线备份与失败回滚流程。实际安装与上线结果以发布回执为准，不把本段当作已上线证明。
+
 存储位于 `FILE_DIR/learning-videos/`：`videos/<id>/`存原片/压缩/封面，`playbacks/<sha256>/`存个人缓存，`uploads/`存分片。默认50GB保护、保留2GB空闲；原片不自动删除，撤下不等于释放空间，生产需按人数、时长和留存规划容量。
 
 新增表在 `app/video_models.py`：learning_videos、learning_video_audiences、learning_video_circles、learning_video_uploads、learning_video_jobs、learning_video_playbacks、learning_video_progress，由现有create_all注册，不改原业务表。受众表用video_id主键，保存受众代码、明确本圈ID和修改revision；圈关联表保留兼容与筛选。无受众表记录的旧样例按原圈TR保守读取，作者可在管理中配置新范围，无需重传。审计保留完整发布圈ID集合，归档锚点保留原单圈字段以兼容现有审计结构。
