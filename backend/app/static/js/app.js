@@ -69,6 +69,7 @@ async function initializeApp(){
     state.me=await api('/api/me');
     if(state.me.must_change_password){renderPasswordChangeRequired();return;}
     state.options=await api('/api/options');
+    if(new URLSearchParams(location.search).get('view')==='actionCenter')state.tab='actionCenter';
     if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';
     applyCircleTheme();
     installScreenWatermark();

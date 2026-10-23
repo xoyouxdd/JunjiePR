@@ -123,7 +123,9 @@ def capture(live: Path, database: Path, store: Path, *, test_mode=False) -> dict
         if not source.is_file() or source.stat().st_size != size:
             raise ValueError('An active attachment is missing or has an unexpected size')
         expected['data_v2/files/' + key] = sha.lower()
+    deleted_video_roots={f'data_v2/files/learning-videos/videos/{int(video_id)}/' for video_id,status,_,_ in videos if status=='deleted'}
     for video_id, status, original_bytes, profiles in videos:
+        if status=='deleted':continue
         directory = live / 'data_v2/files/learning-videos/videos' / str(int(video_id))
         files = {'source.mov': original_bytes}
         if status in {'ready', 'published', 'withdrawn'}:
@@ -149,6 +151,7 @@ def capture(live: Path, database: Path, store: Path, *, test_mode=False) -> dict
     for tree in ('app', 'data_v2/files'):
         for source in walk_files(live / tree):
             name = relative(source.relative_to(live).as_posix())
+            if any(name.startswith(prefix) for prefix in deleted_video_roots):continue
             # Only this feature's regenerable personal cache and incomplete
             # uploads are excluded. Existing active attachments always win.
             if name not in expected and (name.startswith('data_v2/files/learning-videos/playbacks/')

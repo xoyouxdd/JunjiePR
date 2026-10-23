@@ -29,6 +29,7 @@ def _init_db_unlocked() -> None:
     from app import v2_models  # noqa: F401
     from app import video_models  # noqa: F401
     from app.rotation import models as rotation_models  # noqa: F401
+    from app.rotation import namespace as rotation_namespace  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()

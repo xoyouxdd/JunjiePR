@@ -351,6 +351,9 @@ class Engine:
         off_lead = S['offLead']
         for p in list(self.P.values()):
             st = p['state']
+            if p.get('entryHold') and st not in ('notyet', 'rest', 'ready'):
+                p.pop('entryHold', None)
+                changed = True
             if st == 'notyet' and now >= p['start']:
                 self._shift_start(p, now, seat, seat7)
                 changed = True
@@ -406,6 +409,7 @@ class Engine:
                 was = p['state']
                 p['assign'] = None
                 p['state'] = 'done'
+                p.pop('entryHold', None)
                 self.h.log('shift_end_unconfirmed' if was == 'walkback' else 'shift_end', 'system', p['pid'], None, None, {})
                 changed = True
             if p['state'] == 'onpost' and now >= p['end']:
@@ -432,10 +436,19 @@ class Engine:
                 x['open'] = False
         for p in self.P.values():
             p['assign'] = None
+            p.pop('entryHold', None)
             if p['state'] in ('pending', 'rest', 'meal', 'ready') or (p['state'] == 'notyet' and p['role'] in ('rotation', 'op')):
                 p['state'] = 'away'
                 p['away'] = {'reason': CLOSING_WORK, 'until': None}
         self.h.log('park_close', 'system', None, None, None, {})
+
+    def opening_rest_candidate(self, p):
+        """Unseated 07:15 crew rest at shift start; push7 and seated crew keep their flow."""
+        plan = self.d['plan']
+        return (p['start'] == 435 and p['role'] == 'rotation'
+                and p['pid'] not in plan['push7']
+                and all(p['pid'] not in plan[kind].values() for kind in ('crew', 'seven'))
+                and not any(a['start'] <= p['start'] < a['end'] for a in p.get('absences', [])))
 
     def _shift_start(self, p, now, seat, seat7):
         t = p['start']
@@ -463,6 +476,14 @@ class Engine:
                     p['flags'].append('7点岗')
                 self.h.log('crew_start', 'system', p['pid'], lid, x['name'], {})
                 return
+        if self.opening_rest_candidate(p):
+            p.update(state='rest', breakKind='rest', breakStart=t, arriveAnchor=t,
+                     readyAt=t + self.S['breakMin'], readySince=None, assign=None)
+            if now >= p['readyAt']:
+                p.update(state='ready', readySince=p['readyAt'])
+            self.h.log('initial_rest', 'system', p['pid'], None, None,
+                       {'start': t, 'until': p['readyAt']})
+            return
         p['state'] = 'ready'
         p['readyAt'] = now
         p['readySince'] = now
@@ -670,9 +691,10 @@ class Engine:
                     self.alert('%s 不能推 7 点，已改由 %s 推' % (pa['name'], sub['name']), now)
                     pa = sub
                     changed = True
-            if pa and pa['state'] == 'ready' and not pa.get('push7done') \
+            if pa and pa['state'] in ('rest', 'ready') and pa.get('breakKind') != 'meal_rest' and not pa.get('push7done') \
                     and not (pa.get('assign') and pa['assign'].get('mode') in TARGET_MODES):
-                pa['assign'] = {'line': pb['line'], 'mode': 'push7', 'target': b, 'departAt': now, 'why': '推7点'}
+                pa['assign'] = {'line': pb['line'], 'mode': 'push7', 'target': b,
+                                'departAt': max(now, self._ready_time(pa, now)), 'why': '推7点'}
                 pa['push7done'] = True
                 changed = True
         # 推下班 / 推出圈
@@ -680,7 +702,7 @@ class Engine:
             walk = self.walk(x['line'])
             cands = []
             for p in self.P.values():
-                if p['state'] not in REST_STATES or p['role'] not in ('rotation', 'op'):
+                if p.get('entryHold') or p['state'] not in REST_STATES or p['role'] not in ('rotation', 'op'):
                     continue
                 if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
                     continue
@@ -703,7 +725,7 @@ class Engine:
         # 普通分配
         if self._assign_openings(now):
             changed = True
-        todo = [p for p in self.P.values() if p['state'] in REST_STATES and not p.get('assign')
+        todo = [p for p in self.P.values() if not p.get('entryHold') and p['state'] in REST_STATES and not p.get('assign')
                 and p['role'] in ('rotation', 'op') and p['state'] != 'meal'
                 and not (p.get('breakKind') == 'meal_rest' and now < p['readyAt'])]
         todo.sort(key=lambda p: (self._ready_time(p, now), p['start']))
@@ -736,7 +758,7 @@ class Engine:
             candidates = []
             for p in self.P.values():
                 a = p.get('assign') or {}
-                if p['state'] not in ('rest', 'ready') or p['role'] not in ('rotation', 'op'):
+                if p.get('entryHold') or p['state'] not in ('rest', 'ready') or p['role'] not in ('rotation', 'op'):
                     continue
                 if (p.get('breakKind') == 'meal_rest' and now < p['readyAt']) or a.get('mode') in TARGET_MODES \
                         or a.get('mode') == 'opening' or a.get('manual'):
@@ -756,8 +778,9 @@ class Engine:
     def _push7_substitute(self, now):
         open_at = _m(self.S['lineOpenAt'])
         plan = self.d['plan']
-        cands = [p for p in self.P.values() if p['role'] == 'rotation' and p['start'] == open_at
-                 and p['state'] == 'ready' and p['pid'] not in plan['push7'] and not p['absences']
+        cands = [p for p in self.P.values() if not p.get('entryHold') and p['role'] == 'rotation' and p['start'] == open_at
+                 and p['state'] in ('rest', 'ready') and p.get('breakKind') != 'meal_rest'
+                 and p['pid'] not in plan['push7'] and not p['absences']
                  and not (p.get('assign') and p['assign'].get('mode') in TARGET_MODES)]
         if not cands:
             return None
@@ -921,6 +944,8 @@ class Engine:
 
     def act_depart(self, pid, now, actor):
         p = self.person(pid)
+        if p.get('entryHold'):
+            raise ActionError('请先确认本人已到场，重新领取安排')
         if p['state'] != 'ready':
             raise ActionError('%s 还不能出发' % p['name'])
         if now < (p.get('readyAt') or now) - 0.01:

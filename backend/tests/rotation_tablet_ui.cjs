@@ -29,6 +29,8 @@ async function main(){const server=http.createServer((req,res)=>{res.writeHead(2
     assert(size.width<=width,`${width}: horizontal overflow`);if(width>=960){assert(size.height<=height,`${width}: page exceeds screen`);assert(size.frames.every(f=>f.chipHeight>=65&&f.bottom<=height),`${width}: clipped pool`);}
     assert.equal(await page.locator('.pending-add').count(),1);assert.equal(await page.locator('.pending-remove').count(),1);assert.deepEqual(errors,[]);
     await page.screenshot({path:path.join(out,`rotation-tablet-${width}x${height}.png`),fullPage:true});
+    await page.evaluate(()=>{RT.data.clock.minute=434;RT.data.day.persons.push({pid:'waiting715',name:'待开始休息测试',state:'notyet',scheduledRestStart:435,start:435,end:975,flags:[],tags:[]});RT.render();});
+    assert.match(await page.locator('.rt-resting').innerText(),/待开始 1 人/);assert.match(await page.locator('.rt-resting').innerText(),/班次未开始 · 07:15开始休息/);assert.equal(await page.locator('[data-pid=waiting715][data-act]').count(),0);assert.equal(await page.locator('.rt-ready').getByText('待开始休息测试').count(),0);
     await page.evaluate(()=>{RT.data.day.persons=RT.data.day.persons.filter(p=>p.state==='onpost');RT.render();});assert.equal(await page.locator('.rt-sect.is-empty').count(),4);
     await page.evaluate(()=>{RT.data.day=null;RT.render();});assert.match(await page.locator('#rtApp').innerText(),/没有开始/);
     await page.close();console.log(`PASS ${width}x${height}: populated, empty and unstarted display`);

@@ -49,6 +49,41 @@ def roster_file(day=DAY) -> BytesIO:
     return buf
 
 
+def test_0715_unseated_rest_preview_and_automatic_timer_match_all_apis():
+    day = '2026-10-20'
+    book = Workbook(); book.active.append(['工号','姓名','日期','班次','备注'])
+    for i in range(3): book.active.append([str(9600100+i),f'自动休息测试{i}',day,'07:15-16:15',''])
+    book.active.append(['9600199','晚班不变',day,'09:00-18:00',''])
+    out = BytesIO(); book.save(out)
+    with TestClient(app) as manager, TestClient(app) as member, TestClient(app) as screen:
+        login(manager, 'GSMTEST01'); enter(manager, '7777777')
+        login(member, 'TRTEST01'); login(screen, '6666666', '1243')
+        ok(clock(manager, action='set', date=day, time='03:59'))
+        ok(manager.put('/api/rotation/config', json={'lines':[{'id':'R','posts':[{'name':'入口'}]}], 'settings':{'breakMin':15}}))
+        ok(manager.post('/api/rotation/roster/upload', files={'file':('休息班表.xlsx',out.getvalue(),'application/octet-stream')},data={'scope':'day'}))
+        ok(clock(manager, action='set', date=day, time='07:14'))
+        board = ok(manager.get('/api/rotation/board'))
+        waiting = [p for p in board['day']['persons'] if p['scheduledRestStart'] is not None]
+        assert len(waiting) == 2
+        pid = waiting[0]['pid']; enter(member, pid)
+        for client, url in ((manager,'/api/rotation/board'),(screen,'/api/rotation/screen/state'),(member,'/api/rotation/me')):
+            payload = ok(client.get(url)); p = payload['person'] if 'person' in payload else person(payload,pid)
+            assert p['scheduledRestStart'] == 435 and p['state'] == 'notyet' and p['readyAt'] is None
+            assert not p['canDepart'] and not p['confirmationTokens']
+        ok(clock(manager, action='jump', minutes=1))
+        for client, url in ((manager,'/api/rotation/board'),(screen,'/api/rotation/screen/state'),(member,'/api/rotation/me')):
+            payload = ok(client.get(url)); p = payload['person'] if 'person' in payload else person(payload,pid)
+            assert p['state'] == 'rest' and p['readyAt'] == 450 and p['scheduledRestStart'] is None
+            assert not p['canDepart']
+        board = ok(manager.get('/api/rotation/board'))
+        assert person(board,'9600199')['state'] == 'notyet'
+        assert len([p for p in board['day']['persons'] if p['state']=='onpost']) == 1
+        ok(clock(manager, action='jump', minutes=5))
+        assert person(ok(manager.get('/api/rotation/board')),pid)['readyAt'] == 450
+        ok(clock(manager, action='jump', minutes=10))
+        assert person(ok(manager.get('/api/rotation/board')),pid)['state'] == 'ready'
+
+
 def login(client: TestClient, account: str, password: str = "1234") -> None:
     response = client.post("/api/login", json={"employee_no": account, "password": password})
     assert response.status_code == 200, response.text

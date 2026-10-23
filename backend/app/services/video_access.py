@@ -9,9 +9,10 @@ from app.video_models import VideoCircle, VideoAudiencePolicy, LearningVideo
 LEAD_ROLES = {"TA_SUPERVISOR", "SUPERVISOR"}
 SENIOR_ROLES = {"TA_GSM", "GSM", "AM", "OM"}
 AUDIENCE_LABELS = {'local_tr':'本圈 TR', 'local_lead':'本圈 LEAD', 'all_tr':'所有 TR',
-                   'all_lead':'所有 LEAD', 'all_gsm':'所有 GSM', 'am':'AM', 'om':'OM'}
-NOTICE_VERSION = "2026-10-21.1"
-NOTICE_TEXT = "本视频仅供授权人员内部学习。未经许可，请勿下载、录屏、翻拍或向外传播。播放画面将显示您的员工号，并记录本次访问。"
+                   'all_lead':'所有 LEAD', 'all_gsm':'所有 GSM', 'am':'AM', 'om':'OM',
+                   'local_all':'本圈所有人', 'all_people':'所有圈所有人'}
+NOTICE_VERSION = "2026-10-22.1"
+NOTICE_TEXT = "本视频仅供授权人员内部学习。未经许可，请勿下载、录屏、翻拍或向外传播。视频烧录内部学习品牌标记，页面显示您的员工号并记录访问；员工号为播放层水印，不保证在独立播放器或提取文件中保留。"
 _CURRENT_CIRCLE = object()
 
 
@@ -34,7 +35,7 @@ def audience_options(db, user, local_id=_CURRENT_CIRCLE):
     allowed = set(AUDIENCE_LABELS) if senior(user) else {'local_tr'} if user.role_codes & LEAD_ROLES else set()
     local_id = user.employee.attraction_id if local_id is _CURRENT_CIRCLE else local_id
     if local_id not in {r.id for r in db.query(Attraction).filter_by(active=True, employee_circle=True)}:
-        allowed -= {'local_tr', 'local_lead'}
+        allowed -= {'local_tr', 'local_lead', 'local_all'}
     return [{'code': code, 'label': label} for code, label in AUDIENCE_LABELS.items() if code in allowed]
 
 
@@ -67,17 +68,22 @@ def validate_audience(db, user, codes, local_id=_CURRENT_CIRCLE):
 
 
 def audience_circles(db, local_id, codes):
-    if any(code not in {'local_tr','local_lead'} for code in codes):
+    if any(not code.startswith('local_') for code in codes):
         return {r.id for r in db.query(Attraction).filter_by(active=True, employee_circle=True)}
     return {local_id}
 
 
 def recipient_condition(db, user):
     tier = audience_tier(user)
-    if not tier:
-        return False
-    global_code = 'all_'+tier if tier in {'tr','lead','gsm'} else tier
-    allowed = VideoAudiencePolicy.codes.contains('"'+global_code+'"', autoescape=True)
+    # Everyone scopes include CM and other valid identities, without broadening TR.
+    active_circles = {r.id for r in db.query(Attraction).filter_by(active=True, employee_circle=True)}
+    allowed = or_(VideoAudiencePolicy.codes.contains('"all_people"', autoescape=True),
+                  and_(VideoAudiencePolicy.codes.contains('"local_all"', autoescape=True),
+                       VideoAudiencePolicy.local_attraction_id == user.employee.attraction_id,
+                       user.employee.attraction_id in active_circles))
+    if tier:
+        global_code = 'all_'+tier if tier in {'tr','lead','gsm'} else tier
+        allowed = or_(allowed, VideoAudiencePolicy.codes.contains('"'+global_code+'"', autoescape=True))
     if tier in {'tr','lead'}:
         allowed = or_(allowed, and_(VideoAudiencePolicy.local_attraction_id == user.employee.attraction_id,
                                    VideoAudiencePolicy.codes.contains('"local_'+tier+'"',autoescape=True)))
@@ -118,6 +124,10 @@ def require_upload_targets(db, user, ids):
 
 def can_manage(db, user, video):
     return can_upload(db, user) and (administrator(user) or video.owner_id == user.id)
+
+
+def can_delete(user, video):
+    return video.status == 'withdrawn' and (administrator(user) or video.owner_id == user.id)
 
 
 def can_edit_audience(db, user, video):

@@ -390,7 +390,7 @@ def _archive_employee(employee_id: int, request: Request, payload: dict | None, 
         "account_disabled_at": account.disabled_at.isoformat() if account.disabled_at else "",
     }
     context = EmployeeEditContext(
-        db=db, employee=employee, payload={"reason": str((payload or {}).get("reason") or "停用满7天后删除，历史数据留档")},
+        db=db, employee=employee, payload={"reason": str((payload or {}).get("reason") or "停用满3天后删除，历史数据留档")},
         user=user, existing_role=role, existing_base_role=base_role_at(db, employee.id),
         today=date.today(), loa_today=date.today(), month_gate=ensure_month_open, ip_address=client_ip(request),
     )
@@ -419,7 +419,7 @@ def _archive_employee(employee_id: int, request: Request, payload: dict | None, 
             "employee_active": employee.is_active,
             "archive_marker": "已删除·留档",
         },
-        reason=str((payload or {}).get("reason") or "连续停用满7天后删除，保留员工与业务档案"),
+        reason=str((payload or {}).get("reason") or "连续停用满3天后删除，保留员工与业务档案"),
         ip_address=client_ip(request),
     )
     db.commit()

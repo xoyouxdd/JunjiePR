@@ -1,0 +1,155 @@
+"""First-entry preview, independent consent, and single-person relief priority."""
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+
+from app.rotation import cooperation as C
+from app.rotation.engine import ActionError
+from test_rotation_engine import live_day, person, seat, two_lines, occupants
+
+
+def fixture(posts=3):
+    people = [person(p, '07:00', '21:00') for p in ('old1', 'old2', 'old3')]
+    people += [person(p, '09:00', '21:00') for p in ('a', 'b')]
+    eng, hooks = live_day(people, lines=[two_lines(posts)[0]])
+    for i, pid in enumerate(('old1', 'old2', 'old3')[:posts]):
+        seat(eng, pid, 'A', i, '08:00')
+    eng.d['cooperativeEntry'] = True
+    eng.P['a']['assign'] = {'line': 'A', 'mode': 'chain', 'target': 'old1', 'why': '推下班', 'departAt': 540}
+    eng.P['b']['assign'] = {'line': 'A', 'mode': 'push', 'departAt': 540}
+    return eng, hooks
+
+
+def actor(pid):
+    return SimpleNamespace(formal=True, entered_by=SimpleNamespace(employee_no=pid))
+
+
+def test_projection_is_pure_and_shows_final_positions():
+    eng, hooks = fixture()
+    before = deepcopy(eng.d); events = len(hooks.events)
+    view = C.plan(eng, eng.P['b'], 540)
+    assert eng.d == before and len(hooks.events) == events
+    routes = {r['pid']: r['to'] for r in view['routes']}
+    assert routes['old1'] == '下班'
+    assert routes['a'] == 'A1' and routes['b'] == 'A0'
+    assert {r['pid']: r['to'] for r in view['soloRoutes']}['old1'] == '下班'
+
+
+def test_first_vote_does_not_move_or_start_timers_and_second_executes_all():
+    eng, _ = fixture(); before = occupants(eng, 'A')[:]
+    out = C.confirm(eng, 'a', 540, actor('a'), 'a-token')
+    assert out['status'] == 'waiting' and occupants(eng, 'A') == before
+    assert eng.P['a']['state'] == 'ready' and not eng.P['a'].get('lineStart')
+    assert C.plan(eng, eng.P['b'], 540)['confirmed'] == 1
+    out = C.confirm(eng, 'b', 540, actor('b'), 'b-token')
+    assert out['status'] == 'executed' and out['participants'] == ['a', 'b']
+    assert eng.P['old1']['state'] == 'done'
+    assert occupants(eng, 'A')[:2] == ['b', 'a']
+
+
+def test_single_prioritizes_downshift_and_holds_missing_without_marking_absent():
+    eng, _ = fixture()
+    out = C.confirm(eng, 'b', 540, actor('b'), 'token', True, ['a'])
+    assert out['single'] and eng.P['old1']['state'] == 'done'
+    assert eng.P['b']['state'] == 'onpost'
+    assert eng.P['a']['entryHold'] and eng.P['a']['state'] == 'ready'
+    assert not eng.P['a']['absences'] and eng.P['a']['assign'] is None
+    eng._assign_all(541)
+    assert eng.P['a']['assign'] is None
+    with pytest.raises(ActionError, match='已到场'):
+        eng.act_depart('a', 541, actor('a'))
+
+
+def test_peer_cannot_confirm_another_person():
+    eng, _ = fixture()
+    with pytest.raises(ActionError, match='本人'):
+        C.confirm(eng, 'a', 540, actor('b'), 'token')
+
+
+def test_confirmed_peer_cannot_be_reported_missing():
+    eng, _ = fixture()
+    C.confirm(eng, 'a', 540, actor('a'), 'token')
+    with pytest.raises(ActionError, match='已确认到位'):
+        C.confirm(eng, 'b', 540, actor('b'), 'token2', True, ['a'])
+
+
+def test_changed_line_invalidates_previous_consents():
+    eng, _ = fixture()
+    C.confirm(eng, 'a', 540, actor('a'), 'token')
+    eng.line('A')['posts'][1]['name'] = '新岗位'
+    assert C.plan(eng, eng.P['b'], 540)['confirmed'] == 0
+    assert C.confirm(eng, 'b', 540, actor('b'), 'token2')['status'] == 'waiting'
+
+
+def test_rest_and_time_must_finish_before_confirming():
+    eng, _ = fixture()
+    eng.P['a'].update(state='rest', readyAt=550)
+    with pytest.raises(ActionError, match='允许上岗'):
+        C.confirm(eng, 'a', 540, actor('a'), 'token')
+
+
+def test_no_fresh_entrant_is_immediately_pushed_out():
+    eng, _ = fixture(posts=1)
+    view = C.plan(eng, eng.P['b'], 540)
+    assert view['blocked'] and not view['soloBlocked']
+    with pytest.raises(ActionError, match='岗位不足'):
+        C.confirm(eng, 'a', 540, actor('a'), 'token')
+    assert C.confirm(eng, 'b', 540, actor('b'), 'token', True, ['a'])['single']
+
+
+def test_other_lines_or_times_not_grouped():
+    eng, _ = fixture()
+    eng.P['b']['assign']['departAt'] += 1
+    assert C.plan(eng, eng.P['a'], 540) is None
+
+
+def test_three_person_cohort_requires_all_votes():
+    eng, _ = fixture()
+    eng.P['c'] = deepcopy(eng.P['b']);eng.P['c'].update(pid='c', name='c')
+    assert len(C.plan(eng, eng.P['a'], 540)['members']) == 3
+    assert C.confirm(eng, 'a', 540, actor('a'), 'a')['status'] == 'waiting'
+    assert C.confirm(eng, 'b', 540, actor('b'), 'b')['status'] == 'waiting'
+    assert C.confirm(eng, 'c', 540, actor('c'), 'c')['status'] == 'executed'
+    assert set(occupants(eng, 'A')) == {'a', 'b', 'c'}
+
+
+def test_route_change_cancels_old_waiting_receipt():
+    eng, _ = fixture()
+    out=C.confirm(eng, 'a', 540, actor('a'), 'token')
+    eng.d['confirmations']={'token':{'pid':'a','status':'waiting','group':out['group']}}
+    eng.line('A')['posts'][0]['name']='换岗'
+    assert C.reconcile(eng, 541)
+    assert eng.d['confirmations']['token']['status']=='superseded'
+
+
+def test_missing_one_of_three_recombines_without_moving_posts():
+    eng, _ = fixture()
+    eng.P['c']=deepcopy(eng.P['b']);eng.P['c'].update(pid='c',name='c')
+    before=deepcopy(eng.d)
+    preview=C.adjustment(eng,'b',540,['a'])
+    assert eng.d==before and preview['jobs']['b']['mode']=='chain'
+    assert C.apply_adjustment(eng,'b',540,actor('b'),['a'],preview['id'])['status']=='revised'
+    assert occupants(eng,'A')==['old1','old2','old3']
+    assert eng.P['a']['entryHold'] and C.plan(eng,eng.P['b'],540)['confirmed']==0
+    assert C.confirm(eng,'b',540,actor('b'),'b')['status']=='waiting'
+    assert C.confirm(eng,'c',540,actor('c'),'c')['status']=='executed'
+    assert eng.P['old1']['state']=='done'
+
+
+def test_upcoming_only_projects_last_ten_minutes_without_live_writes():
+    eng, hooks = fixture()
+    for pid in ['a', 'b']:
+        eng.P[pid].update(state='notyet', readyAt=None, assign=None)
+    before=deepcopy(eng.d); count=len(hooks.events)
+    assert C.upcoming(eng, 529) == {}
+    assert set(C.upcoming(eng, 530)) == {'a', 'b'}
+    assert eng.d == before and len(hooks.events) == count
+
+
+def test_excluded_and_opening_rest_keep_existing_rules():
+    eng, _ = fixture()
+    eng.P['a'].update(state='notyet', role='excluded', assign=None)
+    assert 'a' not in C.upcoming(eng, 530)
+    eng.P['b'].update(state='notyet', start=435, readyAt=None, assign=None)
+    assert 'b' not in C.upcoming(eng, 430)

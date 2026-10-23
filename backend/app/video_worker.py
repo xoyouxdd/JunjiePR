@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import threading
+from sqlalchemy import text
 
 from app.v2_database import SessionLocal
 from app.video_models import LearningVideo, VideoJob, VideoPlayback, VideoUpload
@@ -32,7 +33,7 @@ def run_one(stop=None):
             stale.status = 'failed'; stale.error = '处理任务中断，请重新处理'
             if stale.kind == 'source':
                 video = db.get(LearningVideo, stale.video_id)
-                if video:
+                if video and video.status not in ('deleted','withdrawn'):
                     video.status = 'failed'; video.error = stale.error
         db.commit()
         row = db.query(VideoJob).filter_by(status="queued").order_by(VideoJob.id).first()
@@ -44,14 +45,22 @@ def run_one(stop=None):
             return False
         video = db.get(LearningVideo, row.video_id)
         try:
-            if row.kind == "source":
+            if row.kind == 'delete':
+                media.erase_video_files(video.id)
+            elif row.kind == 'playback':
+                row.status='cancelled';db.commit();return True
+            elif video.status == 'deleted':
+                row.status='cancelled';db.commit();return True
+            elif row.kind in ('source','shared'):
                 info, profiles, second = media.process_source(video, stop)
                 video.duration = info['duration']; video.profiles = json.dumps(profiles)
-                video.cover_second = second; video.status = "ready"; video.error = ""
+                video.cover_second = second
+                if row.kind == 'source':video.status = 'ready'
+                video.error = ''
             elif row.kind == "cover":
                 media.build_cover(video.id, video.cover_title, video.cover_second, stop)
             else:
-                media.process_playback(video, json.loads(row.payload), stop)
+                raise RuntimeError('未知视频任务类型')
             row.status = "ready"; row.error = ""
         except Exception as exc:
             logging.getLogger(__name__).exception("Video job %s failed", row.id)
@@ -59,15 +68,29 @@ def run_one(stop=None):
             row.error = str(exc) if isinstance(exc, RuntimeError) else "视频处理失败，请重试或联系管理员"
             if row.kind == "source":
                 video.status = "failed"; video.error = row.error
-        row.updated_at = datetime.now()
-        db.commit()
-        return True
+        values={k:getattr(video,k) for k in ('duration','profiles','cover_second','status','error')}
+        job_status,job_error=row.status,row.error
+        db.rollback();db.execute(text('BEGIN IMMEDIATE'))
+        db.refresh(video);db.refresh(row)
+        if video.status=='deleted' and row.kind!='delete':
+            row.status='cancelled';row.error='视频已删除'
+            deletion=enqueue(db,video.id,f'delete:{video.id}','delete')
+            if deletion.status in ('ready','failed','cancelled'):deletion.status='queued'
+        else:
+            if row.kind in ('source','shared'):
+                # A concurrent withdrawal must never be reversed by a transcode.
+                for k in ('duration','profiles','cover_second','error'):setattr(video,k,values[k])
+                if row.kind=='source' and video.status not in ('withdrawn','deleted'):video.status=values['status']
+            row.status=job_status;row.error=job_error
+        row.updated_at=datetime.now();db.commit();return True
 
 
 def cleanup():
     cutoff = datetime.now()-timedelta(days=7)
     with SessionLocal() as db:
-        for row in db.query(VideoJob).filter(VideoJob.kind == "playback", VideoJob.status.in_(["ready", "failed"]), VideoJob.updated_at < cutoff).all():
+        for job in db.query(VideoJob).filter_by(kind='delete',status='failed'):
+            job.status='queued';job.updated_at=datetime.now()
+        for row in db.query(VideoJob).filter(VideoJob.kind == "playback", VideoJob.status.in_(["ready", "failed", "cancelled"]), VideoJob.updated_at < cutoff).all():
             key = row.key.removeprefix("playback:")
             path = media.playback_path(key)
             # Only delete this queue's SHA-256 directory under its own root.

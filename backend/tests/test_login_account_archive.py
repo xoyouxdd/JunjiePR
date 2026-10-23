@@ -58,7 +58,7 @@ def mark_eligible_with_business_history() -> tuple[int, int]:
         employee.terminated_on = (date.today() - timedelta(days=8)).isoformat()
         employee.updated_at = datetime.now() - timedelta(days=8)
         account.enabled = False
-        account.disabled_at = datetime.now() - timedelta(days=8)
+        account.disabled_at = datetime.now() - timedelta(days=3, seconds=1)
         db.add(
             RecognitionRecord(
                 employee_id=employee.id,
@@ -92,7 +92,7 @@ def mark_eligible_with_business_history() -> tuple[int, int]:
         return employee.id, account.id
 
 
-def test_remove_login_after_seven_days_keeps_employee_and_business_archive() -> None:
+def test_remove_login_after_three_days_keeps_employee_and_business_archive() -> None:
     with TestClient(app) as client:
         employee_id, account_id = mark_eligible_with_business_history()
         login(client, "HR01", "isolated-admin-only")
@@ -132,7 +132,7 @@ def test_remove_login_after_seven_days_keeps_employee_and_business_archive() -> 
         assert client.put(f'/api/hr/employees/{employee_id}', json={'employment_status':'active','account_enabled':True}).status_code == 409
 
 
-def test_delete_endpoint_enforces_the_full_seven_day_wait() -> None:
+def test_delete_endpoint_enforces_the_full_three_day_wait() -> None:
     with TestClient(app) as client:
         with SessionLocal() as db:
             employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
@@ -140,7 +140,7 @@ def test_delete_endpoint_enforces_the_full_seven_day_wait() -> None:
             employee.terminated_on = (date.today() - timedelta(days=6)).isoformat()
             account = db.query(UserAccount).filter_by(employee_id=employee.id).one()
             account.enabled = False
-            account.disabled_at = datetime.now() - timedelta(days=6)
+            account.disabled_at = datetime.now() - timedelta(days=2)
             db.commit()
             employee_id = employee.id
         login(client, "HR01", "isolated-admin-only")
@@ -189,9 +189,9 @@ def test_eligibility_requires_full_continuous_disabled_duration(monkeypatch):
     role=SimpleNamespace(code='CM')
     state=lambda:organization_queries.login_account_archive_state(employee,account,role)
     assert state()['eligible'] is False  # Even a long-ago departure cannot bypass disabling.
-    account.enabled=False;account.disabled_at=instant-timedelta(days=7)+timedelta(microseconds=1)
+    account.enabled=False;account.disabled_at=instant-timedelta(days=3)+timedelta(microseconds=1)
     assert state()['eligible'] is False
-    account.disabled_at=instant-timedelta(days=7)
+    account.disabled_at=instant-timedelta(days=3)
     assert state()['eligible'] is True
     account.disabled_at=None
     assert state()['eligible'] is False
@@ -212,7 +212,7 @@ def test_active_employee_disable_reenable_resets_wait_and_delete_archives_profil
         assert remove().status_code==400
         with SessionLocal() as db:
             account=db.query(UserAccount).filter_by(employee_id=target).one()
-            account.disabled_at=datetime.now()-timedelta(days=8);db.commit()
+            account.disabled_at=datetime.now()-timedelta(days=3, seconds=1);db.commit()
         assert update({'account_enabled':True}).status_code==200
         with SessionLocal() as db:
             assert db.query(UserAccount).filter_by(employee_id=target).one().disabled_at is None
@@ -221,7 +221,7 @@ def test_active_employee_disable_reenable_resets_wait_and_delete_archives_profil
         assert remove().status_code==400
         with SessionLocal() as db:
             account=db.query(UserAccount).filter_by(employee_id=target).one()
-            account.disabled_at=datetime.now()-timedelta(days=8);db.commit()
+            account.disabled_at=datetime.now()-timedelta(days=3, seconds=1);db.commit()
         result=remove()
         assert result.status_code==200,result.text
         with SessionLocal() as db:
@@ -243,7 +243,7 @@ def test_archive_failures_keep_account_person_and_history_atomic(blocker):
         target=created.json()['employee']['id']
         with SessionLocal() as db:
             account=db.query(UserAccount).filter_by(employee_id=target).one()
-            account.enabled=False;account.disabled_at=datetime.now()-timedelta(days=8)
+            account.enabled=False;account.disabled_at=datetime.now()-timedelta(days=3, seconds=1)
             if blocker=='leader':
                 group=WorkGroup(name='删除约束合成小组',code='DELETE',attraction_id=circle)
                 db.add(group);db.flush()
@@ -281,7 +281,7 @@ def test_scoped_hr_cannot_delete_other_circle_or_privileged_accounts():
         target=created.json()['employee']['id']
         with SessionLocal() as db:
             account=db.query(UserAccount).filter_by(employee_id=target).one()
-            account.enabled=False;account.disabled_at=datetime.now()-timedelta(days=8);db.commit()
+            account.enabled=False;account.disabled_at=datetime.now()-timedelta(days=3, seconds=1);db.commit()
         client.post('/api/logout');login(client,'HR-HEAT','isolated-circle-test')
         for denied in (target,admin_id,hr_id):
             assert client.request('DELETE',f'/api/hr/employees/{denied}/account',json={}).status_code==403
@@ -315,7 +315,7 @@ def test_deleted_employee_can_register_original_number_without_losing_history(le
             employee.terminated_on = departed
             account = db.query(UserAccount).filter_by(employee_id=target).one()
             account.enabled = False
-            account.disabled_at = datetime.now() - timedelta(days=8)
+            account.disabled_at = datetime.now() - timedelta(days=3, seconds=1)
             admin = db.query(Employee).filter_by(employee_no='HR01').one()
             recognition = RecognitionRecord(employee_id=target, employee_no=number, employee_name=employee.name,
                 home_attraction_id=employee.attraction_id, occurred_attraction_id=employee.attraction_id,

@@ -509,6 +509,50 @@ def test_push7_substitute_is_chosen_when_the_planned_person_is_away():
     assert sub != planned
     assert eng.P[sub]["assign"]["mode"] == "push7"
     assert "push7_substitute" in hooks.types(sub)
+    assert eng.P[sub]['state'] == 'rest'
+    assert eng.P[sub]['assign']['departAt'] >= eng.P[sub]['readyAt']
+    with pytest.raises(ActionError):
+        eng.act_depart(sub, hm('07:15'), 'screen')
+
+
+def test_unseated_0715_crew_rest_automatically_without_confirmation():
+    eng, hooks = seven_day()
+    free = next(p for p in eng.P.values() if eng.opening_rest_candidate(p))
+    assert free['state'] == 'notyet' and free['readyAt'] is None
+    eng.tick(hm('07:14'))
+    assert free['state'] == 'notyet' and free['breakStart'] is None
+    eng.tick(hm('07:15'))
+    assert free['state'] == 'rest' and free['breakStart'] == 435
+    assert free['readyAt'] == 435 + eng.S['breakMin']
+    assert 'initial_rest' in hooks.types(free['pid']) and 'arrive' not in hooks.types(free['pid'])
+    with pytest.raises(ActionError):
+        eng.act_depart(free['pid'], hm('07:15'), 'screen')
+    eng.tick(hm('07:20'))
+    assert free['breakStart'] == 435 and free['state'] == 'rest'
+    eng.tick(hm('07:30'))
+    assert free['state'] == 'ready'
+    assert hooks.types(free['pid']).count('initial_rest') == 1
+
+
+def test_0715_initial_rest_keeps_seated_push7_op_and_other_shifts_unchanged():
+    eng, hooks = seven_day()
+    plan = eng.d['plan']
+    assert all(not eng.opening_rest_candidate(eng.P[pid]) for pid in plan['crew'].values())
+    assert all(not eng.opening_rest_candidate(eng.P[pid]) for pid in plan['push7'])
+    assert not eng.opening_rest_candidate(eng.P['s1'])
+    base = next(p for p in eng.P.values() if eng.opening_rest_candidate(p))
+    assert not eng.opening_rest_candidate(dict(base, role='op'))
+    assert not eng.opening_rest_candidate(dict(base, role='excluded'))
+    assert not eng.opening_rest_candidate(dict(base, start=540))
+    assert not eng.opening_rest_candidate(dict(base, absences=[{'start':435,'end':480}]))
+
+
+def test_late_publication_keeps_initial_rest_anchored_to_0715():
+    eng, hooks = seven_day()
+    free = next(p for p in eng.P.values() if eng.opening_rest_candidate(p))
+    eng._assign_all = lambda now: False
+    eng.publish(hm('07:40'), 'test')
+    assert free['state'] == 'ready' and free['breakStart'] == 435 and free['readyAt'] == 450
 
 
 # ---------------------------------------------------------------- 吃饭、闭园

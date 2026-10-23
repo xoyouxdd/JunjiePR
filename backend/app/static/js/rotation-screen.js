@@ -38,7 +38,8 @@ function screenView() {
     if (p.after === 'done') sub = '今天轮岗结束，点击即可下班';
     return `<button type="button" class="rt-chip${mins >= 10 ? ' due' : ''}" data-pid="${esc(p.pid)}" data-act="arrive"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
   }, 'rt-arrivals');
-  pool += poolSection('休息区', '饭后倒计时结束前不能进线', resting, p => {
+  pool += poolSection('休息区', restSummary(resting), resting, p => {
+    if(waitingInitialRest(p))return `<div class="rt-chip rest"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">班次未开始 · ${hm(p.scheduledRestStart)}开始休息</span><span class="rt-go">班次 ${hm(p.start)}–${hm(p.end)}</span></div>`;
     const kind = p.state === 'meal' ? '<span class="rt-badge meal">吃饭</span>' : '<span class="rt-badge rest">休息</span>';
     const next = p.assign ? `${goText(p)} <small>${hm(p.assign.departAt)}</small>` : '';
     return `<div class="rt-chip rest"><span class="rt-nm">${esc(p.name)} ${kind}</span><span class="rt-sub">至 ${hm(restUntil(p))}，还剩 ${Math.max(0, Math.ceil(restUntil(p) - n))} 分钟</span><span class="rt-go">${next}</span>${badges(p)}</div>`;

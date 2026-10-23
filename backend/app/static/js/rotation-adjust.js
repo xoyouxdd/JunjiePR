@@ -16,6 +16,7 @@ function adjustmentHeader(){
   adjustmentTick();
 }
 async function refreshAdjustment(){
+  if(formalRotation)return;
   if(adjustChecking)return;
   if(adjustExitPending){await adjustLogout(true);return;}
   adjustChecking=true;
@@ -85,6 +86,7 @@ async function adjustGrants(){
 document.addEventListener('pointerdown',()=>adjustLastInput=Date.now(),true);
 document.addEventListener('keydown',()=>adjustLastInput=Date.now(),true);
 document.addEventListener('DOMContentLoaded',()=>{
+  if(formalRotation)return;
   void refreshAdjustment();setInterval(refreshAdjustment,5000);setInterval(adjustmentTick,1000);
   const app=document.getElementById('rtApp');
   app.addEventListener('dragstart',e=>{if(!screenPage()||!adjustmentState)return;const post=e.target.closest('[data-drag-post]'),person=e.target.closest('[data-drag-pid]');if(!post&&!person)return;RT.pressing=true;RT.dragging=true;e.dataTransfer.setData('text/plain',post?'post:'+post.dataset.dragPost:'person:'+person.dataset.dragPid);});

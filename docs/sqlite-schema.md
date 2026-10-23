@@ -93,6 +93,8 @@
 | `rotation_configs` | 轮岗线、岗位与参数 |
 | `rotation_roster_uploads` / `rotation_roster_entries` | 轮岗名单上传批次与每人每天明细 |
 | `rotation_days` | 每天轮岗状态 |
+| `rotation_snapshots` | 每日轮岗的重要状态快照，用于按时间只读回看 |
+| `formal_rotation_*` | 正式轮岗：configs、roster_uploads、roster_entries、days、events、segments、duties、notices、snapshots；与测试表分开，仍在本业务数据库中 |
 | `rotation_events` | 轮岗操作日志 |
 | `rotation_segments` | 每段在线记录 |
 | `rotation_duties` | 推 7 点、送失物人选 |
@@ -310,7 +312,7 @@
 | `locked_until` | DATETIME | 是 | |
 | `last_login_at` | DATETIME | 是 | |
 | `password_changed_at` | DATETIME | 是 | 仅作状态展示 |
-| `disabled_at` | DATETIME | 是 | 停用起算，满 7 天可归档 |
+| `disabled_at` | DATETIME | 是 | 停用起算，满 3 天可归档 |
 | `created_at` | DATETIME | 否 | |
 
 键：PK `id`；UNIQUE `employee_id`、`login_account`；FK `employee_id`。
@@ -1145,6 +1147,7 @@
 | `rotation_roster_uploads` | `attraction_id`；`uploaded_by_id` → `employees` 可空（专用账号直接登录时为空），`uploaded_by_name` 为操作人 | `attraction_id` |
 | `rotation_roster_entries` | `upload_id` → `rotation_roster_uploads`（级联删除） | `ix_rotation_roster_entry_day (attraction_id, work_date)`、`upload_id`、`employee_no` |
 | `rotation_days` | `uq_rotation_day (attraction_id, work_date)`；`status` 为 draft / live / ended | `status` |
+| `rotation_snapshots` | `attraction_id` → `attractions`；`minute` 为当日分钟；`payload` 为 base64(zlib(JSON状态与参数))，`fingerprint` 用于相邻状态去重 | `ix_rotation_snapshot_day_time (attraction_id, work_date, minute, id)` |
 | `rotation_events` | `actor_type` 为 employee / screen / supervisor / manager / system | `ix_rotation_event_day (attraction_id, work_date, id)`、`employee_no` |
 | `rotation_segments` | — | `ix_rotation_segment_week (attraction_id, work_date, employee_no)` |
 | `rotation_duties` | `uq_rotation_duty (attraction_id, work_date, employee_no, kind)`；`kind` 为 push7 / lost | `work_date` |
@@ -1240,3 +1243,8 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 ## 视频观看受众
 
 最新观看范围以`learning_video_audiences`为准：video_id主键、local_attraction_id外键、codes文本JSON白名单、revision用于乐观并发校验、replaces_revision用于新旧版本范围核对。创建表为追加式，不改旧视频列；原圈关联表保留筛选/旧样例兼容，不能替代层级授权。
+
+
+2026-10-22视频学习改造不新增表或列：`learning_videos.status='deleted'`为删除标记，保留替代版本外键及访问/审计记录；`learning_video_jobs.kind='shared'/'delete'`负责旧共享视频升级及可靠文件清理。`profiles` JSON的每个清晰度追加`brand`处理修订号。观看范围新增`local_all`（本圈所有人）和`all_people`（所有圈所有人），原TR范围仍排除CM。新授权token包含视频版本前缀并与现有会话绑定，旧提示版本作废。设备缓存不存入服务端业务数据库，不新增学习计分或评价口径。
+
+正式轮岗表由 `rotation/namespace.py` 注册，结构沿用对应轮岗表，唯一约束和索引加 `formal_` 前缀。正式名单明细的upload_id引用formal_rotation_roster_uploads；attraction_id和员工外键继续引用真实业务主表。正式与测试使用独立运行缓存、版本与快照，不共享模拟时钟。

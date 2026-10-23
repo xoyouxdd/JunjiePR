@@ -713,6 +713,8 @@ def build_employee_import_template() -> Workbook:
     ref.append(["可用角色代码", "CM, TR, TA_SUPERVISOR, SUPERVISOR, TA_GSM, GSM, AM, OM"])
     ref.append(["可用景点圈", "热力追踪、矮人迷宫、小熊罐子"])
     ref.append(["说明", "员工号必须为7位纯数字，姓名必填；员工只能归属三个景点圈之一；密码留空默认员工号后4位。"])
+    ref.append(["日期格式", "支持Excel日期、2026-12-04、2026/12/4、2026.12.4、2026年12月4日及12/4/2026，可带到期后缀；12/4/2026按月/日/年，即12月4日。"])
+    ref.append(["任职日期", "开始日留空默认导入当天；结束日留空为长期任职；填写结束日时须填到期恢复角色，且结束日不得早于开始日。"])
     style_sheet(ws)
     style_sheet(ref)
     return wb

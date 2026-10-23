@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.23.1", "date": "2026-10-23", "status": "candidate",
+        "items": [
+            {"summary": "正式轮岗看板与每日协作接入",
+             "detail": "轮岗看板使用当前员工身份与本圈正式独立记录，不复制测试名单及模拟会话。CM查看当日看板并确认本人待办，TR操作当日看板，主管及经理按权限管理班表和协作；保留步骤确认、影响预览及冲突校验。",
+             "audiences": ["all"]},
+            {"summary": "视频共享播放与设备缓存优化",
+             "detail": "共享品牌播放文件并叠加个人标识，减少首次观看处理；支持受控设备缓存，每次读取仍联网校验当前身份与权限，不提供离线观看。已撤下版本可按原管理权限确认删除并可靠清理，历史审计保留；不承诺绝对防录屏。",
+             "audiences": ["all"]},
+            {"summary": "人员删除等待期与导入日期完善",
+             "detail": "连续停用满3天（72小时）后方可删除留档，重新启用后重新计时，原留档及月结保护不变。员工Excel导入兼容常见日期格式和到期后缀，年在后的斜杠日期按月/日/年解释，非法日期仍拒绝。",
+             "audiences": ["HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"], "permissions": ["HR_MANAGE"]},
+        ],
+    },
+    {
         "version": "2026.10.21.2", "date": "2026-10-21", "status": "candidate",
         "items": [
             {"summary": "新增按景点授权的视频学习",

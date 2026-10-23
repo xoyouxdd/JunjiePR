@@ -160,7 +160,7 @@ def login_account_archive_state(employee: Employee, account: UserAccount | None,
     """Return non-sensitive eligibility for deleting a disabled person's login.
 
     The employee primary key and every business row remain retained. Both
-    the directory and the write endpoint use this same policy so the seven-day
+    the directory and the write endpoint use this same policy so the three-day
     rule cannot be bypassed by calling the API directly.
     """
     result = {"deleted": bool(employee.account_deleted_at), "eligible": False, "reason": "", "eligible_on": ""}
@@ -174,15 +174,15 @@ def login_account_archive_state(employee: Employee, account: UserAccount | None,
         result["reason"] = "HR和最高管理员账号不支持在此删除"
         return result
     if account.enabled:
-        result["reason"] = "请先在账号状态中停用并保存，连续满7天后可删除"
+        result["reason"] = "请先在账号状态中停用并保存，连续满3天后可删除"
         return result
     if not account.disabled_at:
-        result["reason"] = "停用时间未记录，请重新启用后停用并保存，连续满7天后可删除"
+        result["reason"] = "停用时间未记录，请重新启用后停用并保存，连续满3天后可删除"
         return result
-    eligible_at = account.disabled_at + timedelta(days=7)
+    eligible_at = account.disabled_at + timedelta(days=3)
     result["eligible_on"] = eligible_at.date().isoformat()
     if datetime.now() < eligible_at:
-        result["reason"] = f"{eligible_at:%Y-%m-%d %H:%M:%S} 起可删除（须连续停用满7天）"
+        result["reason"] = f"{eligible_at:%Y-%m-%d %H:%M:%S} 起可删除（须连续停用满3天）"
         return result
     result["eligible"] = True
     result["reason"] = "可删除；移出日常人员名单，历史数据保留并标记已删除·留档"

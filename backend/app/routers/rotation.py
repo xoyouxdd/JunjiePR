@@ -373,3 +373,26 @@ async def rotation_stream(request: Request, actor: RotationActor = Depends(requi
             idle += 0.5
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# Daily schedules use the original controller identity; read-only helpers get no new access.
+@router.get('/daily')
+def rotation_daily_month(month:str,db:Session=Depends(get_db),actor:RotationActor=Depends(require_controller)):
+    from app.rotation.daily import month_payload
+    try:return month_payload(db,rotation_attraction_id(db),month)
+    except service.ActionError as exc:raise _action_error(exc) from exc
+
+
+@router.get('/daily/{work_date}')
+def rotation_daily_date(work_date:str,at:str|None=None,db:Session=Depends(get_db),actor:RotationActor=Depends(require_controller)):
+    from app.rotation.daily import day_payload
+    try:return day_payload(db,rotation_attraction_id(db),parse_iso_date(work_date).isoformat(),at)
+    except service.ActionError as exc:raise _action_error(exc) from exc
+
+
+@router.post('/daily/{work_date}')
+def rotation_daily_edit(work_date:str,payload:dict,db:Session=Depends(get_db),actor:RotationActor=Depends(require_controller)):
+    from app.rotation.daily import edit
+    try:edit(db,rotation_attraction_id(db),actor,parse_iso_date(work_date).isoformat(),payload)
+    except service.ActionError as exc:raise _action_error(exc) from exc
+    return {'ok':True}

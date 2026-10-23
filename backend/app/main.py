@@ -252,6 +252,11 @@ def login_page():
     return render_static_page(BASE_DIR / "app" / "static" / "login.html")
 
 
+@app.get("/rotation-board")
+def formal_rotation_page():
+    return render_static_page(BASE_DIR / "app" / "static" / "rotation-board.html")
+
+
 @app.get("/rotation")
 def rotation_page():
     """轮岗（测试）：主管看板与 CM/TR 个人页；身份由轮岗会话决定。"""

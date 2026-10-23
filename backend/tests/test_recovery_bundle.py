@@ -188,3 +188,21 @@ def test_permanent_file_access_failure_stops_after_three_attempts(monkeypatch, f
     with pytest.raises(PermissionError):
         recovery.capture_with_retry(*fixture)
     assert len(attempts) == 3
+
+
+def test_deleted_video_tombstone_does_not_require_or_restore_playable_files(fixture,tmp_path):
+    live,database,store=fixture
+    directory=live/'data_v2/files/learning-videos/videos/17';directory.mkdir(parents=True)
+    (directory/'source.mov').write_bytes(b'pending deletion source')
+    (directory/'master-720.mp4').write_bytes(b'pending deletion master')
+    with sqlite3.connect(database) as db:
+        db.execute('CREATE TABLE learning_videos(id INTEGER,status TEXT,original_bytes INTEGER,profiles TEXT)')
+        db.execute('INSERT INTO learning_videos VALUES(17,?,?,?)',('deleted',23,'{}'))
+        db.execute('INSERT INTO learning_videos VALUES(18,?,?,?)',('deleted',99,'{}'))
+    manifest=Path(recovery.capture(live,database,store)['manifest'])
+    entries=json.loads(manifest.read_text(encoding='utf-8'))['entries']
+    assert not any('/learning-videos/videos/17/' in name for name in entries)
+    recovery.restore(store,tmp_path/'deleted-video-restore',manifest)
+    assert not (tmp_path/'deleted-video-restore/data_v2/files/learning-videos/videos/17').exists()
+    with sqlite3.connect(tmp_path/'deleted-video-restore/data_v2/recognition_v2.db') as db:
+        assert db.execute('SELECT status FROM learning_videos WHERE id=17').fetchone()==('deleted',)

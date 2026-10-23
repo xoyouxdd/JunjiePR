@@ -4,7 +4,7 @@
 
 | 文件 | 内容 |
 |---|---|
-| [video-learning.md](video-learning.md) | 视频学习、分片续传、压缩封面、个人水印及验证边界 |
+| [video-learning.md](video-learning.md) | 视频学习、分片续传、压缩封面、共享品牌/员工号水印、联网缓存及验证边界 |
 | [mobile-filter-alignment-20261020.md](mobile-filter-alignment-20261020.md) | 四页手机筛选对齐、导出历史完整展示与三引擎验证 |
 | [mobile-upload-compatibility.md](mobile-upload-compatibility.md) | 手机浏览器图片上传共用链路、实收测试与真机验收边界 |
 | [uc-upload-review-20261020.md](uc-upload-review-20261020.md) | iPhone UC选图读取兼容、批量上传诊断及验证边界 |
@@ -21,7 +21,7 @@
 | [excel-export-presentation.md](excel-export-presentation.md) | Excel总览、完整明细、低频列折叠与同批次核对 |
 | [local-update-20261011.md](local-update-20261011.md) | 10月11日讨论与本地落实清单 |
 | [local-update-20261019.md](local-update-20261019.md) | 10月19日导出优化、我的荣誉与名称落实复查 |
-| [rotation.md](rotation.md) | 轮岗（测试）：入口、模拟账号、规则、个人确认、平板大屏布局、现场调整、TR临时授权、吃饭选择、同步与测试时钟 |
+| [rotation.md](rotation.md) | 轮岗看板：正式员工入口、分级权限、本人待办确认、线路详情、同步、每日班表及隔离测试机制 |
 | [self-recognition-batch.md](self-recognition-batch.md) | 本人认可多条登记与共用照片 |
 | [announcements.md](announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
 | [announcement-image-generation.md](announcement-image-generation.md) | 公告模板制图、个人待用素材、图片上传和访问权限 |

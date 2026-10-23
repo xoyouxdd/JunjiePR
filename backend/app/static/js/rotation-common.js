@@ -26,6 +26,10 @@ const STATE_NAME = {
   ready: '待出发', heading: '前往中', away: '暂离', done: '已下班', excluded: '不轮岗',
 };
 
+const formalRotation = document.body?.hasAttribute?.('data-formal-rotation')||false;
+const personalRotation = formalRotation&&new URLSearchParams(location.search).get('personal')==='1';
+const rotationApiPath = path => formalRotation?path.replace(/^\/api\/rotation(?=\/|$)/,'/api/rotation-board'):path;
+
 const RT = {
   data: null,
   fetchedAt: 0,
@@ -47,6 +51,8 @@ function departureEarly() {
 }
 
 function canDepartNow(p, n) {
+  if(p.entryGroup&&n<p.assign.departAt-.01)return false;
+  if(p.entryGroup&&(p.entryGroup.blocked||p.entryGroup.members.find(m=>m.pid===p.pid)?.confirmed))return false;
   return p.state === 'ready' && !!p.assign && n >= (p.readyAt ?? n) - 0.01
     && n >= (p.assign.notBefore ?? 0) - 0.01
     && n >= p.assign.departAt - departureEarly() - 0.01;
@@ -54,12 +60,22 @@ function canDepartNow(p, n) {
 
 // 基础休息结束后，等待定时开岗的人员仍显示在休息区。
 function poolState(p, n) {
+  if (waitingInitialRest(p)) return 'rest';
   if (p.state === 'ready' && ((p.readyAt ?? n) > n + 0.01 || (p.assign && !canDepartNow(p, n)))) return 'rest';
   return p.state;
 }
 
 function restUntil(p) {
+  if (waitingInitialRest(p)) return p.scheduledRestStart;
   return Math.max(p.readyAt ?? 0, p.assign?.departAt ?? 0);
+}
+
+function waitingInitialRest(p) {
+  return p.state === 'notyet' && p.scheduledRestStart !== null && p.scheduledRestStart !== undefined;
+}
+function restSummary(people) {
+  const waiting=people.filter(waitingInitialRest).length;
+  return `休息中 ${people.length-waiting} 人 · 待开始 ${waiting} 人`;
 }
 
 async function rtApi(path, options = {}) {
@@ -68,7 +84,7 @@ async function rtApi(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), 12000);
   let body;
   try {
-    res = await fetch(portalPath(path), { credentials: 'same-origin', ...options, signal: controller.signal });
+    res = await fetch(portalPath(rotationApiPath(path)), { credentials: 'same-origin', ...options, signal: controller.signal });
     body = await res.json();
   } catch (_) {
     const error = new Error(RT.pendingConfirmation ? '网络连接中断，正在核实确认结果' : '网络连接失败，恢复后将重新同步');
@@ -84,6 +100,7 @@ async function rtApi(path, options = {}) {
     throw new Error('请重新进入轮岗');
   }
   if (!res.ok) {
+    if(formalRotation&&res.status===403){RT.data=null;const host=document.getElementById('rtApp');if(host)host.innerHTML='<section class="panel"><p role="alert">当前权限不允许执行此操作，请返回工作台或重新打开轮岗看板。</p></section>';}
     const detail = body.detail;
     const error = new Error(typeof detail === 'string' ? detail : (detail && detail.message) || '操作失败，请稍后重试');
     error.status = res.status;
@@ -194,6 +211,11 @@ function acceptLiveData(data) {
   // A slow earlier request must not overwrite a newer response. A live-stream
   // reconnect resets the baseline so a restarted server can start at version 0.
   if (RT.data && Number(data.version) < Number(RT.data.version)) return false;
+  if(formalRotation&&typeof me!=='undefined'&&me&&data.capabilities){
+    const changed=JSON.stringify(me.capabilities)!==JSON.stringify(data.capabilities);
+    Object.assign(me,data.identity||{},{capabilities:data.capabilities});
+    if(changed){if(!me.capabilities.can_manage)tab='board';if(!me.capabilities.can_operate&&RT.modalOpen)closeModal();renderWho();renderTabs();}
+  }
   RT.data = data;
   RT.fetchedAt = Date.now();
   RT.lastSyncedAt = Date.now();
@@ -220,8 +242,8 @@ function confirmationBlocked() {
 function storePendingConfirmation(value) {
   RT.pendingConfirmation = value;
   try {
-    if (value) sessionStorage.setItem('rotation.pendingConfirmation', JSON.stringify(value));
-    else sessionStorage.removeItem('rotation.pendingConfirmation');
+    if (value) sessionStorage.setItem(formalRotation?'formalRotation.pendingConfirmation':'rotation.pendingConfirmation', JSON.stringify(value));
+    else sessionStorage.removeItem(formalRotation?'formalRotation.pendingConfirmation':'rotation.pendingConfirmation');
   } catch (_) { /* Memory still protects this page when browser storage is unavailable. */ }
   renderSyncStatus();
 }
@@ -237,7 +259,7 @@ async function checkPendingConfirmation() {
     const pending = RT.pendingConfirmation;
     const out = await rtApi(`/api/rotation/confirmation?token=${encodeURIComponent(pending.token)}&date=${encodeURIComponent(pending.date)}`);
     storePendingConfirmation(null);
-    toast(out.confirmed ? '已核实：确认成功，画面已同步' : '本次未确认，请查看最新安排后重新确认', !out.confirmed);
+    toast(out.result?.status==='waiting'?'已核实本人到位，仍在等待同行人':out.result?.status==='superseded'?'此前同行安排已调整，请查看最新任务':out.confirmed ? '已核实：确认成功，画面已同步' : '本次未确认，请查看最新安排后重新确认', !out.confirmed);
     await RT.load();
   } catch (_) { /* Keep unresolved operations blocked until connectivity returns. */ }
   finally { RT.checkingConfirmation = false; }
@@ -256,6 +278,10 @@ function confirmRotation(p, action, path) {
   if (!token) { toast('任务已变化，请等待最新画面', true); scheduleLoad(); return; }
   if (action === 'depart' && !canDepartNow(p, nowMin())) { toast('休息未结束或还没到出发时间', true); return; }
   let text = action === 'depart' ? assignmentDescription(p.assign) : '请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
+  if(action==='depart'&&p.entryGroup){
+    if(RT.me?.employee_no&&RT.me.employee_no!==p.pid){toast('协同上岗请本人在待办确认',true);return;}
+    text+=`<p>同组 ${p.entryGroup.members.map(m=>esc(m.name)).join('、')}；${p.entryGroup.confirmed}/${p.entryGroup.members.length}人确认。全部本人确认后统一执行。</p><ul>${p.entryGroup.routes.map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul>`;
+  }
   if(action==='arrive'&&p.mealOptions?.canChoose)text+=`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线，提交时再次核对。</p>`;
   if(action==='arrive'&&p.mealOptions?.forced)text+='<p>已到原有强制饭点，本次安排吃饭。</p>';
   confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : '到达休息室'}`, text,
@@ -277,11 +303,11 @@ function confirmRotation(p, action, path) {
       }
       RT.submitting = false;
       storePendingConfirmation(null);
-      toast(out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : '已确认到达休息室');
+      toast(out.result?.status==='waiting'?'已确认本人到位，等待同行人':out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : '已确认到达休息室');
       // The mutation succeeded even if the subsequent view refresh fails.
       try { await RT.load(); } catch (_) { toast('确认成功，等待画面恢复同步'); }
       return true;
-    }, {autoCancel: 8000});
+    }, {autoCancel: p.entryGroup ? 30000 : 8000});
 }
 
 function scheduleLoad() {
@@ -297,10 +323,10 @@ function scheduleLoad() {
 
 function connectLive() {
   let poll = null;
-  try { RT.pendingConfirmation = JSON.parse(sessionStorage.getItem('rotation.pendingConfirmation') || 'null'); } catch (_) { /* No persisted request. */ }
+  try { RT.pendingConfirmation = JSON.parse(sessionStorage.getItem(formalRotation?'formalRotation.pendingConfirmation':'rotation.pendingConfirmation') || 'null'); } catch (_) { /* No persisted request. */ }
   const startPolling = () => { if (!poll) poll = setInterval(scheduleLoad, 5000); };
   if (!window.EventSource) { RT.sync = 'polling'; startPolling(); renderSyncStatus(); checkPendingConfirmation(); return; }
-  const source = new EventSource(portalPath('/api/rotation/stream'));
+  const source = new EventSource(portalPath(rotationApiPath('/api/rotation/stream')));
   source.onopen = () => { RT.sync = 'live'; if (RT.data) RT.data.version = -1; renderSyncStatus(); scheduleLoad(); };
   source.onmessage = () => { RT.sync = 'live'; scheduleLoad(); if (poll) { clearInterval(poll); poll = null; } };
   source.onerror = () => { RT.sync = 'offline'; renderSyncStatus(); startPolling(); };

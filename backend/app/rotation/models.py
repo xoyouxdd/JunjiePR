@@ -217,3 +217,16 @@ class RotationNotice(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class RotationSnapshot(Base):
+    """Read-only state at a meaningful transition; quiet clock ticks add no rows."""
+    __tablename__ = 'rotation_snapshots'
+    __table_args__ = (Index('ix_rotation_snapshot_day_time','attraction_id','work_date','minute','id'),)
+    id: Mapped[int] = mapped_column(Integer,primary_key=True)
+    attraction_id: Mapped[int] = mapped_column(ForeignKey('attractions.id'))
+    work_date: Mapped[str] = mapped_column(String(10))
+    minute: Mapped[float] = mapped_column(Float)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime,default=datetime.now)

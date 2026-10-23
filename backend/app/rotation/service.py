@@ -30,8 +30,10 @@ from app.rotation.models import (
     RotationRosterEntry,
     RotationRosterUpload,
     RotationSegment,
+    RotationSnapshot,
 )
 from app.rotation.roster import classify, fmt, hm
+from app.rotation.namespace import tables_for, runtime_for, runtime_for_row
 from app.v2_database import SessionLocal
 
 
@@ -69,6 +71,7 @@ def transaction(db: Session):
     failed operation rolls back its events, duties, notices and private state;
     no uncommitted state or version is ever exposed to another request.
     """
+    RUNTIME = runtime_for(db)
     with RUNTIME.lock:
         if _TRANSACTION_KEY in db.info:
             yield
@@ -97,6 +100,7 @@ def transaction(db: Session):
 def transactional(fn):
     @wraps(fn)
     def wrapped(db: Session, *args, **kwargs):
+        RUNTIME = runtime_for(db)
         with RUNTIME.lock:
             with transaction(db):
                 result = fn(db, *args, **kwargs)
@@ -117,12 +121,17 @@ def _dumps(value) -> str:
 # ---------------------------------------------------------------- 配置与时钟
 
 def load_config(db: Session, attraction_id: int) -> RotationConfig:
+    RotationConfig = tables_for(db).RotationConfig
     cfg = db.query(RotationConfig).filter(RotationConfig.attraction_id == attraction_id).first()
     if not cfg:
+        baseline = None
+        if db.info.get('rotation_formal'):
+            from app.rotation.namespace import TEST_TABLES
+            baseline = db.query(TEST_TABLES.RotationConfig).filter_by(attraction_id=attraction_id).first()
         cfg = RotationConfig(
             attraction_id=attraction_id,
-            lines_json=_dumps(E.DEFAULT_LINES),
-            settings_json=_dumps({}),
+            lines_json=baseline.lines_json if baseline else _dumps(E.DEFAULT_LINES),
+            settings_json=baseline.settings_json if baseline else _dumps({}),
             clock_json=_dumps({"mode": "real"}),
         )
         db.add(cfg)
@@ -195,6 +204,8 @@ def week_bounds(day: str) -> tuple[str, str]:
 
 def roster_upload_for(db: Session, attraction_id: int, day: str) -> RotationRosterUpload | None:
     """某天使用的名单：按天上传的优先，其次按周上传的，同类取最新一次。"""
+    RotationRosterEntry = tables_for(db).RotationRosterEntry
+    RotationRosterUpload = tables_for(db).RotationRosterUpload
     base = db.query(RotationRosterUpload).filter(
         RotationRosterUpload.attraction_id == attraction_id,
         RotationRosterUpload.start_date <= day,
@@ -215,6 +226,7 @@ def roster_upload_for(db: Session, attraction_id: int, day: str) -> RotationRost
 
 def roster_for(db: Session, attraction_id: int, day: str) -> dict | None:
     """把某天的名单转成引擎使用的结构。"""
+    RotationRosterEntry = tables_for(db).RotationRosterEntry
     upload = roster_upload_for(db, attraction_id, day)
     if not upload:
         return None
@@ -229,6 +241,8 @@ def roster_for(db: Session, attraction_id: int, day: str) -> dict | None:
 
 @transactional
 def save_roster(db: Session, attraction_id: int, parsed: dict, *, scope: str, file_name: str, uploader_id: int | None, uploader_name: str, only_date: str | None = None) -> RotationRosterUpload:
+    RotationRosterEntry = tables_for(db).RotationRosterEntry
+    RotationRosterUpload = tables_for(db).RotationRosterUpload
     if scope not in ("week", "day"):
         raise ActionError("上传范围只能是按周或按天")
     dates = sorted(parsed["days"])
@@ -296,6 +310,7 @@ def roster_summary(db: Session, attraction_id: int, day: str) -> dict:
 # ---------------------------------------------------------------- 本周统计
 
 def week_minutes(db: Session, attraction_id: int, day: str) -> dict:
+    RotationSegment = tables_for(db).RotationSegment
     start, end = week_bounds(day)
     out: dict = {}
     rows = (
@@ -310,6 +325,7 @@ def week_minutes(db: Session, attraction_id: int, day: str) -> dict:
 
 
 def duty_counts(db: Session, attraction_id: int, day: str) -> dict:
+    RotationDuty = tables_for(db).RotationDuty
     start, end = week_bounds(day)
     out: dict = {}
     rows = (
@@ -324,6 +340,7 @@ def duty_counts(db: Session, attraction_id: int, day: str) -> dict:
 
 
 def write_duties(db: Session, attraction_id: int, day: str, plan: dict) -> None:
+    RotationDuty = tables_for(db).RotationDuty
     db.query(RotationDuty).filter(RotationDuty.attraction_id == attraction_id, RotationDuty.work_date == day).delete(synchronize_session=False)
     for kind, key in (("push7", "push7"), ("lost", "lost")):
         for no in dict.fromkeys(plan.get(key, [])):
@@ -343,8 +360,9 @@ class DbHooks:
         self._week = None
 
     def log(self, typ, actor, pid, line, post, detail):
+        RotationEvent = tables_for(self.db).RotationEvent
         if hasattr(actor, "kind"):
-            actor_type, actor_id, actor_name = ('adjustment' if getattr(actor,'adjustment',False) else actor.kind), actor.actor_id, actor.name
+            actor_type, actor_id, actor_name = ('employee' if getattr(actor,'formal',False) else 'adjustment' if getattr(actor,'adjustment',False) else actor.kind), actor.actor_id, actor.name
         else:
             actor_type, actor_id, actor_name = "system", None, "系统" if actor == "system" else str(actor)
         self.db.add(RotationEvent(
@@ -362,6 +380,7 @@ class DbHooks:
         ))
 
     def segment(self, pid, line, start, end):
+        RotationSegment = tables_for(self.db).RotationSegment
         self.db.add(RotationSegment(
             attraction_id=self.attraction_id, work_date=self.day, employee_no=pid, line=line,
             start_min=start, end_min=end, minutes=max(0.0, end - start),
@@ -378,6 +397,7 @@ class DbHooks:
 # ---------------------------------------------------------------- 当天状态
 
 def day_row(db: Session, attraction_id: int, day: str) -> RotationDay | None:
+    RotationDay = tables_for(db).RotationDay
     row = db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id, RotationDay.work_date == day).first()
     if row is not None and row not in db.dirty:
         db.refresh(row)
@@ -386,6 +406,7 @@ def day_row(db: Session, attraction_id: int, day: str) -> RotationDay | None:
 
 def day_state(row: RotationDay) -> dict:
     """Return a private copy; engines must never mutate the committed cache."""
+    RUNTIME = runtime_for_row(row)
     key = (row.attraction_id, row.work_date)
     cached = RUNTIME.cache.get(key)
     if cached and cached[0] == row.version:
@@ -399,6 +420,9 @@ def save_day(db: Session, row: RotationDay, state: dict, *, notify: bool = True)
     row.status = state["status"]
     row.version += 1
     row.updated_at = datetime.now()
+    if notify and state['status'] in ('live','ended'):
+        from app.rotation.daily import capture_snapshot
+        capture_snapshot(db,row.attraction_id,state,settings_of(load_config(db,row.attraction_id)),float(state.get('lastTick',240)))
     pending = db.info[_TRANSACTION_KEY]
     pending["days"][(row.attraction_id, row.work_date)] = (row.version, row.state_json)
     pending["changed"] = pending["changed"] or notify
@@ -406,6 +430,7 @@ def save_day(db: Session, row: RotationDay, state: dict, *, notify: bool = True)
 
 def engine_for(db: Session, cfg: RotationConfig, row: RotationDay, state: dict) -> tuple[E.Engine, DbHooks]:
     hooks = DbHooks(db, row.attraction_id, row.work_date)
+    state['cooperativeEntry'] = bool(db.info.get('rotation_formal'))
     return E.Engine(state, settings_of(cfg), hooks), hooks
 
 
@@ -422,7 +447,18 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
     while True:
         t = min(t + STEP, target) if t < target else target
         hooks.now = t
-        changed = eng.tick(t) or changed
+        step_changed=eng.tick(t)
+        # Forecast boundaries also need a live-board event even when no post moves.
+        if state.get('cooperativeEntry') and any(p['state'] == 'notyet' and
+                any(t - STEP < p['start'] - lead <= t and previous_tick < p['start'] - lead
+                    for lead in (30, 10)) for p in eng.P.values()):
+            step_changed = True
+        from app.rotation.cooperation import reconcile
+        step_changed = reconcile(eng, t) or step_changed
+        if step_changed:
+            from app.rotation.daily import capture_snapshot
+            capture_snapshot(db,row.attraction_id,state,settings_of(cfg),t)
+        changed = step_changed or changed
         if eng.should_end(t):
             eng.end_day(t)
             changed = True
@@ -441,16 +477,19 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
 
 def end_stale_days(db: Session, cfg: RotationConfig, attraction_id: int, today: str) -> None:
     """时钟已经到了新的一天，前面还在运行的轮岗按 24:00 收尾。"""
+    RotationDay = tables_for(db).RotationDay
     for row in db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id, RotationDay.status == "live", RotationDay.work_date < today).all():
         state = day_state(row)
         advance(db, cfg, row, state, DAY_END)
 
 
-def tick_attraction(attraction_id: int) -> None:
+def tick_attraction(attraction_id: int, *, formal=False) -> None:
     """后台每秒调用。没有运行中的轮岗时只读不写，避免和其他请求的写入冲突。"""
     with SessionLocal() as db:
+        db.info["rotation_formal"] = formal
         with transaction(db):
-            cfg = db.query(RotationConfig).filter(RotationConfig.attraction_id == attraction_id).first()
+            Config = tables_for(db).RotationConfig
+            cfg = db.query(Config).filter(Config.attraction_id == attraction_id).first()
             if cfg is None:
                 return
             day, minute = clock_now(cfg)
@@ -479,8 +518,20 @@ def start_ticker(attraction_id_loader) -> None:
                 attraction_id = attraction_id_loader()
                 if attraction_id:
                     tick_attraction(attraction_id)
-            except Exception:  # 推进失败不能拖垮服务；下一秒重试
-                logger.exception("rotation tick failed")
+            except Exception:
+                logger.exception("sandbox rotation tick failed")
+            try:
+                from app.rotation.namespace import FORMAL_TABLES
+                with SessionLocal() as db:
+                    formal_ids = [r[0] for r in db.query(FORMAL_TABLES.RotationConfig.attraction_id).all()]
+            except Exception:
+                logger.exception("formal rotation scopes unavailable")
+                continue
+            for formal_id in formal_ids:
+                try:
+                    tick_attraction(formal_id, formal=True)
+                except Exception:
+                    logger.exception("formal rotation tick failed for attraction %s", formal_id)
 
     threading.Thread(target=run, name="rotation-ticker", daemon=True).start()
 
@@ -547,7 +598,9 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
             body = "倒计时结束后才可轮岗，不提前派岗。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
             step = ("rest", f"{word}至 {fmt(p['readyAt'])}", body)
         elif st == "ready":
-            if a and now >= max(a["departAt"] - early, a.get("notBefore", 0)):
+            if p.get('entryHold'):
+                step = ('entry_return', '请本人到场后重新领取安排', '同行任务已调整；本提示不代表缺勤，请到场后在本人待办确认。')
+            elif a and now >= max(a["departAt"] - early, a.get("notBefore", 0)):
                 step = ("depart", f"现在出发去 {a['line']} 线", _go_text(eng, a) + "。在个人待办或休息室大屏确认「去轮岗」。")
             elif a:
                 step = ("rest", f"{fmt(a['departAt'])} 出发去 {a['line']} 线", _go_text(eng, a))
@@ -571,6 +624,7 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
 
 
 def sync_notices(db: Session, attraction_id: int, state: dict, eng: E.Engine, now: float) -> None:
+    RotationNotice = tables_for(db).RotationNotice
     day = state["date"]
     desired = desired_notices(eng, now)
     stamp = datetime.now()
@@ -628,11 +682,17 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
     context = {"epoch": eng.d.get("confirmationEpoch"), "date": eng.d["date"],
                "pid": p["pid"], "action": action, "sequence": p.get("confirmationSequence", 0),
                "closed": eng.d.get("closed", False)}
-    if action == "depart":
+    if action in ("depart", "entry_adjust"):
         a = assignment_view(eng, p)
         context.update(assign=a, readyAt=p.get("readyAt"), breakStart=p.get("breakStart"))
+        from app.rotation.cooperation import plan
+        group = plan(eng, p, float(eng.d.get('lastTick', p['start'])))
+        context['entryPlan'] = {'id': group['id'], 'soloRoutes': group['soloRoutes'],
+                                'soloBlocked': group['soloBlocked']} if group else None
         context["posts"] = [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ")}
                             for x in eng.line(a["line"])["posts"]] if a else []
+    elif action == 'entry_return':
+        context['hold'] = p.get('entryHold')
     else:
         context.update(state=p.get("state"), walkbackSince=p.get("walkbackSince"),
                        anchor=p.get("arriveAnchor"), after=p.get("after"), start=p["start"], end=p["end"])
@@ -640,6 +700,10 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
 
 
 def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
+    from app.rotation.cooperation import plan, upcoming
+    if not hasattr(eng, '_upcoming_routes'):
+        eng._upcoming_routes = upcoming(eng, now)
+    group = plan(eng, p, now)
     av = assignment_view(eng, p)
     a = p.get("assign")
     L, i = eng.find_post(p["pid"]) if p.get("state") == "onpost" else (None, None)
@@ -653,17 +717,21 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "line": p.get("line"), "post": L["posts"][i]["name"] if L else None, "postIndex": i,
         "lineStart": p.get("lineStart"), "readyAt": p.get("readyAt"), "breakKind": p.get("breakKind"),
         "assign": av, "flags": p.get("flags", []), "tags": p.get("tags", []), "away": p.get("away"),
+        "entryGroup": group, "entryHold": p.get('entryHold'),
+        "upcomingShift": bool(p.get('state') == 'notyet' and 0 < p['start'] - now <= 30),
+        "previewAssign": eng._upcoming_routes.get(p['pid']),
         "walkbackSince": p.get("walkbackSince"), "arriveAt": p.get("arriveAt"), "ate": p.get("ate"),
         "mealEligible": eng.meal_eligible(p), "downReason": p.get("downReason"), "after": p.get("after"),
         "mealOptions": eng.meal_options(p, now),
         "visited": p.get("visited", []), "mark": p.get("mark", ""), "absences": p.get("absences", []),
         "preparing": preparing,
+        "scheduledRestStart": p['start'] if p.get('state') == 'notyet' and eng.opening_rest_candidate(p) else None,
         "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
-                               (["arrive"] if p.get("state") in ("walkback", "pending") else
-                                ["depart"] if p.get("assign") and p.get("state") in ("rest", "ready", "meal") else [])},
+                               (["entry_return"] if p.get('entryHold') else ["arrive"] if p.get("state") in ("walkback", "pending") else
+                                (["depart", "entry_adjust"] if group else ["depart"]) if p.get("assign") and p.get("state") in ("rest", "ready", "meal") else [])},
         "canDepart": bool(p.get("state") == "ready" and a and now >= (p.get("readyAt") or now) - 0.01
                           and now >= a.get("notBefore", 0) - 0.01
-                          and now >= a["departAt"] - eng.S["departEarly"] - 0.01),
+                          and now >= a["departAt"] - (0 if group else eng.S["departEarly"]) - 0.01),
     }
 
 
@@ -671,7 +739,8 @@ def lines_view(eng: E.Engine) -> list[dict]:
     return [{
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
         "walk": eng.walk(L["id"]),
-        "posts": [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"), "since": x.get("since"),
+        "posts": [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"),
+                   "occName": eng.P.get(x.get("occ"), {}).get("name"), "since": x.get("since"),
                    "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for x in L["posts"]],
     } for L in eng.d["lines"]]
 
@@ -698,12 +767,19 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
 @transactional
 def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int, day: str, minute: float) -> None:
     """有班表时04:00生成预排；开始时间前仅展示岗位，不计时。"""
+    RUNTIME = runtime_for(db)
     with RUNTIME.lock:
-        if minute < 240 or day_row(db, attraction_id, day) or not roster_for(db, attraction_id, day):
+        row=day_row(db,attraction_id,day)
+        if minute < 240 or (row and (row.status != 'draft' or not day_state(row).get('dailyAutoStart'))) or not roster_for(db, attraction_id, day):
             return
-        do_draft_action(db, attraction_id, 'system', {"action": "draft_generate", "date": day})
-        row = day_row(db, attraction_id, day)
+        if row is None:
+            do_draft_action(db, attraction_id, 'system', {"action": "draft_generate", "date": day})
+            row = day_row(db, attraction_id, day)
         state = day_state(row)
+        upload=roster_upload_for(db,attraction_id,day)
+        if state.get('dailyAutoStart') and upload and state.get('rosterUploadId')!=upload.id:
+            # Never run a superseded roster or silently overwrite manual adjustments.
+            return
         remember_initial_draft(state, cfg)
         eng, hooks = engine_for(db, cfg, row, state)
         hooks.now = 240
@@ -716,6 +792,9 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
 
 @transactional
 def board_payload(db: Session, attraction_id: int) -> dict:
+    RotationDay = tables_for(db).RotationDay
+    RotationRosterEntry = tables_for(db).RotationRosterEntry
+    RUNTIME = runtime_for(db)
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
     ensure_prearranged_day(db, cfg, attraction_id, day, minute)
@@ -740,6 +819,7 @@ def board_payload(db: Session, attraction_id: int) -> dict:
 
 @transactional
 def screen_payload(db: Session, attraction_id: int) -> dict:
+    RUNTIME = runtime_for(db)
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
     ensure_prearranged_day(db, cfg, attraction_id, day, minute)
@@ -757,6 +837,9 @@ def screen_payload(db: Session, attraction_id: int) -> dict:
 
 @transactional
 def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
+    RotationNotice = tables_for(db).RotationNotice
+    RotationSegment = tables_for(db).RotationSegment
+    RUNTIME = runtime_for(db)
     cfg = load_config(db, attraction_id)
     day, minute = clock_now(cfg)
     ensure_prearranged_day(db, cfg, attraction_id, day, minute)
@@ -828,9 +911,9 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
         raise ActionError("只能查看自己的确认结果")
     return {"confirmed": bool(result), "result": result}
 
-SCREEN_ACTIONS = {"arrive", "depart"}
+SCREEN_ACTIONS = {"arrive", "depart", "entry_return", "entry_adjust"}
 LIVE_ACTIONS = {
-    "arrive", "depart", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
+    "arrive", "depart", "entry_return", "entry_adjust", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
     "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order",
 }
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
@@ -862,6 +945,8 @@ def action_time(value) -> int:
 
 @transactional
 def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict | None:
+    RotationRosterEntry = tables_for(db).RotationRosterEntry
+    RUNTIME = runtime_for(db)
     from app.rotation.adjustment import revalidate_actor
     revalidate_actor(db, actor)
     act = body.get("action")
@@ -908,6 +993,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
                 raise ConfirmationConflict("轮岗安排已更新，请查看最新安排后重新确认")
             before = assignment_view(eng, p) if act == "depart" else None
         reason = str(body.get("reason") or "").strip()
+        entry_result = None
         if act.startswith("fix_") and not reason:
             raise ActionError("更正需要填写原因")
         if act == "arrive":
@@ -916,7 +1002,25 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             _require(body, "line", "i")
             eng.act_plan_place(pid, body["line"], body["i"], now, actor)
         elif act == "depart":
-            eng.act_depart(pid, now, actor)
+            if state.get('cooperativeEntry'):
+                from app.rotation.cooperation import confirm
+                solo = body.get('single', False)
+                if not isinstance(solo, bool):
+                    raise ActionError('单人模式参数无效')
+                entry_result = confirm(eng, pid, now, actor, token, solo, body.get('missing'))
+            else:
+                eng.act_depart(pid, now, actor)
+        elif act == 'entry_return':
+            p = eng.P[pid]
+            if not p.get('entryHold') or p['state'] not in ('ready', 'rest'):
+                raise ActionError('当前没有待恢复的上岗安排')
+            if not getattr(actor, 'formal', False) or actor.entered_by.employee_no != pid:
+                raise ActionError('请本人确认已到场')
+            p.pop('entryHold')
+            eng.h.log('entry_return', actor, pid, None, None, {})
+        elif act == 'entry_adjust':
+            from app.rotation.cooperation import apply_adjustment
+            entry_result = apply_adjustment(eng, pid, now, actor, body.get('missing'), body.get('expected_plan'))
         elif act == "undo":
             eng.act_undo(pid, now, actor)
         elif act in {"post", "move", "post_order"}:
@@ -970,6 +1074,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             if end <= start:
                 end += DAY_END
             eng.act_add_person({"pid": pid, "name": entry.name, "type": entry.person_type, "mark": entry.mark, "start": start, "end": end}, now, actor)
+        if pid in eng.P and eng.P[pid].get('entryHold') and eng.P[pid]['state'] not in ('ready', 'rest', 'notyet'):
+            eng.P[pid].pop('entryHold', None)
         result = None
         if act in SCREEN_ACTIONS:
             p = eng.P[pid]
@@ -983,6 +1089,17 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             if token is not None:
                 result["token"] = token
                 state.setdefault("confirmations", {})[token] = result
+            if entry_result:
+                result['status'] = entry_result['status']
+                result['group'] = entry_result.get('group')
+                if entry_result['status'] == 'executed':
+                    for other_pid, other_token in entry_result.get('tokens', {}).items():
+                        old = state.get('confirmations', {}).get(other_token)
+                        if old and other_pid != pid:
+                            other = eng.P[other_pid]
+                            ol, oi = eng.find_post(other_pid)
+                            old.update(status='executed', state=other['state'], minute=now,
+                                       line=ol['id'] if ol else None, post=ol['posts'][oi]['name'] if ol else None)
         eng.tick(now)
         state["lastTick"] = max(float(state.get("lastTick", now)), now)
         sync_notices(db, attraction_id, state, eng, now)
@@ -999,6 +1116,13 @@ def remember_initial_draft(state: dict, cfg: RotationConfig) -> None:
 
 @transactional
 def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
+    RotationDay = tables_for(db).RotationDay
+    RotationDuty = tables_for(db).RotationDuty
+    RotationEvent = tables_for(db).RotationEvent
+    RotationNotice = tables_for(db).RotationNotice
+    RotationSegment = tables_for(db).RotationSegment
+    RotationSnapshot = tables_for(db).RotationSnapshot
+    RUNTIME = runtime_for(db)
     act = body.get("action")
     if not isinstance(act, str) or act not in DRAFT_ACTIONS:
         raise ActionError("不支持的操作")
@@ -1019,7 +1143,7 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 raise ActionError(f"{day} 还没有上传名单")
             if row is not None:
                 # 必须先清掉当日计时，避免重新预排仍被刚撤回的本周累计影响。
-                for model in (RotationEvent, RotationSegment, RotationNotice, RotationDuty):
+                for model in (RotationEvent, RotationSegment, RotationNotice, RotationDuty, RotationSnapshot):
                     db.query(model).filter(model.attraction_id == attraction_id, model.work_date == day).delete(synchronize_session=False)
             prior = day_state(row) if row is not None else {}
             if body.get("restore_initial") and prior.get("initialDraft"):
@@ -1034,6 +1158,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 db.flush()
                 state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
                                       duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
+            upload=roster_upload_for(db,attraction_id,day)
+            state['rosterUploadId']=upload.id if upload else None
             # A reset starts a new run, even when the first plan is identical.
             state["confirmationEpoch"] = uuid4().hex
             state.pop("confirmations", None)
@@ -1121,6 +1247,7 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
 # ---------------------------------------------------------------- 记录
 
 def day_log(db: Session, attraction_id: int, day: str, limit: int = 500) -> list[dict]:
+    RotationEvent = tables_for(db).RotationEvent
     rows = (
         db.query(RotationEvent)
         .filter(RotationEvent.attraction_id == attraction_id, RotationEvent.work_date == day)
@@ -1140,6 +1267,9 @@ def day_log(db: Session, attraction_id: int, day: str, limit: int = 500) -> list
 
 
 def person_record(db: Session, attraction_id: int, employee_no: str, day: str) -> dict:
+    RotationDuty = tables_for(db).RotationDuty
+    RotationEvent = tables_for(db).RotationEvent
+    RotationSegment = tables_for(db).RotationSegment
     start, end = week_bounds(day)
     segs = (
         db.query(RotationSegment)

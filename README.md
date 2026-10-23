@@ -10,7 +10,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
-| [docs/video-learning.md](docs/video-learning.md) | 视频学习、分片续传、压缩封面、个人水印及验证边界 |
+| [docs/video-learning.md](docs/video-learning.md) | 视频学习、分片续传、压缩封面、共享品牌/员工号水印、联网缓存及验证边界 |
 | [docs/mobile-filter-alignment-20261020.md](docs/mobile-filter-alignment-20261020.md) | 四页手机筛选对齐、导出历史完整展示与三引擎验证 |
 | [docs/mobile-upload-compatibility.md](docs/mobile-upload-compatibility.md) | 手机浏览器图片上传共用链路、实收测试与真机验收边界 |
 | [docs/uc-upload-review-20261020.md](docs/uc-upload-review-20261020.md) | iPhone UC选图读取兼容、批量上传诊断及验证边界 |
@@ -26,7 +26,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 | [docs/declaration-statistics.md](docs/declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
 | [docs/hr-monthly-report-plan.md](docs/hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
 | [docs/excel-export-presentation.md](docs/excel-export-presentation.md) | Excel总览、完整明细、低频列折叠与同批次核对 |
-| [docs/rotation.md](docs/rotation.md) | 轮岗（测试）：入口、模拟账号、规则、个人确认、平板大屏布局、现场调整、TR临时授权、吃饭选择、同步与测试时钟 |
+| [docs/rotation.md](docs/rotation.md) | 轮岗看板：正式员工入口、分级权限、本人待办确认、线路详情、同步、每日班表及隔离测试机制 |
 | [docs/self-recognition-batch.md](docs/self-recognition-batch.md) | 本人认可多条登记与共用照片 |
 | [docs/announcements.md](docs/announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
 | [docs/announcement-image-generation.md](docs/announcement-image-generation.md) | 公告模板制图、照片上传和素材访问 |

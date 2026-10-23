@@ -24,6 +24,7 @@ from app.services.employment import restart_employment
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.services import loa_commands
+from app.services.employee_import_dates import normalize_import_date
 from app.routers._shared import (
     CIRCLE_HR_MANAGED_ROLE_CODES,
     EMPLOYEE_TARGET_PERMISSIONS,
@@ -374,6 +375,22 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), d
         values = list(values[:len(expected)]) + [None] * max(0, len(expected) - len(values))
         employee_no, name, role_code, attraction_name, password, active, enabled, starts_on, ends_on, return_code = [str(v).strip() if v is not None else "" for v in values]
         if not any((employee_no, name, role_code, attraction_name)):
+            continue
+        date_errors = []
+        for column, label in ((7, '任职开始日'), (8, '任职结束日')):
+            try:
+                normalized = normalize_import_date(values[column])
+                if column == 7:
+                    starts_on = normalized
+                else:
+                    ends_on = normalized
+            except ValueError as exc:
+                date_errors.append(f'第{row_number}行：{label}{exc}')
+        if date_errors:
+            errors.extend(date_errors)
+            continue
+        if ends_on and ends_on < (starts_on or date.today().isoformat()):
+            errors.append(f'第{row_number}行：任职结束日不能早于任职开始日（开始日留空时按导入当天）')
             continue
         if not employee_no or not name or role_code not in roles:
             errors.append(f"第{row_number}行：员工号、姓名必填且角色代码必须有效")

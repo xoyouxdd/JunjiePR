@@ -1,14 +1,15 @@
 """Authenticated video library, resumable bounded uploads and private playback."""
 from datetime import datetime, timedelta
+from pathlib import Path
 import hashlib
 import json
 import secrets
 import threading
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import text, or_
+from sqlalchemy import text, or_, and_
 from sqlalchemy.orm import Session
 
 from app.v2_auth import current_user, V2User
@@ -19,7 +20,7 @@ from app.video_models import LearningVideo, VideoCircle, VideoAudiencePolicy, Vi
 from app.services.video_access import (scope_ids, upload_scope_ids, can_upload, can_manage, require_manage, require_upload_targets, video_targets, senior,
                                        require_view, audit, NOTICE_TEXT, NOTICE_VERSION, audience_options, validate_audience,
                                        audience_circles, policy_data, recipient_condition, administrator, can_edit_audience, AUDIENCE_LABELS,
-                                       publisher_circle, publish_block_reason)
+                                       publisher_circle, publish_block_reason, can_delete)
 from app import video_media as media
 from app.video_worker import enqueue
 
@@ -35,7 +36,7 @@ class Config(BaseModel):
     attraction_id: int | None = Field(default=None, gt=0)
     attraction_ids: list[int] = Field(default_factory=list, max_length=128)
     all_circles: bool = False
-    audience_codes: list[str] | None = Field(default=None, max_length=7)
+    audience_codes: list[str] | None = Field(default=None, max_length=len(AUDIENCE_LABELS))
     replaces_id: int | None = None
 
     @field_validator("title", "cover_title", "description")
@@ -68,14 +69,14 @@ class Cover(BaseModel):
 
 class AudienceChange(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    audience_codes: list[str] = Field(min_length=1, max_length=7)
+    audience_codes: list[str] = Field(min_length=1, max_length=len(AUDIENCE_LABELS))
     revision: int = Field(ge=0)
 
 
 def video_or_404(db, video_id):
     row = db.get(LearningVideo, video_id)
-    if not row:
-        raise HTTPException(404, "视频不存在")
+    if not row or row.status == "deleted":
+        raise HTTPException(404, "视频不存在或已删除")
     return row
 
 
@@ -140,7 +141,7 @@ def payload(db, row, user):
             "original_bytes": row.original_bytes, "duration": row.duration, "profiles": json.loads(row.profiles),
             "error": row.error, "position": progress.position if progress else 0,
             "can_publish": can_manage(db, user, row) and not reason, "publish_block_reason":reason,
-            "can_replace": can_manage(db,user,row) and row.status=='published',
+            "can_replace": can_manage(db,user,row) and row.status=='published', "can_delete":can_delete(user,row),
             "cover_second": row.cover_second, "can_manage": can_manage(db, user, row),
             "cover_status": cover_job.status if cover_job else 'ready', "cover_error": cover_job.error if cover_job else '',
             "cover_url": f"/api/video-learning/videos/{row.id}/cover" if (media.video_dir(row.id)/"cover.jpg").is_file() else "",
@@ -155,7 +156,7 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(current_user))
     local_circle = db.get(Attraction,user.employee.attraction_id) if user.employee.attraction_id else None
     return {"circles": [{"id": r.id, "name": r.name} for r in db.query(Attraction).filter(Attraction.id.in_(ids)).order_by(Attraction.id)],
             "upload_circles": [{"id": r.id, "name": r.name} for r in db.query(Attraction).filter(Attraction.id.in_(upload_ids)).order_by(Attraction.id)],
-            "can_upload": bool(upload_ids), "can_select_multiple": senior(user), "tools_ready": media.tools_ready(),
+            "can_upload": bool(upload_ids), "can_manage_history":db.query(LearningVideo.id).filter(LearningVideo.owner_id==user.id,LearningVideo.status!='deleted').first() is not None, "can_select_multiple": senior(user), "tools_ready": media.tools_ready(),
             "audience_options": audience_options(db,user),
             "local_circle_name": local_circle.name if local_circle else '',
             "notice_version": NOTICE_VERSION, "notice": NOTICE_TEXT,
@@ -173,11 +174,12 @@ def listing(attraction_id: int | None = None, keyword: str = "", mine: bool = Fa
     explicit = db.query(VideoCircle.video_id).filter(VideoCircle.video_id == LearningVideo.id)
     selected = explicit.filter(VideoCircle.attraction_id.in_(ids)).exists()
     global_policy = db.query(VideoAudiencePolicy.video_id).filter(VideoAudiencePolicy.video_id == LearningVideo.id,
-        or_(*(VideoAudiencePolicy.codes.contains('"'+code+'"',autoescape=True) for code in ['all_tr','all_lead','all_gsm','am','om']))).exists()
-    query = db.query(LearningVideo).filter(or_(global_policy, selected, ~explicit.exists() & LearningVideo.attraction_id.in_(ids)))
+        or_(*(VideoAudiencePolicy.codes.contains('"'+code+'"',autoescape=True) for code in ['all_tr','all_lead','all_gsm','am','om','all_people']))).exists()
+    audience_scope=or_(global_policy, selected, ~explicit.exists() & LearningVideo.attraction_id.in_(ids))
+    if mine and attraction_id is None:
+        audience_scope=or_(audience_scope,and_(LearningVideo.owner_id==user.id,LearningVideo.status=='withdrawn'))
+    query = db.query(LearningVideo).filter(LearningVideo.status != "deleted", audience_scope)
     if mine:
-        if not can_upload(db, user):
-            raise HTTPException(403, "没有视频管理权限")
         query = query.filter(LearningVideo.owner_id == user.id)
     else:
         query = query.filter(LearningVideo.status == "published")
@@ -198,7 +200,7 @@ def listing(attraction_id: int | None = None, keyword: str = "", mine: bool = Fa
 @router.get("/videos/{video_id}")
 def detail(video_id: int, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     row = video_or_404(db, video_id)
-    if not can_manage(db, user, row):
+    if not can_manage(db, user, row) and not can_delete(user,row):
         require_view(db, user, row)
     return payload(db, row, user)
 
@@ -248,7 +250,7 @@ def upload_row(db, user, upload_id):
         raise HTTPException(404, "上传任务不存在或已过期，请重新选择视频")
     config = json.loads(row.config)
     validate_audience(db,user,config.get('audience_codes',['local_tr']))
-    if 'local_tr' in config.get('audience_codes',[]) or 'local_lead' in config.get('audience_codes',[]):
+    if any(code.startswith('local_') for code in config.get('audience_codes',[])):
         if config.get('audience_local',config['attraction_id']) != user.employee.attraction_id:
             raise HTTPException(403,'所属圈已变化，请重新选择观看范围后上传')
     require_upload_targets(db, user, stored_targets(config))
@@ -417,7 +419,7 @@ def change_audience(video_id: int, body: AudienceChange, request: Request, db: S
         db.add(policy)
     policy.codes=json.dumps(codes);policy.local_attraction_id=local;policy.revision=before['revision']+1
     if row.replaces_id:
-        policy.replaces_revision=policy_data(db,video_or_404(db,row.replaces_id))['revision']
+        policy.replaces_revision=policy_data(db,db.get(LearningVideo,row.replaces_id))['revision']
     db.query(VideoCircle).filter_by(video_id=video_id).delete()
     targets=audience_circles(db,local,codes)
     db.add_all(VideoCircle(video_id=video_id,attraction_id=id) for id in targets)
@@ -433,7 +435,7 @@ def change_audience(video_id: int, body: AudienceChange, request: Request, db: S
 @router.get("/videos/{video_id}/cover")
 def cover_file(video_id: int, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     row = video_or_404(db, video_id)
-    if not can_manage(db, user, row):
+    if not can_manage(db, user, row) and not can_delete(user,row):
         require_view(db, user, row)
     path = media.video_dir(video_id) / "cover.jpg"
     if not path.is_file():
@@ -458,11 +460,13 @@ def publish(video_id: int, request: Request, db: Session = Depends(get_db), user
     pending = db.query(VideoJob).filter_by(video_id=row.id, kind='cover').filter(VideoJob.status != 'ready').first()
     if row.status != 'ready' or pending:
         raise HTTPException(409, "视频和封面处理完成后才能发布")
+    if any(not media.shared_path(row,q) for q in ('720','1080')):
+        raise HTTPException(409,'请先预览，等待共享品牌水印版本准备完成后发布')
     if row.replaces_id:
         old = video_or_404(db, row.replaces_id); require_manage(db, user, old)
         if policy and policy.replaces_revision != policy_data(db,old)['revision']:
             raise HTTPException(409, '原视频观看范围已更新，请重新核对并保存新版本观看范围')
-        if old.status == 'withdrawn':
+        if old.status != 'published':
             raise HTTPException(409, "原视频已被更新或撤下，请重新核对版本")
         row.version = old.version+1; old.status = 'withdrawn'
     row.status = 'published'; row.published_at = datetime.now()
@@ -486,7 +490,7 @@ def consent(video_id: int, body: Consent, request: Request, db: Session = Depend
     row = video_or_404(db, video_id); require_view(db, user, row, preview=True)
     if not body.accepted or body.notice_version != NOTICE_VERSION:
         raise HTTPException(400, "请阅读并确认最新保密提示")
-    token = secrets.token_urlsafe(32)
+    token = str(row.version)+"."+secrets.token_urlsafe(32)
     db.add(VideoPlayback(id=token_hash(token), video_id=video_id, employee_id=user.id,
                          employee_no=user.employee.employee_no, session_hash=token_hash(request.cookies['rc_v2_session']),
                          notice_version=NOTICE_VERSION, expires_at=datetime.now()+timedelta(minutes=30)))
@@ -500,52 +504,83 @@ def playback_access(db, user, request, video_id, token):
     grant = db.get(VideoPlayback, token_hash(token))
     if not grant or grant.video_id != video_id or grant.employee_id != user.id or grant.session_hash != token_hash(request.cookies['rc_v2_session']) or grant.expires_at <= datetime.now() or grant.employee_no != user.employee.employee_no:
         raise HTTPException(403, "播放授权已失效，请重新确认保密提示")
+    if token.split(".",1)[0] != str(video.version):
+        raise HTTPException(403,"视频版本已变化，请重新确认")
     if grant.notice_version != NOTICE_VERSION:
         raise HTTPException(403, "保密提示已更新，请重新确认")
     return video, grant
 
 
-@router.post("/videos/{video_id}/playback")
-def prepare(video_id: int, request: Request, token: str, quality: str = '720', db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    video, grant = playback_access(db, user, request, video_id, token)
-    if quality not in ('720', '1080'):
-        raise HTTPException(400, "不支持的清晰度")
-    key = media.playback_key(video, grant.employee_no, quality)
-    with _upload_lock:
-        job = enqueue(db, video_id, 'playback:'+key, 'playback', {"employee_no": grant.employee_no, "quality": quality})
-        if job.status == 'ready' and not media.playback_path(key).is_file():
-            job.status = 'queued'
-        # A deliberate call after a failed attempt is an explicit retry, not an
-        # unbounded background retry. Poll with GET to preserve a failed state.
-        if job.status == 'failed':
-            job.status = 'queued'; job.error = ''
-        job.updated_at = datetime.now(); db.commit()
-    return {"status": job.status}
+def shared_ready(db,video,quality,*,enqueue_missing=False):
+    if quality not in ('720','1080'):raise HTTPException(400,'不支持的清晰度')
+    path=media.shared_path(video,quality)
+    if path:return path,None
+    job=db.query(VideoJob).filter_by(key=f'shared:{video.id}:{media.BRAND_REVISION}').first()
+    if enqueue_missing:
+        job=job or enqueue(db,video.id,f'shared:{video.id}:{media.BRAND_REVISION}','shared')
+        if job.status in ('failed','ready'):job.status='queued';job.error=''
+        db.commit()
+    return None,job
 
 
-@router.get("/videos/{video_id}/playback")
-def playback_status(video_id: int, request: Request, token: str, quality: str = '720', db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    video, grant = playback_access(db, user, request, video_id, token)
-    if quality not in ('720', '1080'):
-        raise HTTPException(400, "不支持的清晰度")
-    key = media.playback_key(video, grant.employee_no, quality)
-    job = db.query(VideoJob).filter_by(key='playback:'+key).first()
-    return {"status": job.status if job else 'missing', "error": job.error if job else '',
-            "url": f"/api/video-learning/videos/{video_id}/stream?token={token}&quality={quality}" if job and job.status == 'ready' and media.playback_path(key).is_file() else None}
+@router.post('/videos/{video_id}/playback')
+def prepare(video_id:int,request:Request,token:str,quality:str='720',db:Session=Depends(get_db),user:V2User=Depends(current_user)):
+    video,grant=playback_access(db,user,request,video_id,token)
+    path,job=shared_ready(db,video,quality,enqueue_missing=True)
+    return {'status':'ready' if path else job.status,'mode':'shared'}
 
 
-@router.get("/videos/{video_id}/stream")
-def stream(video_id: int, request: Request, token: str, quality: str = '720', db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    video, grant = playback_access(db, user, request, video_id, token)
-    if quality not in ('720', '1080'):
-        raise HTTPException(400, "不支持的清晰度")
-    key = media.playback_key(video, grant.employee_no, quality)
-    path = media.playback_path(key)
-    job = db.query(VideoJob).filter_by(key='playback:'+key, status='ready').first()
-    if not job or not path.is_file():
-        raise HTTPException(409, "个人水印视频尚未准备完成")
-    job.updated_at = datetime.now(); grant.expires_at = datetime.now()+timedelta(minutes=30); db.commit()
-    return FileResponse(path, media_type='video/mp4', headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer", "Content-Disposition": "inline"})
+@router.get('/videos/{video_id}/playback')
+def playback_status(video_id:int,request:Request,token:str,quality:str='720',db:Session=Depends(get_db),user:V2User=Depends(current_user)):
+    video,grant=playback_access(db,user,request,video_id,token)
+    path,job=shared_ready(db,video,quality)
+    return {'status':'ready' if path else job.status if job else 'missing','error':job.error if job else '',
+            'mode':'shared','employee_no':grant.employee_no,
+            'url':f'/api/video-learning/videos/{video_id}/stream?token={token}&quality={quality}' if path else None}
+
+
+@router.get('/videos/{video_id}/authorize')
+def authorize(video_id:int,request:Request,token:str,quality:str='720',db:Session=Depends(get_db),user:V2User=Depends(current_user)):
+    video,grant=playback_access(db,user,request,video_id,token)
+    path,_=shared_ready(db,video,quality)
+    if not path:raise HTTPException(409,'共享视频尚未准备完成')
+    stat=path.stat()
+    if grant.expires_at < datetime.now()+timedelta(minutes=20):
+        grant.expires_at=datetime.now()+timedelta(minutes=30);db.commit()
+    # No token in persistent block keys; login sessions get disjoint namespaces.
+    identity=token_hash(str(user.id)+':'+grant.session_hash)[:32]
+    return JSONResponse({'employee_no':grant.employee_no,'identity':identity,'video_id':video.id,'version':video.version,
+                         'quality':quality,'bytes':stat.st_size,'generation':str(stat.st_mtime_ns)},headers={'Cache-Control':'no-store'})
+
+
+@router.get('/videos/{video_id}/stream')
+def stream(video_id:int,request:Request,token:str,quality:str='720',db:Session=Depends(get_db),user:V2User=Depends(current_user)):
+    video,grant=playback_access(db,user,request,video_id,token)
+    path,_=shared_ready(db,video,quality)
+    if not path:raise HTTPException(409,'共享视频尚未准备完成')
+    if grant.expires_at < datetime.now()+timedelta(minutes=20):
+        grant.expires_at=datetime.now()+timedelta(minutes=30);db.commit()
+    return FileResponse(path,media_type='video/mp4',headers={'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','Content-Disposition':'inline'})
+
+
+@router.get('/cache-worker.js',include_in_schema=False)
+def cache_worker():
+    return FileResponse(Path(__file__).resolve().parent.parent/'static'/'js'/'video-cache-worker.js',media_type='application/javascript',
+                        headers={'Cache-Control':'no-cache','Service-Worker-Allowed':'/'})
+
+
+@router.delete('/videos/{video_id}')
+def delete_video(video_id:int,request:Request,db:Session=Depends(get_db),user:V2User=Depends(current_user)):
+    db.rollback();db.execute(text('BEGIN IMMEDIATE'))
+    row=video_or_404(db,video_id)
+    if row.owner_id!=user.id and not administrator(user):raise HTTPException(403,'仅发布者或系统管理员可删除')
+    if row.status!='withdrawn':raise HTTPException(409,'请先撤下视频再删除')
+    row.status='deleted'
+    # Keep row IDs, replacement FKs, access and audit records; remove only this version's files.
+    for job in db.query(VideoJob).filter(VideoJob.video_id==video_id,VideoJob.status=='queued'):job.status='cancelled'
+    enqueue(db,video_id,f'delete:{video_id}','delete')
+    audit(db,user,request,video_id,'删除学习视频',{'version':row.version,'scope':'selected_version','files':'cleanup_queued'})
+    db.commit();return {'ok':True,'cleanup':'queued'}
 
 
 @router.put("/videos/{video_id}/progress")

@@ -83,9 +83,12 @@ class RotationActor:
     expires_at: datetime | None = None
     can_authorize: bool = True
     adjustment_session_id: int | None = None
+    formal: bool = False
 
     @property
     def actor_id(self) -> int | None:
+        if self.formal and self.entered_by:
+            return self.entered_by.id
         if self.adjustment and self.entered_by:
             return self.entered_by.id
         return self.account.id if self.account else None

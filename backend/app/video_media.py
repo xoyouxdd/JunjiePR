@@ -16,6 +16,7 @@ from app.v2_database import FILE_DIR
 
 VIDEO_DIR = FILE_DIR / "learning-videos"
 MAX_BYTES = 500 * 1024 * 1024
+BRAND_REVISION = "fz-brand-v1"
 MAX_SECONDS = 1200
 CHUNK_BYTES = 4 * 1024 * 1024
 MIN_FREE_BYTES = 2 * 1024**3
@@ -156,6 +157,13 @@ def process_source(video, stop=None):
     directory = video_dir(video.id)
     info = probe(directory / "source.mov")
     ensure_space(video.original_bytes * 2)
+    font=font_path()
+    if not font:raise RuntimeError('视频品牌水印字体未配置')
+    shutil.copyfile(font, directory/'brand-font.ttf')
+    (directory/'brand.txt').write_text('FZ团队工作台 · 内部学习',encoding='utf-8')
+    brand=("drawtext=fontfile=brand-font.ttf:textfile=brand.txt:expansion=none:"
+           "fontsize='max(14,w/42)':fontcolor=white@0.65:box=1:boxcolor=black@0.24:boxborderw=6:"
+           "x=w-tw-w*0.03:y=h-th-h*0.06")
     profiles = {}
     for quality in (720, 1080):
         long_edge = round(quality*16/9)
@@ -163,12 +171,13 @@ def process_source(video, stop=None):
         output = directory / f"master-{quality}.mp4"
         temp = directory / f"master-{quality}.{uuid4().hex}.new.mp4"
         scale = f"scale=w='min(iw,{width})':h='min(ih,{height})':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1,fps={info['fps']}"
-        run(ffmpeg_base(directory / "source.mov") + ["-vf", scale, "-af", "loudnorm=I=-18:TP=-2:LRA=11"] + codec_args() + [str(temp)], stop=stop)
+        run(ffmpeg_base((directory / "source.mov").resolve()) + ["-vf", scale+","+brand, "-af", "loudnorm=I=-18:TP=-2:LRA=11"] + codec_args() + [str(temp.resolve())], cwd=directory, stop=stop)
         output_info = probe(temp)
         if abs(output_info["duration"]-info["duration"]) > 2:
             raise RuntimeError("处理后视频时长异常，请重新处理")
         temp.replace(output)
-        profiles[str(quality)] = {"bytes": output.stat().st_size, "width": output_info["width"], "height": output_info["height"]}
+        profiles[str(quality)] = {"bytes": output.stat().st_size, "width": output_info["width"], "height": output_info["height"], "brand": BRAND_REVISION}
+    (directory/'brand-font.ttf').unlink(missing_ok=True)
     # Try a few real frames; avoid obvious black opening frames.
     candidates = [min(info['duration']*.1, 5), min(info['duration']*.35, 30), info['duration']*.6]
     chosen = candidates[0]
@@ -212,3 +221,34 @@ def process_playback(video, payload, stop=None):
     probe(temp)
     temp.replace(path)
     (path.parent / "font.ttf").unlink(missing_ok=True)
+
+
+def shared_path(video, quality):
+    if quality not in ('720','1080'):raise RuntimeError('不支持的清晰度')
+    profiles=json.loads(video.profiles)
+    path=video_dir(video.id)/f'master-{quality}.mp4'
+    return path if profiles.get(quality,{}).get('brand')==BRAND_REVISION and path.is_file() else None
+
+
+def erase_video_files(video_id):
+    """Only this version's isolated directory and legacy personal derivatives."""
+    root=(VIDEO_DIR/'videos').resolve(); directory=video_dir(video_id)
+    if directory.exists():
+        if (directory.is_symlink() or getattr(directory,'is_junction',lambda:False)()) or not directory.resolve().is_relative_to(root):raise RuntimeError('Unsafe video directory')
+        # Refuse links anywhere; never follow a junction out of this media root.
+        for item in directory.rglob('*'):
+            if (item.is_symlink() or getattr(item,'is_junction',lambda:False)()) or not item.resolve().is_relative_to(root):raise RuntimeError('Unsafe video media link')
+        shutil.rmtree(directory)
+    cache_root=(VIDEO_DIR/'playbacks').resolve()
+    from app.v2_database import SessionLocal
+    from app.video_models import VideoJob
+    with SessionLocal() as db:
+        for job in db.query(VideoJob).filter_by(video_id=video_id,kind='playback'):
+            key=job.key.removeprefix('playback:')
+            if len(key)!=64 or any(c not in '0123456789abcdef' for c in key):continue
+            directory=playback_path(key).parent
+            if directory.exists():
+                if (directory.is_symlink() or getattr(directory,'is_junction',lambda:False)()) or not directory.resolve().is_relative_to(cache_root):raise RuntimeError('Unsafe video cache')
+                for item in directory.rglob('*'):
+                    if (item.is_symlink() or getattr(item,'is_junction',lambda:False)()) or not item.resolve().is_relative_to(cache_root):raise RuntimeError('Unsafe video cache link')
+                shutil.rmtree(directory)

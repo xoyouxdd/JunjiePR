@@ -761,10 +761,10 @@ async function main() {
     const personnel=await browser.newPage({viewport:{width:1280,height:900}});
     const person={id:77,employee_no:'SYN77',name:'合成人员',role_code:'CM',base_role_code:'CM',base_role_name:'CM',
       attraction_id:1,attraction_name:'热力追踪',employment_status:'active',is_active:true,account_enabled:true,
-      login_account:'SYN77',account_deletion_eligible:false,account_deletion_reason:'请先停用并保存，连续满7天后可删除'};
+      login_account:'SYN77',account_deletion_eligible:false,account_deletion_reason:'请先停用并保存，连续满3天后可删除'};
     let archived=false,editBody;
     await personnel.route('**/api/hr/organization',route=>route.fulfill({json:{circles:[{id:1,name:'热力追踪',gsm_names:[],ta_gsm_names:[],groups:[],supervisors:[],managers:[],inactive:[],unassigned:archived?[]:[person]}],others:[],warnings:[]}}));
-    await personnel.route('**/api/hr/employees/77',route=>{assert.equal(route.request().method(),'PUT');editBody=route.request().postDataJSON();person.account_enabled=editBody.account_enabled;person.account_deletion_reason='2026-10-24 12:00:00 起可删除（须连续停用满7天）';return route.fulfill({json:{ok:true,warnings:[]}});});
+    await personnel.route('**/api/hr/employees/77',route=>{assert.equal(route.request().method(),'PUT');editBody=route.request().postDataJSON();person.account_enabled=editBody.account_enabled;person.account_deletion_reason='2026-10-24 12:00:00 起可删除（须连续停用满3天）';return route.fulfill({json:{ok:true,warnings:[]}});});
     await personnel.route('**/api/hr/employees/77/account',route=>{assert.equal(route.request().method(),'DELETE');archived=true;return route.fulfill({json:{ok:true,archive_retained:true}});});
     await personnel.goto(origin+'/');
     await personnel.locator('.tabs-desktop [data-tab="hrEmployees"]').click();
@@ -778,9 +778,15 @@ async function main() {
     await personnel.locator('[data-modal-form] button[type="submit"]').click();
     await personnel.locator('[data-modal-form]').waitFor({state:'detached'});
     assert.equal(editBody.account_enabled,false);assert.equal(editBody.employment_status,'active');
+    await personnel.waitForFunction(()=>document.querySelector('[data-hr-person="77"] .hr-person-status')?.textContent==='停用');
+    await personnel.locator('#hrStatusFilter').selectOption('disabled');
+    assert.equal(await personnel.locator('[data-hr-person="77"]').isVisible(),true);
+    await personnel.locator('#hrStatusFilter').selectOption('active');
+    assert.equal(await personnel.locator('[data-hr-person="77"]').isVisible(),false);
+    await personnel.locator('#hrStatusFilter').selectOption('all');
     await personnel.locator('[data-hr-edit="77"]').click();
     assert.equal(await personnel.locator('[data-delete-login-account]').isDisabled(),true);
-    assert.match(await personnel.locator('[data-modal-form]').textContent(),/连续停用满7天/);
+    assert.match(await personnel.locator('[data-modal-form]').textContent(),/连续停用满3天/);
     await personnel.locator('[data-modal-cancel]').click();
     await personnel.locator('[data-modal-form]').waitFor({state:'detached'});
     person.account_deletion_eligible=true;person.account_deletion_reason='可删除，历史数据留档';

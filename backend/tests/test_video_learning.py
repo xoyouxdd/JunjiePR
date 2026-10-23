@@ -123,9 +123,9 @@ def test_real_compression_cover_publish_and_watermarked_range(client,clip):
     assert client.post(BASE+f'/videos/{video_id}/publish').status_code==403
     assert client.post(BASE+f'/videos/{video_id}/consent',json={'accepted':False,'notice_version':'old'}).status_code==400
     token=grant(client,video_id);params={'token':token,'quality':'720'}
-    assert client.get(BASE+f'/videos/{video_id}/stream',params=params).status_code==409
-    assert client.post(BASE+f'/videos/{video_id}/playback',params=params).status_code==200
-    assert run_one()
+    assert client.get(BASE+f'/videos/{video_id}/stream',params=params).status_code==200
+    assert client.post(BASE+f'/videos/{video_id}/playback',params=params).json()['status']=='ready'
+    assert not run_one()
     status=client.get(BASE+f'/videos/{video_id}/playback',params=params).json()
     assert status['status']=='ready',status
     response=client.get(status['url'],headers={'Range':'bytes=0-99'})
@@ -133,9 +133,10 @@ def test_real_compression_cover_publish_and_watermarked_range(client,clip):
     assert len(response.content)==100
     assert response.headers['cache-control']=='private, no-store'
     assert response.headers['content-type'].startswith('video/mp4')
-    path=media.playback_path(media.playback_key(type('V',(),{'id':video_id,'version':1}), 'TRTEST01','720'))
+    path=media.video_dir(video_id)/'master-720.mp4'
     assert path.is_file() and media.probe(path)['duration']>0
-    assert 'TRTEST01' in (path.parent/'watermark.txt').read_text(encoding='utf-8')
+    assert 'FZ团队工作台' in (path.parent/'brand.txt').read_text(encoding='utf-8')
+    assert status['employee_no']=='TRTEST01' and status['mode']=='shared'
     assert client.put(BASE+f'/videos/{video_id}/progress',params={'token':token},json={'position':1200}).status_code==200
     assert client.get(BASE+f'/videos/{video_id}').json()['position']==row['duration']
     # Direct filesystem guesses have no API endpoint; no original/master route.
@@ -266,12 +267,11 @@ def test_edit_metadata_rebuilds_cover_and_stale_jobs_recover(client,clip):
 
 def test_old_playback_caches_clean_without_deleting_sources(client,clip):
     video_id=ready(client,clip,'个人缓存清理验收');token=grant(client,video_id)
-    client.post(BASE+f'/videos/{video_id}/playback',params={'token':token})
-    assert run_one()
     with SessionLocal() as db:
         row=db.get(LearningVideo,video_id)
         key=media.playback_key(row,'SUPTEST01','720')
-        job=db.query(VideoJob).filter_by(key='playback:'+key).one();job.updated_at=datetime.now()-timedelta(days=8);db.commit()
+        path=media.playback_path(key);path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'legacy personal cache')
+        db.add(VideoJob(video_id=video_id,key='playback:'+key,kind='playback',status='ready',updated_at=datetime.now()-timedelta(days=8)));db.commit()
     assert media.playback_path(key).is_file()
     cleanup()
     assert not media.playback_path(key).is_file()
@@ -336,8 +336,8 @@ def test_targeted_tiers_union_live_edit_and_immediate_revocation(client,clip):
         listed=client.get(BASE+'/videos',params={'keyword':'分层受众验收'}).json()
         assert listed['total']==int(allowed)
     login(client,'TRTEST01');token=grant(client,video_id)
-    assert client.post(BASE+f'/videos/{video_id}/playback',params={'token':token}).status_code==200
-    assert run_one()
+    assert client.post(BASE+f'/videos/{video_id}/playback',params={'token':token}).json()['status']=='ready'
+    assert not run_one()
     login(client,'GSMTEST01')
     before=client.get(BASE+f'/videos/{video_id}').json()['audience']
     changed=client.patch(BASE+f'/videos/{video_id}/audience',json={'audience_codes':['local_lead','all_gsm','am','om'],'revision':before['revision']})
@@ -367,7 +367,7 @@ def test_targeted_tiers_union_live_edit_and_immediate_revocation(client,clip):
 def test_lead_audience_limits_and_expired_proxy_recipient(client,clip):
     login(client)
     assert [r['code'] for r in client.get(BASE+'/options').json()['audience_options']]==['local_tr']
-    for codes in [[],['local_lead'],['all_tr'],['all_gsm'],['am'],['om']]:
+    for codes in [[],['local_lead'],['all_tr'],['all_gsm'],['am'],['om'],['local_all'],['all_people']]:
         assert client.post(BASE+'/uploads',json=config(client,clip,audience_codes=codes)).status_code in (400,403)
     video_id=ready(client,clip,'LEAD仅TR视频');client.post(BASE+f'/videos/{video_id}/publish')
     login(client,'CMTEST01')
@@ -395,13 +395,15 @@ def test_audience_change_replacement_conflict_keeps_current_version(client,clip)
     assert client.get(BASE+f'/videos/{old}').json()['status']=='withdrawn'
 
 
-def test_all_seven_audiences_against_actual_current_roles(client):
+def test_all_nine_audiences_against_actual_current_roles(client):
     accounts=['TRTEST01','CMTEST01','SUPTEST01','TATEST01','TAGSMTEST01','GSMTEST01','AMTEST01','OMTEST01']
     expected={'local_tr':{'TRTEST01'},'local_lead':{'SUPTEST01','TATEST01'},'all_tr':{'TRTEST01'},
               'all_lead':{'SUPTEST01','TATEST01'},'all_gsm':{'TAGSMTEST01','GSMTEST01'},'am':{'AMTEST01'},'om':{'OMTEST01'}}
     with SessionLocal() as db:
         owner=db.query(Employee).filter_by(employee_no='HR01').one()
         circle=db.query(Employee).filter_by(employee_no='TRTEST01').one().attraction_id
+        expected['local_all']={e.employee_no for e in db.query(Employee).filter(Employee.employee_no.in_(accounts),Employee.attraction_id==circle)}
+        expected['all_people']=set(accounts)
         videos={}
         for code in expected:
             video=LearningVideo(owner_id=owner.id,attraction_id=circle,title='隔离受众矩阵 '+code,
@@ -422,8 +424,8 @@ def test_audience_revocation_rejects_existing_same_session_media_token(client,cl
     client.post(BASE+f'/videos/{id}/publish')
     viewer=TestClient(app)
     login(viewer,'TRTEST01');token=grant(viewer,id)
-    assert viewer.post(BASE+f'/videos/{id}/playback',params={'token':token}).status_code==200
-    assert run_one()
+    assert viewer.post(BASE+f'/videos/{id}/playback',params={'token':token}).json()['status']=='ready'
+    assert not run_one()
     assert viewer.get(BASE+f'/videos/{id}/stream',params={'token':token},headers={'Range':'bytes=0-99'}).status_code==206
     source_hash=hashlib.sha256((media.video_dir(id)/'source.mov').read_bytes()).hexdigest()
     assert client.patch(BASE+f'/videos/{id}/audience',json={'audience_codes':['all_lead'],'revision':1}).status_code==200
@@ -482,3 +484,147 @@ def test_admin_local_scope_edit_uses_publisher_circle_not_admin_circle(client,cl
     assert client.patch(BASE+f'/videos/{id}/audience',json={'audience_codes':['local_tr'],'revision':1}).status_code==200
     assert client.get(BASE+f'/videos/{id}').json()['audience']['local_attraction_id']==own
     assert client.post(BASE+f'/videos/{id}/publish').status_code==200
+
+
+def test_everyone_scopes_cross_circle_cm_and_live_revocation(client, clip):
+    login(client, 'GSMTEST01')
+    options=client.get(BASE+'/options').json()
+    assert {'local_all','all_people'} <= {r['code'] for r in options['audience_options']}
+    video_id=upload(client,clip,title='所有人范围与转圈验收',audience_codes=['local_all'])
+    while run_one():pass
+    assert client.post(BASE+f'/videos/{video_id}/publish').status_code==200
+    viewer=TestClient(app)
+    try:
+        login(viewer,'CMTEST01')
+        assert viewer.get(BASE+f'/videos/{video_id}').status_code==200
+        token=grant(viewer,video_id)
+        assert viewer.post(BASE+f'/videos/{video_id}/playback',params={'token':token}).status_code==200
+        while run_one():pass
+        assert viewer.get(BASE+f'/videos/{video_id}/stream',params={'token':token},headers={'Range':'bytes=0-99'}).status_code==206
+        with SessionLocal() as db:
+            cm=db.query(Employee).filter_by(employee_no='CMTEST01').one();cm_id=cm.id;own=cm.attraction_id
+            other=db.query(Attraction.id).filter_by(active=True,employee_circle=True).filter(Attraction.id!=own).first()[0]
+            cm.attraction_id=other;db.commit()
+        try:
+            assert viewer.get(BASE+f'/videos/{video_id}').status_code==404
+            assert client.patch(BASE+f'/videos/{video_id}/audience',json={'audience_codes':['all_people'],'revision':1}).status_code==200
+            assert viewer.get(BASE+f'/videos/{video_id}').status_code==200
+            listed=viewer.get(BASE+'/videos',params={'attraction_id':other,'keyword':'所有人范围与转圈验收'}).json()
+            assert listed['total']==1
+            assert client.patch(BASE+f'/videos/{video_id}/audience',json={'audience_codes':['all_tr'],'revision':2}).status_code==200
+            assert viewer.get(BASE+f'/videos/{video_id}/stream',params={'token':token}).status_code==404
+        finally:
+            with SessionLocal() as db:db.get(Employee,cm_id).attraction_id=own;db.commit()
+    finally:viewer.close()
+
+
+def test_450mb_upload_initialization_is_allowed_not_a_100mb_cap(client,clip):
+    # Metadata/reservation only: no claim of a real iPhone picker or 450MB transfer.
+    login(client,'GSMTEST01')
+    body=config(client,clip,title='450MB边界',audience_codes=['all_people'])
+    response=client.post(BASE+'/uploads',json={**body,'size':450*1024*1024})
+    assert response.status_code==200,response.text
+    assert response.json()['offset']==0
+    assert client.delete(BASE+'/uploads/'+response.json()['upload_id']).status_code==200
+
+
+def test_shared_media_no_personal_jobs_and_live_authorization(client,clip):
+    login(client,'GSMTEST01')
+    id=upload(client,clip,title='共享播放不排个人队列',audience_codes=['all_people'])
+    while run_one():pass
+    assert client.post(BASE+f'/videos/{id}/publish').status_code==200
+    expected=None
+    for account in ['TRTEST01','CMTEST01','SUPTEST01','TAGSMTEST01']:
+        login(client,account);token=grant(client,id)
+        params={'token':token,'quality':'720'}
+        assert client.post(BASE+f'/videos/{id}/playback',params=params).json()=={'status':'ready','mode':'shared'}
+        info=client.get(BASE+f'/videos/{id}/authorize',params=params)
+        assert info.status_code==200 and info.headers['cache-control']=='no-store'
+        assert info.json()['employee_no']==account
+        response=client.get(BASE+f'/videos/{id}/stream',params=params,headers={'Range':'bytes=0-99'})
+        assert response.status_code==206
+        if expected is None:expected=response.content
+        else:assert response.content==expected
+    with SessionLocal() as db:
+        assert db.query(VideoJob).filter_by(video_id=id,kind='playback').count()==0
+    login(client,'GSMTEST01');client.post(BASE+f'/videos/{id}/withdraw')
+    login(client,'TRTEST01');assert client.get(BASE+f'/videos/{id}/authorize',params=params).status_code in (403,404)
+
+
+def test_delete_only_withdrawn_version_preserves_history_and_access_audit(client,clip):
+    old=ready(client,clip,'删除旧版保留关联');client.post(BASE+f'/videos/{old}/publish')
+    token=grant(client,old)
+    assert client.delete(BASE+f'/videos/{old}').status_code==409
+    new=upload(client,clip,title='保留替代新版',replaces_id=old)
+    while run_one():pass
+    assert client.post(BASE+f'/videos/{new}/publish').status_code==200
+    login(client,'GSMTEST01');assert client.delete(BASE+f'/videos/{old}').status_code==403
+    login(client);assert client.delete(BASE+f'/videos/{old}').status_code==200
+    for suffix in ('','/cover','/authorize?token='+token,'/stream?token='+token):
+        assert client.get(BASE+f'/videos/{old}'+suffix).status_code==404
+    assert all(item['id']!=old for item in client.get(BASE+'/videos',params={'mine':True}).json()['items'])
+    assert run_one()
+    assert not media.video_dir(old).exists()
+    assert media.video_dir(new).is_dir()
+    row=client.get(BASE+f'/videos/{new}').json()
+    assert row['status']=='published' and row['replaces_id']==old
+    assert client.patch(BASE+f'/videos/{new}/audience',json={'audience_codes':['local_tr'],'revision':1}).status_code==200
+    with SessionLocal() as db:
+        assert db.get(LearningVideo,old).status=='deleted'
+        assert db.query(AuditLog).filter_by(entity_type='video_learning',entity_id=str(old),action='删除学习视频').count()==1
+        assert db.query(VideoPlayback).filter_by(video_id=old).count()>=1
+
+
+def test_delete_during_legacy_migration_cannot_resurrect(client,clip,monkeypatch):
+    id=ready(client,clip,'旧视频升级与删除竞争');client.post(BASE+f'/videos/{id}/publish')
+    with SessionLocal() as db:
+        row=db.get(LearningVideo,id);profiles=json.loads(row.profiles)
+        for p in profiles.values():p.pop('brand',None)
+        row.profiles=json.dumps(profiles);db.commit()
+    token=grant(client,id)
+    assert client.post(BASE+f'/videos/{id}/playback',params={'token':token}).json()['status']=='queued'
+    original=media.process_source
+    def racing(video,stop=None):
+        assert client.post(BASE+f'/videos/{id}/withdraw').status_code==200
+        assert client.delete(BASE+f'/videos/{id}').status_code==200
+        return original(video,stop)
+    monkeypatch.setattr(media,'process_source',racing)
+    assert run_one()
+    with SessionLocal() as db:assert db.get(LearningVideo,id).status=='deleted'
+    assert run_one()
+    assert not media.video_dir(id).exists()
+    assert client.get(BASE+f'/videos/{id}').status_code==404
+
+
+def test_delete_cleanup_retries_and_removes_legacy_cache(client,clip,monkeypatch):
+    id=ready(client,clip,'清理失败重试')
+    with SessionLocal() as db:
+        v=db.get(LearningVideo,id);key=media.playback_key(v,'SUPTEST01','720')
+        path=media.playback_path(key);path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'legacy')
+        db.add(VideoJob(video_id=id,key='playback:'+key,kind='playback',status='ready'));db.commit()
+    assert client.post(BASE+f'/videos/{id}/withdraw').status_code==200
+    assert client.delete(BASE+f'/videos/{id}').status_code==200
+    erase=media.erase_video_files
+    monkeypatch.setattr(media,'erase_video_files',lambda _:(_ for _ in ()).throw(RuntimeError('暂时占用')))
+    assert run_one()
+    assert client.get(BASE+f'/videos/{id}').status_code==404
+    monkeypatch.setattr(media,'erase_video_files',erase)
+    cleanup();assert run_one()
+    assert not media.video_dir(id).exists() and not path.exists()
+
+
+def test_transferred_author_can_find_and_delete_own_withdrawn_history(client,clip):
+    id=ready(client,clip,'作者转圈后删除历史')
+    assert client.post(BASE+f'/videos/{id}/withdraw').status_code==200
+    with SessionLocal() as db:
+        author=db.query(Employee).filter_by(employee_no='SUPTEST01').one();author_id=author.id;old=author.attraction_id
+        other=db.query(Attraction.id).filter_by(active=True,employee_circle=True).filter(Attraction.id!=old).first()[0]
+        author.attraction_id=other;db.commit()
+    try:
+        records=client.get(BASE+'/videos',params={'mine':True,'keyword':'作者转圈后删除历史'}).json()
+        assert records['total']==1 and records['items'][0]['can_delete']
+        assert client.get(BASE+f'/videos/{id}').json()['can_delete']
+        assert client.delete(BASE+f'/videos/{id}').status_code==200
+        assert run_one() and not media.video_dir(id).exists()
+    finally:
+        with SessionLocal() as db:db.get(Employee,author_id).attraction_id=old;db.commit()

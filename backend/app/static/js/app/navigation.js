@@ -29,7 +29,7 @@ function menuItems() {
   if(r==='SYSTEM_ADMIN')items.splice(5,0,['operations','系统运营']);
   if(isActingFrontline())items.unshift(['home','我的成绩']);
   items.splice(['CM','TR'].includes(r)?1:0,0,['actionCenter','待办']);
-  if(state.me.rotation_entry)items.push(['rotationTest','轮岗（测试）']);
+  if(state.me.rotation_entry)items.push(['rotationTest','轮岗看板']);
   items.splice(Math.min(items.length,1),0,['announcements','公告中心']);
   items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);
   items.push(['videoLearning','视频学习']);
