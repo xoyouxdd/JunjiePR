@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
@@ -84,27 +83,20 @@ def update_score_rule(payload: dict, request: Request, db: Session = Depends(get
 
 @router.get("/admin/logs")
 def admin_logs(limit: int = Query(300, ge=1, le=1000), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    """Summary-only audit trail: admins and HR管理员 see all circles, circle HR
-    sees entries of their own circle (incl. transfers into it); never the
-    before/after payloads."""
+    """Summary-only audit trail. Circle HR is restricted to local CM/TR/Lead;
+    manager operators and employee targets are excluded by the server."""
     query = db.query(AuditLog)
     if "SYSTEM_ADMIN" in user.permissions or user.has_role("HR_ADMIN"):
         pass
     elif user.has_role("HR_CIRCLE"):
+        from app.services.audit_visibility import circle_hr_logs
         circles = scoped_hr_attraction_ids(db, user) or set()
-        incoming_transfers = [
-            str(transfer_id)
-            for (transfer_id,) in db.query(CircleTransferRequest.id).filter(CircleTransferRequest.target_attraction_id.in_(circles or {-1}))
-        ]
-        query = query.filter(
-            or_(
-                AuditLog.attraction_id.in_(circles or {-1}),
-                and_(AuditLog.entity_type == "circle_transfer", AuditLog.entity_id.in_(incoming_transfers or ["-1"])),
-            )
-        )
+        rows = circle_hr_logs(db, circles, limit)
     else:
         raise HTTPException(403, "没有查看审计日志的权限")
+    if "SYSTEM_ADMIN" in user.permissions or user.has_role("HR_ADMIN"):
+        rows = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit).all()
     return [
         {"id": row.id, "time": row.created_at.strftime("%Y-%m-%d %H:%M:%S"), "operator": row.operator_name or "系统", "action": row.action, "entity": f"{row.entity_type}:{row.entity_id or ''}", "reason": row.reason or ""}
-        for row in query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit).all()
+        for row in rows
     ]

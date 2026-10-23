@@ -65,6 +65,8 @@ class Employee(Base):
     account_deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     account_deleted_by_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     employment_history: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    employee_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    internship_ends_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 

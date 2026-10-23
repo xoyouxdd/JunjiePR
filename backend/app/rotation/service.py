@@ -363,8 +363,13 @@ class DbHooks:
         RotationEvent = tables_for(self.db).RotationEvent
         if hasattr(actor, "kind"):
             actor_type, actor_id, actor_name = ('employee' if getattr(actor,'formal',False) else 'adjustment' if getattr(actor,'adjustment',False) else actor.kind), actor.actor_id, actor.name
+            if getattr(actor,'formal',False) and getattr(actor,'temporary',False): actor_type='temporary'
         else:
             actor_type, actor_id, actor_name = "system", None, "系统" if actor == "system" else str(actor)
+        if self.db.info.get('rotation_formal') and pid:
+            from app.rotation.temporary import was_temporary
+            if was_temporary(self.db,self.attraction_id,pid,datetime.now()):
+                detail={**(detail or {}),'rotation_temporary':True}
         self.db.add(RotationEvent(
             attraction_id=self.attraction_id,
             work_date=self.day,
@@ -1259,10 +1264,16 @@ def day_log(db: Session, attraction_id: int, day: str, limit: int = 500) -> list
     roster = roster_for(db, attraction_id, day)
     if roster:
         names = {no: p["name"] for no, p in roster["people"].items()}
+    if db.info.get('rotation_formal'):
+        from app.rotation.temporary import TemporaryMember
+        for member in db.query(TemporaryMember).filter_by(attraction_id=attraction_id):
+            names.setdefault(member.employee_no,member.name)
     return [{
         "id": r.id, "minute": r.minute, "time": fmt(r.minute), "actor": r.actor_name, "actor_type": r.actor_type,
         "type": r.event_type, "employee_no": r.employee_no, "name": names.get(r.employee_no, r.employee_no),
         "line": r.line, "post": r.post, "detail": json.loads(r.detail_json) if r.detail_json else None,
+        "temporary": bool(json.loads(r.detail_json or '{}').get('rotation_temporary')),
+        "actor_temporary": r.actor_type=='temporary',
     } for r in rows]
 
 
@@ -1294,13 +1305,25 @@ def person_record(db: Session, attraction_id: int, employee_no: str, day: str) -
         .order_by(RotationEvent.work_date.asc(), RotationEvent.minute.asc(), RotationEvent.id.asc())
         .all()
     )
+    member=None
+    if db.info.get('rotation_formal'):
+        from app.rotation.temporary import TemporaryMember
+        member=db.query(TemporaryMember).filter_by(attraction_id=attraction_id,employee_no=employee_no).first()
+    def temporary_segment(segment):
+        if not member: return False
+        start_at=datetime.fromisoformat(segment.work_date)+timedelta(minutes=segment.start_min)
+        end_at=datetime.fromisoformat(segment.work_date)+timedelta(minutes=segment.end_min)
+        return member.created_at<=end_at and (not member.adopted_at or start_at<member.adopted_at)
     return {
         "employee_no": employee_no,
         "week": [start, end],
-        "segments": [{"date": s.work_date, "line": s.line, "start": s.start_min, "end": s.end_min, "minutes": s.minutes} for s in segs],
+        "segments": [{"date": s.work_date, "line": s.line, "start": s.start_min, "end": s.end_min, "minutes": s.minutes,
+                      "temporary":temporary_segment(s)} for s in segs],
         "totals": totals,
         "duties": [{"date": d.work_date, "kind": d.kind} for d in duties],
         "events": [{"date": e.work_date, "time": fmt(e.minute), "type": e.event_type, "actor": e.actor_name, "line": e.line, "post": e.post,
+                    "temporary":bool(json.loads(e.detail_json or '{}').get('rotation_temporary')),
+                    "actor_temporary":e.actor_type=='temporary',
                     "detail": json.loads(e.detail_json) if e.detail_json else None} for e in events],
     }
 

@@ -22,6 +22,8 @@ ROLES = MANAGERS | {'CM', 'TR'}
 
 
 def capabilities(user):
+    if getattr(user,'rotation_temporary',False):
+        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings'),False)
     codes = set(user.role_codes)
     manage = bool(codes & MANAGERS)
     return {'can_operate': manage or 'TR' in codes, 'can_manage': manage,
@@ -29,6 +31,7 @@ def capabilities(user):
 
 
 def can_enter(user):
+    if getattr(user,'rotation_temporary',False): return True
     return bool(set(user.role_codes) & ROLES and user.employee.attraction_id
                 and user.employee.attraction and user.employee.attraction.active
                 and user.employee.attraction.employee_circle)
@@ -58,7 +61,7 @@ def formal_db():
 def actor(user, *, personal=False):
     return RotationActor('member' if personal else 'supervisor', user.name,
                          member_employee_no=user.employee.employee_no,
-                         entered_by=user.employee, formal=True)
+                         entered_by=user.employee, formal=True, temporary=getattr(user,'rotation_temporary',False))
 
 
 def identity(user):
@@ -111,13 +114,23 @@ def me(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
 
 
 @router.post('/me/act')
-def me_act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
+def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     if payload.get('pid',user.employee.employee_no) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
     if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust'): raise HTTPException(403, '只可确认本人轮岗待办')
     if not payload.get('confirmation_token'): raise HTTPException(400, '请刷新待办后重新确认')
-    return call(S.do_live_action, db, user.employee.attraction_id, actor(user, personal=True),
-                {**payload, 'pid': user.employee.employee_no})
+    with runtime_for(db).lock:
+        try:
+            if getattr(user,'rotation_temporary',False):
+                from sqlalchemy import text
+                from app.rotation.temporary import current
+                db.rollback();db.execute(text('BEGIN IMMEDIATE'))
+                user=current(db,request)
+            return call(S.do_live_action, db, user.employee.attraction_id, actor(user, personal=True),
+                        {**payload, 'pid': user.employee.employee_no})
+        except Exception:
+            db.rollback()
+            raise
 
 
 @router.post('/act')
@@ -217,21 +230,51 @@ def roster(date: str, db: Session = Depends(formal_db), user: V2User = Depends(m
 
 @router.post('/roster/upload')
 async def upload(file: UploadFile = File(...), scope: str = Form('week'), date: str = Form(''),
+                 preview: bool = Form(False), expected_digest: str = Form(''),
                  db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     if not (file.filename or '').lower().endswith('.xlsx'): raise HTTPException(400,'请上传xlsx班表')
     content=await file.read(10*1024*1024+1)
     if not content or len(content)>10*1024*1024: raise HTTPException(400,'班表不能为空且不能超过10MB')
     try: parsed=parse_any(BytesIO(content))
     except (ValueError,KeyError,StopIteration,zipfile.BadZipFile) as exc: raise HTTPException(400,'班表无法识别') from exc
-    people=parsed['people']
-    found={e.employee_no:e for e in db.query(Employee).filter(Employee.employee_no.in_(people),
-           Employee.attraction_id==user.employee.attraction_id,Employee.is_active.is_(True),Employee.account_deleted_at.is_(None))}
-    missing=sorted(set(people)-set(found))
-    if missing: raise HTTPException(400,'班表含非本圈在职员工号，请核对：'+'、'.join(missing[:20]))
-    for no,person in people.items(): person['name']=found[no].name
-    row=call(S.save_roster,db,user.employee.attraction_id,parsed,scope=scope,file_name=file.filename,
-             uploader_id=user.id,uploader_name=user.name,only_date=date or None)
-    return {'ok':True,'scope':row.scope,'start_date':row.start_date,'end_date':row.end_date,'entry_count':row.entry_count}
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(_save_uploaded_roster, parsed, scope, date, preview, expected_digest, file.filename, db, user)
+
+
+def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filename, db, user):
+    from app.rotation.temporary import preflight, provision
+    from app.v2_crypto import hash_password
+    preliminary=preflight(db,parsed,user.employee.attraction_id,scope,date or None)
+    if preview: return {'ok':True,'preview':True,**preliminary}
+    if expected_digest and expected_digest!=preliminary['digest']:
+        raise HTTPException(409,'班表或人员身份已变化，请重新预检')
+    if preliminary['new'] and not expected_digest:
+        raise HTTPException(409,'含未注册人员，请预检并确认创建轮岗临时账号')
+    # Password derivation is intentionally outside the rotation/database write locks.
+    db.rollback()
+    passwords={p['employee_no']:hash_password(p['employee_no'][-4:]) for p in preliminary['new']}
+    with runtime_for(db).lock:
+        from sqlalchemy import text
+        from sqlalchemy.exc import IntegrityError
+        try:
+            # A writer reservation serializes roster provisioning against HR registration.
+            db.rollback()
+            db.execute(text('BEGIN IMMEDIATE'))
+            batch=preflight(db,parsed,user.employee.attraction_id,scope,date or None)
+            if preliminary['digest']!=batch['digest']:
+                raise HTTPException(409,'班表或人员身份已变化，请重新预检')
+            with S.transaction(db):
+                provision(db,parsed,user.employee.attraction_id,batch,passwords)
+                row=call(S.save_roster,db,user.employee.attraction_id,parsed,scope=scope,file_name=filename,
+                         uploader_id=user.id,uploader_name=user.name,only_date=date or None)
+            return {'ok':True,'scope':row.scope,'start_date':row.start_date,'end_date':row.end_date,
+                    'entry_count':row.entry_count,'temporary_created':len(batch['new'])}
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(409,'人员身份刚刚变化，请重新预检班表') from exc
+        except Exception:
+            db.rollback()
+            raise
 
 
 @router.get('/log')

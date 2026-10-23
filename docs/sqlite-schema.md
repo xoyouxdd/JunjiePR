@@ -187,6 +187,8 @@
 | `account_deleted_at` | DATETIME | 是 | 登录账号已归档 |
 | `account_deleted_by_name` | VARCHAR(100) | 是 | 归档操作人姓名 |
 | `employment_history` | TEXT | 否 | JSON数组，默认`[]`；保留历次任职起止、删除时间和重新入职日期，同一员工原工号重新注册沿用主键 |
+| `employee_type` | VARCHAR(80) | 是 | 独立Type身份标识；Intern为实习生，其他非空值为正式工并保留具体值；不改变角色或计分 |
+| `internship_ends_on` | VARCHAR(10) | 是 | 选填实习结束日，仅Intern使用；北京时间次日起停用登录账号 |
 | `created_at` | DATETIME | 否 | |
 | `updated_at` | DATETIME | 否 | |
 
@@ -1248,3 +1250,10 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 2026-10-22视频学习改造不新增表或列：`learning_videos.status='deleted'`为删除标记，保留替代版本外键及访问/审计记录；`learning_video_jobs.kind='shared'/'delete'`负责旧共享视频升级及可靠文件清理。`profiles` JSON的每个清晰度追加`brand`处理修订号。观看范围新增`local_all`（本圈所有人）和`all_people`（所有圈所有人），原TR范围仍排除CM。新授权token包含视频版本前缀并与现有会话绑定，旧提示版本作废。设备缓存不存入服务端业务数据库，不新增学习计分或评价口径。
 
 正式轮岗表由 `rotation/namespace.py` 注册，结构沿用对应轮岗表，唯一约束和索引加 `formal_` 前缀。正式名单明细的upload_id引用formal_rotation_roster_uploads；attraction_id和员工外键继续引用真实业务主表。正式与测试使用独立运行缓存、版本与快照，不共享模拟时钟。
+
+
+### 正式轮岗临时人员
+
+- `formal_rotation_temporary_members`：独立7位工号（唯一）、姓名、本圈、密码哈希、启用状态、有效截止时刻、登录锁定计数、创建及正式接管时间、接管员工ID。不会创建正式员工或角色。接管字段保留，账号失效不删除历史。
+- `formal_rotation_temporary_sessions`：临时身份ID、令牌哈希（唯一）、会话截止时刻；正式接管或退出撤销，鉴权同时检查身份截止和接管状态。
+- 新表由启动时metadata建表；不修改原有员工、正式轮岗事件和班表表结构。临时操作事件使用actor_type=temporary、actor_id为空，detail_json保存rotation_temporary事实；个人在线段按临时身份与在线时段的交集标记。

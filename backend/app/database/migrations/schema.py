@@ -4,6 +4,13 @@ from __future__ import annotations
 from sqlalchemy import text
 
 
+def ensure_employee_type_columns(db) -> None:
+    columns = {row[1] for row in db.execute(text('PRAGMA table_info(employees)'))}
+    for name, sql_type in (('employee_type', 'VARCHAR(80)'), ('internship_ends_on', 'VARCHAR(10)')):
+        if columns and name not in columns:
+            db.execute(text(f'ALTER TABLE employees ADD COLUMN {name} {sql_type}'))
+
+
 def ensure_month_rank_comment_column(db) -> None:
     columns = {row[1] for row in db.execute(text("PRAGMA table_info(employee_month_rank_snapshots)"))}
     for name in ("comment_text", "comparison_scope_json"):

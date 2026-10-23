@@ -221,6 +221,8 @@ async def reject_cross_site_state_changes(request: Request, call_next):
 def startup() -> None:
     validate_runtime_paths()
     init_db()
+    from app.services.employee_types import start_worker as start_employee_type_worker
+    start_employee_type_worker()
     start_deduction_material_worker()
     start_rotation_ticker()
     start_announcement_worker()
@@ -234,6 +236,8 @@ def startup() -> None:
 
 @app.on_event("shutdown")
 def shutdown_announcements():
+    from app.services.employee_types import stop_worker as stop_employee_type_worker
+    stop_employee_type_worker()
     stop_announcement_worker()
     stop_video_worker()
 

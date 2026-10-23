@@ -939,8 +939,8 @@ def test_circle_hr_accounts_are_scoped_and_can_change_password() -> None:
         ).status_code == 403
         import_book = Workbook()
         import_sheet = import_book.active
-        import_sheet.append(["员工号", "姓名", "角色代码", "景点圈", "初始密码", "在职", "账号启用", "任职开始日", "任职结束日", "到期恢复角色代码"])
-        import_sheet.append(["9990031", "越权导入GSM", "GSM", "热力追踪", "1234", "是", "是", date.today().isoformat(), "", ""])
+        import_sheet.append(["员工号", "姓名", "角色代码", "景点圈", "Type", "实习结束日期"])
+        import_sheet.append(["9990031", "越权导入GSM", "GSM", "热力追踪", "", ""])
         import_content = BytesIO()
         import_book.save(import_content)
         assert client.post(

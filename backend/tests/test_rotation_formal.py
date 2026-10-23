@@ -268,7 +268,7 @@ def test_upload_rejects_foreign_or_unknown_staff_and_formal_configuration_is_edi
         wb.active.append(['9710001','另一圈员工',date.today().isoformat(),'07:15-16:15',''])
         out=BytesIO();wb.save(out)
         response=c.post('/api/rotation-board/roster/upload',files={'file':('foreign.xlsx',out.getvalue(),'application/octet-stream')},data={'scope':'day'})
-        assert response.status_code==400 and '非本圈在职' in response.text
+        assert response.status_code==400 and '本圈可用正式账号' in response.text
 
 
 def test_formal_manual_preview_is_required_and_stale_preview_is_rejected():
@@ -353,6 +353,8 @@ def test_own_arrival_preserves_forced_meal_and_duplicate_protection():
         db.info['rotation_formal']=True
         aid=db.query(Attraction).filter_by(name='热力追踪').one().id
         with S.transaction(db):
+            # This test covers forced-meal confirmation, including overnight test runs.
+            cfg=S.load_config(db,aid);settings=S.settings_of(cfg);settings['mealEarliest']='00:00';cfg.settings_json=S._dumps(settings)
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             for line in state['lines']:
                 for post in line['posts']:

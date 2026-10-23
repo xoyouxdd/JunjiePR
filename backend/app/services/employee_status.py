@@ -58,6 +58,13 @@ def archive_employee_profile(context: EmployeeEditContext) -> None:
 
 def _apply_profile(context: EmployeeEditContext) -> None:
     employee, payload = context.employee, context.payload
+    if 'employee_type' in payload or 'internship_ends_on' in payload:
+        from app.services.employee_types import normalize
+        kind = payload.get('employee_type', employee.employee_type)
+        end = payload.get('internship_ends_on', employee.internship_ends_on)
+        if 'employee_type' in payload and isinstance(kind, (str, type(None))) and (kind or '').strip().lower() != 'intern' and 'internship_ends_on' not in payload:
+            end = None
+        employee.employee_type, employee.internship_ends_on = normalize(kind, end)
     if "name" in payload:
         employee.name = str(payload["name"]).strip()
     if "attraction_id" in payload:
@@ -131,7 +138,13 @@ def _apply_account_status(context: EmployeeEditContext) -> None:
     account = context.db.query(UserAccount).filter(UserAccount.employee_id == context.employee.id).first()
     if account and "account_enabled" in context.payload:
         next_enabled = bool(context.payload["account_enabled"])
+        from app.services.employee_types import is_due
+        if next_enabled and not account.enabled and is_due(context.employee.employee_type, context.employee.internship_ends_on):
+            raise HTTPException(400, '实习结束日期已过，请先修改或清空日期，再明确启用账号')
         if next_enabled != account.enabled:
             context.ensure_current_month_open("修改员工账号启用状态")
             account.enabled = next_enabled
             account.disabled_at = None if next_enabled else datetime.now()
+    context.db.flush()
+    from app.services.employee_types import expire_accounts
+    expire_accounts(context.db, context.employee.id)

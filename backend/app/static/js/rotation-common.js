@@ -79,12 +79,13 @@ function restSummary(people) {
 }
 
 async function rtApi(path, options = {}) {
+  const {timeoutMs=12000,...fetchOptions}=options;
   let res;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let body;
   try {
-    res = await fetch(portalPath(rotationApiPath(path)), { credentials: 'same-origin', ...options, signal: controller.signal });
+    res = await fetch(portalPath(rotationApiPath(path)), { credentials: 'same-origin', ...fetchOptions, signal: controller.signal });
     body = await res.json();
   } catch (_) {
     const error = new Error(RT.pendingConfirmation ? '网络连接中断，正在核实确认结果' : '网络连接失败，恢复后将重新同步');

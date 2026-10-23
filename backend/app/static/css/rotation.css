@@ -140,6 +140,7 @@ button.rt-chip { cursor: pointer; }
 .rt-row label { display: inline-flex; align-items: center; gap: 6px; }
 .rt-row button { width: auto; }
 .rt-label { min-width: 5em; font-weight: 600; }
+.rt-label-text { flex-shrink: 0; white-space: nowrap; }
 .rt-pill { display: inline-block; padding: 4px 10px; border-radius: 999px; background: var(--surface-tint); color: var(--text-strong); font-size: 13px; }
 .rt-dline { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); font-size: 14px; }
 .rt-dline select { max-width: 60%; min-height: 36px; }

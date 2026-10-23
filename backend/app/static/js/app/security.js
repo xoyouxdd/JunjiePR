@@ -14,7 +14,7 @@ let screenshotNoticePending=false;
 
 async function recordScreenshotKey(){if(screenshotNoticePending)return;screenshotNoticePending=true;try{const result=await api('/api/security/screenshot-event',{method:'POST'});await noticeModal('截图安全提醒',`<p>${esc(result.message)}</p>`)}catch(error){await noticeModal('截图安全提醒','<p>检测到截图按键，请勿分享页面数据。记录提交失败，请联系管理员。</p>')}finally{setTimeout(()=>{screenshotNoticePending=false},1200)}}
 
-const handleScreenshotKey=event=>{if(event.key==='PrintScreen')recordScreenshotKey()};
+const handleScreenshotKey=event=>{if(event.key==='PrintScreen'&&!state.me?.rotation_temporary)recordScreenshotKey()};
 
 function installSecurityEvents(){window.addEventListener('keydown',handleScreenshotKey);window.addEventListener('keyup',handleScreenshotKey);}
 

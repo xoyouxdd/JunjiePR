@@ -26,8 +26,8 @@ def test_employee_import_template_sheets_and_headers() -> None:
     wb = build_employee_import_template()
     assert wb.sheetnames == ["员工导入", "填写说明"]
     headers = [cell.value for cell in wb["员工导入"][1]]
-    assert headers == ["员工号", "姓名", "角色代码", "景点圈", "初始密码", "在职", "账号启用", "任职开始日", "任职结束日", "到期恢复角色代码"]
+    assert headers == ["员工号", "姓名", "角色代码", "景点圈", "Type", "实习结束日期"]
     sample = [cell.value for cell in wb["员工导入"][2]]
     assert sample[0] == "1000001"
-    assert sample[7] == date.today().isoformat()
+    assert sample[4] == "Intern" and sample[5] == ""
     assert "可用角色代码" in [cell.value for cell in wb["填写说明"][1]]

@@ -4,9 +4,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from openpyxl import load_workbook
 from sqlalchemy import or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,7 +23,6 @@ from app.services.employment import restart_employment
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.services import loa_commands
-from app.services.employee_import_dates import normalize_import_date
 from app.routers._shared import (
     CIRCLE_HR_MANAGED_ROLE_CODES,
     EMPLOYEE_TARGET_PERMISSIONS,
@@ -340,121 +338,64 @@ def employee_import_template(db: Session = Depends(get_db), user: V2User = Depen
     output.seek(0)
     write_audit(db, user.employee, "下载员工导入模板", "employee_import_template", None)
     db.commit()
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="employee_import_template_v2.xlsx"'})
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="employee_import_template_v3.xlsx"'})
 
 
 @router.post("/hr/import-employees")
-async def import_employees(request: Request, workbook: UploadFile = File(...), db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+async def import_employees(request: Request, workbook: UploadFile = File(...), preview: bool = Form(False),
+                           skip_existing: bool = Form(False), expected_digest: str = Form(''),
+                           db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    from app.services.employee_import import preflight
+    from app.services.employee_types import expire_accounts, business_today
     if Path(workbook.filename or "").suffix.lower() != ".xlsx":
         raise HTTPException(400, "请上传xlsx文件")
     content = await workbook.read(5 * 1024 * 1024 + 1)
     if not content or len(content) > 5 * 1024 * 1024:
         raise HTTPException(400, "导入文件不能为空且不能超过5MB")
     try:
-        sheet = load_workbook(BytesIO(content), read_only=True, data_only=True).worksheets[0]
-    except Exception as exc:
-        raise HTTPException(400, "Excel文件无法读取") from exc
-    expected = ["员工号", "姓名", "角色代码", "景点圈", "初始密码", "在职", "账号启用", "任职开始日", "任职结束日", "到期恢复角色代码"]
-    header = [str(cell or "").strip() for cell in next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))]
-    if header[:len(expected)] != expected:
-        raise HTTPException(400, "表头与V2导入模板不一致")
-    roles = {row.code: row for row in db.query(Role).all()}
-    circles = {
-        row.name: row
-        for row in db.query(Attraction)
-        .filter(Attraction.active.is_(True), Attraction.employee_circle.is_(True))
-        .all()
-    }
-    allowed_attractions = scoped_hr_attraction_ids(db, user)
-    allowed_circle_names = {
-        row.name for row in db.query(Attraction).filter(Attraction.id.in_(allowed_attractions)).all()
-    } if allowed_attractions is not None else None
-    role_codes_allowed = set(roles) if "SYSTEM_ADMIN" in user.permissions else CIRCLE_HR_MANAGED_ROLE_CODES
-    parsed, seen, errors = [], set(), []
-    for row_number, values in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-        values = list(values[:len(expected)]) + [None] * max(0, len(expected) - len(values))
-        employee_no, name, role_code, attraction_name, password, active, enabled, starts_on, ends_on, return_code = [str(v).strip() if v is not None else "" for v in values]
-        if not any((employee_no, name, role_code, attraction_name)):
-            continue
-        date_errors = []
-        for column, label in ((7, '任职开始日'), (8, '任职结束日')):
-            try:
-                normalized = normalize_import_date(values[column])
-                if column == 7:
-                    starts_on = normalized
-                else:
-                    ends_on = normalized
-            except ValueError as exc:
-                date_errors.append(f'第{row_number}行：{label}{exc}')
-        if date_errors:
-            errors.extend(date_errors)
-            continue
-        if ends_on and ends_on < (starts_on or date.today().isoformat()):
-            errors.append(f'第{row_number}行：任职结束日不能早于任职开始日（开始日留空时按导入当天）')
-            continue
-        if not employee_no or not name or role_code not in roles:
-            errors.append(f"第{row_number}行：员工号、姓名必填且角色代码必须有效")
-            continue
-        if role_code not in role_codes_allowed:
-            errors.append(f"第{row_number}行：景点圈HR只能创建LEAD及以下账号")
-            continue
-        if len(employee_no) != 7 or not employee_no.isdigit():
-            errors.append(f"第{row_number}行：员工号必须为7位纯数字")
-            continue
-        if attraction_name and attraction_name not in circles:
-            errors.append(f"第{row_number}行：景点圈只能填写热力追踪、矮人迷宫或小熊罐子")
-            continue
-        if allowed_circle_names is not None and attraction_name not in allowed_circle_names:
-            errors.append(f"第{row_number}行：景点圈HR只能导入所属景点圈员工")
-            continue
-        if (
-            employee_no in seen
-            or db.query(Employee).filter(Employee.employee_no == employee_no).first()
-            or db.query(UserAccount).filter(UserAccount.login_account == employee_no).first()
-        ):
-            errors.append(f"第{row_number}行：员工号{employee_no}重复")
-            continue
-        if ends_on and return_code not in roles:
-            errors.append(f"第{row_number}行：临时角色必须填写有效的到期恢复角色")
-            continue
-        if ends_on and return_code not in role_codes_allowed:
-            errors.append(f"第{row_number}行：景点圈HR只能将到期恢复角色设置为LEAD及以下")
-            continue
-        seen.add(employee_no)
-        parsed.append((employee_no, name, role_code, attraction_name, password, active, enabled, starts_on, ends_on, return_code))
-    if errors:
-        raise HTTPException(400, "；".join(errors[:20]))
-    created = 0
-    try:
-        for employee_no, name, role_code, attraction_name, password, active, enabled, starts_on, ends_on, return_code in parsed:
-            attraction = None
-            if attraction_name:
-                attraction = circles[attraction_name]
-            employee = Employee(employee_no=employee_no, name=name, attraction_id=attraction.id if attraction else None, is_active=active not in {"否", "0", "false", "False"}, hired_on=starts_on or date.today().isoformat())
-            db.add(employee)
-            db.flush()
-            db.add(EmployeeRoleAssignment(employee_id=employee.id, role_id=roles[role_code].id, starts_on=starts_on or date.today().isoformat(), ends_on=ends_on or None, assignment_type="temporary" if ends_on else "permanent", return_role_id=roles[return_code].id if ends_on else None, status="active", reason="HR Excel导入", created_by=user.id))
-            # Keep Excel imports consistent with the documented employee-account
-            # rule. An explicitly supplied initial password still takes priority.
-            initial_password = password or default_initial_password(employee_no)
-            db.add(
-                UserAccount(
-                    employee_id=employee.id,
-                    login_account=employee_no,
-                    password_hash=hash_password(initial_password),
-                    enabled=enabled not in {"否", "0", "false", "False"},
-                    must_change_password=True,
-                    credential_initialized=True,
-                )
-            )
-            created += 1
-        write_audit(db, user.employee, "Excel导入员工", "employee_import", after={"created": created, "filename": workbook.filename}, ip_address=client_ip(request))
+        if not preview:
+            db.rollback()
+            db.execute(text('BEGIN IMMEDIATE'))
+        allowed = scoped_hr_attraction_ids(db, user)
+        roles = {r.code:r for r in db.query(Role).all()}
+        allowed_roles = set(roles) if "SYSTEM_ADMIN" in user.permissions else CIRCLE_HR_MANAGED_ROLE_CODES
+        batch = preflight(db,user,content,allowed,allowed_roles)
+        report = {k:v for k,v in batch.items() if k!='rows'}
+        if preview:
+            return {"ok":True,"preview":True,"created":0,**report}
+        if expected_digest and expected_digest!=batch['digest']:
+            raise HTTPException(409,'文件、员工名单或日期已变化，请重新预检后确认')
+        if batch['duplicates'] and (not skip_existing or not expected_digest):
+            raise HTTPException(409,'员工已存在，请先预检并明确选择跳过；已有员工不会被覆盖')
+        if batch['expired'] and not expected_digest:
+            raise HTTPException(409,'包含实习已到期人员，请先预检并确认创建为停用状态')
+        for row in batch['rows']:
+            employee=Employee(employee_no=row['employee_no'],name=row['name'],attraction_id=row['attraction_id'],
+                is_active=True,hired_on=business_today().isoformat(),employee_type=row['employee_type'],internship_ends_on=row['internship_ends_on'])
+            db.add(employee);db.flush()
+            from app.rotation.temporary import adopt
+            adopt(db,employee)
+            db.add(EmployeeRoleAssignment(employee_id=employee.id,role_id=roles[row['role_code']].id,
+                starts_on=business_today().isoformat(),assignment_type='permanent',status='active',reason='HR Excel导入',created_by=user.id))
+            db.add(UserAccount(employee_id=employee.id,login_account=employee.employee_no,
+                password_hash=hash_password(default_initial_password(employee.employee_no)),enabled=True,
+                must_change_password=True,credential_initialized=True))
+            synchronize_gsm_management_scope(db,employee,row['role_code'])
+        db.flush()
+        for row in batch['rows']:
+            employee=db.query(Employee).filter_by(employee_no=row['employee_no']).one()
+            expire_accounts(db,employee.id)
+        write_audit(db,user.employee,'Excel导入员工','employee_import',after={'created':len(batch['rows']),
+            'skipped':len(batch['duplicates']),'expired':len(batch['expired']),'filename':workbook.filename},ip_address=client_ip(request))
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409,'员工号刚刚已被注册，请重新预检') from exc
     except Exception:
         db.rollback()
         raise
     invalidate_data_caches()
-    return {"ok": True, "created": created}
+    return {'ok':True,'created':len(batch['rows']),'skipped':len(batch['duplicates']),**report}
 
 
 @router.post("/hr/employees")
@@ -472,6 +413,8 @@ def create_employee(payload: dict, request: Request, db: Session = Depends(get_d
 
 
 def _create_employee(payload: dict, request: Request, db: Session, user: V2User):
+    from app.services.employee_types import normalize as normalize_type, expire_accounts
+    employee_type, internship_ends_on = normalize_type(payload.get('employee_type'), payload.get('internship_ends_on'))
     employee_no = str(payload.get("employee_no") or "").strip()
     name = str(payload.get("name") or "").strip()
     role = db.query(Role).filter(Role.code == str(payload.get("role_code") or "")).first()
@@ -485,6 +428,8 @@ def _create_employee(payload: dict, request: Request, db: Session, user: V2User)
         raise HTTPException(400, "该员工号已存在，不能重复创建账号")
     attraction_id = employee_circle_id(db, payload.get("attraction_id"))
     ensure_scoped_hr_attraction(db, user, attraction_id)
+    from app.rotation.temporary import pending, adopt
+    pending(db,employee_no,name,attraction_id)
     rehire = bool(existing)
     previous_deleted_at = None
     if existing:
@@ -510,7 +455,10 @@ def _create_employee(payload: dict, request: Request, db: Session, user: V2User)
         starts_on = str(payload.get("starts_on") or date.today().isoformat())
         employee = Employee(employee_no=employee_no, name=name, attraction_id=attraction_id, is_active=True, hired_on=str(payload.get("hired_on") or date.today().isoformat()))
         db.add(employee)
+    employee.employee_type = employee_type
+    employee.internship_ends_on = internship_ends_on
     db.flush()
+    adopt(db,employee)
     ends_on = str(payload.get("ends_on") or "").strip() or None
     return_role = db.query(Role).filter(Role.code == str(payload.get("return_role_code") or "")).first() if ends_on else None
     if ends_on:
@@ -547,9 +495,12 @@ def _create_employee(payload: dict, request: Request, db: Session, user: V2User)
             credential_initialized=True,
         )
     )
+    db.flush()
+    expire_accounts(db, employee.id)
     write_audit(db, user.employee, "重新入职注册" if rehire else "新建员工", "employee", employee.id,
                 before={"previous_deleted_at": previous_deleted_at} if rehire else None,
-                after={"employee_no": employee_no, "role": role.name, "rehired": rehire, "history_retained": True}, ip_address=client_ip(request))
+                after={"employee_no": employee_no, "role": role.name, "rehired": rehire, "history_retained": True,
+                       'employee_type': employee_type, 'internship_ends_on': internship_ends_on}, ip_address=client_ip(request))
     db.commit()
     invalidate_data_caches()
     return {

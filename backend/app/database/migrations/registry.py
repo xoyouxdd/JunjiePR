@@ -43,6 +43,8 @@ from app.database.migrations.organization import (
 )
 
 # Execution uses explicit callables; legacy key/name metadata remains public.
+from app.database.migrations.schema import ensure_employee_type_columns
+
 MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-08-void-audit-columns', ensure_void_audit_columns),
     ('2026-08-credential-columns', ensure_credential_columns),
@@ -71,6 +73,7 @@ MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-10-month-rank-rule-version', ensure_month_rank_rule_columns),
     ('2026-09-sick-leave-index-repair', ensure_sick_leave_record_indexes),
     ('2026-10-employee-employment-history', ensure_employee_employment_history),
+    ('2026-10-employee-type-internship', ensure_employee_type_columns),
 )
 SCHEMA_MIGRATION_STEPS = [(key, runner.__name__) for key, runner in MIGRATION_RUNNERS]
 

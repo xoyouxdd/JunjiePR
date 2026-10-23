@@ -45,6 +45,8 @@ function mountRotationTasks(host,request,onComplete){
       if(!current())return;
       const p=data.person;
       const empty=host.parentElement.querySelector('.action-center-empty');if(empty)empty.hidden=!!p;
+      const personalEmpty=document.getElementById('rotationPersonalEmpty');
+      if(personalEmpty){personalEmpty.hidden=!!p;personalEmpty.textContent='当前没有已发布的本人轮岗安排，请等待主管更新班表。';}
       if(!p){host.innerHTML='';return;}
       const g=p.entryGroup,voted=g?.members.find(m=>m.pid===p.pid)?.confirmed;
       const a=p.assign,action=p.entryHold?'entry_return':['walkback','pending'].includes(p.state)?'arrive':p.state==='ready'&&p.canDepart&&!voted&&!g?.blocked?'depart':null;
@@ -52,6 +54,8 @@ function mountRotationTasks(host,request,onComplete){
       const status=waiting?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:['rest','meal'].includes(p.state)?`${p.state==='meal'?'吃饭':'休息'}至 ${hm(p.readyAt)}`:p.state==='heading'?`前往 ${esc(a?.line||'')} 线，预计${hm(p.arriveAt)}到岗`:p.state==='onpost'?`在 ${esc(p.line)} 线 · ${esc(p.post)}`:p.state==='ready'&&!action?'等待上岗时间':action==='arrive'?'待确认休息／吃饭':p.state==='done'?'当日轮岗已结束':'请留意当日轮岗安排';
       const result=data.confirmations?.[0];
       host.innerHTML=`<section class="panel"><div class="record-line"><h3>我的轮岗</h3><a class="secondary" href="${portalPath('/rotation-board')}">当日看板</a></div><p>${status}</p>${a?`<p>安排：${esc(a.line)}线 · ${esc(a.entryPost||'入口岗位')}，${hm(a.departAt)}出发${a.targetName?' · 替换'+esc(a.targetName):''}</p>`:''}${action==='arrive'&&p.mealOptions?.canChoose?'<fieldset><legend>本次选择</legend><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="rest" checked>休息</label><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="meal">吃饭</label></fieldset>':''}${action==='arrive'&&p.mealOptions?.forced?'<p>已到饭点，本次按原规则安排吃饭。</p>':''}${pending?'<p role="status">上次提交结果待核对，可刷新或使用原步骤重试。</p><button type="button" class="primary" data-rotation-retry>重试本次确认</button>':action?`<button type="button" class="primary" data-rotation-task="${action}">${action==='depart'?'确认去上岗':'确认已到休息室'}</button>`:''}${result?`<p class="field-hint">最近确认：${hm(result.minute)} · ${result.action==='depart'?esc(result.line)+'线 · '+esc(result.post):'已到休息室'}</p>`:''}${taskLine(data.line,p.pid)}</section>`;
+      if(state.me.rotation_temporary)host.querySelector('a[href]')?.remove();
+      if(state.me.rotation_temporary&&data.notices?.some(n=>n.status==='open'))host.querySelector('.panel').insertAdjacentHTML('beforeend',`<div role="status">${data.notices.filter(n=>n.status==='open').map(n=>`<p><strong>${esc(n.title)}</strong><br>${esc(n.body)}</p>`).join('')}</div>`);
       host.querySelector('[data-rotation-task]')?.addEventListener('click',()=>submit(action));
       const panel=host.querySelector('.panel');
       if(g){panel.insertAdjacentHTML('beforeend',entryCard(p));if(p.canDepart&&!g.soloBlocked)panel.insertAdjacentHTML('beforeend','<button type="button" class="secondary" data-entry-single>同行人未到场，调整为单人上岗</button>');}

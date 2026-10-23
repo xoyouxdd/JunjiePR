@@ -5,7 +5,7 @@ import { showReleaseAnnouncement } from './app/announcement.js';
 import { renderAnnouncements } from './app/announcements.js';
 import { api } from './app/api.js';
 import { logout } from './app/auth.js';
-import { configureViews, render } from './app/context.js';
+import { configureViews, render, beginViewRequest } from './app/context.js';
 import { renderDeclarationStatistics } from './app/declarations.js';
 import { renderEntries } from './app/entries.js';
 import { esc } from './app/format.js';
@@ -19,7 +19,7 @@ import { renderActionCenter, renderChangelog, renderOperations } from './app/ope
 import { renderPrRankings } from './app/rankings.js';
 import { renderRegister } from './app/registration.js';
 import { renderFrontlineReview, renderSupervisorReview, renderUpgradeReview } from './app/reviews.js';
-import { renderRotationTest } from './app/rotation.js';
+import { renderRotationTest, mountRotationTasks } from './app/rotation.js';
 import { applyCircleTheme, installPageBindHint, installScreenWatermark, installSecurityEvents } from './app/security.js';
 import { app, state } from './app/state.js';
 import { installFormProtection } from './app/submission.js';
@@ -67,6 +67,15 @@ document.getElementById('logoutBtn').onclick=logout;
 async function initializeApp(){
   try{
     state.me=await api('/api/me');
+    if(state.me.rotation_temporary){
+      document.getElementById('tabs').hidden=true;
+      document.body.classList.add('rotation-personal-only');
+      document.getElementById('userBadge').textContent=`${state.me.name} · ${state.me.attraction_name}`;
+      applyCircleTheme();installPageBindHint();installScreenWatermark();
+      app.innerHTML='<section class="panel"><h2>轮岗待办</h2><p class="field-hint">仅显示本人当日安排，请按实际到位情况确认。</p></section><div id="rotationPersonalTasks"></div><section class="empty" id="rotationPersonalEmpty" role="status">正在同步当日轮岗安排…</section>';
+      mountRotationTasks(document.getElementById('rotationPersonalTasks'),beginViewRequest());
+      return;
+    }
     if(state.me.must_change_password){renderPasswordChangeRequired();return;}
     state.options=await api('/api/options');
     if(new URLSearchParams(location.search).get('view')==='actionCenter')state.tab='actionCenter';

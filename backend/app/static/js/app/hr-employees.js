@@ -28,6 +28,28 @@ function hrIdentityTags(employee){
   return `${hrTag(esc(employee.base_role_name||employee.role_name||'未配置'))}${employee.duty_role_code?hrTag(`代理${esc(employee.duty_role_name)}`,'accent'):''}`;
 }
 
+function hrTypeCell(employee){
+  const type=employee.employee_type||'';
+  if(!type)return '<span class="not-applicable">未填写</span>';
+  return `<strong>${esc(type)} · ${type.toLowerCase()==='intern'?'实习生':'正式工'}</strong>${type.toLowerCase()==='intern'?`<small>实习结束：${esc(employee.internship_ends_on||'未设置')}</small>`:''}`;
+}
+
+function hrTypeFields(employee={},key='create'){
+  return `<label class="hr-create-type">员工Type（选填）<input name="employee_type" list="hrTypes-${key}" maxlength="80" value="${esc(employee.employee_type||'')}" placeholder="如 Intern、Comp28、Comp40"><datalist id="hrTypes-${key}"><option value="Intern"><option value="Comp28"><option value="Comp40"></datalist><span class="field-hint" data-type-hint>Intern为实习生，其他非空Type为正式工；不改变角色权限。</span></label><label class="hr-create-intern-end" data-intern-date ${employee.employee_type?.toLowerCase()==='intern'?'':'hidden'}>实习结束日期（选填）<input name="internship_ends_on" type="date" value="${esc(employee.internship_ends_on||'')}"><span class="field-hint">到期当天有效，次日起自动停用；连续停用满3天可删除。</span></label>`;
+}
+
+function bindHrTypeFields(form){
+  const input=form.elements.employee_type,end=form.elements.internship_ends_on,field=form.querySelector('[data-intern-date]');
+  const sync=()=>{const intern=input.value.trim().toLowerCase()==='intern';field.hidden=!intern;if(!intern&&end.value){end.value='';form.querySelector('[data-type-hint]').textContent='已清空实习结束日期，不再按实习期限自动停用；已停用账号保持停用。';}};
+  input.addEventListener('input',sync);sync();
+}
+
+function expiredInternForm(form){
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(p=>[p.type,p.value]));
+  const day=`${parts.year}-${parts.month}-${parts.day}`;
+  return form.elements.employee_type.value.trim().toLowerCase()==='intern'&&form.elements.internship_ends_on.value&&form.elements.internship_ends_on.value<day;
+}
+
 function hrDisplayStatus(employee){
   if(employee.account_deleted_at)return 'deleted';
   if(employee.account_enabled===false)return 'disabled';
@@ -45,10 +67,10 @@ function hrStatusCell(employee){
 
 function hrEditable(employee){return !employee.account_deleted_at&&state.options.roles.some(role=>role.code===employee.role_code);}
 
-function hrPersonHead(groupLabel){return `<div class="hr-person-row hr-person-head" aria-hidden="true"><span>员工</span><span>身份</span><span>${groupLabel}</span><span>状态</span><span></span></div>`;}
+function hrPersonHead(groupLabel){return `<div class="hr-person-row hr-person-head" aria-hidden="true"><span>员工</span><span>角色</span><span>Type／身份标识</span><span>${groupLabel}</span><span>状态</span><span></span></div>`;}
 
 function hrPersonRow(employee,groupCell){
-  return `<div class="hr-person-row" data-hr-person="${employee.id}" data-status="${esc(hrDisplayStatus(employee))}" data-search="${esc(`${employee.name} ${employee.employee_no}`.toLowerCase())}"><div class="hr-person-name"><strong>${esc(employee.name)}</strong><small>${esc(employee.employee_no)}</small></div><div class="hr-person-identity">${hrIdentityTags(employee)}</div><div class="hr-person-group">${groupCell}</div><div class="hr-person-status">${hrStatusCell(employee)}</div><div class="hr-person-actions">${hrEditable(employee)?`<button type="button" class="secondary" data-hr-edit="${employee.id}">编辑</button>`:'<span class="not-applicable" title="仅最高管理员可编辑">只读</span>'}</div></div>`;
+  return `<div class="hr-person-row" data-hr-person="${employee.id}" data-status="${esc(hrDisplayStatus(employee))}" data-search="${esc(`${employee.name} ${employee.employee_no}`.toLowerCase())}"><div class="hr-person-name"><strong>${esc(employee.name)}</strong><small>${esc(employee.employee_no)}</small></div><div class="hr-person-identity">${hrIdentityTags(employee)}</div><div class="hr-person-type">${hrTypeCell(employee)}</div><div class="hr-person-group">${groupCell}</div><div class="hr-person-status">${hrStatusCell(employee)}</div><div class="hr-person-actions">${hrEditable(employee)?`<button type="button" class="secondary" data-hr-edit="${employee.id}">编辑</button>`:'<span class="not-applicable" title="仅最高管理员可编辑">只读</span>'}</div></div>`;
 }
 
 // 组员行唯一可直接修改的项目：所属小组。
@@ -101,9 +123,10 @@ function hrEditEmployee(employee,organization){const page=captureViewContext();
   const roleName=code=>(state.options.roles.find(role=>role.code===code)||{}).name||code;
   const account=employee.account_deleted_at?`<span class="badge danger" title="${esc(employee.account_deletion_reason||'员工与业务档案已保留')}">已删除·留档</span>`:`<select name="enabled"><option value="true" ${employee.account_enabled?'selected':''}>启用</option><option value="false" ${!employee.account_enabled?'selected':''}>停用</option></select>`;
   const archive=!employee.account_deleted_at&&employee.login_account&&!['HR_CIRCLE','HR_ADMIN','SYSTEM_ADMIN'].includes(employee.role_code)?`<button type="button" class="danger" data-delete-login-account ${employee.account_deletion_eligible?'':'disabled'} title="${esc(employee.account_deletion_reason||'先停用账号并保存，连续满3天后可删除')}">删除</button><p class="field-hint">${esc(employee.account_deletion_reason||'先停用账号并保存，连续满3天后可删除')}</p>`:'';
-  const body=`<fieldset class="hr-edit-section"><legend>身份</legend><label>本职<select name="base_role">${legacy?'<option value="">请选择本职</option>':''}${baseRoles.map(role=>`<option value="${role.code}" ${role.code===originalBase?'selected':''}>${esc(role.name)}</option>`).join('')}</select></label>${legacy?`<p class="field-hint legacy-duty-hint">旧记录：请选择本职（${employee.base_role_code==='TA_GSM'?'主管':'CM/TR'}）后保存，代理职务保留</p>`:''}<label>代理职务<select name="duty"></select></label><label data-duty-end>代理至<input name="role_ends_on" type="date" value="${esc(employee.duty_ends_on||'')}"></label><p class="field-hint" data-duty-hint></p></fieldset><fieldset class="hr-edit-section"><legend>归属</legend><label>景点圈<select name="attraction"><option value="">无</option>${state.options.attractions.map(attraction=>`<option value="${attraction.id}" ${attraction.id===employee.attraction_id?'selected':''}>${esc(attraction.name)}</option>`).join('')}</select></label><label data-group-field>所属小组<select name="group"></select></label><p class="field-hint" data-group-hint></p></fieldset><fieldset class="hr-edit-section"><legend>状态与账号</legend><label>人员状态<select name="employment_status"></select></label><label data-loa-field>LOA开始日期<input name="loa_start_date" type="date" value="${esc(employee.loa_start_date||today())}"></label><label>账号状态${account}</label>${archive}</fieldset><label>修改原因<input name="reason" maxlength="200" placeholder="选填，会写入审计"></label>`;
+  const body=`<fieldset class="hr-edit-section"><legend>角色与身份标识</legend><label>本职<select name="base_role">${legacy?'<option value="">请选择本职</option>':''}${baseRoles.map(role=>`<option value="${role.code}" ${role.code===originalBase?'selected':''}>${esc(role.name)}</option>`).join('')}</select></label>${legacy?`<p class="field-hint legacy-duty-hint">旧记录：请选择本职（${employee.base_role_code==='TA_GSM'?'主管':'CM/TR'}）后保存，代理职务保留</p>`:''}<label>代理职务<select name="duty"></select></label><label data-duty-end>代理至<input name="role_ends_on" type="date" value="${esc(employee.duty_ends_on||'')}"></label><p class="field-hint" data-duty-hint></p>${hrTypeFields(employee,'edit')}</fieldset><fieldset class="hr-edit-section"><legend>归属</legend><label>景点圈<select name="attraction"><option value="">无</option>${state.options.attractions.map(attraction=>`<option value="${attraction.id}" ${attraction.id===employee.attraction_id?'selected':''}>${esc(attraction.name)}</option>`).join('')}</select></label><label data-group-field>所属小组<select name="group"></select></label><p class="field-hint" data-group-hint></p></fieldset><fieldset class="hr-edit-section"><legend>状态与账号</legend><label>人员状态<select name="employment_status"></select></label><label data-loa-field>LOA开始日期<input name="loa_start_date" type="date" value="${esc(employee.loa_start_date||today())}"></label><label>账号状态${account}</label>${archive}</fieldset><label>修改原因<input name="reason" maxlength="200" placeholder="选填，会写入审计"></label>`;
   return formModal(`编辑员工 · ${employee.name}`,`${esc(employee.employee_no)} · ${esc(employee.attraction_name||'未分配景点圈')}`,body,'保存',{
     onReady:(form,close)=>{
+      bindHrTypeFields(form);
       const base=form.elements.base_role,duty=form.elements.duty,attraction=form.elements.attraction,group=form.elements.group,status=form.elements.employment_status;
       const dutyEnd=form.querySelector('[data-duty-end]'),dutyHint=form.querySelector('[data-duty-hint]'),groupField=form.querySelector('[data-group-field]'),groupHint=form.querySelector('[data-group-hint]'),loaField=form.querySelector('[data-loa-field]');
       const originalDuty=legacy?employee.base_role_code:(employee.duty_role_code||'');
@@ -139,8 +162,9 @@ function hrEditEmployee(employee,organization){const page=captureViewContext();
       const roleCode=legacy?base:(duty||base);
       const frontline=!form.querySelector('[data-group-field]').hidden;
       const enabled=form.elements.enabled;
-      const body={role_code:roleCode,attraction_id:form.elements.attraction.value||null,employment_status:form.elements.employment_status.value,loa_start_date:form.elements.loa_start_date.value||'',account_enabled:enabled?enabled.value==='true':false,group_id:frontline?(form.elements.group.value||null):null,reason:form.elements.reason.value.trim()||'HR员工管理编辑'};
+      const body={employee_type:form.elements.employee_type.value.trim(),internship_ends_on:form.elements.internship_ends_on.value,role_code:roleCode,attraction_id:form.elements.attraction.value||null,employment_status:form.elements.employment_status.value,loa_start_date:form.elements.loa_start_date.value||'',account_enabled:enabled?enabled.value==='true':false,group_id:frontline?(form.elements.group.value||null):null,reason:form.elements.reason.value.trim()||'HR员工管理编辑'};
       if(HR_DUTY_ROLE_CODES.includes(roleCode))body.role_ends_on=form.elements.role_ends_on.value||'';
+      if(expiredInternForm(form)&&employee.account_enabled&&!await confirmModal('实习结束日期已过','保存后该账号将停用，历史数据保留。'))throw new Error('已取消，修改内容已保留');
       const result=await api('/api/hr/employees/'+employee.id,json('PUT',body));
       toast('已保存');if(page.isCurrent())showSaveWarnings(result);page.refresh(renderHrEmployees);
     },
@@ -226,11 +250,31 @@ async function renderHrEmployees(){
   const request=beginViewRequest();
   const organization=await api('/api/hr/organization');
   if(!request.isCurrent())return;
-  app.innerHTML=`<div class="section-gap"><details class="panel account-status-panel hr-tool-panel"><summary><span><strong>Excel 导入</strong><small>下载模板，填写后整表导入员工</small></span><span class="badge">展开</span></summary><div class="account-status-content"><p>请先下载 V2 模板，填写后整表导入。员工号必须为7位纯数字，员工仅可归属热力追踪、矮人迷宫或小熊罐子景点圈。初始密码留空时，系统使用员工号后四位并要求首次登录修改。任职日期支持 Excel 日期及多种文本格式；例如 12/4/2026 到期按月/日/年解析为2026年12月4日。</p><form id="importEmployees" enctype="multipart/form-data"><div class="actions native-file-actions"><label class="secondary native-file-trigger" for="importEmployeesWorkbook">选择文件</label><a class="secondary download-link" href="${portalPath('/api/hr/import-template')}">下载导入模板</a><button type="submit" class="primary">导入员工</button></div><input id="importEmployeesWorkbook" class="native-file-input" name="workbook" type="file" accept=".xlsx" required><span class="field-hint" data-import-filename>请选择 Excel 文件（.xlsx）</span></form></div></details><details class="panel account-status-panel hr-tool-panel hr-create-panel"><summary><span class="hr-create-heading"><strong>新建员工账号</strong><small>填写员工基础信息，创建后可在下方员工管理中分配小组</small></span><span class="badge">展开</span></summary><div class="account-status-content"><form id="newEmployee" class="hr-filter"><label class="hr-create-employee-no">员工号<input name="employee_no" inputmode="numeric" pattern="[0-9]{7}" minlength="7" maxlength="7" required placeholder="请输入7位员工号"><span class="field-hint">仅限7位数字；已删除的同一人员可用原工号重新注册，在用账号不能重复创建。</span></label><label class="hr-create-name">姓名<input name="name" required placeholder="请输入员工姓名"></label><label class="hr-create-role">角色<select name="role_code">${opt(state.options.roles,'code',x=>x.name)}</select></label><label class="hr-create-attraction">景点圈<select name="attraction_id"><option value="">无</option>${opt(state.options.employee_circles||state.options.attractions)}</select></label><label class="hr-create-password">初始密码<input name="password" placeholder="留空使用员工号后4位"><span class="field-hint">首次登录后必须立即修改密码。</span></label><div class="actions hr-create-actions"><button type="submit" class="primary">创建账号</button></div></form></div></details>${employeeNumberChangePanel()}<section class="panel"><h2>员工管理</h2><p>改人在这里：本职与代理职务、景点圈、所属小组、人员状态和账号。组员行可直接选择所属小组，其他修改请点“编辑”。小组的主管和代理主管请到<button type="button" class="link-button" data-goto-groups>小组管理</button>设置。</p>${hrOrganizationMarkup(organization)}</section>${accountStatusPanel()}</div>`;
+  app.innerHTML=`<div class="section-gap"><details class="panel account-status-panel hr-tool-panel"><summary><span><strong>Excel 导入</strong><small>下载模板，填写后整表导入员工</small></span><span class="badge">展开</span></summary><div class="account-status-content"><p>请先下载V3六列模板。员工号为7位纯数字；密码自动使用后四位，首次登录需修改；默认在职、账号启用，已过期Intern创建为停用。角色支持CM、TR、Lead、GSM、AM、OM（沿用HR可管理范围）；TA职务在页面设置。Type与实习结束日期选填，日期仅用于Intern。日期支持Excel日期及12/4/2026 到期等格式，年在后的斜杠日期按月/日/年解析。</p><form id="importEmployees" enctype="multipart/form-data"><div class="actions native-file-actions"><label class="secondary native-file-trigger" for="importEmployeesWorkbook">选择文件</label><a class="secondary download-link" href="${portalPath('/api/hr/import-template')}">下载导入模板</a><button type="submit" class="primary">导入员工</button></div><input id="importEmployeesWorkbook" class="native-file-input" name="workbook" type="file" accept=".xlsx" required><span class="field-hint" data-import-filename>请选择 Excel 文件（.xlsx）</span></form></div></details><details class="panel account-status-panel hr-tool-panel hr-create-panel"><summary><span class="hr-create-heading"><strong>新建员工账号</strong><small>填写员工基础信息，创建后可在下方员工管理中分配小组</small></span><span class="badge">展开</span></summary><div class="account-status-content"><form id="newEmployee" class="hr-filter"><label class="hr-create-employee-no">员工号<input name="employee_no" inputmode="numeric" pattern="[0-9]{7}" minlength="7" maxlength="7" required placeholder="请输入7位员工号"><span class="field-hint">仅限7位数字；已删除的同一人员可用原工号重新注册，在用账号不能重复创建。</span></label><label class="hr-create-name">姓名<input name="name" required placeholder="请输入员工姓名"></label><label class="hr-create-role">角色<select name="role_code">${opt(state.options.roles,'code',x=>x.name)}</select></label><label class="hr-create-attraction">景点圈<select name="attraction_id"><option value="">无</option>${opt(state.options.employee_circles||state.options.attractions)}</select></label>${hrTypeFields()}<label class="hr-create-password">初始密码<input name="password" placeholder="留空使用员工号后4位"><span class="field-hint">首次登录后必须立即修改密码。</span></label><div class="actions hr-create-actions"><button type="submit" class="primary">创建账号</button></div></form></div></details>${employeeNumberChangePanel()}<section class="panel"><h2>员工管理</h2><p>改人在这里：本职与代理职务、景点圈、所属小组、人员状态和账号。组员行可直接选择所属小组，其他修改请点“编辑”。小组的主管和代理主管请到<button type="button" class="link-button" data-goto-groups>小组管理</button>设置。</p>${hrOrganizationMarkup(organization)}</section>${accountStatusPanel()}</div>`;
   const importForm=document.getElementById('importEmployees'),workbookInput=importForm.querySelector('[name=workbook]'),fileHint=importForm.querySelector('[data-import-filename]');
   workbookInput.onchange=()=>{fileHint.textContent=workbookInput.files[0]?workbookInput.files[0].name:'请选择 Excel 文件（.xlsx）';};
-  importForm.onsubmit=async event=>{event.preventDefault();try{const out=await api('/api/hr/import-employees',{method:'POST',body:new FormData(event.target)});toast(`成功导入 ${out.created} 名员工`);request.refresh(renderHrEmployees)}catch(error){toast(error.message,true)}};
-  document.getElementById('newEmployee').onsubmit=async event=>{event.preventDefault();try{const out=await api('/api/hr/employees',json('POST',Object.fromEntries(new FormData(event.target))));toast(out.rehired?'员工已重新注册，历史记录已保留':'员工已创建');request.refresh(renderHrEmployees)}catch(error){toast(error.message,true)}};
+  importForm.onsubmit=async event=>{
+    event.preventDefault();const button=importForm.querySelector('[type=submit]');if(button.disabled)return;button.disabled=true;
+    try{
+      const file=workbookInput.files[0];if(!file)throw new Error('请选择Excel文件');
+      const form=()=>{const body=new FormData();body.append('workbook',file);return body;};
+      const check=form();check.append('preview','true');
+      const out=await api('/api/hr/import-employees',{method:'POST',body:check});if(!request.isCurrent())return;
+      const duplicates=out.duplicates||[],expired=out.expired||[];
+      if(duplicates.length||expired.length){
+        const list=(items)=>items.map(r=>`<li>第${r.row}行 · ${esc(r.employee_no)} · ${esc(r.name)}</li>`).join('');
+        if(!await confirmModal('导入预检',`<p>将新增 ${out.would_create} 人，跳过已有员工 ${duplicates.length} 人。</p>${duplicates.length?`<p>以下员工已存在，跳过后不覆盖原信息：</p><ul>${list(duplicates)}</ul>`:''}${expired.length?`<p>以下 ${expired.length} 人实习已到期，将创建为停用状态：</p><ul>${list(expired)}</ul>`:''}`,duplicates.length?'跳过已有员工并继续':'确认创建'))return;
+      }
+      if(!request.isCurrent())return;
+      const body=form();body.append('expected_digest',out.digest);body.append('skip_existing',duplicates.length?'true':'false');
+      const saved=await api('/api/hr/import-employees',{method:'POST',body});
+      toast(`新增 ${saved.created} 人，跳过 ${saved.skipped||0} 人`);
+      if(saved.duplicates?.length)await confirmModal('导入已完成',`<p>新增 ${saved.created} 人。以下已有员工已跳过：</p><ul>${saved.duplicates.map(r=>`<li>第${r.row}行 · ${esc(r.employee_no)} · ${esc(r.name)}</li>`).join('')}</ul>`,'知道了');
+      request.refresh(renderHrEmployees);
+    }catch(error){toast(error.message,true)}finally{button.disabled=false}
+  };
+  const createForm=document.getElementById('newEmployee');bindHrTypeFields(createForm);
+  createForm.onsubmit=async event=>{event.preventDefault();const button=createForm.querySelector('[type=submit]');if(button.disabled)return;button.disabled=true;try{if(expiredInternForm(createForm)&&!await confirmModal('实习结束日期已过','该员工创建后将为停用状态，历史记录仍会保留。'))return;const out=await api('/api/hr/employees',json('POST',Object.fromEntries(new FormData(createForm))));toast(out.rehired?'员工已重新注册，历史记录已保留':'员工已创建');request.refresh(renderHrEmployees)}catch(error){toast(error.message,true)}finally{button.disabled=false}};
   bindHrOrganization(organization);
   bindAccountStatusPanel();
   bindEmployeeNumberChange();

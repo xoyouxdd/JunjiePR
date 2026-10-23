@@ -22,6 +22,10 @@ router = APIRouter()
 
 
 def user_payload(db: Session, user: V2User) -> dict:
+    if getattr(user,'rotation_temporary',False):
+        return {'id':user.id,'name':user.name,'employee_no':user.employee.employee_no,
+                'attraction_name':user.employee.attraction.name,'rotation_entry':True,
+                'rotation_temporary':True,'must_change_password':False,'permissions':[]}
     from app.announcements import grant_config, summary as announcement_summary
     announcement_access = grant_config(db, user.id)
     announcement_counts = announcement_summary(db, user)
@@ -77,9 +81,16 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
         .first()
     )
     if not account:
+        from app.rotation.temporary import TemporaryMember, login as temporary_login
+        member=db.query(TemporaryMember).filter_by(employee_no=login_name).first()
+        if member: return temporary_login(db,request,response,member,password)
         rotation_account = find_rotation_account(db, login_name)
         if rotation_account:
             return rotation_login(db, request, response, rotation_account, password)
+    if account and account.enabled:
+        from app.services.employee_types import enforce_account_expiry
+        if enforce_account_expiry(db, account.employee_id):
+            raise HTTPException(401, '实习已到期，账号已停用')
     if not account or not account.enabled:
         raise HTTPException(401, "账号或密码/PIN不正确")
     if account.locked_until and account.locked_until > datetime.now():
@@ -110,6 +121,8 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
     )
     write_audit(db, employee, "登录", "user_account", account.id, ip_address=client_ip(request))
     db.commit()
+    from app.rotation.temporary import COOKIE
+    response.delete_cookie(COOKIE,secure=request_is_https(request),httponly=True,samesite='lax')
     response.set_cookie(
         "rc_v2_session",
         raw_token,
@@ -123,6 +136,12 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
 
 @router.post("/logout")
 def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    from app.rotation.temporary import TemporarySession, COOKIE
+    temporary_raw=request.cookies.get(COOKIE)
+    if temporary_raw:
+        db.query(TemporarySession).filter_by(token_hash=token_hash(temporary_raw)).delete(synchronize_session=False)
+        db.commit()
+    response.delete_cookie(COOKIE,secure=request_is_https(request),httponly=True,samesite='lax')
     raw_token = request.cookies.get("rc_v2_session")
     if raw_token:
         db.query(UserSession).filter(UserSession.token_hash == token_hash(raw_token)).delete(synchronize_session=False)

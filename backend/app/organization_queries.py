@@ -305,6 +305,8 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
         "formal_leader_name": display.get("formal_leader_name", ""),
         "acting_leader_name": display.get("acting_leader_name", ""),
         "is_active": employee.is_active,
+        "employee_type": employee.employee_type or '',
+        "internship_ends_on": employee.internship_ends_on or '',
         "employment_status": "loa" if employee.is_active and loa_period else "active" if employee.is_active else "terminated",
         "loa_start_date": loa_period.starts_on if loa_period else "",
         "account_enabled": bool(account and account.enabled),

@@ -77,11 +77,17 @@ class V2User:
 def current_user(request: Request, db: Session = Depends(get_db)) -> V2User:
     raw_token = request.cookies.get("rc_v2_session")
     if not raw_token:
+        from app.rotation.temporary import current, COOKIE
+        if request.cookies.get(COOKIE): return current(db, request)
         raise HTTPException(401, "请先登录")
     session = db.query(UserSession).filter(UserSession.token_hash == token_hash(raw_token)).first()
     if not session or session.expires_at <= datetime.now():
         raise HTTPException(401, "登录已过期，请重新登录")
     account = db.get(UserAccount, session.account_id)
+    if account and account.enabled:
+        from app.services.employee_types import enforce_account_expiry
+        if enforce_account_expiry(db, account.employee_id):
+            raise HTTPException(401, '实习已到期，账号已停用')
     if not account or not account.enabled:
         raise HTTPException(401, "账号不可用")
     employee = db.get(Employee, account.employee_id)

@@ -87,6 +87,7 @@ function renderTabs() {
 }
 
 function openTab() {
+  if(!RT.data)return;
   if(tab==='draft')void loadDaily(daily.date||RT.data.clock.date,daily.time);
   if (tab === 'records' && !view.log) loadLog(view.logDate || RT.data.clock.date);
   if (tab === 'roster' && !view.roster) loadRoster(view.rosterDate || RT.data.clock.date);
@@ -411,7 +412,7 @@ function rosterView() {
   const r = view.roster;
   const kindName = { rotation: '轮岗', excluded: '不轮岗', off: '不在本区' };
   return `<section class="panel"><h2>上传名单</h2>
-    <p class="field-hint">支持 ZTP 周班表，或标准模板（列：工号、姓名、日期、班次、备注；班次如 07:15-16:15，备注可写 0900-1200 SSEI）。按天上传的会覆盖按周上传的同一天。名单为模拟数据，只用于轮岗测试。</p>
+    <p class="field-hint">支持 ZTP 周班表，或标准模板（列：工号、姓名、日期、班次、备注；班次如 07:15-16:15）。按天上传会覆盖按周上传的同一天。${formalRotation?'未注册人员经预检确认后创建轮岗专用临时身份，完整工号登录、密码为后四位；不进入正式员工统计。':'名单为模拟数据，只用于轮岗测试。'}</p>
     <form id="rosterForm" class="rt-row">
       <input type="file" name="file" accept=".xlsx" required>
       <label><input type="radio" name="scope" value="week" checked> 按周</label>
@@ -429,15 +430,29 @@ function bindRoster() {
   const form = document.getElementById('rosterForm');
   form.onsubmit = async event => {
     event.preventDefault();
+    if(RT.modalOpen)return;
     const data = new FormData(form);
     if (!data.get('date')) data.delete('date');
+    const button=form.querySelector('[type=submit]');if(button.disabled)return;button.disabled=true;
+    const perform=async()=>{
+      try{
+        const out=await rtApi('/api/rotation/roster/upload',{method:'POST',body:data,timeoutMs:120000});
+        toast(`已导入 ${out.start_date}${out.end_date!==out.start_date?` 至 ${out.end_date}`:''}，共 ${out.entry_count} 条`);
+        form.reset();await RT.load();await loadRoster(out.start_date);return true;
+      }catch(error){toast(error.message,true);return false;}
+    };
     try {
-      const out = await rtApi('/api/rotation/roster/upload', { method: 'POST', body: data });
-      toast(`已导入 ${out.start_date}${out.end_date !== out.start_date ? ` 至 ${out.end_date}` : ''}，共 ${out.entry_count} 条`);
-      form.reset();
-      await RT.load();
-      await loadRoster(out.start_date);
+      if(formalRotation){
+        const check=new FormData();for(const [key,value] of data.entries())check.append(key,value);check.set('preview','true');
+        const batch=await rtApi('/api/rotation/roster/upload',{method:'POST',body:check});
+        data.set('expected_digest',batch.digest);
+        if(batch.new.length){
+          confirmBox('确认班表人员',`<p>将为 ${batch.new.length} 位未注册人员创建仅可确认本人轮岗待办的临时账号。</p><div class="rt-scroll"><ul>${batch.new.map(p=>`<li>${esc(p.name)} · ${esc(p.employee_no)}</li>`).join('')}</ul></div><p class="field-hint">完整工号登录，密码为后四位；不进入正式员工统计。已有临时身份复用，历史记录保留。</p>`,'确认导入',perform);return;
+        }
+      }
+      await perform();
     } catch (error) { toast(error.message, true); }
+    finally{button.disabled=false;}
   };
   $app.querySelectorAll('[data-rdate]').forEach(button => { button.onclick = () => loadRoster(button.dataset.rdate); });
 }
@@ -479,13 +494,13 @@ async function loadRecord(no) {
 
 function recordsView() {
   const rec = view.record;
-  const recordBox = rec ? `<h3>${esc(rec.employee_no)} 本周（${esc(rec.week[0])} 至 ${esc(rec.week[1])}）</h3>
+  const recordBox = rec ? `<h3>${esc(rec.employee_no)}${rec.segments.some(s=>s.temporary)||rec.events.some(e=>e.temporary)?' · 含临时身份记录':''} 本周（${esc(rec.week[0])} 至 ${esc(rec.week[1])}）</h3>
     <div class="rt-row">${Object.entries(rec.totals).sort().map(([line, m]) => `<span class="rt-pill">${esc(line)} ${Math.round(m)} 分钟</span>`).join('') || '<span class="field-hint">本周还没有在线记录</span>'}</div>
     ${rec.duties.length ? `<p class="field-hint">本周任务：${rec.duties.map(d => `${esc(d.date)} ${d.kind === 'push7' ? '推 7 点' : '送失物'}`).join('；')}</p>` : ''}
-    <div class="rt-scroll"><table class="rt-table"><thead><tr><th>日期</th><th>线</th><th>开始</th><th>结束</th><th>分钟</th></tr></thead><tbody>${rec.segments.map(s => `<tr><td>${esc(s.date)}</td><td>${esc(s.line)}</td><td>${hm(s.start)}</td><td>${hm(s.end)}</td><td>${Math.round(s.minutes)}</td></tr>`).join('')}</tbody></table></div>` : '';
-  return `<section class="panel"><h2>个人轮岗记录</h2><form id="recordForm" class="rt-row"><label>工号<input name="no" value="${esc(view.recordNo)}" maxlength="50" required></label><button type="submit" class="primary">查询</button></form>${recordBox}</section>
-    <section class="panel"><h2>操作日志</h2><div class="rt-row"><label>日期<input type="date" id="logDate" value="${esc(view.logDate || RT.data.clock.date)}"></label><button type="button" class="secondary" id="logLoad">查看</button></div>
-    <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>时间</th><th>操作</th><th>人员</th><th>线/岗位</th><th>说明</th><th>操作人</th></tr></thead><tbody>${(view.log || []).map(item => `<tr><td>${esc(item.time)}</td><td>${esc(EVENT_NAME[item.type] || item.type)}</td><td>${esc(item.name || '')}</td><td>${esc([item.line, item.post].filter(Boolean).join(' '))}</td><td>${esc(detailText(item))}</td><td>${esc(item.actor)}</td></tr>`).join('') || '<tr><td colspan="6">暂无记录</td></tr>'}</tbody></table></div></section>`;
+    <div class="rt-scroll"><table class="rt-table"><thead><tr><th>日期</th><th>线</th><th>开始</th><th>结束</th><th>分钟</th></tr></thead><tbody>${rec.segments.map(s => `<tr><td>${esc(s.date)}${s.temporary?'（临时）':''}</td><td>${esc(s.line)}</td><td>${hm(s.start)}</td><td>${hm(s.end)}</td><td>${Math.round(s.minutes)}</td></tr>`).join('')}</tbody></table></div>` : '';
+  return `<section class="panel"><h2>个人轮岗记录</h2><form id="recordForm" class="rt-row"><label><span class="rt-label-text">工号</span><input name="no" value="${esc(view.recordNo)}" maxlength="50" required></label><button type="submit" class="primary">查询</button></form>${recordBox}</section>
+    <section class="panel"><h2>操作日志</h2><div class="rt-row"><label><span class="rt-label-text">日期</span><input type="date" id="logDate" value="${esc(view.logDate || RT.data.clock.date)}"></label><button type="button" class="secondary" id="logLoad">查看</button></div>
+    <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>时间</th><th>操作</th><th>人员</th><th>线/岗位</th><th>说明</th><th>操作人</th></tr></thead><tbody>${(view.log || []).map(item => `<tr><td>${esc(item.time)}</td><td>${esc(EVENT_NAME[item.type] || item.type)}</td><td>${esc(item.name || '')}${item.temporary?'（临时）':''}</td><td>${esc([item.line, item.post].filter(Boolean).join(' '))}</td><td>${esc(detailText(item))}</td><td>${esc(item.actor)}${item.actor_temporary?'（临时）':''}</td></tr>`).join('') || '<tr><td colspan="6">暂无记录</td></tr>'}</tbody></table></div></section>`;
 }
 
 function bindRecords() {
@@ -597,6 +612,8 @@ RT.render = (fromTicker,forceDaily=false) => {
   }
   // 每秒刷新只更新看板；表单页在正在输入或由计时器触发时不重绘
   if (fromTicker && tab !== 'board') return;
+  // A delayed roster read must not replace a file the manager has already selected.
+  if(tab==='roster'&&$app.querySelector('#rosterForm [type=file]')?.files?.length)return;
   // Live-board SSE must not replace the calendar or a pending daily-plan selection.
   if(tab==='draft'&&!forceDaily&&$app.querySelector('.rt-daily'))return;
   if (editing()&&!(forceDaily&&tab==='draft')) return;
@@ -640,8 +657,8 @@ document.getElementById('rtSwitch').onclick = async () => {
     if (me.kind === 'screen') { location.href = portalPath('/rotation/screen'); return; }
     if (me.adjustment&&!['board','records'].includes(tab))tab='board';
     renderWho();
-    renderTabs();
     await RT.load();
+    renderTabs();
     if (isManager()) openTab();
     connectLive();
     startLocalTicker();

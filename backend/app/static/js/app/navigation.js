@@ -203,6 +203,7 @@ function setActionBadge(total){
 }
 
 async function refreshActionBadge(){
+  if(state.me?.rotation_temporary)return;
   if(!state.me||!menuItems().some(([id])=>id==='actionCenter'))return;
   const employeeId=state.me.id;
   const isUpgradeReviewer=['TA_GSM','GSM'].includes(state.me.role_code);

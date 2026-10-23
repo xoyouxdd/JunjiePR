@@ -1755,7 +1755,12 @@ details.hr-block[open] > summary::before { transform: rotate(90deg); }
 details.hr-block:not([open]) > summary { border-bottom: 0; }
 .hr-block-head .link-button { margin-left: auto; font-size: 13px; }
 .hr-block-title { font-weight: 700; min-width: 40px; }
-.hr-person-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(150px, 260px) 92px 68px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.hr-person-row { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,.9fr) minmax(0,1.1fr) minmax(110px,1.3fr) 64px 64px; gap: 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.hr-person-type { min-width:0; overflow-wrap:anywhere; }
+.hr-person-type strong { font-size:13px; font-weight:500; }
+.hr-person-type small { display:block; font-size:12px; color:var(--muted); margin-top:3px; }
+.hr-create-type, .hr-create-intern-end { min-width:0; }
+.hr-create-intern-end input { min-width:0; max-width:100%; box-sizing:border-box; }
 .hr-person-head { border-top: 0; padding-top: 6px; padding-bottom: 4px; color: var(--muted); font-size: 12px; }
 .hr-person-name small { display: block; color: var(--muted); font-size: 12px; }
 .hr-person-identity { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -1790,7 +1795,7 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
   .hr-org-toolbar { grid-template-columns: 1fr; }
   .hr-person-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; }
   .hr-person-head { display: none; }
-  .hr-person-identity, .hr-person-group { grid-column: 1 / -1; }
+  .hr-person-identity, .hr-person-type, .hr-person-group { grid-column: 1 / -1; }
   .hr-person-status { grid-row: 1; grid-column: 2; }
   .hr-person-actions { grid-column: 2; justify-self: end; }
   .group-row { grid-template-columns: minmax(0, 1fr) auto; }
@@ -2361,3 +2366,7 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
 @media(max-width:760px) { .honor-layout,.honor-memory-layout { grid-template-columns:1fr; }.honor-content { padding:14px; }.honor-heading { padding:18px 14px 8px; }.honor-tabs { padding:0 14px;gap:16px; }.honor-letter { padding:20px; }.honor-history { grid-template-columns:1fr 1fr; }.honor-history h4,.honor-history .field-hint,.honor-history>.secondary { grid-column:1/-1; }.honor-history-item { flex-direction:column;align-items:flex-start;gap:5px; } }
 @media(max-width:370px) { .honor-heading { flex-wrap:wrap; }.honor-tabs { gap:12px; }.honor-tabs button { font-size:13px; }.honor-content { padding:10px; }.honor-skin-grid { gap:8px; }.honor-skin-choice { padding:10px 7px;gap:7px; }.honor-swatch { width:25px; }.honor-display { padding:18px 5px; }.honor-display .member-rank-emblem { width:205px;height:205px; }.honor-letter { padding:16px; } }
 @media(prefers-reduced-motion:no-preference) { .honor-skin-choice { transition:background-color .15s,border-color .15s; } }
+body.rotation-personal-only .app-shell{margin-left:0;max-width:760px;margin-inline:auto;width:100%;}
+body.rotation-personal-only #tabs{display:none;}
+body.rotation-personal-only #app{display:grid;gap:12px;}
+body.rotation-personal-only .rt-line{margin-top:12px;}

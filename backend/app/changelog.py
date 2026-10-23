@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.24.1", "date": "2026-10-24", "status": "candidate",
+        "items": [
+            {"summary": "轮岗支持独立临时人员身份",
+             "detail": "本圈管理人员预检班表后可创建轮岗专用临时身份，仅能查看和确认本人轮岗待办，不创建正式员工、角色或绩效数据。身份按已导入班次有效期校验；同工号同名同圈正式注册可接管并原子撤销临时会话，轮岗历史保留。",
+             "audiences": ["all"]},
+            {"summary": "员工Type与实习期限、导入预检完善",
+             "detail": "Type独立于本职与代理，Intern可设置实习结束日期，到期后停用账号并撤销会话，延期不自动启用。V3员工模板使用六列，提交前预检，确认跳过已有员工但不覆盖档案；提交重新校验文件与范围，事务内整批写入。沿用HR权限及原计分规则。",
+             "audiences": ["HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"], "permissions": ["HR_MANAGE"]},
+            {"summary": "景点圈HR可查本圈受限审计摘要",
+             "detail": "景点圈HR仅查看可核实的本圈CM/TR及主管层级操作摘要，涉及人员对象时同时校验目标范围；不返回原始快照或IP，不包含跨圈、经理及HR管理身份操作。全局HR及最高管理员原有范围保留。",
+             "audiences": ["HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.23.1", "date": "2026-10-23", "status": "candidate",
         "items": [
             {"summary": "正式轮岗看板与每日协作接入",

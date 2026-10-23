@@ -41,14 +41,14 @@ def test_invalid_dates_are_not_guessed(value):
 
 def workbook(rows):
     wb = Workbook(); ws = wb.active
-    ws.append(['员工号', '姓名', '角色代码', '景点圈', '初始密码', '在职', '账号启用', '任职开始日', '任职结束日', '到期恢复角色代码'])
+    ws.append(['员工号','姓名','角色代码','景点圈','Type','实习结束日期'])
     for row in rows: ws.append(row)
     out = BytesIO(); wb.save(out)
     return {'workbook': ('dates.xlsx', out.getvalue(), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')}
 
 
-def row(no, start, end='', restore=''):
-    return [no, '日期导入模拟员工'+no[-1], 'TR', '热力追踪', '', '', '', start, end, restore]
+def row(no, end='', kind='Intern'):
+    return [no, '日期导入模拟员工'+no[-1], 'TR', '热力追踪', kind, end]
 
 
 def test_real_import_normalizes_mixed_excel_dates_and_rejects_whole_invalid_batch():
@@ -56,23 +56,21 @@ def test_real_import_normalizes_mixed_excel_dates_and_rejects_whole_invalid_batc
         login = client.post('/api/login', json={'employee_no': 'HR01', 'password': 'import-dates-admin'})
         assert login.status_code == 200, login.text
         response = client.post('/api/hr/import-employees', files=workbook([
-            row('9876101', date(2026, 10, 1), '12/4/2026 到期', 'CM'),
-            row('9876102', '2026年10月1日', '12/18/2026 到期', 'CM'),
-            row('9876103', '', ''),
-            row('9876104', '2026.10.1', datetime(2026, 12, 18), 'CM')]))
+            row('9876101', date(2099,12,4)), row('9876102','12/18/2099 到期'),
+            row('9876103',''), row('9876104',datetime(2099,12,18))]))
         assert response.status_code == 200, response.text
         assert response.json()['created'] == 4
         with SessionLocal() as db:
             employee = db.query(Employee).filter_by(employee_no='9876101').one()
             assignment = db.query(EmployeeRoleAssignment).filter_by(employee_id=employee.id).one()
-            assert employee.hired_on == '2026-10-01'
-            assert assignment.starts_on == '2026-10-01' and assignment.ends_on == '2026-12-04'
-            assert assignment.assignment_type == 'temporary'
+            assert employee.internship_ends_on == '2099-12-04'
+            assert assignment.starts_on == date.today().isoformat() and assignment.ends_on is None
+            assert assignment.assignment_type == 'permanent'
             employee = db.query(Employee).filter_by(employee_no='9876103').one()
-            assert employee.hired_on == date.today().isoformat()
-        for bad_end, restore in [('2026-02-30', 'CM'), ('9/30/2026 到期', 'CM'), ('12/4/2026 到期', '')]:
+            assert employee.hired_on == date.today().isoformat() and employee.internship_ends_on is None
+        for bad_end, kind in [('2026-02-30','Intern'),('12/4/2099 到期','Comp28'),('12/4/2099 到期','')]:
             response = client.post('/api/hr/import-employees', files=workbook([
-                row('9876190', '2026-10-01'), row('9876191', '2026-10-01', bad_end, restore)]))
+                row('9876190'), row('9876191',bad_end,kind)]))
             assert response.status_code == 400 and '第3行' in response.text, response.text
             with SessionLocal() as db:
-                assert not db.query(Employee).filter(Employee.employee_no.in_(['9876190', '9876191'])).count()
+                assert not db.query(Employee).filter(Employee.employee_no.in_(['9876190','9876191'])).count()
