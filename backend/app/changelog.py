@@ -7,6 +7,14 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.24.4", "date": "2026-10-24", "status": "candidate",
+        "items": [
+            {"summary": "完善复核切页处理与发布验证",
+             "detail": "已发起并填写确认说明的复核操作继续绑定原队列，切页后不错误取消，也不覆盖新页面；保留不通过原因必填与同条写入防重复。补齐后台导出的门户路径和主动下载验证、新样式精确版本清单及稳定的强制休饭测试，不修改计分、权限或休饭规则。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.24.3", "date": "2026-10-24", "status": "candidate",
         "items": [
             {"summary": "轮岗支持当日持续定岗",

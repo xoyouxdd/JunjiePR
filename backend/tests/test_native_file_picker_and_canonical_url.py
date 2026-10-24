@@ -36,8 +36,10 @@ def test_portal_navigation_keeps_the_recognition_prefix() -> None:
     login = (ROOT / "app" / "static" / "login.html").read_text(encoding="utf-8")
 
     assert "function portalPath(path)" in script
-    assert "location.href=portalPath('/api/statistics/export?'+qs)" in script
-    assert "location.href=portalPath('/api/pr-rankings/export?'+params())" in script
+    assert "queueExport('/api/statistics/export?'+qs)" in script
+    assert "queueExport('/api/pr-rankings/export?'+params())" in script
+    assert "fetch(portalPath('/api/export-tasks?'" in script
+    assert "portalPath(row.download_url)" in script
     assert "location.href=portalPath('/login')" in script
     assert "href=\"${portalPath('/api/hr/import-template')}\"" in script
     assert "location.href = portalPath('/');" in login_script

@@ -31,6 +31,19 @@ def login(client,no):
     ok(client.post('/api/login',json={'employee_no':no,'password':'formal-fixture-2026'}))
 
 
+@pytest.fixture(autouse=True)
+def stable_wall_clock(monkeypatch):
+    # Keep the real-clock implementation/mode, but make daytime action fixtures
+    # independent of the machine's closing time. No meal or movement rule changes.
+    real_datetime=datetime
+    class WallClock(real_datetime):
+        @classmethod
+        def now(cls,tz=None):
+            return real_datetime.now(tz).replace(hour=12,minute=0,second=0,microsecond=0)
+    monkeypatch.setitem(globals(),'datetime',WallClock)
+    monkeypatch.setattr(S,'datetime',WallClock)
+
+
 @pytest.fixture(scope='module',autouse=True)
 def seed():
     with TestClient(app):
@@ -351,18 +364,21 @@ def test_formal_commit_failure_preserves_its_cache_and_sandbox(monkeypatch):
 
 
 def test_own_arrival_preserves_forced_meal_and_duplicate_protection():
+    # A forced meal needs enough time before closing; the shared wall-clock
+    # fixture preserves formal clock mode and the engine's eligibility rules.
+    minute=720.0
     with SessionLocal() as db:
         db.info['rotation_formal']=True
         aid=db.query(Attraction).filter_by(name='热力追踪').one().id
         with S.transaction(db):
-            # This test covers forced-meal confirmation, including overnight test runs.
+            # Keep the fixture away from the real machine's closing-time boundary.
             cfg=S.load_config(db,aid);settings=S.settings_of(cfg);settings['mealEarliest']='00:00';cfg.settings_json=S._dumps(settings)
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             for line in state['lines']:
                 for post in line['posts']:
                     if post.get('occ')=='9710000':post['occ']=None
             p=state['persons']['9710000']
-            now=datetime.now();minute=now.hour*60+now.minute+now.second/60
+            state['lastTick']=minute
             p.update(state='walkback',line=None,assign=None,ate=False,start=minute-310,end=1440,walkbackSince=minute-1,arriveAnchor=None,after=None)
             S.save_day(db,row,state)
     with TestClient(app) as c:

@@ -298,6 +298,22 @@ async function main() {
       assert.equal(inline.executed, false, 'The import map hash must not authorize arbitrary inline JavaScript');
       assert(inline.violations.some(row => row.directive.startsWith('script-src') && row.blockedURI === 'inline'));
       assert.deepEqual(errors, [], `Module/DOM errors at ${pagePath}`);
+      const prefix=pagePath.startsWith('/recognition')?'/recognition':'';
+      const exportJob={id:'prefix-check',label:'合成导出',status:'completed',bytes:1,download_url:'/api/export-tasks/prefix-check/file'};
+      await page.route('**/api/export-tasks**',async route=>{
+        const request=route.request(),url=new URL(request.url());
+        assert.equal(url.pathname,prefix+'/api/export-tasks');
+        assert(['GET','POST'].includes(request.method()));
+        if(request.method()==='POST')assert(['/api/statistics/export?month=2026-10','/api/pr-rankings/export?month=2026-10'].includes(url.searchParams.get('target')));
+        await route.fulfill({status:request.method()==='POST'?202:200,json:request.method()==='POST'?exportJob:{items:[exportJob]}});
+      });
+      for(const target of ['/api/statistics/export?month=2026-10','/api/pr-rankings/export?month=2026-10']){
+        const sent=page.waitForRequest(request=>request.method()==='POST'&&new URL(request.url()).pathname===prefix+'/api/export-tasks');
+        await page.evaluate(async target=>{const map=JSON.parse(document.querySelector('script[type=importmap]').textContent).imports;await(await import(map['./static/js/app/export-tasks.js'])).queueExport(target);},target);
+        assert.equal(new URL((await sent).url()).searchParams.get('target'),target,'Internal export target must stay root-relative');
+        assert.equal(await page.locator('[data-export-download="prefix-check"]').getAttribute('href'),prefix+'/api/export-tasks/prefix-check/file','Manual download must preserve portal prefix');
+      }
+      checks.push(`queued export creation and manual download preserve portal prefix at ${pagePath}`);
       checks.push(`admin navigation, versioned imports, strict CSP, stale-write guard and cleanup at ${pagePath}`);
       await page.close();
     }

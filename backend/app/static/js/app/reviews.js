@@ -65,7 +65,9 @@ function bindReviewActions(showHistory=false,offset=0){
     peers.forEach(node=>node.disabled=true);
     try{
       const note=button.dataset.action==='reject'?(await promptModal('请输入不通过原因','请填写不通过原因（必填）','不通过原因'))||'':'';
-      if(!page.isCurrent()||(button.dataset.action==='reject'&&!note))return;
+      // The accepted action keeps its captured queue across navigation;
+      // only repaint/refresh belongs to the original page context.
+      if(button.dataset.action==='reject'&&!note)return;
       const out=await api(key,json('POST',{action:button.dataset.action,note}));
       void refreshActionBadge();toast('操作成功');
       if(!page.isCurrent()||!out.record)return;
