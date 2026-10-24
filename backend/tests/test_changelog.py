@@ -104,10 +104,10 @@ def test_changelog_filters_by_role() -> None:
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert cm[0]["items"][0]["summary"] == "轮岗支持当日持续定岗"
+    assert cm[0]["items"][0]["summary"] == "完善复核切页处理与发布验证"
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
-    assert gsm[0]["items"][0]["summary"] == "轮岗支持当日持续定岗"
+    assert gsm[0]["items"][0]["summary"] == "完善复核切页处理与发布验证"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -157,16 +157,16 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in cm["release"]["items"]] == ["轮岗支持当日持续定岗"]
+        assert [item["summary"] for item in cm["release"]["items"]] == ["完善复核切页处理与发布验证"]
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["轮岗支持当日持续定岗"]
+        assert [item["summary"] for item in tr["release"]["items"]] == ["完善复核切页处理与发布验证"]
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in hr["release"]["items"]] == [
-            "轮岗支持当日持续定岗"]
+            "完善复核切页处理与发布验证"]
         assert hr["read"] is False
         client.post("/api/logout")
         login(client, "OMTEST01")
