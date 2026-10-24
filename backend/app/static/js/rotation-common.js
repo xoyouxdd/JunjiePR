@@ -399,6 +399,7 @@ function lineCard(L, n, ops) {
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;
       else if (p && p.lineStart !== null && p.lineStart !== undefined) mins = `${Math.max(0, Math.floor(n - p.lineStart))} 分`;
     }
+    if(x.hold){cls+=' holding';who+=`<span class="rt-badge post-hold" title="${esc(x.hold.reason)}">定岗 · ${hm(Math.floor(x.hold.since))}起</span>`;}
     if (i === exitIndex) cls += ' exit';
     const scheduled = value => /^\d{2}:\d{2}$/.test(value || '') ? Number(value.slice(0,2))*60+Number(value.slice(3)) : null;
     if (L.active && !x.open && !x.opened && scheduled(x.openAt) > n) {

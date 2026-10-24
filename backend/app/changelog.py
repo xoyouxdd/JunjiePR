@@ -7,6 +7,14 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.24.3", "date": "2026-10-24", "status": "candidate",
+        "items": [
+            {"summary": "轮岗支持当日持续定岗",
+             "detail": "有看板操作权限的人员可为当前在岗人员设置或取消定岗，其他岗位跳过该岗继续轮转。定岗优先于当日下班、出圈、撤岗及闭园，相关移动须先取消；取消后按当前实际时间处理，不重置计时或补推。状态及说明同步到本人线路和待办，零点自动结束，不影响PR计分。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.24.2", "date": "2026-10-24", "status": "candidate",
         "items": [
             {"summary": "今日工作与连续登记体验完善",

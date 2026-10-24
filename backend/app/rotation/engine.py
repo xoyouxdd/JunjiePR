@@ -239,6 +239,52 @@ class Engine:
     def open_posts(self, L):
         return [i for i, x in enumerate(L['posts']) if x.get('open')]
 
+    def rotation_posts(self, L):
+        return [i for i in self.open_posts(L) if not L['posts'][i].get('hold')]
+
+    def held(self, pid):
+        L, i = self.find_post(pid)
+        return L is not None and bool(L['posts'][i].get('hold'))
+
+    def act_post_hold(self, lid, i, pid, on, reason, now, actor):
+        L, i, x = self.post(lid, i)
+        if not L.get('active') or not x.get('open') or x.get('occ') != pid or self.person(pid)['state'] != 'onpost':
+            raise ActionError('岗位或在岗人员已变化，请刷新后重新选择')
+        if on:
+            if x.get('hold'):
+                return
+            if self.d.get('closed'):
+                raise ActionError('闭园后不能新设定岗；已有定岗仍保留到取消')
+            x['hold'] = {'pid': pid, 'since': now, 'reason': reason or '现场任务',
+                         'by': getattr(actor, 'name', str(actor))}
+        else:
+            if not x.get('hold'):
+                return
+            previous = x.pop('hold')
+        self._reset_line_plans(lid)
+        self._clear_stale_assigns()
+        info = x['hold'] if on else previous
+        self.h.log('post_hold' if on else 'post_resume', actor, pid, lid, x['name'],
+                   {'reason': reason or info['reason'], 'since': info['since'],
+                    'duration': None if on else max(0, now-info['since'])})
+        if not on:
+            if self.d.get('closed'):
+                self._push_off(pid, L, i, now, '闭园')
+                x.update(occ=None, open=False)
+            else:
+                p = self.person(pid)
+                if now >= p['end']:
+                    self._leave_line(p, L, i, now)
+                    x['occ'] = None
+                    p.update(state='done', assign=None)
+                    self.h.log('shift_end_onpost', 'system', pid, lid, x['name'], {})
+                else:
+                    absence = self.next_absence(p, now)
+                    if absence and absence['start'] <= now < absence['end']:
+                        self._leave_line(p, L, i, now)
+                        x['occ'] = None
+                        self._go_out(p, absence, now, actor)
+
     def find_post(self, pid):
         for L in self.d['lines']:
             for i, x in enumerate(L['posts']):
@@ -340,7 +386,7 @@ class Engine:
                         x['open'] = True
                         self.h.log('post_open', 'system', None, L['id'], x['name'], {'auto': True})
                     changed = True
-                if x.get('closeAt') and x['open'] and now >= _m(x['closeAt']) and not x.get('closedAuto'):
+                if x.get('closeAt') and x['open'] and not x.get('hold') and now >= _m(x['closeAt']) and not x.get('closedAuto'):
                     x['closedAuto'] = True
                     self._close_post(L, i, now, 'system', x.get('closeMode', 'direct'))
                     changed = True
@@ -412,7 +458,7 @@ class Engine:
                 p.pop('entryHold', None)
                 self.h.log('shift_end_unconfirmed' if was == 'walkback' else 'shift_end', 'system', p['pid'], None, None, {})
                 changed = True
-            if p['state'] == 'onpost' and now >= p['end']:
+            if p['state'] == 'onpost' and now >= p['end'] and not self.held(p['pid']):
                 L, i = self.find_post(p['pid'])
                 if L is not None:
                     self._leave_line(p, L, i, now)
@@ -429,6 +475,8 @@ class Engine:
         self.d['closed'] = True
         for L in self.d['lines']:
             for i, x in enumerate(L['posts']):
+                if x.get('hold'):
+                    continue
                 x['openBeforeClose'] = bool(x.get('open'))
                 if x.get('occ'):
                     self._push_off(x['occ'], L, i, now, '闭园')
@@ -492,6 +540,8 @@ class Engine:
 
     # -------- 下线
     def _leave_line(self, p, L, i, now):
+        if L['posts'][i].get('hold'):
+            raise ActionError('该人员正在定岗，请先取消定岗')
         if p.get('lineStart') is not None:
             self.h.segment(p['pid'], L['id'], p['lineStart'], now)
         p['line'] = None
@@ -542,16 +592,20 @@ class Engine:
             p['away'] = {'reason': CLOSING_WORK, 'until': None}
             p['assign'] = None
             return
-        if L is None or not L.get('active') or not self.open_posts(L):
+        if L is None or not L.get('active') or not self.rotation_posts(L):
             p['state'] = 'ready'
             p['readyAt'] = now
             p['readySince'] = now
             p['assign'] = None
-            self.alert('%s 到达 %s 时该线已停用，已重新分配' % (p['name'], lid), now)
+            self.alert('%s 到达 %s 时暂无可轮换岗位，已重新分配' % (p['name'], lid), now)
             return
         depart = p.get('departedAt', now)
         tgt = a.get('target')
         TL, ti = self.find_post(tgt) if tgt else (None, None)
+        if TL is L and L['posts'][ti].get('hold'):
+            p.update(state='ready', assign=None, readyAt=now, readySince=now)
+            self.alert('%s 的目标岗位已定岗，请按新安排上岗' % p['name'], now)
+            return
         if a.get('mode') == 'push7' and TL is L:
             # 推 7 点：在 7 点岗位直接对换
             x = L['posts'][ti]
@@ -569,14 +623,14 @@ class Engine:
             self._chain_out(L, p['pid'], tgt, ti, now)
             self._remove_leaving(tgt, L, ti, now, a.get('why') or '推下班')
             self._enter(p, L, depart)
-            self.h.log('chain_out', 'system', p['pid'], L['id'], L['posts'][self.open_posts(L)[0]]['name'], {'target': tgt, 'why': a.get('why')})
+            self.h.log('chain_out', 'system', p['pid'], L['id'], L['posts'][self.rotation_posts(L)[0]]['name'], {'target': tgt, 'why': a.get('why')})
             return
         if tgt:
             self.h.log('target_gone', 'system', p['pid'], L['id'], None, {'target': tgt})
         # 普通推岗：从入口岗进，依次后移，遇到空岗停止，否则出口岗的人下线
         carry = p['pid']
         out = None
-        for i in self.open_posts(L):
+        for i in self.rotation_posts(L):
             x = L['posts'][i]
             if x.get('occ') is None:
                 x['occ'] = carry
@@ -589,11 +643,11 @@ class Engine:
         if carry is not None and out:
             self._push_off(carry, L, out[1], now, '推岗')
         self._enter(p, L, depart)
-        self.h.log('push', 'system', p['pid'], L['id'], L['posts'][self.open_posts(L)[0]]['name'], {'out': carry})
+        self.h.log('push', 'system', p['pid'], L['id'], L['posts'][self.rotation_posts(L)[0]]['name'], {'out': carry})
 
     def _chain_out(self, L, new_pid, target, ti, now):
         """入口岗到 target 所在岗位之间整体后移一位，target 腾出。中间有空岗时前面的人往后补齐。"""
-        seq = [i for i in self.open_posts(L) if i <= ti]
+        seq = [i for i in self.rotation_posts(L) if i <= ti]
         if ti not in seq:
             seq.append(ti)
         others = [L['posts'][i]['occ'] for i in seq if L['posts'][i].get('occ') not in (None, target)]
@@ -637,6 +691,7 @@ class Engine:
             if not stale and a.get('mode') in TARGET_MODES:
                 t = self.P.get(a.get('target'))
                 stale = not t or t['state'] != 'onpost' or t.get('line') != a['line']
+                stale = stale or bool(t and self.held(t['pid']))
             if not stale and a.get('mode') == 'opening':
                 _, _, post = self.post(a['line'], a['post'])
                 stale = not post.get('openRequest') or bool(post.get('occ'))
@@ -652,7 +707,7 @@ class Engine:
         cm = self.close_min()
         S = self.S
         for p in self.P.values():
-            if p['state'] != 'onpost' or p['pid'] in taken:
+            if p['state'] != 'onpost' or p['pid'] in taken or self.held(p['pid']):
                 continue
             t, kind, _ = self.leave_at(p, now)
             need_at = t - S['offLead']
@@ -677,7 +732,7 @@ class Engine:
         # 推 7 点：07:15 班的人在 7 点岗位对换 07:00 班的人
         for idx, a, b in self._push7_pairs():
             pa, pb = self.P.get(a), self.P.get(b)
-            if not pb or pb['state'] != 'onpost' or '7点岗' not in pb['flags'] or '推7点下来' in pb['flags']:
+            if not pb or pb['state'] != 'onpost' or self.held(pb['pid']) or '7点岗' not in pb['flags'] or '推7点下来' in pb['flags']:
                 continue
             if b in self.targeted():
                 continue
@@ -792,7 +847,7 @@ class Engine:
 
     def _chain(self, L):
         """从出口岗往入口岗的在岗人列表。"""
-        return [L['posts'][i]['occ'] for i in reversed(self.open_posts(L)) if L['posts'][i].get('occ')]
+        return [L['posts'][i]['occ'] for i in reversed(self.rotation_posts(L)) if L['posts'][i].get('occ')]
 
     def _best_line(self, p, now, wk):
         """选线：先补空岗或马上定时开的岗位；否则推出口岗站得最久的人。
@@ -807,7 +862,7 @@ class Engine:
         for order, L in enumerate(self.d['lines']):
             if not L.get('active'):
                 continue
-            idx = self.open_posts(L)
+            idx = self.rotation_posts(L)
             future = sorted(_m(x['openAt']) for x in L['posts']
                             if x.get('openAt') and not x['opened'] and not x['manual'])
             if not idx and not future:
@@ -1006,6 +1061,8 @@ class Engine:
 
     def _close_post(self, L, i, now, actor, mode='direct'):
         x = L['posts'][i]
+        if x.get('hold'):
+            raise ActionError('该岗位正在定岗，请先取消定岗')
         if mode not in ('direct', 'push'):
             raise ActionError('撤岗方式不正确')
         if mode == 'push' and x.get('occ') and self.P[x['occ']]['state'] != 'notyet':
@@ -1013,7 +1070,7 @@ class Engine:
             last_index = i
             for j in range(i+1, len(L['posts'])):
                 target = L['posts'][j]
-                if not target.get('open'):
+                if not target.get('open') or target.get('hold'):
                     continue
                 if target.get('occ') and self.P[target['occ']]['state']=='notyet':
                     raise ActionError('尚未到班次的岗位不能参与运行中顺推')
@@ -1075,6 +1132,8 @@ class Engine:
         if p['state']=='notyet':
             return self.act_plan_place(pid,lid,i,now,actor)
         target, i, slot=self.post(lid,i)
+        if slot.get('hold') or self.held(pid):
+            raise ActionError('定岗人员不能调换岗位，请先取消定岗')
         if not target.get('active') or not slot.get('open'):
             raise ActionError('只能移动到启用线路的已开岗位')
         if p['state']!='onpost':
@@ -1112,6 +1171,8 @@ class Engine:
 
     def act_line(self, lid, active, now, actor):
         L = self.line(lid)
+        if not active and any(x.get('hold') for x in L['posts']):
+            raise ActionError('本线还有定岗人员，请先取消定岗再停用')
         if active:
             L['active'] = True
             for x in L['posts']:
@@ -1270,6 +1331,13 @@ class Engine:
         return all(p['state'] in ('done', 'excluded') for p in self.P.values())
 
     def end_day(self, now):
+        for L in self.d['lines']:
+            for x in L['posts']:
+                hold = x.pop('hold', None)
+                if hold:
+                    self.h.log('post_resume', 'system', hold['pid'], L['id'], x['name'],
+                               {'reason': '零点定岗自动结束', 'original_reason': hold['reason'],
+                                'since': hold['since'], 'duration': max(0, now-hold['since'])})
         for p in self.P.values():
             if p['state'] in ('done', 'excluded'):
                 continue
@@ -1307,6 +1375,10 @@ class Engine:
                 out.append({'level': 'warn', 'pid': p['pid'], 'msg': '%s 下线 %d 分钟仍未在大屏点去休息' % (p['name'], now - p['walkbackSince'])})
             if st == 'onpost':
                 t, kind, _ = self.leave_at(p, now)
+                if self.held(p['pid']):
+                    if self.d.get('closed') or now >= t:
+                        out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 仍在定岗，结束现场任务后请手动取消；零点自动结束' % p['name']})
+                    continue
                 word = '出圈' if kind == 'out' else '下班'
                 if kind == 'out':
                     if now >= t + S['outWarnAfter'] and p['pid'] not in taken:

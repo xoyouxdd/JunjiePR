@@ -678,7 +678,7 @@ def assignment_view(eng: E.Engine, p: dict) -> dict | None:
     if target:
         av.update(targetName=target["name"], targetLine=TL["id"] if TL else None,
                   targetPost=TL["posts"][ti]["name"] if TL else None)
-    indexes = eng.open_posts(L)
+    indexes = eng.rotation_posts(L)
     entry = ti if a.get("mode") == "push7" and TL is L else (indexes[0] if indexes else None)
     av["entryPost"] = L["posts"][entry]["name"] if entry is not None else None
     return av
@@ -697,7 +697,7 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
         group = plan(eng, p, float(eng.d.get('lastTick', p['start'])))
         context['entryPlan'] = {'id': group['id'], 'soloRoutes': group['soloRoutes'],
                                 'soloBlocked': group['soloBlocked']} if group else None
-        context["posts"] = [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ")}
+        context["posts"] = [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"), "hold": x.get("hold")}
                             for x in eng.line(a["line"])["posts"]] if a else []
     elif action == 'entry_return':
         context['hold'] = p.get('entryHold')
@@ -726,6 +726,7 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "lineStart": p.get("lineStart"), "readyAt": p.get("readyAt"), "breakKind": p.get("breakKind"),
         "assign": av, "flags": p.get("flags", []), "tags": p.get("tags", []), "away": p.get("away"),
         "entryGroup": group, "entryHold": p.get('entryHold'),
+        "postHold": L['posts'][i].get('hold') if L else None,
         "upcomingShift": bool(p.get('state') == 'notyet' and 0 < p['start'] - now <= 30),
         "previewAssign": eng._upcoming_routes.get(p['pid']),
         "walkbackSince": p.get("walkbackSince"), "arriveAt": p.get("arriveAt"), "ate": p.get("ate"),
@@ -748,7 +749,7 @@ def lines_view(eng: E.Engine) -> list[dict]:
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
         "walk": eng.walk(L["id"]),
         "posts": [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"),
-                   "occName": eng.P.get(x.get("occ"), {}).get("name"), "since": x.get("since"),
+                   "occName": eng.P.get(x.get("occ"), {}).get("name"), "since": x.get("since"), "hold": x.get("hold"),
                    "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for x in L["posts"]],
     } for L in eng.d["lines"]]
 
@@ -893,7 +894,7 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
             "id": L["id"],
             "posts": [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"),
                        "occName": state["persons"][x["occ"]]["name"] if x.get("occ") in state["persons"] else None,
-                       "since": x.get("since")} for x in L["posts"]],
+                       "since": x.get("since"), "hold": x.get("hold")} for x in L["posts"]],
         }
     segs = (
         db.query(RotationSegment)
@@ -922,7 +923,7 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
 SCREEN_ACTIONS = {"arrive", "depart", "entry_return", "entry_adjust"}
 LIVE_ACTIONS = {
     "arrive", "depart", "entry_return", "entry_adjust", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
-    "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order",
+    "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order", "post_hold",
 }
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
 
@@ -1006,6 +1007,13 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             raise ActionError("更正需要填写原因")
         if act == "arrive":
             eng.act_arrive(pid, now, actor, meal_choice=body.get('meal_choice'))
+        elif act == 'post_hold':
+            _require(body, 'line', 'i')
+            if body.get('expected_post') is not None and eng.post(body['line'], body['i'])[2]['name'] != body['expected_post']:
+                raise ConfirmationConflict('岗位顺序已变化，请刷新后重新设置定岗')
+            if len(reason) > 100:
+                raise ActionError('定岗说明最多100字')
+            eng.act_post_hold(body['line'], body['i'], pid, action_boolean(body, 'on'), reason, now, actor)
         elif act == "plan_place":
             _require(body, "line", "i")
             eng.act_plan_place(pid, body["line"], body["i"], now, actor)
@@ -1144,6 +1152,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             raise ActionError("日期格式需为 YYYY-MM-DD") from exc
         row = day_row(db, attraction_id, day)
         if act == "draft_generate":
+            if row and any(x.get('hold') for L in day_state(row).get('lines', []) for x in L['posts']):
+                raise ActionError('当日还有定岗人员，请先取消定岗再重新生成班表')
             if row and row.status in ("live", "ended") and not body.get("force"):
                 raise ActionError(f"{day} 已经发布过轮岗，不能重新生成")
             roster = roster_for(db, attraction_id, day)

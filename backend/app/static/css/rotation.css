@@ -300,3 +300,6 @@ button.rt-chip { cursor: pointer; }
 .rt-entry-group h4 { margin:0 0 8px; }
 .rt-entry-group ul { padding-inline-start:20px; line-height:1.7; }
 .rt-entry-group .rt-chip { width:100%; min-height:44px; margin-block:4px; }
+/* Continuous staffing is visible on every board, including CM read-only views. */
+.rt-line .rt-post.holding{background:#fff8eb;border-color:#d8bd86}
+.rt-badge.post-hold{display:inline-block;margin:3px 0 0 5px;padding:2px 6px;border-radius:5px;background:#f8e9c8;color:#765519;font-size:12px;line-height:1.5;white-space:normal;vertical-align:middle}

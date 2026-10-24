@@ -32,7 +32,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
       await page.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('最近确认'));
       assert.match(await page.locator('[data-formal-rotation-todo]').innerText(),/A1线.*岗位详情/s);
       assert.equal(await page.locator('[data-formal-rotation-todo] .rt-post').count(),2);
-      await page.waitForFunction(()=>document.querySelector('.action-center-heading strong')?.textContent==='0');
+      await page.waitForFunction(()=>document.querySelector('.workbench-heading strong')?.textContent==='0');
       assert(!(await page.locator('[data-formal-rotation-todo] .rt-post.me .rt-who-name').innerText()).includes('空岗'));
       await board.waitForFunction(()=>['heading','onpost'].includes(RT.data.day.persons.find(p=>p.pid==='9710000').state),{timeout:15000});
       await watcher.close();

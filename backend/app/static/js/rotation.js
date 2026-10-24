@@ -143,6 +143,7 @@ function personMenu(p) {
     <dt>工号</dt><dd>${esc(p.pid)}</dd>
     <dt>班次</dt><dd>${hm(p.start)}-${hm(p.end)}${p.mealEligible ? '（有吃饭）' : '（只休息）'}${p.ate ? '，已吃饭' : ''}</dd>
     <dt>状态</dt><dd>${STATE_NAME[state] || ''}${state === 'rest' ? `至 ${hm(restUntil(p))}` : ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（${preparingText(p.preparing)}）` : ''}</dd>
+    ${p.postHold?`<dt>持续定岗</dt><dd>${hm(Math.floor(p.postHold.since))}起 · ${esc(p.postHold.reason)}；手动取消或零点结束。</dd>`:''}
     <dt>去向</dt><dd>${p.assign ? `${goText(p)}，${hm(p.assign.departAt)} 出发` : '无'}</dd>
     <dt>今天去过</dt><dd>${esc(p.visited.join('、') || '无')}</dd>
     ${p.absences.length ? `<dt>固定暂离</dt><dd>${p.absences.map(a => `${hm(a.start)}-${hm(a.end)} ${esc(a.label)}${a.missed ? '（错过）' : ''}`).join('；')}</dd>` : ''}
@@ -472,7 +473,7 @@ function bindRoster() {
 // ---------------------------------------------------------------- 记录
 
 const EVENT_NAME = {
-  publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
+  post_hold:'设置持续定岗',post_resume:'结束定岗', publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
   arrive: '去休息', arrive_done: '去休息后下班', arrive_away: '去休息后转暂离', depart: '去轮岗', undo_arrive: '撤回去休息', away: '暂离/出圈', back: '回池',
   initial_rest:'班次开始自动休息', reassign: '改派', leave: '离岗', flag: '标记', move:'现场人员调整',post_order:'岗位顺序调整',post_schedule_close:'计划撤岗',post_open: '开岗', post_close: '撤岗', line_on: '启用线', line_off: '停用线', set_close: '改闭园时间',
   fix_undo_depart: '更正：撤销出发', fix_remove: '更正：移出岗位', fix_place: '更正：放入岗位', add_person: '临时加人', shift_end: '下班', shift_end_onpost: '在岗到点下班',
@@ -601,7 +602,7 @@ function memberView() {
   if (p.state === 'heading') status = `前往 ${esc(p.assign ? p.assign.line : '')} 线，约 ${hm(p.arriveAt)} 到岗`;
   if (p.state === 'away' && p.away) status = `暂离：${esc(p.away.reason)}${p.away.until !== null && p.away.until !== undefined ? `，${hm(p.away.until)} 回` : ''}`;
   const next = p.assign ? `<p>下一步：${goText(p)}，${hm(p.assign.departAt)} 出发</p>` : '';
-  const line = d.line ? `<section class="panel"><h2>${esc(d.line.id)} 线</h2><div class="rt-line">${d.line.posts.map(x => `<div class="rt-post${x.occ === p.pid ? ' me' : ''}${x.open ? '' : ' closed'}"><span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${x.open ? esc(x.occName || '空岗') : '未开'}</span></div>`).join('')}</div></section>` : '';
+  const line = d.line ? `<section class="panel"><h2>${esc(d.line.id)} 线</h2><div class="rt-line">${d.line.posts.map(x => `<div class="rt-post${x.occ === p.pid ? ' me' : ''}${x.open ? '' : ' closed'}"><span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${x.open ? esc(x.occName || '空岗') : '未开'}${x.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span></div>`).join('')}</div></section>` : '';
   const today = (d.today || []).map(s => `<span class="rt-pill">${esc(s.line)} ${hm(s.start)}-${hm(s.end)}</span>`).join('');
   const week = Object.entries(d.week_minutes || {}).sort().map(([lineId, m]) => `<span class="rt-pill">${esc(lineId)} ${Math.round(m)} 分钟</span>`).join('');
   const results = d.confirmations || [];
