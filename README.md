@@ -35,6 +35,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 | [docs/release.md](docs/release.md) | 发布打包与版本号 |
 | [docs/deployment.md](docs/deployment.md) | 生产部署：本地构建与人工授权上线 |
 | [docs/operations.md](docs/operations.md) | 备份、恢复演练、健康检查 |
+| [docs/workbench-experience.md](docs/workbench-experience.md) | 今日工作、连续登记与后台导出边界 |
 | [docs/security.md](docs/security.md) | 仓库边界与内部约定 |
 | [docs/changelog.md](docs/changelog.md) | 应用内「更新记录」怎么维护 |
 | [docs/maintain.md](docs/maintain.md) | 改代码时文档改哪 |

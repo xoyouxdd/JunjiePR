@@ -1,3 +1,4 @@
+import { queueExport } from './export-tasks.js';
 // Declaration statistics and record detail presentation.
 import { api } from './api.js';
 import { beginViewRequest } from './context.js';
@@ -46,7 +47,7 @@ async function renderDeclarationStatistics(){
   const params=()=>new URLSearchParams([...new FormData(form)].filter(([,value])=>value));
   const load=async()=>{const id=++sequence,button=form.querySelector('button[type="submit"]');button.disabled=true;host.innerHTML='<section class="panel"><div class="empty">正在加载统计数据…</div></section>';try{const data=await api('/api/declaration-statistics?'+params());if(id===sequence&&app.contains(form))show(data);}catch(error){if(id===sequence&&app.contains(form))host.innerHTML=`<section class="panel"><div class="error">${esc(error.message)}</div></section>`;}finally{if(id===sequence)button.disabled=false;}};
   form.onsubmit=event=>{event.preventDefault();void load();};
-  if(canExport)document.getElementById('declarationExport').onclick=async()=>{const confirmed=await confirmModal('导出声明登记统计',`<p>将按当前筛选条件导出 ${esc(form.elements.month.value)} 的景点圈、等级汇总和逐条明细。</p>`,'导出 Excel');if(confirmed)location.href=portalPath('/api/declaration-statistics/export?'+params());};
+  if(canExport)document.getElementById('declarationExport').onclick=async()=>{const confirmed=await confirmModal('导出声明登记统计',`<p>将按当前筛选条件导出 ${esc(form.elements.month.value)} 的景点圈、等级汇总和逐条明细。</p>`,'导出 Excel');if(confirmed){const button=document.getElementById('declarationExport');if(button.disabled)return;button.disabled=true;try{await queueExport('/api/declaration-statistics/export?'+params());toast('已加入导出任务');}catch(error){toast(error.message,true);}finally{button.disabled=false;}}};
   show(initial);
 }
 

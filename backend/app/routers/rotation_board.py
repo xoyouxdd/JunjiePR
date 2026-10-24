@@ -3,11 +3,13 @@ import asyncio
 from datetime import datetime
 from io import BytesIO
 import zipfile
+from weakref import WeakKeyDictionary
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
-from app.v2_database import SessionLocal
+from app.v2_database import SessionLocal, get_db
 from app.v2_models import Employee
 from app.rotation import service as S
 from app.rotation import daily as D
@@ -16,7 +18,24 @@ from app.rotation.namespace import runtime_for
 from app.rotation.roster import parse_any
 from app.date_utils import parse_iso_date
 
-router = APIRouter(prefix='/rotation-board', tags=['rotation-board'])
+_request_gates = WeakKeyDictionary()
+
+
+class RotationRoute(APIRoute):
+    async def handle(self, scope, receive, send):
+        # Wait before resolving auth/database dependencies, and hold the slot
+        # until their cleanup ends. Four active requests leave pool headroom
+        # for the clock, exports and the rest of the app. SSE already uses
+        # short, released sessions rather than one per long-lived stream.
+        if scope['path'].endswith('/stream'):
+            return await super().handle(scope, receive, send)
+        loop = asyncio.get_running_loop()
+        gate = _request_gates.setdefault(loop, asyncio.Semaphore(4))
+        async with gate:
+            return await super().handle(scope, receive, send)
+
+
+router = APIRouter(prefix='/rotation-board', tags=['rotation-board'], route_class=RotationRoute)
 MANAGERS = {'SUPERVISOR', 'TA_SUPERVISOR', 'GSM', 'TA_GSM'}
 ROLES = MANAGERS | {'CM', 'TR'}
 
@@ -30,15 +49,31 @@ def capabilities(user):
             'can_records': manage, 'can_settings': manage}
 
 
-def can_enter(user):
+def can_enter(user, db=None):
     if getattr(user,'rotation_temporary',False): return True
+    if db is not None:
+        from app.rotation.participation import contexts
+        if contexts(db,user.employee.employee_no):return True
     return bool(set(user.role_codes) & ROLES and user.employee.attraction_id
                 and user.employee.attraction and user.employee.attraction.active
                 and user.employee.attraction.employee_circle)
 
 
-def staff(user: V2User = Depends(current_user)):
-    if not can_enter(user): raise HTTPException(403, '没有本景点圈轮岗权限')
+def formal_db(db: Session = Depends(get_db)):
+    # Authentication and formal operations share the request's connection.
+    # Two independent sessions per request can exhaust the pool when many
+    # phones poll together, before any request can release its auth session.
+    previous = db.info.get('rotation_formal', False)
+    db.info['rotation_formal'] = True
+    try:
+        yield db
+    finally:
+        db.info['rotation_formal'] = previous
+
+
+
+def staff(user: V2User = Depends(current_user), db: Session = Depends(formal_db)):
+    if not can_enter(user, db): raise HTTPException(403, '没有本景点圈轮岗权限')
     return user
 
 
@@ -52,16 +87,12 @@ def operator(user: V2User = Depends(staff)):
     return user
 
 
-def formal_db():
-    with SessionLocal() as db:
-        db.info['rotation_formal'] = True
-        yield db
 
 
 def actor(user, *, personal=False):
     return RotationActor('member' if personal else 'supervisor', user.name,
                          member_employee_no=user.employee.employee_no,
-                         entered_by=user.employee, formal=True, temporary=getattr(user,'rotation_temporary',False))
+                         entered_by=user.employee, formal=True, temporary=getattr(user,'rotation_identity_temporary',getattr(user,'rotation_temporary',False)))
 
 
 def identity(user):
@@ -78,6 +109,7 @@ def call(fn, *args, **kwargs):
 
 @router.get('/whoami')
 def whoami(user: V2User = Depends(staff)):
+    if not set(user.role_codes)&ROLES:raise HTTPException(403,'此身份只可使用本人轮岗待办')
     return {'kind': 'supervisor' if capabilities(user)['can_operate'] else 'member',
             'kind_label': user.display_role_name, 'name': user.name, 'employee_no': user.employee.employee_no,
             'attraction_name': user.employee.attraction.name, 'test_mode': False, 'formal': True,
@@ -86,7 +118,12 @@ def whoami(user: V2User = Depends(staff)):
 
 @router.get('/board')
 def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
-    S.tick_attraction(user.employee.attraction_id, formal=True)
+    if not set(user.role_codes)&ROLES:raise HTTPException(403,'此身份只可使用本人轮岗待办')
+    aid = user.employee.attraction_id
+    # No pending writes here: release the authorization/read snapshot before
+    # the ticker opens its separate short transaction and acquires its lock.
+    db.rollback()
+    S.tick_attraction(aid, formal=True)
     data = call(S.board_payload, db, user.employee.attraction_id)
     data.update(capabilities=capabilities(user),identity=identity(user))
     if not capabilities(user)['can_manage']:
@@ -98,23 +135,29 @@ def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
 
 
 @router.get('/me')
-def me(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
-    S.tick_attraction(user.employee.attraction_id, formal=True)
+def me(attraction_id: int | None = None, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
+    from app.rotation.participation import personal_scope
+    aid,choices=personal_scope(db,user,attraction_id)
+    db.rollback()
+    S.tick_attraction(aid, formal=True)
     with S.transaction(db):
-        data=call(S.member_payload, db, user.employee.attraction_id, user.employee.employee_no)
+        data=call(S.member_payload, db, aid, user.employee.employee_no)
         data.update(capabilities=capabilities(user),identity=identity(user))
+        data.update(attraction_id=aid,rotation_circles=choices)
+        data['identity']['attraction_name']=next(c['name'] for c in choices if c['id']==aid)
         data.pop('week_minutes',None)
         data.pop('today',None)
         if data.get('line'):
-            row=S.day_row(db,user.employee.attraction_id,data['clock']['date'])
+            row=S.day_row(db,aid,data['clock']['date'])
             state=S.day_state(row)
-            eng,_=S.engine_for(db,S.load_config(db,user.employee.attraction_id),row,state)
+            eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
             data['line']=next((line for line in S.lines_view(eng) if line['id']==data['line']['id']),None)
     return data
 
 
 @router.post('/me/act')
 def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
+    from app.rotation.participation import personal_scope
     if payload.get('pid',user.employee.employee_no) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
     if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust'): raise HTTPException(403, '只可确认本人轮岗待办')
@@ -126,7 +169,11 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
                 from app.rotation.temporary import current
                 db.rollback();db.execute(text('BEGIN IMMEDIATE'))
                 user=current(db,request)
-            return call(S.do_live_action, db, user.employee.attraction_id, actor(user, personal=True),
+            selected=payload.get('attraction_id')
+            if selected is not None and (not isinstance(selected,int) or isinstance(selected,bool)):
+                raise HTTPException(400,'轮岗景点圈无效')
+            aid,_=personal_scope(db,user,selected)
+            return call(S.do_live_action, db, aid, actor(user, personal=True),
                         {**payload, 'pid': user.employee.employee_no})
         except Exception:
             db.rollback()
@@ -147,11 +194,16 @@ def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(
 @router.post('/me/entry-preview')
 def entry_preview(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     from app.rotation.cooperation import adjustment
-    S.tick_attraction(user.employee.attraction_id, formal=True)
+    from app.rotation.participation import personal_scope
+    selected=payload.get('attraction_id')
+    if selected is not None and (not isinstance(selected,int) or isinstance(selected,bool)):raise HTTPException(400,'轮岗景点圈无效')
+    aid,_=personal_scope(db,user,selected)
+    db.rollback()
+    S.tick_attraction(aid, formal=True)
     with S.transaction(db):
-        cfg=S.load_config(db,user.employee.attraction_id)
+        cfg=S.load_config(db,aid)
         day,now=S.clock_now(cfg)
-        row=S.day_row(db,user.employee.attraction_id,day)
+        row=S.day_row(db,aid,day)
         if not row or row.status!='live': raise HTTPException(400,'当日轮岗尚未运行')
         eng,_=S.engine_for(db,cfg,row,S.day_state(row))
         p=eng.P.get(user.employee.employee_no)
@@ -176,11 +228,13 @@ def execute_preview(payload: dict,db: Session = Depends(formal_db),user: V2User 
 
 
 @router.get('/confirmation')
-def confirmation(token: str, date: str, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
+def confirmation(token: str, date: str, attraction_id: int | None = None, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
+    from app.rotation.participation import personal_scope
+    aid,_=personal_scope(db,user,attraction_id)
     if len(token)!=64: raise HTTPException(400, '确认标识无效')
     if parse_iso_date(date).isoformat()!=datetime.now().date().isoformat(): raise HTTPException(400, '仅可核对当日确认')
-    return call(S.confirmation_status, db, user.employee.attraction_id, date, token,
-                None if capabilities(user)['can_operate'] else user.employee.employee_no)
+    return call(S.confirmation_status, db, aid, date, token,
+                None if capabilities(user)['can_operate'] and aid==user.employee.attraction_id else user.employee.employee_no)
 
 
 @router.get('/daily')
@@ -231,23 +285,32 @@ def roster(date: str, db: Session = Depends(formal_db), user: V2User = Depends(m
 @router.post('/roster/upload')
 async def upload(file: UploadFile = File(...), scope: str = Form('week'), date: str = Form(''),
                  preview: bool = Form(False), expected_digest: str = Form(''),
+                 confirm_exceptions: bool = Form(False), skip_employee_nos: str = Form('[]'),
                  db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     if not (file.filename or '').lower().endswith('.xlsx'): raise HTTPException(400,'请上传xlsx班表')
     content=await file.read(10*1024*1024+1)
     if not content or len(content)>10*1024*1024: raise HTTPException(400,'班表不能为空且不能超过10MB')
     try: parsed=parse_any(BytesIO(content))
     except (ValueError,KeyError,StopIteration,zipfile.BadZipFile) as exc: raise HTTPException(400,'班表无法识别') from exc
+    import json
+    try:
+        skip=json.loads(skip_employee_nos)
+        if not isinstance(skip,list) or any(not isinstance(no,str) for no in skip):raise ValueError()
+    except (ValueError,TypeError):raise HTTPException(400,'跳过人员列表无效')
     from starlette.concurrency import run_in_threadpool
-    return await run_in_threadpool(_save_uploaded_roster, parsed, scope, date, preview, expected_digest, file.filename, db, user)
+    return await run_in_threadpool(_save_uploaded_roster, parsed, scope, date, preview, expected_digest, file.filename, db, user, confirm_exceptions, skip)
 
 
-def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filename, db, user):
+def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filename, db, user, confirm_exceptions=False, skip=None):
     from app.rotation.temporary import preflight, provision
+    from app.rotation.participation import save_metadata
     from app.v2_crypto import hash_password
-    preliminary=preflight(db,parsed,user.employee.attraction_id,scope,date or None)
+    preliminary=preflight(db,parsed,user.employee.attraction_id,scope,date or None,skip)
     if preview: return {'ok':True,'preview':True,**preliminary}
     if expected_digest and expected_digest!=preliminary['digest']:
         raise HTTPException(409,'班表或人员身份已变化，请重新预检')
+    if preliminary['warnings'] and (not confirm_exceptions or not expected_digest):
+        raise HTTPException(409,'含账号异常人员，请先预检并确认加入或跳过')
     if preliminary['new'] and not expected_digest:
         raise HTTPException(409,'含未注册人员，请预检并确认创建轮岗临时账号')
     # Password derivation is intentionally outside the rotation/database write locks.
@@ -260,15 +323,32 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
             # A writer reservation serializes roster provisioning against HR registration.
             db.rollback()
             db.execute(text('BEGIN IMMEDIATE'))
-            batch=preflight(db,parsed,user.employee.attraction_id,scope,date or None)
+            batch=preflight(db,parsed,user.employee.attraction_id,scope,date or None,skip)
             if preliminary['digest']!=batch['digest']:
                 raise HTTPException(409,'班表或人员身份已变化，请重新预检')
             with S.transaction(db):
                 provision(db,parsed,user.employee.attraction_id,batch,passwords)
-                row=call(S.save_roster,db,user.employee.attraction_id,parsed,scope=scope,file_name=filename,
+                from copy import deepcopy
+                selected=deepcopy(parsed)
+                for day in batch['dates']:
+                    selected['days'][day]={no:cell for no,cell in selected['days'][day].items() if no not in batch['skipped']}
+                if not any(selected['days'][day] for day in batch['dates']):raise HTTPException(400,'跳过后没有可导入人员')
+                row=call(S.save_roster,db,user.employee.attraction_id,selected,scope=scope,file_name=filename,
                          uploader_id=user.id,uploader_name=user.name,only_date=date or None)
+                save_metadata(db,row,batch)
+                # Refresh only identity facts for an already-running participant.
+                # Imported rosters never silently move posts or restart live shifts.
+                for day in batch['dates']:
+                    running=S.day_row(db,user.employee.attraction_id,day)
+                    if running and running.status=='live':
+                        state=S.day_state(running)
+                        facts={no:metadata for no,metadata in batch['identities'].items()
+                               if no in selected['days'][day] and no in state.get('persons',{})}
+                        if facts:
+                            state.setdefault('rosterIdentities',{}).update(facts)
+                            S.save_day(db,running,state)
             return {'ok':True,'scope':row.scope,'start_date':row.start_date,'end_date':row.end_date,
-                    'entry_count':row.entry_count,'temporary_created':len(batch['new'])}
+                    'entry_count':row.entry_count,'temporary_created':len(batch['new']),'skipped':batch['skipped']}
         except IntegrityError as exc:
             db.rollback()
             raise HTTPException(409,'人员身份刚刚变化，请重新预检班表') from exc

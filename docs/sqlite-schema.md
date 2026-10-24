@@ -1252,8 +1252,10 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 正式轮岗表由 `rotation/namespace.py` 注册，结构沿用对应轮岗表，唯一约束和索引加 `formal_` 前缀。正式名单明细的upload_id引用formal_rotation_roster_uploads；attraction_id和员工外键继续引用真实业务主表。正式与测试使用独立运行缓存、版本与快照，不共享模拟时钟。
 
 
-### 正式轮岗临时人员
+### 正式轮岗独立人员与班表身份
 
-- `formal_rotation_temporary_members`：独立7位工号（唯一）、姓名、本圈、密码哈希、启用状态、有效截止时刻、登录锁定计数、创建及正式接管时间、接管员工ID。不会创建正式员工或角色。接管字段保留，账号失效不删除历史。
-- `formal_rotation_temporary_sessions`：临时身份ID、令牌哈希（唯一）、会话截止时刻；正式接管或退出撤销，鉴权同时检查身份截止和接管状态。
-- 新表由启动时metadata建表；不修改原有员工、正式轮岗事件和班表表结构。临时操作事件使用actor_type=temporary、actor_id为空，detail_json保存rotation_temporary事实；个人在线段按临时身份与在线时段的交集标记。
+- `formal_rotation_temporary_members`：独立7位员工号（唯一）、姓名、初始导入圈、轮岗密码哈希、启用状态、有效截止时刻、登录失败计数、创建及正式接管时间、接管员工ID。未注册人员不创建正式员工或角色；异常正式员工可在确认导入后复用受限轮岗身份，原正式账号状态不变。
+- `formal_rotation_temporary_sessions`：独立身份ID、令牌哈希（唯一）、会话截止。鉴权同时核对有效当日班表、正式账号是否恢复正常及访问路径白名单；正式接管或退出撤销。
+- `formal_rotation_roster_identities`：上传ID与员工号构成主键，姓名及metadata_json保存导入当时的员工ID、来源圈、跨圈标记、临时标记与具体账号异常原因。按天优先于按周，同类最新名单生效；没有修改原班表表结构。
+- 草稿状态的`rosterIdentities`冻结本次运行身份；事件detail_json的`rotation_identity`固化事件事实。新接口返回identity_labels用于后台记录显示。未知临时操作actor_type=temporary，异常正式人员使用实际员工ID及employee类型，仍不获得正式功能权限。
+- 新表启动时由metadata建表，现有数据库不删除、不重写员工或历史轮岗数据。正式账号接管继续以同一员工号继承轮岗记录。

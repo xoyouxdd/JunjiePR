@@ -260,7 +260,7 @@ def test_three_member_missing_one_recombines_with_relief_priority_and_new_consen
             assert state['persons']['9710000']['entryHold']
 
 
-def test_upload_rejects_foreign_or_unknown_staff_and_formal_configuration_is_editable():
+def test_upload_accepts_cross_circle_staff_and_formal_configuration_is_editable():
     with TestClient(app) as c:
         login(c,'9710020')
         ok(c.put('/api/rotation-board/config',json={'settings':{'breakMin':15}}))
@@ -268,7 +268,9 @@ def test_upload_rejects_foreign_or_unknown_staff_and_formal_configuration_is_edi
         wb.active.append(['9710001','另一圈员工',date.today().isoformat(),'07:15-16:15',''])
         out=BytesIO();wb.save(out)
         response=c.post('/api/rotation-board/roster/upload',files={'file':('foreign.xlsx',out.getvalue(),'application/octet-stream')},data={'scope':'day'})
-        assert response.status_code==400 and '本圈可用正式账号' in response.text
+        assert response.status_code==200,response.text
+        with SessionLocal() as db:
+            assert db.query(Employee).filter_by(employee_no='9710001').one().attraction_id!=db.query(Employee).filter_by(employee_no='9710020').one().attraction_id
 
 
 def test_formal_manual_preview_is_required_and_stale_preview_is_rejected():

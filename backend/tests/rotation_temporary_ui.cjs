@@ -15,7 +15,7 @@ let server,browser;
     const context=await browser.newContext(),page=await context.newPage();const errors=[];
     page.on('pageerror',e=>errors.push(e.stack||e.message));
     await page.goto(base+'/login');await page.locator('[name=employee_no]').fill('9730100');await page.locator('[name=password]').fill('0100');await page.locator('[type=submit]').click();
-    await page.getByRole('heading',{name:'轮岗待办',exact:true}).waitFor();await page.locator('#rotationPersonalTasks .panel').waitFor();
+    await page.getByRole('heading',{name:'轮岗待办',exact:true}).waitFor();await page.locator('#rotationPersonalTasks .rt-personal-task').waitFor();
     assert.equal(await page.locator('#tabs').isVisible(),false);assert.equal(await page.getByRole('link',{name:'当日看板'}).count(),0);
     assert(!(await page.locator('#app').innerText()).includes('（临时）'));
     for(const width of [320,375,390,430,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,name+' personal overflow '+width);}

@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.24.2", "date": "2026-10-24", "status": "candidate",
+        "items": [
+            {"summary": "今日工作与连续登记体验完善",
+             "detail": "待办整合为今日工作，常用入口沿用现有权限；直属签卡支持逐条复核。本人认可登记可主动沿用上一条选择，内容仍独立填写，提交成功后照片清除，不跨批次复用。",
+             "audiences": ["all"]},
+            {"summary": "导出支持后台任务与主动下载",
+             "detail": "统计、排名、声明、公告报告和月报可加入受限后台队列，完成后主动下载。创建、执行和下载重新核对身份及范围，任务仅本人可见；保留原导出内容、审计和同步接口。文件限时保留，服务重启不重放任务；不支持多进程共享队列。",
+             "audiences": ["all"]},
+            {"summary": "轮岗参与按有效班表独立校验",
+             "detail": "正常跨圈员工可按有效班表参与本人轮岗，不修改HR归属或绩效范围。异常身份集中预检后确认加入或跳过，临时访问仅限本人轮岗；同日多圈可切换，确认令牌绑定圈。原员工账号停用和工作台权限不会因轮岗参与恢复。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.24.1", "date": "2026-10-24", "status": "candidate",
         "items": [
             {"summary": "轮岗支持独立临时人员身份",

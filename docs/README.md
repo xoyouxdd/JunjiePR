@@ -30,6 +30,7 @@
 | [release.md](release.md) | 发布打包 |
 | [deployment.md](deployment.md) | 生产部署：本地构建与人工授权上线 |
 | [operations.md](operations.md) | 备份与恢复入口 |
+| [workbench-experience.md](workbench-experience.md) | 今日工作、连续登记与后台导出边界 |
 | [security.md](security.md) | 仓库边界与内部约定 |
 | [changelog.md](changelog.md) | 应用内更新记录的数据源 |
 | [maintain.md](maintain.md) | 改代码时文档改哪 |

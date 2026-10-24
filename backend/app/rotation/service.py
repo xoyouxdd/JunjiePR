@@ -367,8 +367,11 @@ class DbHooks:
         else:
             actor_type, actor_id, actor_name = "system", None, "系统" if actor == "system" else str(actor)
         if self.db.info.get('rotation_formal') and pid:
+            from app.rotation.participation import record_identity
+            metadata=record_identity(self.db,self.attraction_id,self.day,pid)
+            if metadata:detail={**(detail or {}),'rotation_identity':metadata}
             from app.rotation.temporary import was_temporary
-            if was_temporary(self.db,self.attraction_id,pid,datetime.now()):
+            if metadata.get('temporary') or not metadata and was_temporary(self.db,self.attraction_id,pid,datetime.now()):
                 detail={**(detail or {}),'rotation_temporary':True}
         self.db.add(RotationEvent(
             attraction_id=self.attraction_id,
@@ -1165,6 +1168,9 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                                       duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
             upload=roster_upload_for(db,attraction_id,day)
             state['rosterUploadId']=upload.id if upload else None
+            if db.info.get('rotation_formal'):
+                from app.rotation.participation import roster_metadata
+                state['rosterIdentities']=roster_metadata(db,attraction_id,day,upload.id if upload else None)
             # A reset starts a new run, even when the first plan is identical.
             state["confirmationEpoch"] = uuid4().hex
             state.pop("confirmations", None)
@@ -1270,10 +1276,11 @@ def day_log(db: Session, attraction_id: int, day: str, limit: int = 500) -> list
             names.setdefault(member.employee_no,member.name)
     return [{
         "id": r.id, "minute": r.minute, "time": fmt(r.minute), "actor": r.actor_name, "actor_type": r.actor_type,
-        "type": r.event_type, "employee_no": r.employee_no, "name": names.get(r.employee_no, r.employee_no),
+        "type": r.event_type, "employee_no": r.employee_no, "name": json.loads(r.detail_json or '{}').get('rotation_identity',{}).get('name') or names.get(r.employee_no, r.employee_no),
         "line": r.line, "post": r.post, "detail": json.loads(r.detail_json) if r.detail_json else None,
         "temporary": bool(json.loads(r.detail_json or '{}').get('rotation_temporary')),
         "actor_temporary": r.actor_type=='temporary',
+        "identity_labels": _identity_labels(json.loads(r.detail_json or '{}').get('rotation_identity',{})),
     } for r in rows]
 
 
@@ -1314,18 +1321,29 @@ def person_record(db: Session, attraction_id: int, employee_no: str, day: str) -
         start_at=datetime.fromisoformat(segment.work_date)+timedelta(minutes=segment.start_min)
         end_at=datetime.fromisoformat(segment.work_date)+timedelta(minutes=segment.end_min)
         return member.created_at<=end_at and (not member.adopted_at or start_at<member.adopted_at)
+    identity_by_day={}
+    if db.info.get('rotation_formal'):
+        from app.rotation.participation import record_identity
+        identity_by_day={d:record_identity(db,attraction_id,d,employee_no) for d in {s.work_date for s in segs}}
     return {
         "employee_no": employee_no,
         "week": [start, end],
         "segments": [{"date": s.work_date, "line": s.line, "start": s.start_min, "end": s.end_min, "minutes": s.minutes,
-                      "temporary":temporary_segment(s)} for s in segs],
+                      "temporary":identity_by_day.get(s.work_date,{}).get('temporary',temporary_segment(s)),
+                      "identity_labels":_identity_labels(identity_by_day.get(s.work_date,{}))} for s in segs],
         "totals": totals,
         "duties": [{"date": d.work_date, "kind": d.kind} for d in duties],
         "events": [{"date": e.work_date, "time": fmt(e.minute), "type": e.event_type, "actor": e.actor_name, "line": e.line, "post": e.post,
                     "temporary":bool(json.loads(e.detail_json or '{}').get('rotation_temporary')),
                     "actor_temporary":e.actor_type=='temporary',
+                    "identity_labels":_identity_labels(json.loads(e.detail_json or '{}').get('rotation_identity',{})),
                     "detail": json.loads(e.detail_json) if e.detail_json else None} for e in events],
     }
+
+
+def _identity_labels(metadata):
+    from app.rotation.participation import labels
+    return labels(metadata)
 
 
 def update_config(cfg: RotationConfig, lines, settings, employee_id: int | None) -> None:

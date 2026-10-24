@@ -66,7 +66,7 @@ def user_payload(db: Session, user: V2User) -> dict:
         "member_count": len(direct_member_ids(db, user.id)),
         "must_change_password": user.account.must_change_password,
         # 「轮岗（测试）」入口：热力追踪的 TR 和 GSM。
-        "rotation_entry": can_enter_formal_rotation(user),
+        "rotation_entry": can_enter_formal_rotation(user, db),
     }
 
 
@@ -81,12 +81,18 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
         .first()
     )
     if not account:
-        from app.rotation.temporary import TemporaryMember, login as temporary_login
-        member=db.query(TemporaryMember).filter_by(employee_no=login_name).first()
-        if member: return temporary_login(db,request,response,member,password)
         rotation_account = find_rotation_account(db, login_name)
         if rotation_account:
             return rotation_login(db, request, response, rotation_account, password)
+        from app.rotation.temporary import TemporaryMember, login as temporary_login
+        member=db.query(TemporaryMember).filter_by(employee_no=login_name).first()
+        if member: return temporary_login(db,request,response,member,password)
+    elif account:
+        from app.rotation.participation import account_issues
+        from app.rotation.temporary import TemporaryMember, login as temporary_login
+        if account_issues(db,account.employee)[0]:
+            member=db.query(TemporaryMember).filter_by(employee_no=account.employee.employee_no).first()
+            if member:return temporary_login(db,request,response,member,password)
     if account and account.enabled:
         from app.services.employee_types import enforce_account_expiry
         if enforce_account_expiry(db, account.employee_id):

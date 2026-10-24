@@ -8,6 +8,7 @@ import { logout } from './app/auth.js';
 import { configureViews, render, beginViewRequest } from './app/context.js';
 import { renderDeclarationStatistics } from './app/declarations.js';
 import { renderEntries } from './app/entries.js';
+import { startExportTasks } from './app/export-tasks.js';
 import { esc } from './app/format.js';
 import { renderHome } from './app/home.js';
 import { renderCircleTransfers, renderHrGroups, renderHrScores, renderLogs, renderMonthClose } from './app/hr.js';
@@ -78,6 +79,7 @@ async function initializeApp(){
     }
     if(state.me.must_change_password){renderPasswordChangeRequired();return;}
     state.options=await api('/api/options');
+    startExportTasks(state.me);
     if(new URLSearchParams(location.search).get('view')==='actionCenter')state.tab='actionCenter';
     if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';
     applyCircleTheme();

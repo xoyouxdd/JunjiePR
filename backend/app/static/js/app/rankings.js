@@ -1,3 +1,4 @@
+import { queueExport } from './export-tasks.js';
 // PR ranking filters and presentation.
 import { api } from './api.js';
 import { beginViewRequest } from './context.js';
@@ -74,7 +75,7 @@ async function renderPrRankings(){
   document.getElementById('prCategoryTabs').querySelectorAll('[data-pr-category]').forEach(button=>button.onclick=()=>{category=button.dataset.prCategory;sortBy=['leader','gsm_leader'].includes(category)?'count':'score';page=1;document.querySelectorAll('[data-pr-category]').forEach(item=>item.classList.toggle('active',item===button));renderSubfilters();updateExportState();load()});
   form.onsubmit=event=>{event.preventDefault();page=1;load()};
   form.elements.population.onchange=()=>{page=1;load()};
-  if(canExport)document.getElementById('prExport').onclick=()=>{location.href=portalPath('/api/pr-rankings/export?'+params())};
+  if(canExport)document.getElementById('prExport').onclick=async event=>{const button=event.currentTarget;if(button.disabled)return;button.disabled=true;try{await queueExport('/api/pr-rankings/export?'+params());toast('已加入导出任务');}catch(error){toast(error.message,true);}finally{button.disabled=false;}};
   renderSubfilters();updateExportState();await load();
 }
 

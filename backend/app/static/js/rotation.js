@@ -412,7 +412,7 @@ function rosterView() {
   const r = view.roster;
   const kindName = { rotation: '轮岗', excluded: '不轮岗', off: '不在本区' };
   return `<section class="panel"><h2>上传名单</h2>
-    <p class="field-hint">支持 ZTP 周班表，或标准模板（列：工号、姓名、日期、班次、备注；班次如 07:15-16:15）。按天上传会覆盖按周上传的同一天。${formalRotation?'未注册人员经预检确认后创建轮岗专用临时身份，完整工号登录、密码为后四位；不进入正式员工统计。':'名单为模拟数据，只用于轮岗测试。'}</p>
+    <p class="field-hint">支持 ZTP 周班表，或标准模板（列：工号、姓名、日期、班次、备注；班次如 07:15-16:15）。按天上传会覆盖按周上传的同一天。${formalRotation?'以班表为准加入轮岗，跨圈直接识别；账号异常集中确认加入或跳过，未注册人员建立独立轮岗身份。':'名单为模拟数据，只用于轮岗测试。'}</p>
     <form id="rosterForm" class="rt-row">
       <input type="file" name="file" accept=".xlsx" required>
       <label><input type="radio" name="scope" value="week" checked> 按周</label>
@@ -446,6 +446,18 @@ function bindRoster() {
         const check=new FormData();for(const [key,value] of data.entries())check.append(key,value);check.set('preview','true');
         const batch=await rtApi('/api/rotation/roster/upload',{method:'POST',body:check});
         data.set('expected_digest',batch.digest);
+        if(batch.warnings?.length){
+          openModal(`<h3>以下人员存在账号异常</h3><p>正常人员照常导入。勾选异常人员可仅加入轮岗，不会启用其工作台账号。</p><div class="rt-scroll">${batch.warnings.map(p=>`<label class="rt-roster-exception"><input type="checkbox" data-exception-no="${esc(p.employee_no)}" value="${esc(p.employee_no)}" checked><span><strong>${esc(p.name)} · ${esc(p.employee_no)}</strong><small>${esc(p.reasons.join('、'))}</small></span></label>`).join('')}</div>${batch.new.some(p=>batch.identities[p.employee_no]?.temporary)?`<p>另有 ${batch.new.filter(p=>batch.identities[p.employee_no]?.temporary).length} 位未注册人员，将创建独立轮岗身份。</p>`:''}<p class="field-hint">已有登录账号使用原密码；无登录账号使用工号后四位。情况仅在后台轮岗记录中标注。</p><div class="modal-actions"><button type="button" class="ghost" data-close>返回检查</button><button type="button" class="secondary" data-skip-exceptions>跳过异常人员</button><button type="button" class="primary" data-include-exceptions>确认加入轮岗</button></div>`,host=>{
+            const commit=async(skipAll)=>{
+              data.set('confirm_exceptions','true');
+              data.set('skip_employee_nos',JSON.stringify([...host.querySelectorAll('[data-exception-no]')].filter(el=>skipAll||!el.checked).map(el=>el.value)));
+              host.querySelectorAll('button,input').forEach(el=>el.disabled=true);
+              if(await perform())closeModal();else host.querySelectorAll('button,input').forEach(el=>el.disabled=false);
+            };
+            host.querySelector('[data-include-exceptions]').onclick=()=>commit(false);
+            host.querySelector('[data-skip-exceptions]').onclick=()=>commit(true);
+          });return;
+        }
         if(batch.new.length){
           confirmBox('确认班表人员',`<p>将为 ${batch.new.length} 位未注册人员创建仅可确认本人轮岗待办的临时账号。</p><div class="rt-scroll"><ul>${batch.new.map(p=>`<li>${esc(p.name)} · ${esc(p.employee_no)}</li>`).join('')}</ul></div><p class="field-hint">完整工号登录，密码为后四位；不进入正式员工统计。已有临时身份复用，历史记录保留。</p>`,'确认导入',perform);return;
         }
@@ -497,10 +509,10 @@ function recordsView() {
   const recordBox = rec ? `<h3>${esc(rec.employee_no)}${rec.segments.some(s=>s.temporary)||rec.events.some(e=>e.temporary)?' · 含临时身份记录':''} 本周（${esc(rec.week[0])} 至 ${esc(rec.week[1])}）</h3>
     <div class="rt-row">${Object.entries(rec.totals).sort().map(([line, m]) => `<span class="rt-pill">${esc(line)} ${Math.round(m)} 分钟</span>`).join('') || '<span class="field-hint">本周还没有在线记录</span>'}</div>
     ${rec.duties.length ? `<p class="field-hint">本周任务：${rec.duties.map(d => `${esc(d.date)} ${d.kind === 'push7' ? '推 7 点' : '送失物'}`).join('；')}</p>` : ''}
-    <div class="rt-scroll"><table class="rt-table"><thead><tr><th>日期</th><th>线</th><th>开始</th><th>结束</th><th>分钟</th></tr></thead><tbody>${rec.segments.map(s => `<tr><td>${esc(s.date)}${s.temporary?'（临时）':''}</td><td>${esc(s.line)}</td><td>${hm(s.start)}</td><td>${hm(s.end)}</td><td>${Math.round(s.minutes)}</td></tr>`).join('')}</tbody></table></div>` : '';
+    <div class="rt-scroll"><table class="rt-table"><thead><tr><th>日期</th><th>线</th><th>开始</th><th>结束</th><th>分钟</th></tr></thead><tbody>${rec.segments.map(s => `<tr><td>${esc(s.date)}${(s.identity_labels?.length?s.identity_labels:s.temporary?['临时']:[]).map(label=>`（${esc(label)}）`).join('')}</td><td>${esc(s.line)}</td><td>${hm(s.start)}</td><td>${hm(s.end)}</td><td>${Math.round(s.minutes)}</td></tr>`).join('')}</tbody></table></div>` : '';
   return `<section class="panel"><h2>个人轮岗记录</h2><form id="recordForm" class="rt-row"><label><span class="rt-label-text">工号</span><input name="no" value="${esc(view.recordNo)}" maxlength="50" required></label><button type="submit" class="primary">查询</button></form>${recordBox}</section>
     <section class="panel"><h2>操作日志</h2><div class="rt-row"><label><span class="rt-label-text">日期</span><input type="date" id="logDate" value="${esc(view.logDate || RT.data.clock.date)}"></label><button type="button" class="secondary" id="logLoad">查看</button></div>
-    <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>时间</th><th>操作</th><th>人员</th><th>线/岗位</th><th>说明</th><th>操作人</th></tr></thead><tbody>${(view.log || []).map(item => `<tr><td>${esc(item.time)}</td><td>${esc(EVENT_NAME[item.type] || item.type)}</td><td>${esc(item.name || '')}${item.temporary?'（临时）':''}</td><td>${esc([item.line, item.post].filter(Boolean).join(' '))}</td><td>${esc(detailText(item))}</td><td>${esc(item.actor)}${item.actor_temporary?'（临时）':''}</td></tr>`).join('') || '<tr><td colspan="6">暂无记录</td></tr>'}</tbody></table></div></section>`;
+    <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>时间</th><th>操作</th><th>人员</th><th>线/岗位</th><th>说明</th><th>操作人</th></tr></thead><tbody>${(view.log || []).map(item => `<tr><td>${esc(item.time)}</td><td>${esc(EVENT_NAME[item.type] || item.type)}</td><td>${esc(item.name || '')}${(item.identity_labels?.length?item.identity_labels:item.temporary?['临时']:[]).map(label=>`（${esc(label)}）`).join('')}</td><td>${esc([item.line, item.post].filter(Boolean).join(' '))}</td><td>${esc(detailText(item))}</td><td>${esc(item.actor)}${item.actor_temporary?'（临时）':''}</td></tr>`).join('') || '<tr><td colspan="6">暂无记录</td></tr>'}</tbody></table></div></section>`;
 }
 
 function bindRecords() {

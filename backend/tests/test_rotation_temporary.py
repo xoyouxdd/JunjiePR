@@ -87,15 +87,17 @@ def test_scoped_login_and_every_non_rotation_function_is_denied():
         assert c.post('/api/rotation-board/me/act',json={'action':'depart'}).status_code==400
         ok(c.post('/api/logout'));assert c.get('/api/me').status_code==401
 
-def test_formal_conflicts_disabled_foreign_name_and_reserved_accounts():
+def test_cross_circle_is_accepted_and_anomalies_need_explicit_choice():
     with TestClient(app) as c:
         ok(login(c))
-        for no,name in [('9730001','合成员工9730001'),('9730100','错误姓名'),('6666666','合成冲突')]:
-            assert upload(c,[[no,name,date.today().isoformat(),'07:15-16:15','']],preview='true').status_code in (400,409)
+        cross=ok(upload(c,[['9730001','合成员工9730001',date.today().isoformat(),'07:15-16:15','']],preview='true'))
+        assert cross['identities']['9730001']['cross_circle'] and not cross['warnings']
+        conflict=ok(upload(c,[['9730100','错误姓名',date.today().isoformat(),'07:15-16:15','']],preview='true'))
+        assert conflict['warnings']
         ok(upload(c,[['9730000','班表别名',date.today().isoformat(),'07:15-16:15','']],preview='true'))
         with SessionLocal() as db:
             e=db.query(Employee).filter_by(employee_no='9730000').one();a=db.query(UserAccount).filter_by(employee_id=e.id).one();a.enabled=False;db.commit()
-        assert upload(c,[['9730000','合成员工9730000',date.today().isoformat(),'07:15-16:15','']]).status_code==400
+        assert upload(c,[['9730000','合成员工9730000',date.today().isoformat(),'07:15-16:15','']]).status_code==409
         with SessionLocal() as db:
             a=db.query(UserAccount).join(Employee).filter(Employee.employee_no=='9730000').one();a.enabled=True;db.commit()
 
@@ -128,7 +130,7 @@ def seed_live():
         with S.transaction(db):
             cfg=S.load_config(db,aid);cfg.lines_json=S._dumps([{'id':'A1','posts':[{'name':'入口'},{'name':'出口'}]}])
             cfg.settings_json=S._dumps({'parkClose':'23:59','closeDelay':0})
-        S.do_draft_action(db,aid,'fixture',{'action':'draft_generate','date':date.today().isoformat()})
+        S.do_draft_action(db,aid,'fixture',{'action':'draft_generate','date':date.today().isoformat(),'force':True})
         S.do_draft_action(db,aid,'fixture',{'action':'publish','date':date.today().isoformat()})
         now=datetime.now();minute=now.hour*60+now.minute+now.second/60
         with S.transaction(db):
@@ -248,7 +250,9 @@ def test_password_derivation_holds_neither_rotation_nor_database_write_lock(monk
 
 def test_equal_password_suffixes_do_not_merge_login_identities():
     with TestClient(app) as manager,TestClient(app) as a,TestClient(app) as b:
-        ok(login(manager));register_temp(manager,'9731109','合成同尾号甲');register_temp(manager,'9741109','合成同尾号乙')
+        ok(login(manager))
+        roster=[['9731109','合成同尾号甲',date.today().isoformat(),'00:00-23:59',''],['9741109','合成同尾号乙',date.today().isoformat(),'00:00-23:59','']]
+        p=ok(upload(manager,roster,preview='true'));ok(upload(manager,roster,expected_digest=p['digest']))
         ok(login(a,'9731109','1109'));ok(login(b,'9741109','1109'))
         assert ok(a.get('/api/me'))['name']=='合成同尾号甲'
         assert ok(b.get('/api/me'))['name']=='合成同尾号乙'

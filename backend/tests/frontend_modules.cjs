@@ -95,11 +95,13 @@ async function fixtureRequest(request, response) {
     response.writeHead(200, {'Content-Type': types[path.extname(file)] || 'application/octet-stream'});
     response.end(fs.readFileSync(file)); return;
   }
+  if(route === '/api/export-tasks/demo-queue/file'){response.writeHead(200,{'Content-Type':'application/pdf','Content-Disposition':'attachment; filename="synthetic.pdf"'});response.end('%PDF-1.4 synthetic');return;}
   if (route === '/api/me') {
     sendJson(response, ['publisher','trainer'].includes(mode) ? {...user, role_code: mode === 'trainer' ? 'TR' : 'GSM', base_role_code: mode === 'trainer' ? 'TR' : 'GSM', role_codes: [mode === 'trainer' ? 'TR' : 'GSM']} : mode === 'member' ? {...user, name: '测试员工', role_code: 'CM', base_role_code: 'CM',
       role_name: 'CM', permissions: ['SELF_RECOGNITION']} : {...user, must_change_password: mode === 'password'});
   } else if (route === '/api/rotation/adjust/mine') sendJson(response, {items: []});
   else if (route === '/api/options') sendJson(response, options);
+  else if (route === '/api/export-tasks') sendJson(response, {items: []});
   else if (route === '/api/action-center') sendJson(response, {month: '2026-10', items: [], total: 0});
   else if (/^\/api\/month-closes\/\d{4}-\d{2}$/.test(route)) {
     const month = route.split('/').pop(), allowed = month <= '2026-09';
@@ -207,7 +209,7 @@ async function main() {
       page.on('pageerror', error => errors.push(error.message));
       page.on('request', request => {if (/\/static\/js\/app\/.*\.js/.test(request.url())) loadedModules.push(request.url());});
       await page.goto(`${origin}${pagePath}`);
-      await page.locator('#app h2').filter({hasText: '待办中心'}).waitFor();
+      await page.locator('#app h2').filter({hasText: '今日工作'}).waitFor();
       assert.equal(await page.locator('#tabs [data-tab="changelog"]').count(),0);
       await page.locator('.tabs-desktop [data-open-about]').click();
       await page.locator('[data-about-version]').filter({hasText: version}).waitFor();
@@ -280,7 +282,7 @@ async function main() {
         runtime.registerPageCleanup(() => {window.fixtureCleanupFired = true;});
       });
       await page.locator('.tabs-desktop [data-tab="actionCenter"]').click();
-      await page.locator('#app h2').filter({hasText: '待办中心'}).waitFor();
+      await page.locator('#app h2').filter({hasText: '今日工作'}).waitFor();
       await page.waitForTimeout(650);
       assert.deepEqual(await page.evaluate(() => [window.fixtureTimerFired, window.fixtureCleanupFired]), [false, true]);
       assert.equal(new Set(loadedModules.map(url => new URL(url).pathname)).size, moduleFiles.length);
@@ -299,6 +301,68 @@ async function main() {
       checks.push(`admin navigation, versioned imports, strict CSP, stale-write guard and cleanup at ${pagePath}`);
       await page.close();
     }
+    {
+      const taskPage=await browser.newPage({viewport:{width:1280,height:900}});
+      const pending=[{...reviewRecord,id:171,employee_name:'合成员工·较长中英文姓名 Alexander',status:'pending'},{...reviewRecord,id:172,status:'pending'}];
+      const qaDir=path.resolve(__dirname,'../../.handover_review/task-workbench-20261024');fs.mkdirSync(qaDir,{recursive:true});
+      let task=null,reviewWrites=0;
+      await taskPage.route('**/api/action-center',route=>route.fulfill({json:{month:'2026-10',total:pending.length,items:pending.length?[{type:'recognition_review',title:'待复核签卡',description:'直属组员提交的签卡等待复核。',tab:'review',severity:'warning',count:pending.length}]:[]}}));
+      await taskPage.route('**/api/reviews**',async route=>{
+        if(route.request().method()==='POST'){reviewWrites++;const record={...pending.shift(),status:'confirmed'};await route.fulfill({json:{record}});}
+        else await route.fulfill({json:{items:pending,total:pending.length,limit:200,offset:0,has_more:false}});
+      });
+      await taskPage.route('**/api/export-tasks**',async route=>{
+        if(route.request().method()==='POST'){task={id:'demo-queue',label:'合成景点数据',status:'running',bytes:0};await route.fulfill({status:202,json:task});}
+        else if(route.request().url().endsWith('/file'))await route.fulfill({contentType:'application/pdf',headers:{'Content-Disposition':'attachment; filename="synthetic.pdf"'},body:'%PDF-1.4 synthetic'});
+        else await route.fulfill({json:{items:task?[task]:[]}});
+      });
+      await taskPage.goto(origin+'/');
+      await taskPage.locator('.workbench-heading').waitFor();
+      await taskPage.evaluate(async()=>{const {state}=await import('./static/js/app/state.js');state.me.role_code='SUPERVISOR';state.me.base_role_code='SUPERVISOR';state.me.role_name='主管';const {gotoTab,renderUserBadge}=await import('./static/js/app/navigation.js');renderUserBadge();gotoTab('actionCenter');});
+      await taskPage.locator('[data-action-type=recognition_review]:not([data-action-details])').waitFor();
+      for(const width of [320,375,390,430,768,1280]){
+        await taskPage.setViewportSize({width,height:900});
+        assert(!await taskPage.evaluate(()=>document.documentElement.scrollWidth>innerWidth),'Workbench has no viewport overflow');
+        if([390,1280].includes(width))await taskPage.screenshot({path:path.join(qaDir,'workbench-'+width+'.png'),fullPage:true});
+      }
+      for(const role of ['CM','TR','TA_SUPERVISOR','SUPERVISOR','TA_GSM','GSM','AM','OM','HR_CIRCLE','HR_ADMIN','SYSTEM_ADMIN']){
+        await taskPage.evaluate(async role=>{const {state}=await import('./static/js/app/state.js');state.me.role_code=role;state.me.base_role_code=role;state.me.permissions=role==='TA_GSM'?['HR_MONTHLY_REPORT']:[];const {gotoTab,renderUserBadge}=await import('./static/js/app/navigation.js');renderUserBadge();gotoTab('actionCenter');},role);
+        await taskPage.locator('.workbench-shortcuts').waitFor();
+        const shortcutIds=await taskPage.locator('[data-workbench-tab]').evaluateAll(nodes=>nodes.map(node=>node.dataset.workbenchTab));
+        if(['CM','TR','TA_GSM','HR_CIRCLE','HR_ADMIN'].includes(role))assert(!shortcutIds.includes('hrMonthlyReport'));
+        if(['AM','OM'].includes(role))assert(!shortcutIds.includes('rotationTest'));
+        if(role==='HR_ADMIN')assert(!shortcutIds.includes('monthClose'));
+      }
+      await taskPage.evaluate(async()=>{const {state}=await import('./static/js/app/state.js');state.me.role_code='SUPERVISOR';state.me.base_role_code='SUPERVISOR';state.me.role_name='主管';state.me.permissions=[];const {gotoTab,renderUserBadge}=await import('./static/js/app/navigation.js');renderUserBadge();gotoTab('actionCenter');});
+      await taskPage.locator('[data-action-type=recognition_review]:not([data-action-details])').waitFor();
+      await taskPage.getByRole('button',{name:'查看导出任务',exact:true}).click();
+      await taskPage.getByText('暂无导出任务。生成报告后，可在这里查看进度和下载文件。',{exact:true}).waitFor();
+      await taskPage.keyboard.press('Escape');
+      assert(await taskPage.getByRole('button',{name:'查看导出任务',exact:true}).evaluate(node=>node===document.activeElement));
+      await taskPage.locator('[data-action-type=recognition_review]:not([data-action-details])').click();
+      await taskPage.locator('.review-focused [data-review-row="171"]').waitFor();
+      assert.equal(await taskPage.locator('[data-review-row]').count(),1);
+      await taskPage.screenshot({path:path.join(qaDir,'review-desktop.png'),fullPage:true});
+      await taskPage.locator('[data-action=confirm]').click();
+      await taskPage.locator('.review-focused [data-review-row="172"]').waitFor();
+      assert.equal(reviewWrites,1);
+      await taskPage.setViewportSize({width:390,height:844});
+      await taskPage.screenshot({path:path.join(qaDir,'review-mobile.png'),fullPage:true});
+      await taskPage.locator('[data-action=reject]').click();
+      await taskPage.locator('[data-modal-confirm]').click();
+      assert.equal(reviewWrites,1,'Rejection cannot bypass mandatory reason');
+      await taskPage.locator('[data-modal-cancel]').click();
+      await taskPage.locator('.modal-overlay').waitFor({state:'detached'});
+      await taskPage.evaluate(async()=>{const {queueExport}=await import('./static/js/app/export-tasks.js');await queueExport('/api/statistics/export?month=2026-10');const {gotoTab}=await import('./static/js/app/navigation.js');gotoTab('actionCenter');});
+      await taskPage.locator('.export-task-list').getByText('正在制作',{exact:true}).waitFor();
+      task={...task,status:'completed',bytes:1024,download_url:'/api/export-tasks/demo-queue/file'};
+      await taskPage.getByRole('link',{name:'下载文件',exact:true}).waitFor();
+      const download=taskPage.waitForEvent('download');await taskPage.getByRole('link',{name:'下载文件',exact:true}).click();
+      assert.equal((await download).suggestedFilename(),'synthetic.pdf');
+      await taskPage.screenshot({path:path.join(qaDir,'export-mobile.png'),fullPage:true});
+      await taskPage.close();
+      checks.push('real workbench 320–1280px, direct focused review, successful next row, mandatory rejection, queued export survives navigation and manual download');
+    }
     // Load the real review module and APIs for both queues, with different
     // business/submission dates. Check responsive layouts and history row updates.
     mode = 'admin';
@@ -307,7 +371,7 @@ async function main() {
       const reviewErrors = [];
       reviewPage.on('pageerror', error => reviewErrors.push(error.message));
       await reviewPage.goto(`${origin}/`);
-      await reviewPage.locator('#app h2').filter({hasText: '待办中心'}).waitFor();
+      await reviewPage.locator('#app h2').filter({hasText: '今日工作'}).waitFor();
       for (const renderer of ['renderSupervisorReview', 'renderFrontlineReview']) {
         await reviewPage.evaluate(async name => {
           const entryUrl = new URL(document.querySelector('script[type="module"][src]').src);
@@ -408,6 +472,26 @@ async function main() {
     await secondSigner.selectOption('10');
     assert.equal(await signer.inputValue(),'8','Batch entries keep independent signer choices');
     await member.locator('[data-batch-entry]').nth(1).locator('[data-entry-remove]').click();
+    await firstCard.locator('[name=occurred_attraction_id]').selectOption('1');
+    await firstCard.locator('[name=content]').fill('第一条内容不得复制');
+    const reuseStart=Date.now();
+    for(let index=1;index<5;index++){
+      await member.locator('[data-batch-reuse]').click();
+      const copied=member.locator('[data-batch-entry]').nth(index);
+      await copied.locator('[name=recognizer_employee_id] option[value="8"]').waitFor({state:'attached'});
+      await member.waitForFunction(i=>document.querySelectorAll('[data-batch-entry]')[i].querySelector('[name=recognizer_employee_id]').value==='8',index);
+      assert.equal(await copied.locator('[name=recognition_date]').inputValue(),await firstCard.locator('[name=recognition_date]').inputValue());
+      assert.equal(await copied.locator('[name=recognition_type_id]').inputValue(),'1');
+      assert.equal(await copied.locator('[name=occurred_attraction_id]').inputValue(),'1');
+      assert.equal(await copied.locator('[name=content]').inputValue(),'');
+      assert.equal(await copied.getAttribute('data-duplicate-confirmed-payload'),null);
+      await copied.locator('[name=content]').fill('独立的认可表现'+index);
+    }
+    assert(await member.locator('[data-batch-reuse]').isDisabled());
+    const qaDir=path.resolve(__dirname,'../../.handover_review/task-workbench-20261024');fs.mkdirSync(qaDir,{recursive:true});
+    fs.writeFileSync(path.join(qaDir,'registration-comparison.json'),JSON.stringify({scenario:'same date/type/venue/signer, five independent contents; synthetic data',beforeFieldSelections:25,afterFieldSelections:9,savedFieldSelections:16,copyFourRowsAutomationMs:Date.now()-reuseStart},null,2));
+    await member.screenshot({path:path.join(qaDir,'registration-mobile.png'),fullPage:true});
+    for(let index=4;index>0;index--)await member.locator('[data-batch-entry]').nth(index).locator('[data-entry-remove]').click();
     checks.push('CM/TR batch: collapsed signer groups, expand/close, choose, Escape, special type, independent rows, 320/375/390/430px date layout');
     await member.locator('[data-batch-entry] [name="content"]').fill('未提交保护验证');
     await member.locator('.tabs-mobile [data-tab="home"]').click();
@@ -481,6 +565,11 @@ async function main() {
     assert.equal(uploads[0].imageName, 'fixture.png');
     assert.deepEqual(uploads[0].imageBytes,pickerCompatibility.bytes,'The server must receive the exact original image bytes');
     assert.equal(uploads[0].clientImageReady,'1');
+    await member.locator('[data-batch-entry]').waitFor();
+    await member.locator('[data-batch-reuse]').click();
+    assert.equal(await member.locator('[data-batch-entry]').count(),1,'Reuse after success fills the single fresh row');
+    assert.equal(await member.locator('[data-batch-entry] [name=content]').inputValue(),'');
+    assert(await member.locator('#recognitionAlbumInput').evaluate(async input=>(await import('./static/js/app/submission.js')).readableEvidenceFile(input.form)===null),'A new submission never reuses a previous evidence image');
     await member.locator('#recognitionAlbumInput').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(pickerCompatibility.bytes)});
     const invalidReplacement=await member.evaluate(async()=>{
       const {readableEvidenceFile}=await import('./static/js/app/submission.js');
@@ -609,7 +698,7 @@ async function main() {
     assert.equal(await workPage.locator('#hrReportNotes').inputValue(),'合成月报说明保留验证');
     assert.equal(await workPage.locator('#hrReportPhotos').evaluate(input=>input.files.length),1);
     let releaseExport;const exportGate=new Promise(resolve=>releaseExport=resolve);let exportRequests=0;
-    await workPage.route('**/api/hr-monthly-reports/export',async route=>{exportRequests++;await exportGate;await route.fulfill({status:500,json:{detail:'合成导出失败'}});});
+    await workPage.route('**/api/export-tasks?target=**',async route=>{exportRequests++;await exportGate;await route.fulfill({status:500,json:{detail:'合成导出失败'}});});
     await workPage.locator('#hrReportExport').click();
     await workPage.locator('#hrReportFilter [name="month"]').fill('2026-04');
     await workPage.locator('#hrReportFilter [type="submit"]').click();
@@ -683,11 +772,11 @@ async function main() {
         assert.match(await followupExport.getAttribute('href'),/followup-export\?version=1/);
         let exportRequests=0,exportFailure=false,releaseExport;
         const exportGate=new Promise(resolve=>{releaseExport=resolve;});
-        await page.route('**/api/announcements/51/export?**',async route=>{
+        await page.route('**/api/export-tasks?target=**',async route=>{
           exportRequests++;
           if(exportFailure){await route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({detail:'签字凭据摘要不匹配，导出已停止'})});return;}
           await exportGate;
-          await route.fulfill({status:200,contentType:'application/pdf',headers:{'Content-Disposition':'attachment; filename="announcement-51-v1.pdf"'},body:'%PDF-1.4\npreview fixture'});
+          await route.fulfill({status:202,json:{id:'fixture-report',label:'公告签收报告',status:'queued',bytes:0}});
         });
         const pdfExport=page.locator('.announcement-export-pdf');
         await pdfExport.click();
@@ -695,8 +784,8 @@ async function main() {
         assert.equal(await pdfExport.getAttribute('aria-disabled'),'true');
         await pdfExport.evaluate(el=>el.click());
         await page.locator('.announcement-export-excel').evaluate(el=>el.click());
-        const downloadResult=page.waitForEvent('download');releaseExport();
-        assert.equal((await downloadResult).suggestedFilename(),'announcement-51-v1.pdf');
+        releaseExport();
+        await page.getByText('报告已加入导出任务，可继续其他工作',{exact:true}).waitFor();
         await page.getByRole('link',{name:/下载签收 PDF/}).waitFor();
         assert.equal(exportRequests,1);
         exportFailure=true;
@@ -704,7 +793,7 @@ async function main() {
         await page.getByText('签字凭据摘要不匹配，导出已停止',{exact:true}).waitFor();
         assert.equal(await pdfExport.getAttribute('aria-disabled'),null);
         assert.equal(exportRequests,2);
-        checks.push('announcement report download busy state, duplicate-click guard, filename and integrity failure');
+        checks.push('announcement export queue receiving state, duplicate-click guard and enqueue failure');
         const leaders=page.locator('.announcement-group-leaders');
         assert.deepEqual(await leaders.allTextContents(),['组长：测试组长<甲>　｜　代理组长：测试代理乙','组长：正式组长丙','负责人未设置','代理组长：代理组长丁']);
         for(const width of [320,390,1280]){

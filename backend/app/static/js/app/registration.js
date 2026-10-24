@@ -95,19 +95,23 @@ function selfRecognitionBatchItems(cards){
 
 async function bindSelfRecognitionBatch(form,imageField){
   const page=captureViewContext(form);
-  form.innerHTML=`<p class="field-hint">默认登记1条，最多5条。仅认可照片共用，其余信息逐条填写；全部通过校验后一起提交。</p>${imageField}<div class="section-gap" data-batch-entries></div><div class="action-row"><button type="button" class="secondary" data-batch-add>＋新增一条</button><span data-batch-count></span></div><div class="form-sticky-actions"><button type="submit" class="primary" data-batch-submit>提交认可</button></div>`;
+  form.innerHTML=`<p class="field-hint">默认登记1条，最多5条。照片在本批共用，内容单独填写；可沿用上一条选择，请逐条核对后提交。</p>${imageField}<div class="section-gap" data-batch-entries></div><div class="action-row"><button type="button" class="secondary" data-batch-add>＋新增一条</button><span data-batch-count></span></div><div class="registration-reuse"><button type="button" class="secondary" data-batch-reuse disabled>沿用上一条选择</button><small>仅沿用日期、类型、景点和签卡人；内容须重新填写。</small></div><div class="form-sticky-actions"><button type="submit" class="primary" data-batch-submit>提交认可</button></div>`;
   const container=form.querySelector('[data-batch-entries]'),add=form.querySelector('[data-batch-add]'),submit=form.querySelector('[data-batch-submit]');
   const evidenceInputs=[...form.querySelectorAll('[data-evidence-input]')],evidenceName=form.querySelector('[data-evidence-name]');
   evidenceInputs.forEach(input=>input.onchange=()=>{const file=rememberEvidenceFile(input);if(file||input.value){evidenceInputs.filter(other=>other!==input).forEach(clearEvidenceFile);evidenceName.textContent=file?`本次全部记录共用：${file.name}`:recognitionImageIssueMessage(form);}});
   const closeOtherPickers=event=>form.querySelectorAll('[data-batch-recognizer][open]').forEach(picker=>{if(!picker.contains(event.target))picker.open=false;});
   document.addEventListener('click',closeOtherPickers);
   registerPageCleanup(()=>document.removeEventListener('click',closeOtherPickers));
-  let sequence=0;
-  function update(){const cards=[...container.children];cards.forEach((card,i)=>{card.querySelector('[data-entry-title]').textContent=`登记 ${i+1}`;card.querySelector('[data-entry-remove]').disabled=cards.length===1;});form.querySelector('[data-batch-count]').textContent=`${cards.length}/5 条`;add.disabled=cards.length>=5;submit.textContent=cards.length===1?'提交认可':`提交 ${cards.length} 条认可`;}
-  async function append(){
+  let sequence=0,lastSubmittedChoice=null;
+  const reuse=form.querySelector('[data-batch-reuse]');
+  const choices=card=>Object.fromEntries(['recognition_date','recognition_type_id','occurred_attraction_id','recognizer_employee_id'].map(name=>[name,name==='recognition_date'?submittedDateValue(card.querySelector(`[name="${name}"]`)):card.querySelector(`[name="${name}"]`).value]));
+  reuse.onclick=async()=>{const last=container.lastElementChild;if(last?._isLoading?.()){toast('签卡人正在加载，请稍候');return;}const seed=container.children.length>1||!lastSubmittedChoice?choices(last):lastSubmittedChoice;if(container.children.length===1&&lastSubmittedChoice&&!last.querySelector('[name=content]').value.trim()){await last._reuse(seed);}else await append(seed);};
+  function update(){const cards=[...container.children];cards.forEach((card,i)=>{card.querySelector('[data-entry-title]').textContent=`登记 ${i+1}`;card.querySelector('[data-entry-remove]').disabled=cards.length===1;});form.querySelector('[data-batch-count]').textContent=`${cards.length}/5 条`;add.disabled=cards.length>=5;reuse.disabled=cards.length>=5;submit.textContent=cards.length===1?'提交认可':`提交 ${cards.length} 条认可`;}
+  async function append(seed=null){
     if(container.children.length>=5||form.dataset.batchSubmitting)return;
     const id=++sequence,card=document.createElement('fieldset');card.className='form-stack';card.dataset.batchEntry=String(id);
     card.innerHTML=`<legend data-entry-title></legend><button type="button" class="secondary" data-entry-remove>删除此条</button><div class="grid two"><label>认可日期<input name="recognition_date" type="date" value="${today()}" required></label><label>认可类型<select name="recognition_type_id" required>${opt((state.options.recognition_types||[]).filter(row=>!row.dedicated_entry))}</select></label></div><label>认可内容<input name="content" maxlength="20" required placeholder="请输入20字以内的认可内容"></label><div class="grid two"><label>发生景点<select name="occurred_attraction_id" required><option value="">请选择</option>${opt(state.options.recognition_venues||[])}</select></label><label>认可人 / 签卡人<select name="recognizer_employee_id" required><option value="">正在加载…</option></select></label></div><span class="field-hint" data-entry-score>分值按认可人当日角色自动计算</span>`;
+    if(seed)for(const name of ['recognition_date','recognition_type_id','occurred_attraction_id']){const input=card.querySelector(`[name="${name}"]`);input.value=seed[name]??'';}
     container.append(card);bindDateSubmissionFallbacks(card);update();
     const dateInput=card.querySelector('[name=recognition_date]'),type=card.querySelector('[name=recognition_type_id]'),recognizer=card.querySelector('[name=recognizer_employee_id]'),hint=card.querySelector('[data-entry-score]');let rows=[],requestVersion=0,loading=false;
     // Keep the original select as the serialization and validation owner.
@@ -145,8 +149,11 @@ async function bindSelfRecognitionBatch(form,imageField){
     function score(){const row=rows.find(x=>String(x.id)===recognizer.value);hint.textContent=row?`${row.name} · 当日分值：${fmt(row.score)}分`:'分值按认可人当日角色自动计算';pickerValue.textContent=row?`${row.name} · ${row.role_name} · ${fmt(row.score)}分`:'请选择';pickerMenu.querySelectorAll('[data-batch-recognizer-option]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.batchRecognizerOption===recognizer.value)));}
     async function load(){const version=++requestVersion;loading=true;picker.open=false;picker.setAttribute('aria-busy','true');pickerValue.textContent='正在加载…';recognizer.innerHTML='<option value="">正在加载…</option>';hint.textContent='正在获取当日认可人…';try{const value=submittedDateValue(dateInput);if(!value)throw new Error('请填写有效认可日期');const result=await api('/api/recognizers?'+new URLSearchParams({attraction_id:state.me.attraction_id,recognition_date:value}));if(version!==requestVersion||!card.isConnected||!page.isCurrent())return;rows=result;options();}catch(error){if(version!==requestVersion||!page.isCurrent())return;rows=[];recognizer.innerHTML='<option value="">请选择日期后重试</option>';pickerMenu.innerHTML='';pickerValue.textContent='请选择日期后重试';hint.textContent=error.message||'认可人加载失败，请重新选择日期';}finally{if(version===requestVersion){loading=false;picker.removeAttribute('aria-busy');}}}
     dateInput.addEventListener('change',load);type.onchange=options;recognizer.onchange=score;card._isLoading=()=>loading;await load();
+    card._reuse=async value=>{for(const name of ['recognition_date','recognition_type_id','occurred_attraction_id'])card.querySelector(`[name="${name}"]`).value=value[name]||'';dateInput.dataset.submitDate=value.recognition_date||'';delete dateInput.dataset.submitDateCleared;await load();if([...recognizer.options].some(option=>option.value===value.recognizer_employee_id)){recognizer.value=value.recognizer_employee_id;score();}card.querySelector('[name=content]').focus();};
+    if(seed&&[...recognizer.options].some(option=>option.value===seed.recognizer_employee_id)){recognizer.value=seed.recognizer_employee_id;score();}
+    if(seed)card.querySelector('[name=content]').focus();
   }
-  add.onclick=append;await append();
+  add.onclick=()=>append();await append();
   form.onsubmit=async event=>{
     event.preventDefault();if(form.dataset.batchSubmitting)return;
     try{
@@ -158,7 +165,7 @@ async function bindSelfRecognitionBatch(form,imageField){
       try{
         let result;
         for(;;){const data=new FormData();data.set('entries',JSON.stringify(items));appendRecognitionImage(data,file);data.set('idempotency_key',form.dataset.submissionKey);try{result=await sendRecognitionImage('/api/recognitions/batch',data);break;}catch(error){if(error?.detail?.code!=='SAME_DAY_RECOGNITION_DUPLICATE')throw error;const index=Number(error.detail.entry_index)-1;if(index<0||index>=items.length||items[index].same_day_duplicate_confirmed)throw error;const previous=(error.detail.previous_records||[]).map(row=>`<li>${esc(row.submitted_at)}：${esc(row.content)}</li>`).join('');if(!await confirmModal('同类认可登记确认',`<p>${esc(error.message)}</p><ul>${previous}</ul>`,'确认是独立表现，继续登记'))return;cards[index].dataset.duplicateConfirmedPayload=JSON.stringify(items[index]);items[index].same_day_duplicate_confirmed=true;}}
-        clearSubmissionKey(form);if(!page.isCurrent()){toast('认可已提交');return;}container.innerHTML='';evidenceInputs.forEach(clearEvidenceFile);evidenceName.textContent='请选择一张JPG/JPEG、PNG、WebP或HEIC/HEIF图片，最大100MB。';const encouragement=recognitionEncouragement(result.encouragement_options);toast(`已提交 ${result.records.length} 条认可，等待逐条复核${encouragement?'\n'+encouragement:''}`,false,5600,'encouragement');
+        lastSubmittedChoice=choices(cards[cards.length-1]);clearSubmissionKey(form);if(!page.isCurrent()){toast('认可已提交');return;}container.innerHTML='';evidenceInputs.forEach(clearEvidenceFile);evidenceName.textContent='请选择一张JPG/JPEG、PNG、WebP或HEIC/HEIF图片，最大100MB。';const encouragement=recognitionEncouragement(result.encouragement_options);toast(`已提交 ${result.records.length} 条认可，等待逐条复核${encouragement?'\n'+encouragement:''}`,false,5600,'encouragement');
       }finally{delete form.dataset.batchSubmitting;controls.forEach((x,i)=>{x.disabled=disabled[i];});if(!container.children.length)await append();update();}
     }catch(error){if([400,403,409,413,422].includes(error.status)&&error.detail?.code!=='IDEMPOTENCY_PAYLOAD_CONFLICT')clearSubmissionKey(form,true);toast(recognitionImageFailureMessage(error)||error.message||'提交失败，已保留填写内容',true);}
   };

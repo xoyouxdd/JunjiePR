@@ -22,23 +22,29 @@ async function renderReview(showHistory=false, offset=0){
   const request=beginViewRequest();
   const view=showHistory?'history':'queue';
   const supervisorQueue=reviewApiBase==='/api/supervisor-reviews';
-  const data=await api(reviewApiBase+'?view='+view+'&limit=200&offset='+offset);
+  const requestedLimit=!showHistory&&state.reviewFocus?1:200;
+  const data=await api(reviewApiBase+'?view='+view+'&limit='+requestedLimit+'&offset='+offset);
   if(!request.isCurrent())return;
   const rows=data.items||[];
+  if(!showHistory&&!rows.length&&offset>0)return renderReview(false,Math.max(0,offset-Number(data.limit||200)));
+  const focused=!showHistory&&Boolean(state.reviewFocus);
+  const displayRows=focused?rows.slice(0,1):rows;
   const total=Number(data.total||0);
   const limit=Number(data.limit||200);
   const pageOffset=Number(data.offset||offset||0);
   const hasMore=Boolean(data.has_more);
   const mobileQuery=window.matchMedia('(max-width: 760px)');
-  const cards=rows.map(reviewCard).join('')||'<div class="empty">暂无记录</div>';
+  const cards=displayRows.map(reviewCard).join('')||'<div class="empty">暂无记录</div>';
   const table=`<div class="table-wrap sticky-col"><table><thead><tr><th>认可日期 / 提交时间</th><th>${supervisorQueue?'主管':'组员'}</th><th>认可信息</th><th>分值</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows.map(reviewTableRow).join('')||'<tr><td colspan="6" class="empty">暂无记录</td></tr>'}</tbody></table></div>`;
   const hint=showHistory?`已处理记录（已确认和不通过，共${total}条）`:`待复核记录（共${total}条，最早提交的在前）`;
   const pager=(total>limit||pageOffset>0||hasMore)?`<div class="pagination"><button type="button" id="reviewPrev" class="secondary" ${pageOffset<=0?'disabled':''}>上一页</button><span>本页${rows.length}条 · 共${total}条</span><button type="button" id="reviewNext" class="secondary" ${hasMore?'':'disabled'}>下一页</button></div>`:'';
-  if(!request.write(`<section class="panel"><div class="record-line"><div><h2>${supervisorQueue?'主管复核':'复核'}</h2><p>${hint}</p></div><button type="button" class="secondary" id="reviewHistoryToggle">${showHistory?'返回待处理':'查看已处理历史'}</button></div>${mobileQuery.matches?`<div class="work-card-list">${cards}</div>`:table}${pager}</section>`))return;
+  if(!request.write(`<section class="panel review-page"><div class="record-line"><h2>${supervisorQueue?'主管复核':'复核'}</h2><button type="button" class="secondary" id="reviewHistoryToggle">${showHistory?'返回待处理':'查看已处理历史'}</button></div><p>${hint}</p>${!showHistory?`<div class="review-focus-toolbar"><span>${focused?'逐条核对图片与内容；处理成功后载入最早待复核的一条。':'可切换为逐条处理，每次专注一条完整记录。'}</span><button type="button" class="secondary" id="reviewFocusToggle">${focused?'返回完整列表':'逐条处理'}</button></div>`:''}<div class="${focused?'review-focused':''}">${focused||mobileQuery.matches?`<div class="work-card-list">${cards}</div>`:table}</div>${focused?'':pager}</section>`))return;
   const reload=(history,offset)=>{const owner=captureViewContext(app,{latest:false});clearPageResources();void renderReview(history,offset).catch(error=>{if(error?.name!=='AbortError'&&owner.isCurrent())toast(error.message||'加载复核记录失败，请重试',true);});};
   const handleLayoutChange=()=>reload(showHistory,pageOffset);
   mobileQuery.addEventListener?.('change',handleLayoutChange);
   registerPageCleanup(()=>mobileQuery.removeEventListener?.('change',handleLayoutChange));
+  document.getElementById('reviewFocusToggle')?.addEventListener('click',()=>{state.reviewFocus=!focused;reload(false,0);});
+  if(focused)app.querySelectorAll('[data-action=confirm]').forEach(button=>button.textContent='确认，继续下一条');
   document.getElementById('reviewHistoryToggle').onclick=()=>reload(!showHistory,0);
   document.getElementById('reviewPrev')?.addEventListener('click',()=>{if(pageOffset<=0)return;reload(showHistory,Math.max(0,pageOffset-limit));});
   document.getElementById('reviewNext')?.addEventListener('click',()=>{if(!hasMore)return;reload(showHistory,pageOffset+limit);});
@@ -48,7 +54,28 @@ async function renderReview(showHistory=false, offset=0){
 
 function reviewActions(r){return r.status==='pending'?`<button data-review="${r.id}" data-action="confirm" class="primary">确认</button> <button data-review="${r.id}" data-action="reject" class="danger">不通过</button>`:`<button data-review="${r.id}" data-action="restore" class="secondary">还原</button>`}
 
-function bindReviewActions(showHistory=false, offset=0){const page=captureViewContext(),apiBase=reviewApiBase;app.querySelectorAll('[data-review]').forEach(b=>b.onclick=async()=>{if(b.dataset.busy==='1')return;const note=b.dataset.action==='reject'?(await promptModal('请输入不通过原因','请填写不通过原因（必填）','不通过原因'))||'':'';if(b.dataset.action==='reject'&&!note)return;b.dataset.busy='1';try{const out=await api(apiBase+'/'+b.dataset.review,json('POST',{action:b.dataset.action,note}));const record=out.record;refreshActionBadge();toast('操作成功');if(!page.isCurrent())return;if(!record)return;if(!showHistory&&record.status!=='pending'){await renderReview(showHistory,offset);}else{replaceReviewRows(record);bindReviewActions(showHistory,offset);}}catch(x){toast(x.message,true)}finally{delete b.dataset.busy;}})}
+const reviewWrites=new Set();
+function bindReviewActions(showHistory=false,offset=0){
+  const page=captureViewContext(),apiBase=reviewApiBase;
+  app.querySelectorAll('[data-review]').forEach(button=>button.onclick=async()=>{
+    const key=apiBase+'/'+button.dataset.review;
+    if(reviewWrites.has(key))return;
+    reviewWrites.add(key);
+    const peers=[...app.querySelectorAll(`[data-review="${button.dataset.review}"]`)];
+    peers.forEach(node=>node.disabled=true);
+    try{
+      const note=button.dataset.action==='reject'?(await promptModal('请输入不通过原因','请填写不通过原因（必填）','不通过原因'))||'':'';
+      if(!page.isCurrent()||(button.dataset.action==='reject'&&!note))return;
+      const out=await api(key,json('POST',{action:button.dataset.action,note}));
+      void refreshActionBadge();toast('操作成功');
+      if(!page.isCurrent()||!out.record)return;
+      if(!showHistory&&out.record.status!=='pending'){
+        clearPageResources();await renderReview(showHistory,offset);
+      }else{replaceReviewRows(out.record);bindReviewActions(showHistory,offset);}
+    }catch(error){toast(error.message,true);}
+    finally{reviewWrites.delete(key);peers.forEach(node=>node.disabled=false);}
+  });
+}
 
 function upgradeReviewCards(items){
   return items.map(row=>`<article class="group-card" data-upgrade="${row.id}"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge warn">待审核</span></div><p>${esc(row.deduction_type)} · 提交人：${esc(row.submitted_by)} · ${esc(row.created_at)}</p><p><strong>A1：</strong>${esc(row.first_record?.occurred_on||'')} · ${esc(row.first_record?.description||'')} ${attachmentControl(row.first_record?.document_url||'','查看A1声明',row.first_record?.document_preview_kind||'')}</p><p><strong>A2：</strong>${esc(row.second_record?.occurred_on||'')} · ${esc(row.second_record?.description||'')} ${attachmentControl(row.second_record?.document_url||'','查看A2声明',row.second_record?.document_preview_kind||'')}</p><div class="actions"><button type="button" class="secondary" data-upgrade-transfer="${row.id}">转交工单</button><button type="button" class="danger" data-upgrade-reject="${row.id}">不通过</button><button type="button" class="primary" data-upgrade-approve="${row.id}">同意升级</button></div></article>`).join('')||'<p class="empty">暂无声明升级待审核工单</p>';

@@ -1,3 +1,4 @@
+import { queueExport } from './export-tasks.js';
 import { api, apiFallbackMessage, json, readApiBody } from './api.js';
 import { beginViewRequest, registerPageCleanup } from './context.js';
 import { confirmModal } from './dialogs.js';
@@ -29,18 +30,10 @@ function bindAnnouncementExportDownloads(host,isCurrent){
     const title=link.querySelector('strong'),hint=link.querySelector('small'),oldTitle=title.textContent,oldHint=hint.textContent;
     title.textContent='正在生成报告…';hint.textContent='正在整理记录与签名，请稍候';
     try{
-      const response=await fetch(link.href,{credentials:'same-origin',signal:controller.signal});
-      if(response.status===401){location.href=portalPath('/login');return;}
-      if(!response.ok){const body=await readApiBody(response);throw new Error(typeof body.detail==='string'?body.detail:apiFallbackMessage(response.status));}
-      const blob=await response.blob();
-      if(!isCurrent())return;
-      if(!['application/pdf','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'].includes(blob.type))throw new Error('服务器未返回有效报告，请稍后重试');
-      const match=/filename="?([^";]+)"?/i.exec(response.headers.get('Content-Disposition')||'');
-      const url=URL.createObjectURL(blob),download=document.createElement('a');
-      download.href=url;download.download=match?match[1]:`公告签收报告.${blob.type==='application/pdf'?'pdf':'xlsx'}`;
-      document.body.appendChild(download);download.click();download.remove();
-      setTimeout(()=>URL.revokeObjectURL(url),60000);
-      toast('报告已生成，已发起下载');
+      const url=new URL(link.href,location.href);
+      const path=url.pathname.replace(/^\/recognition(?=\/api\/)/,'');
+      await queueExport(path+url.search);
+      toast('报告已加入导出任务，可继续其他工作');
     }catch(error){if(error.name!=='AbortError'&&isCurrent())toast(error.message||'导出失败，请稍后重试',true);}
     finally{busy=false;panel.removeAttribute('aria-busy');links.forEach(item=>item.removeAttribute('aria-disabled'));title.textContent=oldTitle;hint.textContent=oldHint;}
   });

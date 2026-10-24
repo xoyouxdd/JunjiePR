@@ -138,19 +138,25 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     # Count only materialized formal steps; this read does not advance the engine.
     from app.routers.rotation_board import can_enter as rotation_allowed
     from app.rotation.namespace import FORMAL_TABLES
-    if rotation_allowed(user):
+    if rotation_allowed(user, db):
         import json
         current = datetime.now()
-        row = db.query(FORMAL_TABLES.RotationDay).filter_by(attraction_id=user.employee.attraction_id,work_date=current.date().isoformat()).first()
-        if row and row.status=='live':
-            person=json.loads(row.state_json).get('persons',{}).get(user.employee.employee_no)
-            now_min=current.hour*60+current.minute+current.second/60
-            if person:
-                assignment=person.get('assign') or {}
-                config=db.query(FORMAL_TABLES.RotationConfig).filter_by(attraction_id=user.employee.attraction_id).first()
-                early=json.loads(config.settings_json or '{}').get('departEarly',1) if config else 1
-                actionable=person.get('state') in ('walkback','pending') or bool(person.get('entryHold') and person.get('state') in ('ready','rest')) or (person.get('state')=='ready' and assignment and now_min>=max(person.get('readyAt') or now_min,assignment.get('notBefore',0),assignment.get('departAt',1440)-early))
-                if actionable:items.append(action_center_item('rotation_step','本人轮岗待确认',1,'rotationTest','warning','确认待上岗或待休息（吃饭），同步当日轮岗看板。'))
+        from app.rotation.participation import contexts
+        aids={choice['id'] for choice in contexts(db,user.employee.employee_no)}
+        if user.employee.attraction_id:aids.add(user.employee.attraction_id)
+        actionable_count=0
+        for aid in sorted(aids):
+            row = db.query(FORMAL_TABLES.RotationDay).filter_by(attraction_id=aid,work_date=current.date().isoformat()).first()
+            if row and row.status=='live':
+                person=json.loads(row.state_json).get('persons',{}).get(user.employee.employee_no)
+                now_min=current.hour*60+current.minute+current.second/60
+                if person:
+                    assignment=person.get('assign') or {}
+                    config=db.query(FORMAL_TABLES.RotationConfig).filter_by(attraction_id=aid).first()
+                    early=json.loads(config.settings_json or '{}').get('departEarly',1) if config else 1
+                    actionable=person.get('state') in ('walkback','pending') or bool(person.get('entryHold') and person.get('state') in ('ready','rest')) or (person.get('state')=='ready' and assignment and now_min>=max(person.get('readyAt') or now_min,assignment.get('notBefore',0),assignment.get('departAt',1440)-early))
+                    if actionable:actionable_count+=1
+        if actionable_count:items.append(action_center_item('rotation_step','本人轮岗待确认',actionable_count,'rotationTest','warning','确认待上岗或待休息（吃饭），同步对应景点圈轮岗看板。'))
 
     from app.announcements import summary as announcement_summary
     announcement_counts = announcement_summary(db, user)

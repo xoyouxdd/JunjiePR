@@ -46,8 +46,8 @@ def pending(db, no, name, attraction_id):
     """Validate a formal-account takeover; caller commits it with employee creation."""
     member = db.query(TemporaryMember).filter_by(employee_no=no).first()
     if member and not member.adopted_at:
-        if member.name != name.strip() or member.attraction_id != attraction_id:
-            raise HTTPException(409, '该工号已有轮岗临时身份，姓名或景点圈不一致，请先核对同一人员')
+        if member.name != name.strip():
+            raise HTTPException(409, '该工号已有轮岗临时身份，姓名不一致，请先核对同一人员')
         return member
     return None
 
@@ -64,73 +64,87 @@ def adopt(db, employee):
                     after={'temporary_member_id':member.id, 'history_retained':True})
 
 
-def preflight(db, parsed, attraction_id, scope, only_date):
-    dates = sorted(parsed['days'])
-    if scope not in ('week', 'day'): raise HTTPException(400, '上传范围只能是按周或按天')
-    if scope == 'day':
-        selected = only_date or (dates[0] if len(dates)==1 else None)
-        if not selected or selected not in dates: raise HTTPException(400, '按天上传请选择名单中存在的日期')
-        dates = [selected]
-    if not dates: raise HTTPException(400, '名单里没有任何日期')
-    numbers = sorted({no for d in dates for no in parsed['days'][d]})
-    if not numbers: raise HTTPException(400, '名单没有人员')
-    existing = {e.employee_no:e for e in db.query(Employee).filter(Employee.employee_no.in_(numbers))}
-    accounts = {a.employee_id:a for a in db.query(UserAccount).filter(UserAccount.employee_id.in_([e.id for e in existing.values()]))}
-    temporary = {m.employee_no:m for m in db.query(TemporaryMember).filter(TemporaryMember.employee_no.in_(numbers))}
-    blocked = {r.old_employee_no for r in db.query(EmployeeNumberHistory).filter(EmployeeNumberHistory.old_employee_no.in_(numbers))}
-    from app.rotation.models import RotationAccount
-    reserved = {r.login_account for r in db.query(RotationAccount).filter(RotationAccount.login_account.in_(numbers))}
-    reserved |= {a.login_account for a in db.query(UserAccount).filter(UserAccount.login_account.in_(numbers))}
-    new=[];reuse=[];signature=[]
+def preflight(db, parsed, attraction_id, scope, only_date, skip=None):
+    from app.rotation.participation import account_issues
+    dates=sorted(parsed['days'])
+    if scope not in ('week','day'):raise HTTPException(400,'上传范围只能是按周或按天')
+    if scope=='day':
+        selected=only_date or (dates[0] if len(dates)==1 else None)
+        if not selected or selected not in dates:raise HTTPException(400,'按天上传请选择名单中存在的日期')
+        dates=[selected]
+    numbers=sorted({no for day in dates for no in parsed['days'][day]})
+    if not numbers:raise HTTPException(400,'名单没有人员')
+    existing={e.employee_no:e for e in db.query(Employee).filter(Employee.employee_no.in_(numbers))}
+    members={m.employee_no:m for m in db.query(TemporaryMember).filter(TemporaryMember.employee_no.in_(numbers))}
+    history={r.old_employee_no for r in db.query(EmployeeNumberHistory).filter(EmployeeNumberHistory.old_employee_no.in_(numbers))}
+    new=[];reuse=[];warnings=[];identities={};signature=[]
     for no in numbers:
         person=parsed['people'].get(no,{})
         name=str(person.get('name') or '').strip()
         if not re.fullmatch(r'[0-9]{7}',no) or not name or len(name)>100:
             raise HTTPException(400,'班表工号须为7位数字，姓名不能为空或超过100字')
-        e=existing.get(no); m=temporary.get(no)
+        e=existing.get(no);member=members.get(no);issues=[];account=None
         if e:
-            account=accounts.get(e.id)
-            if e.attraction_id!=attraction_id or not e.is_active or e.account_deleted_at or not account or not account.enabled:
-                raise HTTPException(400,f'工号{no}不是本圈可用正式账号，请先核对员工状态')
-            from app.services.employee_types import is_due
-            if is_due(e.employee_type,e.internship_ends_on): raise HTTPException(400,f'工号{no}实习已到期，请先核对员工状态')
-            # Preserve existing roster behavior: formal identities use their canonical name.
-            person['name']=e.name
-            signature.append([no,e.id,e.name,e.attraction_id,account.enabled])
-        else:
-            if no in blocked or no in reserved or m and (m.attraction_id!=attraction_id or m.adopted_at):
-                raise HTTPException(409,f'工号{no}已被占用或属于历史身份，请核对')
-            if m and m.name!=name: raise HTTPException(409,f'工号{no}与临时身份姓名不一致，请核对')
-            (reuse if m else new).append({'employee_no':no,'name':name})
-            signature.append([no,m.id if m else None,name,m.attraction_id if m else attraction_id, bool(m.enabled) if m else None])
+            issues,account=account_issues(db,e)
+            person['name']=name=e.name
+        elif member and member.name!=name:
+            issues.append('班表姓名与原轮岗身份不一致')
+        if not e and no in history:issues.append('历史员工号')
+        metadata={'name':name,'employee_id':e.id if e else None,
+            'origin_id':e.attraction_id if e else None,
+            'origin_name':e.attraction.name if e and e.attraction else '',
+            'cross_circle':bool(e and e.attraction_id!=attraction_id),
+            'temporary':not bool(e),'issues':issues}
+        identities[no]=metadata
+        if issues:warnings.append({'employee_no':no,'name':name,'reasons':issues})
+        if not e or issues:
+            (reuse if member else new).append({'employee_no':no,'name':name,
+                'credential_source':'formal' if account else 'suffix'})
+        signature.append([no,metadata,member.id if member else None,
+                          member.adopted_at.isoformat() if member and member.adopted_at else None])
     digest=hashlib.sha256(json.dumps([attraction_id,scope,dates,parsed,signature],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-    return {'new':new,'reuse':reuse,'dates':dates,'digest':digest}
+    skip=set(skip or [])
+    if skip-set(w['employee_no'] for w in warnings):raise HTTPException(400,'仅可跳过预检列出的异常人员')
+    return {'new':[p for p in new if p['employee_no'] not in skip],
+        'reuse':[p for p in reuse if p['employee_no'] not in skip],
+        'warnings':warnings,'identities':{no:v for no,v in identities.items() if no not in skip},
+        'dates':dates,'digest':digest,'skipped':sorted(skip)}
 
 
 def provision(db, parsed, attraction_id, batch, passwords):
     for person in batch['new']+batch['reuse']:
-        no=person['employee_no']
-        ends=[]
+        no=person['employee_no'];ends=[]
         for day in batch['dates']:
-            if no not in parsed['days'][day]: continue
-            info=classify(parsed['days'][day][no])
-            ends.append(datetime.fromisoformat(day)+timedelta(minutes=max(1440,info.get('end',1440))))
+            if no in parsed['days'][day]:
+                info=classify(parsed['days'][day][no])
+                ends.append(datetime.fromisoformat(day)+timedelta(minutes=max(1440,info.get('end',1440))))
         until=max(ends)
         member=db.query(TemporaryMember).filter_by(employee_no=no).first()
         if member:
             member.valid_until=max(member.valid_until,until)
+            member.name=person['name']
         else:
             db.add(TemporaryMember(employee_no=no,name=person['name'],attraction_id=attraction_id,
-                                   password_hash=passwords[no],valid_until=until,enabled=True))
+                password_hash=passwords[no],valid_until=until,enabled=True))
     db.flush()
 
 
 def login(db, request, response, member, password):
+    from app.rotation.participation import contexts, account_issues
     now=datetime.now()
-    if not member.enabled or member.adopted_at or member.valid_until<=now:
+    employee=db.query(Employee).filter_by(employee_no=member.employee_no).first()
+    issues,account=account_issues(db,employee) if employee else ([],None)
+    assigned=contexts(db,member.employee_no)
+    # Existing abnormal accounts authenticate with their existing credentials;
+    # absent accounts use the rotation-only credential. Never enable a workbench account.
+    if member.valid_until<=now or not assigned or (employee and not issues):
         raise HTTPException(401,'临时轮岗账号已失效，请联系主管核对班表')
+    if not employee and (not member.enabled or member.adopted_at):raise HTTPException(401,'轮岗账号不可用')
+    if account and account.locked_until and account.locked_until>now:raise HTTPException(423,'登录失败次数过多，请稍后再试')
+    if employee and not any(c['metadata'].get('issues') for c in assigned):
+        raise HTTPException(401,'异常人员尚未确认加入当日轮岗')
     if member.locked_until and member.locked_until>now: raise HTTPException(423,'登录失败次数过多，请稍后再试')
-    if not verify_password(password,member.password_hash):
+    if not verify_password(password,account.password_hash if account else member.password_hash):
         member.failed_attempts+=1
         if member.failed_attempts>=5:
             member.failed_attempts=0;member.locked_until=now+timedelta(minutes=15)
@@ -148,21 +162,28 @@ def login(db, request, response, member, password):
 
 
 def current(db, request):
+    from app.rotation.participation import contexts, account_issues
     raw=request.cookies.get(COOKIE)
     session=db.query(TemporarySession).filter_by(token_hash=token_hash(raw)).first() if raw else None
     member=db.get(TemporaryMember,session.member_id) if session else None
     now=datetime.now()
-    if not session or session.expires_at<=now or not member or not member.enabled or member.adopted_at or member.valid_until<=now:
+    if not session or session.expires_at<=now or not member or member.valid_until<=now:
         raise HTTPException(401,'请重新登录')
-    if db.query(Employee.id).filter_by(employee_no=member.employee_no).first(): raise HTTPException(401,'账号已更新，请重新登录')
+    employee=db.query(Employee).filter_by(employee_no=member.employee_no).first()
+    issues,_=account_issues(db,employee) if employee else ([],None)
+    if employee and not issues:raise HTTPException(401,'账号已更新，请重新登录')
+    if not employee and (member.adopted_at or not member.enabled):raise HTTPException(401,'请重新登录')
+    choices=contexts(db,member.employee_no)
+    if not choices or employee and not any(c['metadata'].get('issues') for c in choices):
+        raise HTTPException(401,'当日轮岗授权已结束')
     allowed={('GET','/api/me'),('GET','/api/rotation-board/me'),('POST','/api/rotation-board/me/act'),
              ('POST','/api/rotation-board/me/entry-preview'),('GET','/api/rotation-board/confirmation')}
     if (request.method,request.url.path) not in allowed: raise HTTPException(403,'此账号仅可使用本人轮岗待办')
-    circle=db.get(Attraction,member.attraction_id)
+    circle=db.get(Attraction,choices[0]['id'])
     if not circle or not circle.active or not circle.employee_circle: raise HTTPException(403,'景点圈不可用')
-    return SimpleNamespace(id=-member.id,name=member.name,rotation_temporary=True,role_codes=set(),
-        display_role_name='轮岗人员',employee=SimpleNamespace(id=None,employee_no=member.employee_no,
-        name=member.name,attraction_id=member.attraction_id,attraction=circle),permissions=set())
+    return SimpleNamespace(id=-member.id,name=employee.name if employee else member.name,rotation_temporary=True,rotation_identity_temporary=not bool(employee),role_codes=set(),
+        display_role_name='轮岗人员',employee=SimpleNamespace(id=employee.id if employee else None,employee_no=member.employee_no,
+        name=employee.name if employee else member.name,attraction_id=circle.id,attraction=circle),permissions=set())
 
 
 def was_temporary(db, attraction_id, no, at):
