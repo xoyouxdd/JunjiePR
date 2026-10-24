@@ -3,6 +3,9 @@ import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from test_rotation_roster_independence import app,setup,seed_employee,ids,rows,live,SessionLocal,UserAccount,Employee,S
+import pytest
+from rotation_test_clock import install_rotation_test_clock
+clock_patch=pytest.MonkeyPatch();install_rotation_test_clock(clock_patch)
 from test_rotation_temporary import book,date
 from fastapi.responses import Response
 

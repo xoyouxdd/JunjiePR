@@ -3,6 +3,9 @@ from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from test_rotation_formal import seed, seed_today, seed_cohort, app
+import pytest
+from rotation_test_clock import install_rotation_test_clock
+clock_patch=pytest.MonkeyPatch();install_rotation_test_clock(clock_patch)
 setup=seed.__wrapped__()
 next(setup)
 seed_today()

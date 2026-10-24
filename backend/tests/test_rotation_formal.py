@@ -31,19 +31,6 @@ def login(client,no):
     ok(client.post('/api/login',json={'employee_no':no,'password':'formal-fixture-2026'}))
 
 
-@pytest.fixture(autouse=True)
-def stable_wall_clock(monkeypatch):
-    # Keep the real-clock implementation/mode, but make daytime action fixtures
-    # independent of the machine's closing time. No meal or movement rule changes.
-    real_datetime=datetime
-    class WallClock(real_datetime):
-        @classmethod
-        def now(cls,tz=None):
-            return real_datetime.now(tz).replace(hour=12,minute=0,second=0,microsecond=0)
-    monkeypatch.setitem(globals(),'datetime',WallClock)
-    monkeypatch.setattr(S,'datetime',WallClock)
-
-
 @pytest.fixture(scope='module',autouse=True)
 def seed():
     with TestClient(app):
