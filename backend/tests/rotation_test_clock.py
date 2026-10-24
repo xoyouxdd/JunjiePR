@@ -13,7 +13,7 @@ def install_rotation_test_clock(patch):
     # Patch already-loaded fixture/application clock bindings, never import the
     # application before a fixture has selected its isolated data directory.
     prefixes = ('test_rotation_', 'app.rotation', 'app.routers.rotation_board',
-                'app.routers.auth', 'app.v2_auth')
+                'app.routers.auth', 'app.v2_auth', 'app.routers.governance')
     for name, module in list(sys.modules.items()):
         if name.startswith(prefixes):
             value = getattr(module, 'datetime', None)
