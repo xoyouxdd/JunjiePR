@@ -59,6 +59,13 @@ def simulate(eng, people, now, solo=None):
         trial.P[solo]['assign'] = deepcopy(people[0]['assign'])
     at = max([now] + [max(trial.P[q['pid']].get('readyAt') or now, trial.P[q['pid']]['assign']['departAt'],
                          trial.P[q['pid']]['assign'].get('notBefore', 0)) for q in jobs])
+    # Rehearse scheduled openings at the projected execution time without
+    # reassigning anyone or advancing the live board/other timers.
+    for line in trial.d['lines']:
+        for post in line['posts']:
+            if (post.get('openAt') and not post.get('opened') and E.hm(post['openAt']) <= at
+                    and line.get('active') and not post.get('manual') and not trial.d.get('closed')):
+                post.update(open=True, opened=True)
     before = {pid: (L['id'], x['name']) for L in trial.d['lines']
               for x in L['posts'] if (pid := x.get('occ'))}
     for q in jobs:

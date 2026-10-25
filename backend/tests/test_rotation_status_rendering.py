@@ -98,7 +98,11 @@ process.stdout.write(JSON.stringify({manager:render(input.manager,false),screen:
     import re
     for name, view in views.items():
         assert view["state"] == expected and view["can"] is can, name
-        sections = re.findall(r"<section[^>]*>(.*?)</section>", view["pool"], re.S)
+        forecasts=re.findall(r'<details class="rt-departure-preview".*?</details>',view['pool'],re.S)
+        for forecast in forecasts:
+            assert '仅预告' in forecast and 'data-act=' not in forecast
+        primary=re.sub(r'<details class="rt-departure-preview".*?</details>','',view['pool'],flags=re.S)
+        sections = re.findall(r"<section[^>]*>(.*?)</section>", primary, re.S)
         section = next(s for s in sections if "定时开岗员工" in s)
         assert ("<h2>休息区" if expected == "rest" else "<h2>待出发") in section
         if expected == "rest":

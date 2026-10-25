@@ -24,7 +24,7 @@ let server,browser;
     if(await page.locator('[data-rotation-task=depart]').count()){
       const submitted=page.waitForResponse(r=>r.url().endsWith('/api/rotation-board/me/act'));
       await page.locator('[data-rotation-task=depart]').click();await page.locator('[data-modal-confirm]').click();
-      assert((await submitted).ok());await page.getByText(/最近确认/).waitFor();
+      assert((await submitted).ok());await page.getByText(/最近安排生效/).waitFor();
     }
     await page.getByRole('button',{name:'退出',exact:true}).click();await page.waitForURL('**/login');
     await page.locator('[name=employee_no]').fill('9730020');await page.locator('[name=password]').fill('rotation-temp-fixture');await page.locator('[type=submit]').click();await page.waitForURL(base+'/');

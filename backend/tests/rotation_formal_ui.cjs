@@ -29,7 +29,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
       // The server commits, then the browser loses the response: recover by the same step token.
       await page.route('**/api/rotation-board/me/act',async route=>{await route.fetch();await route.abort('failed');},{times:1});
       await page.locator('[data-rotation-task=depart]').click();await page.locator('[data-modal-confirm]').click();
-      await page.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('最近确认'));
+      await page.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('最近安排生效'));
       assert.match(await page.locator('[data-formal-rotation-todo]').innerText(),/A1线.*岗位详情/s);
       assert.equal(await page.locator('[data-formal-rotation-todo] .rt-post').count(),2);
       await page.waitForFunction(()=>document.querySelector('.workbench-heading strong')?.textContent==='0');

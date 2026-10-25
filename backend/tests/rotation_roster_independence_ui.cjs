@@ -27,7 +27,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));let server,browser;
   assert((await context.request.post(base+`/__fixture/live?aid=${heat}&no=${no}`)).ok());
   await context.request.post(base+'/api/logout');await page.goto(base+'/login');await page.locator('[name=employee_no]').fill(no);await page.locator('[name=password]').fill('rotation-existing');await page.locator('[type=submit]').click();
   await page.getByRole('heading',{name:'轮岗待办',exact:true}).waitFor();await page.locator('[data-rotation-task=depart]').waitFor();assert.equal(await page.locator('#tabs').isVisible(),false);assert(!(await page.locator('#app').innerText()).includes('账号停用'));
-  const submitted=page.waitForResponse(r=>r.url().endsWith('/api/rotation-board/me/act'));await page.locator('[data-rotation-task=depart]').click();assert.match(await page.getByRole('dialog').innerText(),/当前景点圈：热力追踪/);await page.locator('[data-modal-confirm]').click();assert((await submitted).ok());await page.getByText(/最近确认/).waitFor();
+  const submitted=page.waitForResponse(r=>r.url().endsWith('/api/rotation-board/me/act'));await page.locator('[data-rotation-task=depart]').click();assert.match(await page.getByRole('dialog').innerText(),/当前景点圈：热力追踪/);await page.locator('[data-modal-confirm]').click();assert((await submitted).ok());await page.getByText(/最近安排生效/).waitFor();
   assert.equal((await context.request.get(base+'/api/options')).status(),403);assert.equal((await context.request.get(base+'/__fixture/info?no='+no).then(r=>r.json())).account_enabled,false);
   assert((await context.request.post(base+'/__fixture/source')).ok());assert((await context.request.post(base+`/__fixture/live?aid=${heat}&no=9730001`)).ok());
   await context.request.post(base+'/api/logout');assert((await context.request.post(base+'/api/login',{data:{employee_no:'9730001',password:'rotation-temp-fixture'}})).ok());
@@ -44,7 +44,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));let server,browser;
   if(outcome.error){console.error(errors,await page.locator('body').innerText());throw outcome.error;}
   const committed=outcome.response;assert(committed.ok(),await committed.text());assert.equal(committed.request().postDataJSON().attraction_id,heat);
   await Promise.race([refreshedAfterSubmit,sleep(12000).then(()=>{throw new Error('action-center did not refresh after confirmation');})]);
-  await page.locator('[data-formal-rotation-todo] .rt-personal-task').getByText(/最近确认/).waitFor();
+  await page.locator('[data-formal-rotation-todo] .rt-personal-task').getByText(/最近安排生效/).waitFor();
   for(const width of [320,375,390,430,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,name+' multi circle overflow '+width);}
   const shots=process.env.ROTATION_INDEPENDENCE_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await page.setViewportSize({width:390,height:844});await page.screenshot({path:path.join(shots,name+'-cross-circle-mobile.png')});}
   assert.deepEqual(errors,[]);console.log(name+': mixed roster exception selection, disabled rotation-only login, actual confirmation, cross-circle switch and scoped submission, 320-1440px passed');

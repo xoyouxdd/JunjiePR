@@ -37,6 +37,34 @@ def test_projection_is_pure_and_shows_final_positions():
     assert {r['pid']: r['to'] for r in view['soloRoutes']}['old1'] == '下班'
 
 
+def test_future_opening_projection_opens_only_the_clone_at_execution_time():
+    eng,hooks=live_day([person('a','07:00','21:00')],lines=[two_lines(1)[0]])
+    eng.act_post('A',0,False,540,'manager')
+    eng.act_post('A',0,True,540,'manager',open_at=550)
+    eng.P['a'].update(state='ready',readyAt=540,assign={'line':'A','mode':'opening','post':0,'departAt':550,'notBefore':550})
+    before=deepcopy(eng.d);events=len(hooks.events)
+    assert C.simulate(eng,[eng.P['a']],549)[0]['to']=='A0'
+    assert eng.d==before and len(hooks.events)==events
+    with pytest.raises(ActionError,match='加岗时间'):
+        eng.act_depart('a',549,'screen')
+    assert eng.d==before
+
+
+def test_rescheduled_fixed_opening_is_blocked_without_changing_original_task():
+    eng,_=live_day([person('a','07:00','21:00')],lines=[two_lines(1)[0]])
+    eng.act_post('A',0,False,540,'manager')
+    eng.act_post('A',0,True,540,'manager',open_at=543)
+    eng.P['a'].update(state='ready',assign={'line':'A','mode':'opening','post':0,'departAt':543,'notBefore':543})
+    eng.act_post('A',0,True,540,'manager',open_at=550)
+    eng.tick(540)
+    assert eng.P['a']['assign']['departAt']==543
+    assert '加岗时间已变化' in eng.P['a']['assign']['blocked']
+    before=deepcopy(eng.d)
+    with pytest.raises(ActionError,match='加岗时间已变化'):
+        eng.act_depart('a',550,'screen')
+    assert eng.d==before
+
+
 def test_first_vote_does_not_move_or_start_timers_and_second_executes_all():
     eng, _ = fixture(); before = occupants(eng, 'A')[:]
     out = C.confirm(eng, 'a', 540, actor('a'), 'a-token')

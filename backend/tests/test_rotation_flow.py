@@ -144,7 +144,9 @@ def test_future_opening_waits_for_departure_window_in_every_api():
             response = screen_act(screen, 'depart', '9100001') if client is screen else client.post(path, json={'action': 'depart', 'pid': '9100001'})
             assert response.status_code == 400 and '还没到出发时间' in response.text
         ok(clock(manager, action='jump', minutes=9))
-        assert person(ok(manager.get('/api/rotation/board')), '9100001')['canDepart'] is True
+        p=person(ok(manager.get('/api/rotation/board')), '9100001')
+        assert p['canDepart'] is True and p['assign']['departAt']==495
+        assert p['departureRoutes'] and not p['departureBlocked']
         ok(manager.put('/api/rotation/config', json={'settings': {'departEarly': 0}}))
         assert person(ok(screen.get('/api/rotation/screen/state')), '9100001')['canDepart'] is False
         assert ok(member.get('/api/rotation/me'))['settings']['departEarly'] == 0
@@ -231,13 +233,17 @@ def test_manual_opening_default_edit_cancel_and_screen_departure():
         assert board['day']['lines'][0]['posts'][0]['openAt'] == '08:08'
         assert person(board, '9200001')['assign']['mode'] == 'opening'
         ok(manager.post('/api/rotation/act', json={**request, 'openAt': '08:12'}))
-        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign']['departAt'] == 492
+        locked=person(ok(manager.get('/api/rotation/board')), '9200001')
+        assert locked['assign']['departAt']==488 and locked['assignmentLocked']
+        assert '加岗时间已变化' in locked['assign']['blocked'] and not locked['canDepart']
         for value in ('08:04', '24:00', 'no-time'):
             assert manager.post('/api/rotation/act', json={**request, 'openAt': value}).status_code == 400
-        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign']['departAt'] == 492
+        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign']==locked['assign']
         ok(manager.post('/api/rotation/act', json={**request, 'open': False}))
-        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign'] is None
+        cancelled=person(ok(manager.get('/api/rotation/board')), '9200001')
+        assert cancelled['assign']['departAt']==488 and cancelled['assign']['blocked']
         ok(manager.post('/api/rotation/act', json=request))
+        assert not person(ok(manager.get('/api/rotation/board')), '9200001')['assign'].get('blocked')
         ok(clock(manager, action='jump', minutes=2))
         assert person(ok(screen.get('/api/rotation/screen/state')), '9200001')['canDepart'] is False
         assert screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9200001'}).status_code == 400

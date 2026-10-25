@@ -726,6 +726,8 @@ class Engine:
                 _, _, post = self.post(a['line'], a['post'])
                 if not post.get('openRequest') or post.get('occ') or post.get('hold'):
                     return '原加岗位置已变化'
+                if post.get('openAt') and a.get('notBefore') is not None and abs(_m(post['openAt'])-a['notBefore']) > .01:
+                    return '原加岗时间已变化'
             elif not self.rotation_posts(L) and not any(x.get('openAt') and not x.get('opened') for x in L['posts']):
                 return '原线路暂无可轮换岗位'
         except ActionError:
