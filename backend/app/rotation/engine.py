@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 
 from app.rotation.roster import classify, fmt, hm
 
@@ -261,8 +262,8 @@ class Engine:
             if not x.get('hold'):
                 return
             previous = x.pop('hold')
-        self._reset_line_plans(lid)
-        self._clear_stale_assigns()
+        self._reset_line_plans(lid, now)
+        self._clear_stale_assigns(now)
         info = x['hold'] if on else previous
         self.h.log('post_hold' if on else 'post_resume', actor, pid, lid, x['name'],
                    {'reason': reason or info['reason'], 'since': info['since'],
@@ -372,7 +373,7 @@ class Engine:
         d = self.d
         if d['status'] != 'live':
             return False
-        changed = False
+        changed = self._freeze_daily_opening(now)
         S = self.S
         plan = d['plan']
         seat = {v: k for k, v in plan['crew'].items()}
@@ -414,7 +415,6 @@ class Engine:
             elif st == 'meal' and now < p['readyAt'] and p['readyAt'] - now <= S['mealReserveLeft']:
                 p['state'] = 'rest'
                 p['breakKind'] = 'meal_rest'
-                p['assign'] = None
                 changed = True
             elif st in ('rest', 'meal') and now >= p['readyAt']:
                 p['state'] = 'ready'
@@ -469,6 +469,26 @@ class Engine:
         if self._assign_all(now):
             changed = True
         return changed
+
+    def _freeze_daily_opening(self, now):
+        if self.d.get('dailyOpening') or not self.P:
+            return False
+        first = min(p['start'] for p in self.P.values())
+        # Never fabricate an opening snapshot from an already running legacy day.
+        if now < first or any(p['state'] not in ('notyet', 'excluded') for p in self.P.values()):
+            return False
+        excluded = {'dailyOpening', 'initialDraft', 'initialSettings', 'confirmations', 'entryVotes'}
+        state = deepcopy({k: v for k, v in self.d.items() if k not in excluded})
+        for kind in ('crew', 'seven'):
+            for key, pid in state['plan'][kind].items():
+                lid, i = key.split('#')
+                line = next(l for l in state['lines'] if l['id'] == lid)
+                if line['posts'][int(i)].get('open'):
+                    line['posts'][int(i)].update(occ=pid, since=None)
+        self.d['dailyOpening'] = {'minute': first, 'captured_at': now,
+                                  'late_publish': 'lastTick' not in self.d and now > first,
+                                  'state': state, 'settings': deepcopy(self.S)}
+        return True
 
     def _park_close(self, now):
         """闭园：撤下所有岗位，线上的人回板面后转为闭园后工作，池子里的人直接转入。"""
@@ -675,29 +695,77 @@ class Engine:
             return max(now, p.get('readyAt') or now)
         return p.get('readyAt') or now
 
-    def _clear_stale_assigns(self):
-        """替换的对象已不在那条线、或去的线已停用：没出发的去向作废，重新分配。"""
+    def assignment_locked(self, p, now):
+        def own(q):
+            return bool(q.get('assign') and q['state'] in ('rest', 'meal', 'ready')
+                        and (q['state'] == 'ready' or (q.get('readyAt') if q.get('readyAt') is not None else now) - now <= 3 + 1e-9))
+        if own(p):
+            return True
+        a = p.get('assign')
+        if not a or not self.d.get('cooperativeEntry'):
+            return False
+        # Keep the shared route intact when one same-time teammate reaches the window.
+        return any(own(q) and not q.get('entryHold') and q['assign']['line'] == a['line']
+                   and abs(q['assign']['departAt'] - a['departAt']) < .01 for q in self.P.values())
+
+    def assignment_issue(self, p):
+        a = p.get('assign')
+        if not a:
+            return None
+        try:
+            L = self.line(a['line'])
+            if not L.get('active'):
+                return '原线路已停用'
+            if a.get('mode') in TARGET_MODES:
+                target = self.P.get(a.get('target'))
+                if not target or target['state'] != 'onpost' or target.get('line') != a['line']:
+                    return '原接替对象已离开该线路'
+                if self.held(target['pid']):
+                    return '原接替岗位已持续定岗'
+            if a.get('mode') == 'opening':
+                _, _, post = self.post(a['line'], a['post'])
+                if not post.get('openRequest') or post.get('occ') or post.get('hold'):
+                    return '原加岗位置已变化'
+            elif not self.rotation_posts(L) and not any(x.get('openAt') and not x.get('opened') for x in L['posts']):
+                return '原线路暂无可轮换岗位'
+        except ActionError:
+            return '原线路或岗位已变化'
+        return None
+
+    def _clear_stale_assigns(self, now=None):
+        now = float(self.d.get('lastTick', 0)) if now is None else now
         changed = False
         for q in self.P.values():
             a = q.get('assign')
             if not a or q['state'] == 'heading':
                 continue
-            stale = False
-            try:
-                L = self.line(a['line'])
-                stale = not L.get('active')
-            except ActionError:
-                stale = True
-            if not stale and a.get('mode') in TARGET_MODES:
-                t = self.P.get(a.get('target'))
-                stale = not t or t['state'] != 'onpost' or t.get('line') != a['line']
-                stale = stale or bool(t and self.held(t['pid']))
-            if not stale and a.get('mode') == 'opening':
-                _, _, post = self.post(a['line'], a['post'])
-                stale = not post.get('openRequest') or bool(post.get('occ'))
-            if stale:
+            issue = self.assignment_issue(q)
+            if issue and self.assignment_locked(q, now):
+                message = issue + '，安排已固定，请联系主管核对'
+                if a.get('blocked') != message:
+                    a['blocked'] = message
+                    self.h.log('assign_blocked', 'system', q['pid'], a['line'], None, {'reason': message})
+                    changed = True
+            elif issue:
                 q['assign'] = None
                 self.h.log('assign_cleared', 'system', q['pid'], a.get('line'), None, {'mode': a.get('mode'), 'target': a.get('target')})
+                changed = True
+            elif a.pop('blocked', None) is not None:
+                changed = True
+        return changed
+
+    def _refresh_future_assignments(self, now):
+        board = [[L['id'], L.get('active'), [[x['name'], x.get('open'), x.get('occ'), bool(x.get('hold')),
+                  x.get('openAt'), x.get('closeAt')] for x in L['posts']]] for L in self.d['lines']]
+        if self.d.get('assignmentBoard') == board:
+            return False
+        self.d['assignmentBoard'] = board
+        changed = False
+        for p in self.P.values():
+            a = p.get('assign')
+            if (a and a.get('mode') == 'push' and not a.get('manual')
+                    and p['state'] in ('rest', 'meal') and not self.assignment_locked(p, now)):
+                p['assign'] = None
                 changed = True
         return changed
 
@@ -726,7 +794,8 @@ class Engine:
     def _assign_all(self, now):
         if self.d.get('closed'):
             return False
-        changed = self._clear_stale_assigns()
+        changed = self._clear_stale_assigns(now)
+        changed = self._refresh_future_assignments(now) or changed
         S = self.S
         plan = self.d['plan']
         # 推 7 点：07:15 班的人在 7 点岗位对换 07:00 班的人
@@ -747,7 +816,7 @@ class Engine:
                     pa = sub
                     changed = True
             if pa and pa['state'] in ('rest', 'ready') and pa.get('breakKind') != 'meal_rest' and not pa.get('push7done') \
-                    and not (pa.get('assign') and pa['assign'].get('mode') in TARGET_MODES):
+                    and not (pa.get('assign') and pa['assign'].get('mode') in TARGET_MODES) and not self.assignment_locked(pa, now):
                 pa['assign'] = {'line': pb['line'], 'mode': 'push7', 'target': b,
                                 'departAt': max(now, self._ready_time(pa, now)), 'why': '推7点'}
                 pa['push7done'] = True
@@ -759,7 +828,7 @@ class Engine:
             for p in self.P.values():
                 if p.get('entryHold') or p['state'] not in REST_STATES or p['role'] not in ('rotation', 'op'):
                     continue
-                if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
+                if self.assignment_locked(p, now):
                     continue
                 if p.get('assign') and p['assign'].get('mode') in TARGET_MODES:
                     continue
@@ -781,8 +850,7 @@ class Engine:
         if self._assign_openings(now):
             changed = True
         todo = [p for p in self.P.values() if not p.get('entryHold') and p['state'] in REST_STATES and not p.get('assign')
-                and p['role'] in ('rotation', 'op') and p['state'] != 'meal'
-                and not (p.get('breakKind') == 'meal_rest' and now < p['readyAt'])]
+                and p['role'] in ('rotation', 'op')]
         todo.sort(key=lambda p: (self._ready_time(p, now), p['start']))
         if todo:
             wk = self.h.week_minutes()
@@ -813,9 +881,9 @@ class Engine:
             candidates = []
             for p in self.P.values():
                 a = p.get('assign') or {}
-                if p.get('entryHold') or p['state'] not in ('rest', 'ready') or p['role'] not in ('rotation', 'op'):
+                if p.get('entryHold') or p['state'] not in ('rest', 'meal', 'ready') or p['role'] not in ('rotation', 'op'):
                     continue
-                if (p.get('breakKind') == 'meal_rest' and now < p['readyAt']) or a.get('mode') in TARGET_MODES \
+                if self.assignment_locked(p, now) or a.get('mode') in TARGET_MODES \
                         or a.get('mode') == 'opening' or a.get('manual'):
                     continue
                 ready = self._ready_time(p, now)
@@ -836,7 +904,7 @@ class Engine:
         cands = [p for p in self.P.values() if not p.get('entryHold') and p['role'] == 'rotation' and p['start'] == open_at
                  and p['state'] in ('rest', 'ready') and p.get('breakKind') != 'meal_rest'
                  and p['pid'] not in plan['push7'] and not p['absences']
-                 and not (p.get('assign') and p['assign'].get('mode') in TARGET_MODES)]
+                 and not (p.get('assign') and p['assign'].get('mode') in TARGET_MODES) and not self.assignment_locked(p, now)]
         if not cands:
             return None
         return min(cands, key=lambda p: (self._ready_time(p, now), -(p['end'] - p['start']), p['name']))
@@ -870,7 +938,8 @@ class Engine:
             walk = self.walk(L['id'])
             arrive0 = ready + walk
             res = sorted([q for q in self.P.values() if q.get('assign') and q['assign']['line'] == L['id']
-                          and q['assign'].get('mode') in ('push', 'opening')],
+                          and q['assign'].get('mode') in ('push', 'opening') and not q['assign'].get('blocked')
+                          and q['assign']['departAt'] <= arrive0 + .01],
                          key=lambda q: q['assign']['departAt'])
             k = len(res)
             vac = [i for i in idx if L['posts'][i].get('occ') is None]
@@ -1013,6 +1082,9 @@ class Engine:
             raise ActionError('%s 还没到加岗时间（%s）' % (p['name'], fmt(p['assign']['notBefore'])))
         if now < depart_at - self.S['departEarly'] - 0.01:
             raise ActionError('%s 还没到出发时间（%s）' % (p['name'], fmt(depart_at)))
+        issue = self.assignment_issue(p)
+        if issue:
+            raise ActionError(issue + '，请联系主管核对原安排')
         L = self.line(p['assign']['line'])
         p['departedAt'] = now
         p['arriveAt'] = None
@@ -1148,7 +1220,7 @@ class Engine:
                 raise ActionError('撤岗时间不得早于当前时间')
             x.update(manual=True, opened=True, openRequest=False)
             self._close_post(L, i, now, actor, close_mode)
-        self._reset_line_plans(lid)
+        self._reset_line_plans(lid, now)
 
     def act_move(self, pid, lid, i, now, actor, force=False, reason=''):
         p=self.person(pid)
@@ -1158,6 +1230,14 @@ class Engine:
             if force:
                 raise ActionError('未到班次人员只能调整预排，不能强制提前上岗')
             return self.act_plan_place(pid,lid,i,now,actor)
+        if p['state'] in ('rest','meal','ready') and self.assignment_locked(p,now):
+            failed = bool(self.assignment_issue(p))
+            if force and str(reason).strip() and not failed and self.d.get('cooperativeEntry'):
+                from app.rotation.cooperation import plan
+                group = plan(self,p,now)
+                failed = bool(group and group['blocked'])
+            if not (force and str(reason).strip() and failed):
+                raise ActionError('剩余餐休3分钟及以内或已待出发，原安排已固定，不能调配')
         target, i, slot=self.post(lid,i)
         if slot.get('hold') or self.held(pid):
             raise ActionError('定岗人员不能调换岗位，请先取消定岗')
@@ -1181,7 +1261,7 @@ class Engine:
                 p.pop('entryHold',None)
                 slot.update(occ=pid,since=now)
                 self._enter(p,target,now)
-                self._reset_line_plans(lid)
+                self._reset_line_plans(lid, now)
                 self.h.log('force_place',actor,pid,lid,slot['name'],
                            {'reason':str(reason).strip(),'previous':previous,'replaced':other})
                 return
@@ -1201,10 +1281,14 @@ class Engine:
             if who and self.P[who].get('line')!=line['id']:
                 self._leave_line(self.P[who],source if who==pid else target,old if who==pid else i,now)
                 self._enter(self.P[who],line,now)
-        self._reset_line_plans(source['id']);self._reset_line_plans(lid)
+        self._reset_line_plans(source['id'], now);self._reset_line_plans(lid, now)
         self.h.log('move',actor,pid,lid,slot['name'],{'swapped':other,'from':source['id'],'fromPost':source['posts'][old]['name']})
 
-    def act_post_order(self, lid, i, target_i, now, actor, swap_mode=None):
+    def act_post_order(self, lid, i, target_i, now, actor, swap_mode=None, target_lid=None):
+        if target_lid is not None and not isinstance(target_lid, str):
+            raise ActionError('目标线路选择不正确')
+        if target_lid is not None and target_lid != lid:
+            return self._swap_cross_line_posts(lid, i, target_lid, target_i, now, actor, swap_mode)
         L,i,_=self.post(lid,i);_,target_i,_=self.post(lid,target_i)
         if i==target_i:
             return
@@ -1220,7 +1304,7 @@ class Engine:
             configs=[{k:v for k,v in x.items() if k not in fixed} for x in (left,right)]
             for post,config in ((left,configs[1]),(right,configs[0])):
                 keep={k:v for k,v in post.items() if k in fixed};post.clear();post.update(config);post.update(keep)
-            self._reset_line_plans(lid)
+            self._reset_line_plans(lid, now)
             self.h.log('post_order',actor,None,lid,left['name'],{'from':i,'to':target_i,'mode':swap_mode})
             return
         old=list(L['posts'])
@@ -1236,8 +1320,49 @@ class Engine:
                 self.d['plan'][kind].pop(key,None)
                 if f'{lid}#{old_j}' in previous:
                     self.d['plan'][kind][key]=previous[f'{lid}#{old_j}']
-        self._reset_line_plans(lid)
+        self._reset_line_plans(lid, now)
         self.h.log('post_order',actor,None,lid,post['name'],{'from':i,'to':target_i,'mode':swap_mode or 'order'})
+
+    def _swap_cross_line_posts(self, lid, i, target_lid, target_i, now, actor, mode):
+        L, i, left = self.post(lid, i)
+        R, target_i, right = self.post(target_lid, target_i)
+        if mode not in ('posts', 'with_people'):
+            raise ActionError('跨线交换请选择只交换岗位或岗位和人员一起交换')
+        if left.get('hold') or right.get('hold'):
+            raise ActionError('涉及定岗岗位，请先取消定岗')
+        for line, index, incoming in ((L, i, right), (R, target_i, left)):
+            if any(j != index and x['name'] == incoming['name'] for j, x in enumerate(line['posts'])):
+                raise ActionError('交换后同一线路的岗位名称重复，请先调整岗位名称')
+            if incoming.get('occ') and mode == 'with_people':
+                if not line.get('active') or not incoming.get('open'):
+                    raise ActionError('有人员的岗位只能交换到启用线路，且岗位必须开放')
+                if self.P[incoming['occ']]['state'] not in ('onpost', 'notyet'):
+                    raise ActionError('岗位人员状态已变化，请刷新后重试')
+        if mode == 'posts':
+            if left.get('open') != right.get('open') and (left.get('occ') or right.get('occ')):
+                raise ActionError('有人员时不能只交换开放状态不同的岗位')
+            fixed = {'occ', 'since', 'hold'}
+            configs = [{k: v for k, v in x.items() if k not in fixed} for x in (left, right)]
+            for post, config in ((left, configs[1]), (right, configs[0])):
+                keep = {k: v for k, v in post.items() if k in fixed}
+                post.clear(); post.update(config); post.update(keep)
+        else:
+            for line, index, post in ((L, i, left), (R, target_i, right)):
+                if post.get('occ') and self.P[post['occ']]['state'] == 'onpost':
+                    self._leave_line(self.P[post['occ']], line, index, now)
+            L['posts'][i], R['posts'][target_i] = right, left
+            for line, post in ((L, right), (R, left)):
+                if post.get('occ') and self.P[post['occ']]['state'] == 'onpost':
+                    self._enter(self.P[post['occ']], line, now)
+            for kind in ('crew', 'seven'):
+                plan = self.d['plan'][kind]
+                a, b = f'{lid}#{i}', f'{target_lid}#{target_i}'
+                av, bv = plan.pop(a, None), plan.pop(b, None)
+                if bv is not None: plan[a] = bv
+                if av is not None: plan[b] = av
+        self._reset_line_plans(lid, now); self._reset_line_plans(target_lid, now)
+        self.h.log('post_order', actor, None, lid, L['posts'][i]['name'],
+                   {'from': i, 'to': target_i, 'target_line': target_lid, 'mode': mode})
 
     def act_line(self, lid, active, now, actor):
         L = self.line(lid)
@@ -1257,12 +1382,13 @@ class Engine:
                 x['manual'] = False
             L['active'] = False
             self.h.log('line_off', actor, None, lid, None, {})
-        self._reset_line_plans(lid)
+        self._reset_line_plans(lid, now)
 
-    def _reset_line_plans(self, lid):
+    def _reset_line_plans(self, lid, now=None):
+        now = float(self.d.get('lastTick', 0)) if now is None else now
         for q in self.P.values():
             if q.get('assign') and q['assign']['line'] == lid and q['state'] != 'heading' \
-                    and q['assign'].get('mode') in ('push', 'opening'):
+                    and q['assign'].get('mode') in ('push', 'opening') and not self.assignment_locked(q, now):
                 q['assign'] = None
 
     def act_away(self, pid, reason, now, actor):
@@ -1291,8 +1417,8 @@ class Engine:
 
     def act_reassign(self, pid, lid, now, actor):
         p = self.person(pid)
-        if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
-            raise ActionError('吃饭及饭后休息倒计时未结束，不参与派岗')
+        if self.assignment_locked(p,now):
+            raise ActionError('剩余餐休3分钟及以内或已待出发，原安排已固定，不能改派')
         if p['state'] not in REST_STATES:
             raise ActionError('%s 当前不能改派' % p['name'])
         L = self.line(lid)
@@ -1346,6 +1472,8 @@ class Engine:
 
     def act_fix_place(self, pid, lid, i, reason, now, actor):
         p = self.person(pid)
+        if self.assignment_locked(p,now):
+            raise ActionError('原上岗安排已固定；若已失效，请预览并填写原因强制安排')
         if p['state'] == 'meal' or (p.get('breakKind') == 'meal_rest' and now < p['readyAt']):
             raise ActionError('吃饭及饭后休息倒计时未结束，不能进线')
         L, i, x = self.post(lid, i)

@@ -15,7 +15,43 @@ HEADERS = ['员工号', '姓名', '角色代码', '景点圈', 'Type', '实习�
 ROLE_MAP = {'CM':'CM', 'TR':'TR', 'LEAD':'SUPERVISOR', 'GSM':'GSM', 'AM':'AM', 'OM':'OM'}
 
 
-def preflight(db, user, content, allowed_circles, allowed_roles):
+def selection_map(decisions):
+    if decisions is None:
+        return {}
+    if not isinstance(decisions, list) or len(decisions) > 10000:
+        raise HTTPException(400, '导入选择格式不正确')
+    choices = {}
+    fields = {'row', 'action', 'name_mode', 'custom_name', 'clear_type', 'clear_end'}
+    for choice in decisions:
+        if not isinstance(choice, dict) or set(choice) - fields or type(choice.get('row')) is not int:
+            raise HTTPException(400, '导入选择格式不正确')
+        row = choice['row']
+        if row in choices or choice.get('action') not in ('skip', 'update'):
+            raise HTTPException(400, '导入选择重复或操作不正确')
+        if any(key in choice and type(choice[key]) is not bool for key in ('clear_type', 'clear_end')):
+            raise HTTPException(400, '清空字段选项必须为布尔值')
+        choices[row] = choice
+    return choices
+
+
+def replacement(old, raw, choice):
+    mode = choice.get('name_mode', 'system')
+    if mode not in ('system', 'excel', 'custom'):
+        raise HTTPException(400, '请选择保留系统姓名、采用Excel姓名或输入新姓名')
+    name = old.name if mode == 'system' else raw['姓名'] if mode == 'excel' else choice.get('custom_name')
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 100:
+        raise HTTPException(400, '最终姓名必填，且不能超过100个字符')
+    value = None if choice.get('clear_type') else raw['Type'] if raw['Type'] is not None and str(raw['Type']).strip() else old.employee_type
+    kind, _ = normalize(value, None)
+    end = None
+    if kind == 'Intern' and not choice.get('clear_end'):
+        end = normalize_import_date(raw['实习结束日期']) if raw['实习结束日期'] is not None and str(raw['实习结束日期']).strip() else old.internship_ends_on
+    kind, end = normalize(kind, end)
+    return {'name': old.name if mode == 'system' else name.strip(), 'employee_type': kind, 'internship_ends_on': end}
+
+
+def preflight(db, user, content, allowed_circles, allowed_roles, decisions=None):
+    choices=selection_map(decisions)
     try:
         wb=load_workbook(BytesIO(content),read_only=True,data_only=True)
     except Exception as exc:
@@ -31,7 +67,7 @@ def preflight(db, user, content, allowed_circles, allowed_roles):
         positions={name:header.index(name) for name in HEADERS}
         roles={r.code:r for r in db.query(Role).all()}
         circles={c.name:c for c in db.query(Attraction).filter(Attraction.active.is_(True),Attraction.employee_circle.is_(True)).all()}
-        parsed=[];duplicates=[];expired=[];errors=[];seen=set()
+        parsed=[];duplicates=[];expired=[];errors=[];seen=set();updates=[];occupied=[];duplicate_rows=set();unchanged=0
         for rownum,values in enumerate(sheet.iter_rows(min_row=2,values_only=True),2):
             if rownum>10001: raise HTTPException(400,'单次最多导入10000行，请拆分文件')
             values=list(values)+[None]*max(0,len(header)-len(values))
@@ -46,28 +82,73 @@ def preflight(db, user, content, allowed_circles, allowed_roles):
             seen.add(no)
             if not name or len(name)>100: errors.append(prefix+'姓名必填，且不能超过100个字符');continue
             if not role or role not in roles: errors.append(prefix+'角色仅支持CM、TR、Lead、GSM、AM、OM；TA职务请在页面设置');continue
-            if role not in allowed_roles: errors.append(prefix+'当前HR权限仅可导入Lead及以下员工');continue
-            if not circle or allowed_circles is not None and circle.id not in allowed_circles:
-                errors.append(prefix+'请选择权限范围内的有效景点圈');continue
+            if not circle:
+                errors.append(prefix+'请选择有效景点圈');continue
             old=db.query(Employee).filter_by(employee_no=no).first()
             account=db.query(UserAccount).filter_by(login_account=no).first()
             if old or account:
-                # Occupied numbers are skip-only, never an update/transfer.
-                # A conflict must not prevent safe new rows reaching confirmation.
+                duplicate_rows.add(rownum)
+                choice=choices.get(rownum, {'row':rownum,'action':'skip'})
+                same_circle=old is not None and old.attraction_id==circle.id
                 in_scope=old is not None and (allowed_circles is None or old.attraction_id in allowed_circles)
-                old_role=role_at(db,old.id) if in_scope else None
+                old_role=role_at(db,old.id) if old else None
                 visible=in_scope and (old_role is None or old_role.code in allowed_roles)
-                if visible:
-                    reason='已存在，本次跳过，不覆盖原档案'
+                cross=old is not None and (not same_circle or not in_scope)
+                can_update=bool(same_circle and visible and not old.account_deleted_at
+                                and (account is None or account.employee_id==old.id))
+                item={'row':rownum,'employee_no':no,'name':'信息受限','excel_name':name,
+                      'can_update':can_update,'name_conflict':False,'selected_action':'skip'}
+                if cross:
+                    home=db.get(Attraction,old.attraction_id) if old.attraction_id else None
+                    item.update(name=old.name,attraction_name=home.name if home else '未设置景点圈',
+                                reason='员工已存在，所属景点圈与本次可导入范围或目标圈不同；仅可跳过，如需变更请通过跨圈调动更新景点圈')
+                elif visible:
+                    item.update(name=old.name,id=old.id,name_conflict=old.name!=name,
+                                current={'name':old.name,'employee_type':old.employee_type,'internship_ends_on':old.internship_ends_on},
+                                incoming={'name':name,'employee_type':None if raw['Type'] is None else str(raw['Type']).strip(),
+                                          'internship_ends_on':None if raw['实习结束日期'] is None else str(raw['实习结束日期'])},
+                                reason='本圈员工已存在，可选择仅覆盖Type、适用的实习结束日期及明确选择的姓名；角色和景点圈不变')
                     if old.account_deleted_at:
-                        reason='已删除留档，本次跳过；重新入职请使用新建员工'
-                    duplicates.append({'row':rownum,'employee_no':no,'name':old.name,'id':old.id,'reason':reason})
+                        item['reason']='已删除留档，本次跳过；重新入职请使用新建员工'
+                    elif not can_update:
+                        item['reason']='员工号关联账号冲突，仅可跳过，请先核对账号档案'
                 else:
-                    # Only echo the workbook's row/number. Do not disclose the
-                    # stored employee's name, ID, circle, role or account details.
-                    duplicates.append({'row':rownum,'employee_no':no,'name':'信息受限',
-                                       'reason':'员工号已被占用，仅可跳过，不修改原档案'})
+                    item['reason']='员工号已存在，当前HR无权查看该档案；本次跳过，不修改原信息'
+                # Bind confirmation to current ownership, role, values and account state,
+                # without returning restricted data to the client.
+                own_account=db.query(UserAccount).filter_by(employee_id=old.id).first() if old else None
+                occupied.append({'row':rownum,'id':old.id if old else None,
+                    'name':old.name if old else None,'circle':old.attraction_id if old else None,
+                    'role':old_role.code if old_role else None,'type':old.employee_type if old else None,
+                    'end':old.internship_ends_on if old else None,'active':old.is_active if old else None,
+                    'deleted':str(old.account_deleted_at) if old else None,
+                    'account':None if account is None else [account.id,account.employee_id,account.enabled],
+                    'own_account':None if own_account is None else [own_account.id,own_account.enabled,str(own_account.disabled_at)]})
+                if choice['action']=='update':
+                    if not can_update:
+                        raise HTTPException(403,prefix+'此员工仅可跳过，不能通过导入覆盖或转圈')
+                    if old.name==name and choice.get('name_mode')=='custom':
+                        raise HTTPException(400,prefix+'工号和姓名一致时仅可覆盖Type及实习结束日期，不能通过本条改名')
+                    try:
+                        after=replacement(old,raw,choice)
+                    except (ValueError,HTTPException) as exc:
+                        raise HTTPException(400,prefix+str(exc.detail if isinstance(exc,HTTPException) else exc)) from exc
+                    before={'name':old.name,'employee_type':old.employee_type,'internship_ends_on':old.internship_ends_on}
+                    changes={key:{'before':before[key],'after':value} for key,value in after.items() if before[key]!=value}
+                    item.update(selected_action='update' if changes else 'unchanged',after=after,changes=changes)
+                    if changes:
+                        updates.append({'row':rownum,'employee_id':old.id,'employee_no':no,'before':before,'after':after,'changes':changes})
+                        if is_due(after['employee_type'],after['internship_ends_on']):
+                            expired.append({'row':rownum,'employee_no':no,'name':after['name'],
+                                            'internship_ends_on':after['internship_ends_on'],'action':'update'})
+                    else:
+                        unchanged+=1
+                duplicates.append(item)
                 continue
+            if role not in allowed_roles:
+                errors.append(prefix+'当前HR权限仅可导入Lead及以下员工');continue
+            if allowed_circles is not None and circle.id not in allowed_circles:
+                errors.append(prefix+'请选择权限范围内的有效景点圈');continue
             try:
                 from app.rotation.temporary import pending
                 pending(db,no,name,circle.id)
@@ -78,10 +159,14 @@ def preflight(db, user, content, allowed_circles, allowed_roles):
                  'employee_type':kind,'internship_ends_on':end}
             parsed.append(row)
             if is_due(kind,end): expired.append({'row':rownum,'employee_no':no,'name':name,'internship_ends_on':end})
+        if set(choices)-duplicate_rows:raise HTTPException(400,'导入选择包含不存在或非已有员工的行，请重新预检')
         if errors: raise HTTPException(400,'；'.join(errors[:20]))
         if not seen: raise HTTPException(400,'文件中没有员工数据')
         digest=hashlib.sha256(content+json.dumps({'user':user.id,'date':business_today().isoformat(),
-            'rows':parsed,'duplicates':duplicates},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-        return {'rows':parsed,'duplicates':duplicates,'expired':expired,'digest':digest,'would_create':len(parsed)}
+            'rows':parsed,'duplicates':duplicates,'occupied':occupied,'decisions':choices,
+            'allowed_circles':None if allowed_circles is None else sorted(allowed_circles),'allowed_roles':sorted(allowed_roles)},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        return {'rows':parsed,'duplicates':duplicates,'updates':updates,'expired':expired,'digest':digest,
+                'would_create':len(parsed),'would_update':len(updates),'would_rename':sum('name' in r['changes'] for r in updates),
+                'unchanged':unchanged,'would_skip':sum(r['selected_action']=='skip' for r in duplicates)}
     finally:
         wb.close()

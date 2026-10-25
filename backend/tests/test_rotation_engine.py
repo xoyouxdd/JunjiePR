@@ -123,6 +123,7 @@ def test_opening_keeps_urgent_replacement_and_does_not_reserve_far_future():
     eng, _ = live_day([person(p, '07:00', '21:00') for p in ('first', 'second', 'urgent', 'next')], lines=[two_lines()[0]])
     seat(eng, 'first', 'A', 0, '08:00')
     seat(eng, 'second', 'A', 1, '08:00')
+    eng.P['next'].update(state='rest', readyAt=hm('09:10'), breakKind='rest')
     eng.P['urgent']['assign'] = {'line': 'A', 'mode': 'chain', 'target': 'first', 'departAt': hm('09:15'), 'why': '推下班'}
     eng.act_post('A', 2, False, hm('09:00'), 'test')
     eng.act_post('A', 2, True, hm('09:00'), 'test', open_at=hm('10:00'))
@@ -152,6 +153,7 @@ def test_longest_standing_exit_is_pushed_first_without_minimum_online_time():
         seat(eng, p, "A", i, "08:55")  # A 线出口岗只站了 5 分钟
     for i, p in enumerate(("b0", "b1", "b2")):
         seat(eng, p, "B", i, "08:20")  # B 线出口岗站了 40 分钟
+    eng.P["new"].update(state="rest",readyAt=hm("09:05"),breakKind="rest")
     eng.tick(hm("09:00"))
     assign = eng.P["new"]["assign"]
     assert assign["line"] == "B" and assign["mode"] == "push"
@@ -160,8 +162,9 @@ def test_longest_standing_exit_is_pushed_first_without_minimum_online_time():
     eng.act_line("B", False, hm("09:00"), "test")
     eng.tick(hm("09:00"))
     assert eng.P["new"]["assign"]["line"] == "A"
-    eng.act_depart("new", hm("09:00"), "screen")
-    eng.tick(hm("09:03"))
+    eng.tick(hm("09:05"))
+    eng.act_depart("new", hm("09:05"), "screen")
+    eng.tick(hm("09:05"))
     assert occupants(eng, "A") == ["new", "a0", "a1"]
     assert eng.P["a2"]["state"] == "walkback"
 
@@ -295,6 +298,7 @@ def test_stale_replacement_is_cleared_when_target_leaves_the_line():
     seat(eng, "a0", "A", 0, "08:50")
     seat(eng, "leaver", "A", 1, "08:30")
     seat(eng, "a2", "A", 2, "08:10")
+    eng.P["new"].update(state="rest",readyAt=hm("09:10"),breakKind="rest")
     eng.tick(hm("09:00"))
     assert eng.P["new"]["assign"]["target"] == "leaver"
     eng.act_away("leaver", "主管暂离", hm("09:05"), "test")
@@ -434,17 +438,17 @@ def test_prearranged_posts_start_counting_only_at_shift_start():
         eng.act_plan_place('s1', 'B2', 1, hm('07:01'), 'manager')
 
 
-def test_meal_last_twenty_minutes_is_rest_without_dispatch_until_deadline():
+def test_meal_previews_route_and_last_twenty_minutes_rest_cannot_depart_until_deadline():
     eng, _ = live_day([person('meal', '07:00', '21:00')], now='11:00')
     p = eng.P['meal']
     p.update(state='meal', ate=True, breakKind='meal', readyAt=hm('12:00'), assign=None)
     eng.tick(hm('11:39'))
-    assert p['state'] == 'meal' and p['assign'] is None
+    assert p['state'] == 'meal' and p['assign']['departAt'] == hm('12:00')
     eng.tick(hm('11:40'))
     assert p['state'] == 'rest' and p['breakKind'] == 'meal_rest'
-    assert p['readyAt'] == hm('12:00') and p['assign'] is None
+    assert p['readyAt'] == hm('12:00') and p['assign']['departAt'] == hm('12:00')
     eng.tick(hm('11:59'))
-    assert p['assign'] is None
+    assert p['assign']['departAt'] == hm('12:00') and eng.assignment_locked(p,hm('11:59'))
     with pytest.raises(ActionError):
         eng.act_depart('meal', hm('11:59'), 'screen')
     with pytest.raises(ActionError):

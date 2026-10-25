@@ -172,7 +172,7 @@ def test_committed_confirmation_notifies_all_live_subscribers(rotation):
 def test_changed_route_requires_new_confirmation(rotation):
     body = confirmation_setup(rotation)
     with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'reassign', 'pid':'1', 'line':'B'})
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'post_order', 'line':'A', 'i':0, 'target_i':1, 'swapMode':'with_people'})
     before = snapshot(rotation)
     with rotation.factory() as db, pytest.raises(S.ConfirmationConflict):
         S.do_live_action(db, rotation.attraction_id, 'test', body)

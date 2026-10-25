@@ -76,7 +76,8 @@ def test_all_fixed_posts_leave_newcomer_ready_and_cannot_replace_fixed_target():
     for p in ['a','b','c']:hold(e,p)
     assert e._best_line(e.P['next'],hm('09:12'),{}) is None
     e.P['next']['assign']={'line':'A','mode':'push','departAt':hm('09:12')}
-    e.act_depart('next',hm('09:12'),'test')
+    with pytest.raises(ActionError,match='可轮换岗位'):
+        e.act_depart('next',hm('09:12'),'test')
     assert occupants(e,'A')==['a','b','c'] and e.P['next']['state']=='ready'
     hold(e,'a',False,hm('09:13'))
     e.P['next'].update(state='heading',arriveAt=hm('09:14'),departedAt=hm('09:14'),

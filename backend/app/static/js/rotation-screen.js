@@ -3,9 +3,9 @@
 
 const $app = document.getElementById('rtApp');
 
-function poolSection(title, hint, list, chip, extraClass = '', grouped = false) {
+function poolSection(title, hint, list, chip, extraClass = '', grouped = false, extra = '') {
   const content=grouped?groupedChips(list,chip,nowMin(),extraClass==='rt-ready'):list.map(chip).join('');
-  return `<section class="rt-sect ${extraClass}${list.length ? '' : ' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2>${hint&&list.length?`<p class="rt-pool-hint">${hint}</p>`:''}<div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? content : '暂无'}</div></section>`;
+  return `<section class="rt-sect ${extraClass}${list.length ? '' : ' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2>${hint&&list.length?`<p class="rt-pool-hint">${hint}</p>`:''}<div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? content : '暂无'}</div>${extra}</section>`;
 }
 
 function screenView() {
@@ -33,8 +33,8 @@ function screenView() {
       sub = over >= -early ? (over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发') : `${hm(a.departAt)} 出发`;
     }
     const can = (p.entryGroup?groupCanDepart(p.entryGroup,n):canDepartNow(p, n)) && !confirmationBlocked();
-    return `<button type="button" class="${cls}" data-pid="${esc(p.pid)}" data-act="depart"${drag(p)} ${can ? '' : 'aria-disabled="true"'}><span class="rt-nm">${esc(p.name)}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
-  }, 'rt-ready',true);
+    return `<button type="button" class="${cls}" data-pid="${esc(p.pid)}" data-act="depart"${drag(p)} ${can ? '' : 'aria-disabled="true"'}><span class="rt-nm">${esc(p.name)}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${p.assign?`<span class="rt-sub">${assignmentPlanText(p,n)}</span>`:''}${badges(p)}</button>`;
+  }, 'rt-ready',true,departureForecast(ps,n,true));
   pool += poolSection('到休息室确认', '到达后点本人姓名', arrive, p => {
     const mins = p.walkbackSince !== null && p.walkbackSince !== undefined ? Math.max(0, Math.floor(n - p.walkbackSince)) : 0;
     let sub = opWaiting(p)?'OP · 可提前确认去休息':p.state === 'pending' ? 'OP 结束，点击转入休息区' : `下线 ${mins} 分钟`;
@@ -45,9 +45,9 @@ function screenView() {
     if(waitingInitialRest(p))return `<div class="rt-chip rest"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">班次未开始 · ${hm(p.scheduledRestStart)}开始休息</span><span class="rt-go">班次 ${hm(p.start)}–${hm(p.end)}</span></div>`;
     const kind = p.state === 'meal' ? '<span class="rt-badge meal">吃饭</span>' : '<span class="rt-badge rest">休息</span>';
     const next = p.assign ? `${goText(p)} <small>${hm(p.assign.departAt)}</small>` : '';
-    return `<div class="rt-chip rest"${drag(p)}><span class="rt-nm">${esc(p.name)} ${kind}</span><span class="rt-sub">至 ${hm(restUntil(p))}，还剩 ${Math.max(0, Math.ceil(restUntil(p) - n))} 分钟</span><span class="rt-go">${next}</span>${badges(p)}</div>`;
+    return `<div class="rt-chip rest"${drag(p)}><span class="rt-nm">${esc(p.name)} ${kind}</span><span class="rt-sub">至 ${hm(restUntil(p))}，还剩 ${Math.max(0, Math.ceil(restUntil(p) - n))} 分钟</span><span class="rt-go">${next}</span>${p.assign?`<span class="rt-sub">${assignmentPlanText(p,n)}</span>`:''}${badges(p)}</div>`;
   }, 'rt-resting',true);
-  pool += poolSection('吃饭区', '', meals, p => `<div class="rt-chip meal"${drag(p)}><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0, Math.ceil(p.readyAt-n))} 分钟</span>${badges(p)}</div>`, 'rt-meals');
+  pool += poolSection('吃饭区', '', meals, p => `<div class="rt-chip meal"${drag(p)}><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0, Math.ceil(p.readyAt-n))} 分钟</span>${p.assign?`<span class="rt-go">${goText(p)}</span><span class="rt-sub">${assignmentPlanText(p,n)}</span>`:''}${badges(p)}</div>`, 'rt-meals');
   const outside=ps.filter(outsideKind);
   pool+=`<section class="rt-sect rt-outside${outside.length?'':' is-empty'}"><h2>圈外人员<span class="rt-n">${outside.length}</span></h2><div class="rt-chips rt-outside-scroll${outside.length?'':' empty'}">${['病假','出圈','OJT'].map(kind=>`<div data-outside-kind="${kind}"${outside.length?'':' hidden'}><h3>${kind==='出圈'?'出圈（含暂离）':kind}</h3><div class="rt-outside-members">${outside.filter(p=>outsideKind(p)===kind).map(p=>`<div class="rt-chip dim"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">${esc(p.leaveReason||p.away?.reason||p.label||kind)}</span></div>`).join('')||'暂无'}</div></div>`).join('')}${outside.length?'':'暂无'}</div></section>`;
   return `<div class="rt-board"><section class="rt-line-area" aria-label="轮岗线路"><div class="rt-area-heading"><h1>轮岗线路</h1><span>${day.lines.filter(L=>L.active).length}条启用 <span class="rt-schedule-key"><i class="add"></i>待加 <i class="remove"></i>待撤</span></span></div>${lines}</section><div class="rt-pool" aria-label="休息室人员">${pool}</div></div>`;

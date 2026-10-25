@@ -49,6 +49,7 @@ def restore_test_accounts() -> None:
             ("GSMTEST01", "1234"),
             ("TAGSMTEST01", "1234"),
             ("HR-HEAT", "1234"),
+            ("HR-BEAR", "1234"),
             ("HR01", "HR123"),
         ):
             account = db.query(UserAccount).filter_by(login_account=login_account).one()
@@ -389,3 +390,61 @@ def test_group_keeps_its_fixed_name_when_the_supervisor_changes() -> None:
         # The group keeps its fixed name; only its 主管 changes.
         assert current["name"] == group["name"]
         assert current["formal_leader"]["id"] == candidate["id"]
+
+
+def test_global_effective_scope_does_not_offer_circle_hr_an_impossible_reopen():
+    month='2097-07'
+    with TestClient(app) as client:
+        restore_test_accounts();login(client,'HR01','HR123')
+        heat=next(c['id'] for c in client.get('/api/options').json()['employee_circles'] if c['name']=='热力追踪')
+        assert client.post(f'/api/month-closes/{month}/close',json={'reason':'全局封存测试'}).status_code==200
+        admin=client.get(f'/api/month-closes/{month}',params={'attraction_id':heat}).json()
+        assert admin['can_reopen'] and admin['reopen_target_attraction_id'] is None
+        wrong=client.post(f'/api/month-closes/{month}/reopen',json={'attraction_id':heat,'reason':'错误单圈目标'})
+        assert wrong.status_code==409 and wrong.json()['detail']['code']=='MONTH_CLOSE_SCOPE_MISMATCH'
+        login(client,'HR-HEAT')
+        hr=client.get(f'/api/month-closes/{month}',params={'attraction_id':heat}).json()
+        assert hr['is_closed'] and not hr['can_reopen'] and '最高管理员' in hr['reopen_block_reason']
+        assert client.post(f'/api/month-closes/{month}/reopen',json={'attraction_id':None,'reason':'不能越权全局'}).status_code in (400,403)
+        with SessionLocal() as db:
+            assert db.query(MonthClosure).filter_by(closure_month=month,attraction_id=None).one().status=='closed'
+        login(client,'HR01','HR123')
+        assert client.post(f'/api/month-closes/{month}/reopen',json={'attraction_id':admin['reopen_target_attraction_id'],'reason':'正确全局目标'}).status_code==200
+        assert not client.get(f'/api/month-closes/{month}',params={'attraction_id':heat}).json()['is_closed']
+
+
+def test_reopening_global_does_not_silently_open_independent_circle_closure():
+    month='2097-08'
+    with TestClient(app) as client:
+        restore_test_accounts();login(client,'HR01','HR123')
+        heat=next(c['id'] for c in client.get('/api/options').json()['employee_circles'] if c['name']=='热力追踪')
+        assert client.post(f'/api/month-closes/{month}/close',json={'attraction_id':heat,'reason':'单圈封存'}).status_code==200
+        assert client.post(f'/api/month-closes/{month}/close',json={'reason':'全局封存'}).status_code==200
+        assert client.post(f'/api/month-closes/{month}/reopen',json={'reason':'仅开放全局层'}).status_code==200
+        local=client.get(f'/api/month-closes/{month}',params={'attraction_id':heat}).json()
+        assert local['is_closed'] and local['effective_scope']=='热力追踪' and local['reopen_target_attraction_id']==heat
+        assert client.post(f'/api/month-closes/{month}/reopen',json={'attraction_id':heat,'reason':'再开放单圈'}).status_code==200
+        assert not client.get(f'/api/month-closes/{month}',params={'attraction_id':heat}).json()['is_closed']
+
+
+def test_loa_global_gate_message_and_registration_after_correct_reopen():
+    month='2097-09'
+    with TestClient(app) as client:
+        restore_test_accounts();login(client,'HR01','HR123')
+        bear=next(c['id'] for c in client.get('/api/options').json()['employee_circles'] if c['name']=='小熊罐子')
+        created=client.post('/api/hr/employees',json={'employee_no':'9876100','name':'月结LOA合成员工','role_code':'CM','attraction_id':bear})
+        assert created.status_code==200,created.text
+        with SessionLocal() as db:eid=db.query(Employee).filter_by(employee_no='9876100').one().id
+        assert client.post(f'/api/month-closes/{month}/close',json={'reason':'模拟截图中的全局月结'}).status_code==200
+        body={'employee_id':eid,'starts_on':'2097-09-03','ends_on':'2097-09-05'}
+        login(client,'HR-BEAR')
+        blocked=client.post('/api/loa-periods',json=body)
+        assert blocked.status_code==423,blocked.text
+        detail=blocked.json()['detail'];assert '最高管理员' in detail['message'] and '全部景点圈' in detail['message']
+        assert detail['attraction_id'] is None
+        login(client,'HR01','HR123')
+        view=client.get(f'/api/month-closes/{month}',params={'attraction_id':bear}).json()
+        assert client.post(f'/api/month-closes/{month}/reopen',json={'attraction_id':view['reopen_target_attraction_id'],'reason':'更正LOA'}).status_code==200
+        login(client,'HR-BEAR')
+        saved=client.post('/api/loa-periods',json=body)
+        assert saved.status_code==200,saved.text

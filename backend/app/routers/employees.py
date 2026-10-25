@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from io import BytesIO
+import json
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -343,7 +344,7 @@ def employee_import_template(db: Session = Depends(get_db), user: V2User = Depen
 
 @router.post("/hr/import-employees")
 async def import_employees(request: Request, workbook: UploadFile = File(...), preview: bool = Form(False),
-                           skip_existing: bool = Form(False), expected_digest: str = Form(''),
+                           skip_existing: bool = Form(False), expected_digest: str = Form(''), decisions: str = Form(''),
                            db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
     from app.services.employee_import import preflight
     from app.services.employee_types import expire_accounts, business_today
@@ -359,14 +360,19 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), p
         allowed = scoped_hr_attraction_ids(db, user)
         roles = {r.code:r for r in db.query(Role).all()}
         allowed_roles = set(roles) if "SYSTEM_ADMIN" in user.permissions else CIRCLE_HR_MANAGED_ROLE_CODES
-        batch = preflight(db,user,content,allowed,allowed_roles)
+        try:
+            selections=json.loads(decisions) if decisions else None
+        except (ValueError,TypeError) as exc:
+            raise HTTPException(400,'导入选择格式不正确') from exc
+        if decisions and selections is None:raise HTTPException(400,'导入选择必须为逐行选择列表')
+        batch = preflight(db,user,content,allowed,allowed_roles,selections)
         report = {k:v for k,v in batch.items() if k!='rows'}
         if preview:
             return {"ok":True,"preview":True,"created":0,**report}
         if expected_digest and expected_digest!=batch['digest']:
             raise HTTPException(409,'文件、员工名单或日期已变化，请重新预检后确认')
-        if batch['duplicates'] and (not skip_existing or not expected_digest):
-            raise HTTPException(409,'员工已存在，请先预检并明确选择跳过；已有员工不会被覆盖')
+        if batch['duplicates'] and (not expected_digest or selections is None and not skip_existing):
+            raise HTTPException(409,'员工已存在，请先预检并明确选择覆盖或跳过')
         if batch['expired'] and not expected_digest:
             raise HTTPException(409,'包含实习已到期人员，请先预检并确认创建为停用状态')
         for row in batch['rows']:
@@ -381,12 +387,21 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), p
                 password_hash=hash_password(default_initial_password(employee.employee_no)),enabled=True,
                 must_change_password=True,credential_initialized=True))
             synchronize_gsm_management_scope(db,employee,row['role_code'])
+        for row in batch['updates']:
+            employee=db.get(Employee,row['employee_id'])
+            for key,value in row['after'].items():
+                setattr(employee,key,value)
+            write_audit(db,user.employee,'Excel更新员工','employee',employee.id,
+                        before=row['before'],after=row['after'],
+                        reason=f"Excel导入第{row['row']}行：明确选择覆盖；角色与景点圈不变",ip_address=client_ip(request))
         db.flush()
         for row in batch['rows']:
             employee=db.query(Employee).filter_by(employee_no=row['employee_no']).one()
             expire_accounts(db,employee.id)
+        for row in batch['updates']:
+            expire_accounts(db,row['employee_id'])
         write_audit(db,user.employee,'Excel导入员工','employee_import',after={'created':len(batch['rows']),
-            'skipped':len(batch['duplicates']),'expired':len(batch['expired']),'filename':workbook.filename},ip_address=client_ip(request))
+            'updated':len(batch['updates']),'renamed':batch['would_rename'],'skipped':batch['would_skip'],'unchanged':batch['unchanged'],'expired':len(batch['expired']),'filename':workbook.filename},ip_address=client_ip(request))
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -395,7 +410,7 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), p
         db.rollback()
         raise
     invalidate_data_caches()
-    return {'ok':True,'created':len(batch['rows']),'skipped':len(batch['duplicates']),**report}
+    return {'ok':True,'created':len(batch['rows']),'updated':len(batch['updates']),'renamed':batch['would_rename'],'skipped':batch['would_skip'],**report}
 
 
 @router.post("/hr/employees")

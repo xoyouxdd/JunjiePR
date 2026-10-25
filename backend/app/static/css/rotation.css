@@ -316,3 +316,25 @@ button.rt-chip { cursor: pointer; }
 /* Continuous staffing is visible on every board, including CM read-only views. */
 .rt-line .rt-post.holding{background:#fff8eb;border-color:#d8bd86}
 .rt-badge.post-hold{display:inline-block;margin:3px 0 0 5px;padding:2px 6px;border-radius:5px;background:#f8e9c8;color:#765519;font-size:12px;line-height:1.5;white-space:normal;vertical-align:middle}
+
+/* Daily plans use the live board's line, post and pool structure. */
+.rt-daily-board { margin-block:12px; }
+.rt-daily-board .rt-daily-slot button { min-width:0; min-height:44px; padding:4px 2px; background:transparent; text-align:left; border:0; white-space:normal; overflow-wrap:anywhere; }
+.rt-daily-board .rt-daily-slot button.is-selected { background:var(--info-bg-strong); outline:2px solid var(--primary); }
+.rt-daily-settings { margin-block:12px; }
+
+.rt-daily-board .rt-post { grid-template-columns:5.5em minmax(0,1fr) auto; gap:6px; }
+
+.rt-departure-preview { margin-top:10px; border-top:1px solid var(--line); padding-top:8px; }
+.rt-departure-preview summary { min-height:44px; font-size:13px; color:var(--text-secondary); cursor:pointer; }
+.rt-departure-preview .rt-chips { max-height:240px; }
+.rotation-screen .rt-departure-preview .rt-chips { max-height:160px; }
+
+.rt-forecast-short { display:none; }
+.rotation-screen .rt-ready { position:relative; }
+.rotation-screen .rt-ready > .rt-departure-preview { position:absolute; top:0; right:8px; margin:0; padding:0; border:0; z-index:3; }
+.rotation-screen .rt-departure-preview summary { display:flex; align-items:center; justify-content:flex-end; padding:0 4px; }
+.rotation-screen .rt-forecast-full { display:none; }
+.rotation-screen .rt-forecast-short { display:inline; }
+.rotation-screen .rt-ready:has(.rt-departure-preview[open]) { overflow:visible; z-index:5; }
+.rotation-screen .rt-ready > .rt-departure-preview[open] { width:min(340px,calc(100% - 16px)); max-height:calc(100dvh - 110px); overflow:auto; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:0 8px 24px #0f172a26; }

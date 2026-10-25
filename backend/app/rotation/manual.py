@@ -18,7 +18,7 @@ def apply(eng, body, now, actor):
         _require(body,'pid');eng.act_move(body['pid'],body['line'],body['i'],now,actor,
             force=action_boolean(body,'force') if 'force' in body else False,reason=str(body.get('reason') or '').strip())
     elif act=='post_order':
-        _require(body,'target_i');eng.act_post_order(body['line'],body['i'],body['target_i'],now,actor,swap_mode=body.get('swapMode'))
+        _require(body,'target_i');eng.act_post_order(body['line'],body['i'],body['target_i'],now,actor,swap_mode=body.get('swapMode'),target_lid=body.get('target_line'))
     elif act=='post':
         opened=action_boolean(body,'open')
         eng.act_post(body['line'],body['i'],opened,now,actor,
@@ -39,7 +39,9 @@ def preview(db,attraction_id,body):
     with service.transaction(db):
         cfg=service.load_config(db,attraction_id);day,now=service.clock_now(cfg);row=service.day_row(db,attraction_id,day)
         if not row or row.status!='live': raise ActionError('今天的轮岗尚未开始')
-        state=service.day_state(row);token=fingerprint(state);after=deepcopy(state)
+        state=service.day_state(row)
+        service.advance(db,cfg,row,state,now)
+        token=fingerprint(state);after=deepcopy(state)
         hooks=Hooks(service.week_minutes(db,attraction_id,day));eng=Engine(after,service.settings_of(cfg),hooks)
         apply(eng,body,now,'preview')
         def position(d,pid):
@@ -50,5 +52,11 @@ def preview(db,attraction_id,body):
                     'notyet':'未到班次 · 待安排','done':'已离岗','away':'圈外人员','op':'OP待确认休息',
                     'pending':'待到大屏确认休息','excluded':'OJT/不轮岗'}.get(d['persons'][pid]['state'],'待核实')
         changes=[p['name']+'：'+position(state,pid)+' → '+position(after,pid) for pid,p in state['persons'].items() if position(state,pid)!=position(after,pid)]
-        changes += [f"{L['id']} · {x['name']}：{'开岗' if x.get('open') else '关闭'}" for L in after['lines'] for x in L['posts'] if next((old.get('open') for line in state['lines'] if line['id']==L['id'] for old in line['posts'] if old['name']==x['name']),None)!=x.get('open')]
+        if body['action']=='post_order':
+            original = Engine(state, service.settings_of(cfg), hooks)
+            source, _, left = original.post(body['line'], body['i'])
+            target, _, right = original.post(body.get('target_line') or body['line'], body['target_i'])
+            changes.insert(0, f"{source['id']} · {left['name']} ↔ {target['id']} · {right['name']}")
+        if body['action'] != 'post_order':
+            changes += [f"{L['id']} · {x['name']}：{'开岗' if x.get('open') else '关闭'}" for L in after['lines'] for x in L['posts'] if next((old.get('open') for line in state['lines'] if line['id']==L['id'] for old in line['posts'] if old['name']==x['name']),None)!=x.get('open')]
         return {'expected_snapshot':token,'changes':changes,'summary':'强制安排上岗' if body.get('force') else '取消待撤岗计划' if body.get('cancelClose') else '只交换岗位' if body.get('swapMode')=='posts' else '岗位和人员一起交换' if body.get('swapMode')=='with_people' else '岗位顺序调整' if body['action']=='post_order' else '定时调整' if body.get('openAt') or body.get('closeAt') else '现场调整'}

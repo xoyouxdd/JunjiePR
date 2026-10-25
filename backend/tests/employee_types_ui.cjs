@@ -28,7 +28,7 @@ const root=path.resolve(__dirname,'../..');let server,browser,log='';const sleep
     await edit.locator('[type=submit]').click();await edit.waitFor({state:'detached'});await row.locator('.hr-person-type').filter({hasText:'2099-12-18'}).waitFor();
     const excel=await ctx.request.get(base+`/__fixture/workbook?existing=${no}&new=${next}`);await page.locator('details').filter({has:page.locator('#importEmployees')}).locator('summary').click();
     await page.locator('#importEmployeesWorkbook').setInputFiles({name:'synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await excel.body()});await page.locator('#importEmployees [type=submit]').click();
-    await page.getByRole('dialog',{name:'导入预检'}).waitFor();assert.match(await page.getByRole('dialog',{name:'导入预检'}).innerText(),/已有员工/);await page.locator('[data-modal-confirm]').click();await page.getByRole('dialog',{name:'导入已完成'}).waitFor();await page.locator('[data-modal-confirm]').click();
+    await page.getByRole('dialog',{name:'导入预检'}).waitFor();assert.match(await page.getByRole('dialog',{name:'导入预检'}).innerText(),/已有员工/);await page.getByRole('button',{name:'查看最终变更',exact:true}).click();await page.getByRole('dialog',{name:'确认导入变更'}).waitFor();await page.getByRole('button',{name:'确认导入',exact:true}).click();await page.getByRole('dialog',{name:'导入已完成'}).waitFor();await page.getByRole('button',{name:'知道了',exact:true}).click();
     await page.locator('#newEmployee').waitFor({state:'attached'});people=await ctx.request.get(base+'/api/hr/employees').then(r=>r.json());assert(people.some(p=>p.employee_no===next&&p.employee_type==='Intern'));assert.equal(people.find(p=>p.employee_no===no).name,'界面合成实习生');
     for(const width of [320,390,430,768,1024,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' directory overflow '+width);}
     const shots=process.env.EMPLOYEE_TYPE_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await page.setViewportSize({width:390,height:844});await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(shots,engine+'-employee-mobile.png')});await page.setViewportSize({width:1440,height:1000});await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(shots,engine+'-employee-desktop.png')});}
@@ -41,13 +41,31 @@ const root=path.resolve(__dirname,'../..');let server,browser,log='';const sleep
     const occupied=await ctx.request.get(base+'/__fixture/occupied-workbook?index='+(index-1));assert(occupied.ok());
     await dwarfPage.locator('#importEmployeesWorkbook').setInputFiles({name:'occupied-synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await occupied.body()});
     await dwarfPage.locator('#importEmployees [type=submit]').click();const previewDialog=dwarfPage.getByRole('dialog',{name:'导入预检'});await previewDialog.waitFor();
-    const previewText=await previewDialog.innerText();assert.match(previewText,/将新增 1 人，跳过已有员工 2 人/);assert(previewText.includes('信息受限')&&previewText.includes('仅可跳过'));assert(!previewText.includes('不可泄露原姓名'+foreign));assert(previewText.includes('不可泄露原姓名'+own));
+    const previewText=await previewDialog.innerText();assert.match(previewText,/将新增 1 人；已有员工 2 人/);assert(previewText.includes('热力追踪')&&previewText.includes('仅可跳过')&&previewText.includes('跨圈调动'));assert(previewText.includes('不可泄露原姓名'+foreign));assert(previewText.includes('不可泄露原姓名'+own));
     await dwarfPage.locator('[data-modal-cancel]').click();
     assert(!(await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json())).some(p=>p.employee_no===fresh),'Cancel cannot create an employee');
-    await dwarfPage.locator('#importEmployees [type=submit]').click();await previewDialog.waitFor();await dwarfPage.locator('[data-modal-confirm]').click();await dwarfPage.getByRole('dialog',{name:'导入已完成'}).waitFor();
-    assert(!(await dwarfPage.getByRole('dialog',{name:'导入已完成'}).innerText()).includes('不可泄露原姓名'+foreign));await dwarfPage.locator('[data-modal-confirm]').click();
+    await dwarfPage.locator('#importEmployees [type=submit]').click();await previewDialog.waitFor();await dwarfPage.getByRole('button',{name:'查看最终变更',exact:true}).click();await dwarfPage.getByRole('dialog',{name:'确认导入变更'}).waitFor();await dwarfPage.getByRole('button',{name:'确认导入',exact:true}).click();await dwarfPage.getByRole('dialog',{name:'导入已完成'}).waitFor();
+    assert(!(await dwarfPage.getByRole('dialog',{name:'导入已完成'}).innerText()).includes('不可泄露原姓名'+foreign));await dwarfPage.getByRole('button',{name:'知道了',exact:true}).click();
     const dwarfPeople=await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json());assert(dwarfPeople.some(p=>p.employee_no===fresh));assert.equal(dwarfPeople.find(p=>p.employee_no===own).name,'不可泄露原姓名'+own);
     const allPeople=await ctx.request.get(base+'/api/hr/employees').then(r=>r.json());const untouched=allPeople.find(p=>p.employee_no===foreign);assert(untouched&&untouched.name==='不可泄露原姓名'+foreign&&untouched.employee_type==='Comp28'&&!untouched.account_enabled);
-    await dwarf.close();assert.deepEqual(errors,[]);console.log(engine+': actual create/edit, dates, V3 preview/skip and dwarf-HR occupied-number cancel/confirm/redaction passed');await browser.close();browser=null;
+    // Existing own-circle employee: explicit custom rename and Type replacement.
+    await dwarfPage.locator('details').filter({has:dwarfPage.locator('#importEmployees')}).locator('summary').click();
+    await dwarfPage.locator('#importEmployeesWorkbook').setInputFiles({name:'occupied-synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await occupied.body()});
+    await dwarfPage.locator('#importEmployees [type=submit]').click();await previewDialog.waitFor();
+    const ownCard=previewDialog.locator('[data-import-row="3"]'),foreignCard=previewDialog.locator('[data-import-row="2"]');
+    assert.equal(await foreignCard.locator('[name=action]').count(),0);
+    await ownCard.locator('[name=action]').selectOption('update');
+    await ownCard.locator('[name=name_mode]').selectOption('custom');
+    await ownCard.locator('[name=custom_name]').fill('导入自定义合成姓名');
+    for(const width of [320,390,430,768,1440]){await dwarfPage.setViewportSize({width,height:900});assert.equal(await dwarfPage.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' import decision overflow '+width);}
+    if(shots){await dwarfPage.setViewportSize({width:390,height:844});await dwarfPage.locator('#toast').evaluate(el=>el.classList.remove('show'));await previewDialog.evaluate(el=>Promise.all(el.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{}))));await dwarfPage.screenshot({path:path.join(shots,engine+'-import-choice-mobile.png')});}
+    await dwarfPage.getByRole('button',{name:'查看最终变更',exact:true}).click();
+    const finalDialog=dwarfPage.getByRole('dialog',{name:'确认导入变更'});await finalDialog.waitFor();
+    assert.match(await finalDialog.innerText(),/更新 1 人，其中改名 1 人/);assert.match(await finalDialog.innerText(),/Comp28.*Comp40/);assert.match(await finalDialog.innerText(),/导入自定义合成姓名/);
+    if(shots){await dwarfPage.locator('[data-import-row]').first().waitFor({state:'detached'});await finalDialog.evaluate(el=>Promise.all(el.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{}))));await dwarfPage.screenshot({path:path.join(shots,engine+'-import-final-mobile.png')});}
+    await dwarfPage.getByRole('button',{name:'确认导入',exact:true}).click();await dwarfPage.getByRole('dialog',{name:'导入已完成'}).waitFor();await dwarfPage.getByRole('button',{name:'知道了',exact:true}).click();
+    const updated=await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json());
+    const ownAfter=updated.find(p=>p.employee_no===own);assert.equal(ownAfter.name,'导入自定义合成姓名');assert.equal(ownAfter.employee_type,'Comp40');assert.equal(ownAfter.account_enabled,false);
+    await dwarf.close();assert.deepEqual(errors,[]);console.log(engine+': actual create/edit, dates, V3 preview/skip, cross-circle disclosure/skip and own-circle custom-name/type update passed');await browser.close();browser=null;
   }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(3000)]);}}})().catch(e=>{console.error(e);process.exitCode=1;});

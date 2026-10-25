@@ -72,7 +72,7 @@ def test_future_plan_starts_only_on_its_day_preserving_edits(rotation):
         S.set_sim_clock(cfg, FUTURE, 240, paused=True)
         S.ensure_prearranged_day(db, cfg, rotation.attraction_id, FUTURE, 240)
     after = read(rotation)
-    assert after['day']['status'] == 'live' and not after['can_edit']
+    assert after['day']['status'] == 'live' and after['can_edit'] and after['prestart_live']
     assert after['day']['plan'] == plan
     assert after['times'] and after['as_of'] == 240
 
@@ -184,3 +184,120 @@ def test_snapshot_write_rolls_back_with_failed_commit(rotation, monkeypatch):
     after = read(rotation, DAY)
     assert after['revision'] == before['revision'] and after['times'] == before['times']
     assert after['day'] == before['day']
+
+
+def set_clock(rotation, day, minute):
+    with rotation.factory() as db, S.transaction(db):
+        S.set_sim_clock(S.load_config(db, rotation.attraction_id), day, minute, paused=True)
+
+
+def daily_edit_today(rotation, data=None, **body):
+    data = data or read(rotation, DAY)
+    with rotation.factory() as db:
+        D.edit(db, rotation.attraction_id, '测试', DAY,
+               {'revision':data['revision'], 'plan_revision':data['plan_revision'], **body})
+
+
+def test_today_published_prestart_plan_and_board_edit_same_arrangement(rotation):
+    live(rotation)
+    before = read(rotation, DAY)
+    assert before['can_edit'] and before['prestart_live'] and not before['frozen']
+    daily_edit_today(rotation, before, action='draft_swap_people', source='A#0', target='B#0')
+    after = read(rotation, DAY)
+    with rotation.factory() as db:
+        board = S.board_payload(db, rotation.attraction_id)['day']
+    assert after['day']['lines'] == board['lines']
+    assert after['draft']['plan']['crew']['A#0'] == before['draft']['plan']['crew']['B#0']
+    pid = after['draft']['plan']['crew']['A#0']
+    with rotation.factory() as db:
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'move', 'pid':pid, 'line':'B', 'i':0})
+    restored = read(rotation, DAY)
+    assert restored['draft']['plan'] == before['draft']['plan']
+    assert all(p['state']=='notyet' and p['lineStart'] is None for p in restored['day']['persons'])
+
+
+def test_opening_freezes_whole_day_once_and_later_board_changes_do_not_touch_it(rotation):
+    live(rotation)
+    daily_edit_today(rotation, action='draft_swap_people', source='A#0', target='B#0')
+    with rotation.factory() as db, S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,DAY);state=S.day_state(row)
+        state['persons']['5']['start']=720;S.save_day(db,row,state)
+    expected = read(rotation, DAY)['day']['lines']
+    set_clock(rotation, DAY, 435)
+    opening = read(rotation, DAY)
+    assert opening['frozen'] and not opening['can_edit'] and opening['opening_source']=='opening'
+    assert opening['as_of']==435 and opening['day']['lines']==expected
+    with rotation.factory() as db, S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,DAY);state=S.day_state(row)
+        state['lines'][0]['posts'][0]['name']='运行后的调整'
+        state['persons']['5']['start']=780
+        S.save_day(db,row,state)
+    assert read(rotation, DAY)['day']==opening['day']
+    with pytest.raises(S.ActionError,match='已固定'):
+        daily_edit_today(rotation, action='draft_swap_people', source='A#0', target='B#0')
+    set_clock(rotation,FUTURE,240)
+    historical=read(rotation,DAY)
+    assert historical['day']==opening['day'] and not historical['can_edit']
+    assert historical['opening_source']=='opening'
+
+
+def test_prestart_editor_ignores_quiet_clock_but_rejects_real_plan_change(rotation):
+    live(rotation)
+    before=read(rotation,DAY)
+    set_clock(rotation,DAY,241)
+    read(rotation,DAY)
+    daily_edit_today(rotation,before,action='draft_swap_people',source='A#0',target='B#0')
+    with pytest.raises(S.ConfirmationConflict):
+        daily_edit_today(rotation,before,action='draft_swap_people',source='A#0',target='B#0')
+
+
+def test_prestart_pool_person_and_cross_line_posts_update_board_without_timers(rotation):
+    live(rotation)
+    before=read(rotation,DAY)
+    used=set(before['draft']['plan']['crew'].values())|set(before['draft']['plan']['seven'].values())
+    pid=next(pid for pid in before['draft']['persons'] if pid not in used)
+    daily_edit_today(rotation,action='draft_swap_people',source='person:'+pid,target='A#0')
+    after=read(rotation,DAY)
+    assert after['draft']['plan']['crew']['A#0']==pid
+    daily_edit_today(rotation,action='draft_swap_posts',source='A#0',target='B#0')
+    after=read(rotation,DAY)
+    assert after['draft']['plan']['crew']['B#0']==pid
+    assert after['day']['lines'][1]['posts'][0]['occ']==pid
+    assert all(p['lineStart'] is None for p in after['day']['persons'])
+
+
+def test_opening_snapshot_rollback_does_not_leave_frozen_state(rotation,monkeypatch):
+    live(rotation)
+    with rotation.factory() as db:
+        def fail():raise RuntimeError('opening commit failed')
+        monkeypatch.setattr(db,'commit',fail)
+        with pytest.raises(RuntimeError,match='opening commit'):
+            with S.transaction(db):
+                row=S.day_row(db,rotation.attraction_id,DAY)
+                S.advance(db,S.load_config(db,rotation.attraction_id),row,S.day_state(row),435)
+    with rotation.factory() as db:
+        assert 'dailyOpening' not in S.day_state(S.day_row(db,rotation.attraction_id,DAY))
+
+
+def test_legacy_opening_falls_back_to_saved_plan_without_rewriting_history(rotation):
+    live(rotation)
+    with rotation.factory() as db, S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,DAY);state=S.day_state(row)
+        original=state['initialDraft']['lines'][0]['posts'][0]['name']
+        state['lines'][0]['posts'][0]['name']='后来的现场岗位'
+        S.save_day(db,row,state)
+        S.set_sim_clock(S.load_config(db,rotation.attraction_id),FUTURE,240,paused=True)
+    first=read(rotation,DAY);second=read(rotation,DAY)
+    assert first['opening_source']=='initial_draft' and first['frozen'] and not first['can_edit']
+    assert first['day']['lines'][0]['posts'][0]['name']==original
+    assert first['revision']==second['revision'] and first['day']==second['day']
+
+
+def test_late_publish_labels_actual_capture_instead_of_claiming_earlier_snapshot(rotation):
+    draft(rotation)
+    set_clock(rotation,DAY,600)
+    with rotation.factory() as db:
+        S.do_draft_action(db,rotation.attraction_id,'test',{'action':'publish','date':DAY})
+    result=read(rotation,DAY)
+    assert result['frozen'] and not result['can_edit']
+    assert result['opening_source']=='late_publish' and result['as_of']==600

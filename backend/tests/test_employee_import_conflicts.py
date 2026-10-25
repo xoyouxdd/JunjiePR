@@ -57,10 +57,13 @@ def test_dwarf_hr_can_confirm_skip_without_disclosure_or_overwrite(kind):
         preview=response.json();assert preview['would_create']==1 and len(preview['duplicates'])==1
         item=preview['duplicates'][0]
         assert item['row']==2 and item['employee_no']==occupied and item['reason']
-        if kind in {'foreign','manager','login_only'}:
-            assert set(item)=={'row','employee_no','name','reason'}
+        if kind in {'manager','login_only'}:
+            assert not item['can_update'] and 'current' not in item
             assert item['name']=='信息受限'
             assert before[0] not in response.text
+        elif kind=='foreign':
+            assert item['name']==before[0] and item['attraction_name']=='热力追踪' and not item['can_update']
+            assert 'current' not in item and 'id' not in item
         else:
             assert item['name']==before[0] and item['id']==employee_id
         if kind=='deleted':assert '重新入职' in item['reason']
@@ -99,7 +102,7 @@ def test_scope_change_since_preview_requires_reconfirmation():
     with TestClient(app) as client:
         login(client,'HR-DWARF')
         preview=client.post('/api/hr/import-employees',files=files,data={'preview':'true'}).json()
-        assert preview['duplicates'][0]['name']=='信息受限'
+        assert preview['duplicates'][0]['name']==snapshot(employee_id)[0] and not preview['duplicates'][0]['can_update']
         with SessionLocal() as db:
             db.get(Employee,employee_id).attraction_id=circle_id('矮人迷宫');db.commit()
         result=client.post('/api/hr/import-employees',files=files,

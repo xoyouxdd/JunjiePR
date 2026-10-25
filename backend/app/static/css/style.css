@@ -2370,3 +2370,11 @@ body.rotation-personal-only .app-shell{margin-left:0;max-width:760px;margin-inli
 body.rotation-personal-only #tabs{display:none;}
 body.rotation-personal-only #app{display:grid;gap:12px;}
 body.rotation-personal-only .rt-line{margin-top:12px;}
+
+/* Per-row employee workbook decisions, contained within the existing HR modal. */
+.hr-import-row { min-width:0; display:grid; gap:10px; padding:12px; border:1px solid var(--line,#dbe4ee); border-radius:10px; overflow-wrap:anywhere; }
+.hr-import-row legend { padding:0 6px; font-weight:700; }
+.hr-import-row p { margin:0; }
+.hr-import-row [data-import-edit] { display:grid; gap:10px; }
+.hr-import-row [data-import-edit][hidden],.hr-import-row [data-import-custom][hidden] { display:none; }
+.hr-import-row :is(input:not([type=checkbox]),select) { width:100%; min-width:0; box-sizing:border-box; }

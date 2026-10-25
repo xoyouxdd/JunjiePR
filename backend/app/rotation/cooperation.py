@@ -1,4 +1,4 @@
-"""First-entry cohort plans. Projections never mutate the live board or hooks."""
+"""Same-line, same-time cohort plans. Projections never mutate the live board or hooks."""
 from copy import deepcopy
 import hashlib
 import json
@@ -42,11 +42,11 @@ def order(p):
 
 def members(eng, p):
     a = p.get('assign')
-    if not eng.d.get('cooperativeEntry') or not a or not first_entry(p):
+    if not eng.d.get('cooperativeEntry') or not a or p.get('entryHold'):
         return []
-    return sorted([q for q in eng.P.values() if first_entry(q)
-                   and q.get('state') in ('ready', 'rest') and q.get('assign')
-                   and q['assign']['line'] == a['line'] and q['start'] == p['start']
+    return sorted([q for q in eng.P.values() if q.get('role') in ('rotation', 'op') and not q.get('entryHold')
+                   and q.get('state') in ('ready', 'rest', 'meal') and q.get('assign')
+                   and q['assign']['line'] == a['line']
                    and abs(q['assign']['departAt'] - a['departAt']) < .01], key=order)
 
 
@@ -80,7 +80,7 @@ def simulate(eng, people, now, solo=None):
     return routes
 
 
-E_STATE = {'done': '下班', 'away': '暂离／出圈', 'walkback': '下线去休息'}
+E_STATE = {'done': '下班', 'away': '暂离／出圈', 'walkback': '下线，回休息室确认休息／吃饭'}
 
 
 def plan(eng, p, now):
@@ -96,6 +96,7 @@ def plan(eng, p, now):
                           for q in group]}
     result = {'line': line['id'], 'at': max(q['assign']['departAt'] for q in group),
               'members': [{'pid': q['pid'], 'name': q['name'], 'start': q['start'], 'end': q['end'],
+                           'task': q['assign'].get('why') or {'push7': '推7点', 'chain': '推下班／出圈', 'opening': '补岗', 'push': '正常轮岗'}.get(q['assign']['mode'], '上岗'),
                            'confirmed': False} for q in group],
               'confirmed': 0, 'routes': [], 'soloRoutes': [], 'blocked': None, 'soloBlocked': None}
     try:

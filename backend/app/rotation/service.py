@@ -710,7 +710,7 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
 
 
 def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
-    from app.rotation.cooperation import plan, upcoming, upcoming_shift
+    from app.rotation.cooperation import plan, simulate, upcoming, upcoming_shift
     if not hasattr(eng, '_upcoming_routes'):
         eng._upcoming_routes = upcoming(eng, now)
     group = plan(eng, p, now)
@@ -719,6 +719,16 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         own=next((member for member in group['members'] if member['pid']==p['pid']),None)
         if own and own.get('entryPost'):
             av['entryPost']=own['entryPost']
+    routes = group['routes'] if group else []
+    departure_blocked = group['blocked'] if group else None
+    if av and not group and p.get('state') in ('rest', 'ready', 'meal'):
+        try:
+            routes = simulate(eng, [p], now)
+            own_route = next((r for r in routes if r['pid'] == p['pid']), None)
+            if own_route:
+                av['entryPost'] = own_route['to']
+        except E.ActionError as exc:
+            departure_blocked = str(exc)
     a = p.get("assign")
     L, i = eng.find_post(p["pid"]) if p.get("state") == "onpost" else (None, None)
     preparing = None
@@ -731,6 +741,8 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "line": p.get("line"), "post": L["posts"][i]["name"] if L else None, "postIndex": i,
         "lineStart": p.get("lineStart"), "readyAt": p.get("readyAt"), "breakKind": p.get("breakKind"),
         "assign": av, "flags": p.get("flags", []), "tags": p.get("tags", []), "away": p.get("away"),
+        "departureRoutes": routes, "departureBlocked": departure_blocked,
+        "assignmentLocked": eng.assignment_locked(p, now),
         "entryGroup": group, "entryHold": p.get('entryHold'),
         "interruptedBreak": p.get('interruptedBreak'), "leaveReason": p.get('leaveReason'),
         "postHold": L['posts'][i].get('hold') if L else None,
@@ -745,7 +757,7 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
                                (["entry_return"] if p.get('entryHold') else ["arrive"] if p.get("state") in ("walkback", "pending", "op") or p.get('role')=='op' and p.get('state')=='notyet' else
                                 (["depart", "entry_adjust", "group_depart"] if group else ["depart"]) if p.get("assign") and p.get("state") in ("rest", "ready", "meal") else [])},
-        "canDepart": bool(p.get("state") == "ready" and a and now >= (p.get("readyAt") or now) - 0.01
+        "canDepart": bool(not departure_blocked and p.get("state") == "ready" and a and now >= (p.get("readyAt") or now) - 0.01
                           and now >= a.get("notBefore", 0) - 0.01
                           and now >= a["departAt"] - (0 if group else eng.S["departEarly"]) - 0.01),
     }

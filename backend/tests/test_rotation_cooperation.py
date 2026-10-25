@@ -196,3 +196,53 @@ def test_excluded_and_opening_rest_keep_existing_rules():
     assert 'a' not in C.upcoming(eng, 530)
     eng.P['b'].update(state='notyet', start=435, readyAt=None, assign=None)
     assert 'b' not in C.upcoming(eng, 430)
+
+
+def test_returning_mixed_shift_relief_and_rotation_share_one_plan():
+    eng, _ = fixture()
+    eng.P['a']['visited'] = ['A']
+    eng.P['b'].update(start=480, visited=['B'])
+    view = C.plan(eng, eng.P['b'], 540)
+    assert [m['pid'] for m in view['members']] == ['a', 'b']
+    assert [m['task'] for m in view['members']] == ['推下班', '正常轮岗']
+    before = deepcopy(eng.d)
+    assert C.confirm(eng, 'a', 540, actor('a'), 'a')['status'] == 'waiting'
+    assert occupants(eng, 'A') == [x['occ'] for x in before['lines'][0]['posts']]
+    assert C.plan(eng, eng.P['b'], 541)['confirmed'] == 1
+    assert C.confirm(eng, 'b', 541, actor('b'), 'b')['status'] == 'executed'
+    assert eng.P['a']['lineStart'] == eng.P['b']['lineStart'] == 541
+    assert eng.P['old1']['state'] == 'done'
+    assert occupants(eng, 'A')[:2] == ['b', 'a']
+
+
+def test_meal_member_stays_in_group_but_cannot_confirm_before_ready():
+    eng, _ = fixture()
+    eng.P['b'].update(state='meal', readyAt=550, visited=['A'])
+    view = C.plan(eng, eng.P['a'], 540)
+    assert len(view['members']) == 2
+    assert C.confirm(eng, 'a', 540, actor('a'), 'a')['status'] == 'waiting'
+    with pytest.raises(ActionError, match='允许上岗'):
+        C.confirm(eng, 'b', 540, actor('b'), 'b')
+    assert eng.P['old1']['state'] == 'onpost'
+
+
+def test_op_and_returning_rotation_group_without_walk_delay():
+    eng, _ = fixture()
+    eng.S['walkMin'] = 99
+    eng.line('A')['walk'] = 99
+    eng.P['a'].update(role='op', visited=['A'])
+    assert len(C.plan(eng, eng.P['b'], 540)['members']) == 2
+    C.confirm(eng, 'a', 540, actor('a'), 'a')
+    C.confirm(eng, 'b', 540, actor('b'), 'b')
+    assert eng.P['a']['lineStart'] == eng.P['b']['lineStart'] == 540
+    assert eng.P['a']['arriveAt'] is None
+
+
+def test_route_explains_return_to_rest_room_without_starting_rest():
+    eng, _ = fixture()
+    view = C.plan(eng, eng.P['a'], 540)
+    assert next(r for r in view['routes'] if r['pid'] == 'old3')['to'] == '下线，回休息室确认休息／吃饭'
+    C.confirm(eng, 'a', 540, actor('a'), 'a')
+    C.confirm(eng, 'b', 540, actor('b'), 'b')
+    assert eng.P['old3']['state'] == 'walkback'
+    assert eng.P['old3']['breakStart'] is None

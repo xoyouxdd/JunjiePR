@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.25.2", "date": "2026-10-25", "status": "candidate",
+        "items": [
+            {"summary": "轮岗预排固定窗口与跨线调整完善",
+             "detail": "餐休期间可提前预排去向，剩余3分钟及以内固定已有安排，同线同时同行组合整体保护；失效路线保留并提示，不静默改派，主管按原权限预览并填写原因处理。支持跨线人员及岗位交换并保留累计在线时长；协同上岗仍须全员确认，不提前结束餐休。",
+             "audiences": ["all"]},
+            {"summary": "员工导入支持逐项覆盖与改名预检",
+             "detail": "本圈可管理的已有员工默认跳过，可选择更新Type及实习期限并明确处理空值；姓名不一致时选择保留、采用文件或填写新姓名。跨圈仅展示受限身份提示，不开放覆盖或调圈。提交重新核验文件、档案、范围及日期，新增、更新、停用与审计同事务提交。",
+             "audiences": ["HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"], "permissions": ["HR_MANAGE"]},
+            {"summary": "月结开放明确实际生效范围",
+             "detail": "页面显示实际阻断的全局或单圈月结范围，开放操作使用生效记录范围。全局仅最高管理员可开放并明确影响全部景点圈，景点圈HR保留本圈权限；范围不匹配明确拒绝，不自动扩大范围或连带开放其他记录。",
+             "audiences": ["HR_CIRCLE", "SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.25.1", "date": "2026-10-25", "status": "candidate",
         "items": [
             {"summary": "员工导入占用工号支持预检后跳过",

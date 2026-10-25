@@ -53,7 +53,7 @@ def ensure_month_open(db: Session, month: str, attraction_id: int | None, operat
         423,
         detail={
             "code": "MONTH_CLOSED",
-            "message": f"{month} · {scope_name}已月结，不能{operation}。如需更正，请由该景点圈HR填写原因后临时开放。",
+            "message": f"{month} · {scope_name}已月结，不能{operation}。" + ("如需更正，请由最高管理员填写原因后临时开放全部景点圈月结。" if closure.attraction_id is None else "如需更正，请由该景点圈HR或最高管理员填写原因后临时开放。"),
             "month": month,
             "attraction_id": closure.attraction_id,
             "attraction_name": scope_name,
@@ -158,7 +158,8 @@ def month_closure_payload(db: Session, month: str, attraction_id: int | None, us
         "close_reason": effective.close_reason if effective else "",
         "can_close": can_close,
         **period_policy,
-        "can_reopen": bool(effective and (user.role.code == "SYSTEM_ADMIN" or (user.role.code == "HR_CIRCLE" and attraction_id is not None and attraction_id in scoped_hr_attraction_ids(db, user)))),
+        "can_reopen": bool(effective and (user.role.code == "SYSTEM_ADMIN" or (effective.attraction_id is not None and user.role.code == "HR_CIRCLE" and attraction_id is not None and attraction_id in scoped_hr_attraction_ids(db, user)))),
+        "reopen_block_reason": "本月受全部景点圈月结限制，请联系最高管理员填写原因后临时开放；景点圈HR不能开放全局月结。" if global_row and user.role.code != "SYSTEM_ADMIN" else "",
         "reopen_target_attraction_id": effective.attraction_id if effective else attraction_id,
         "checklist": month_close_checklist(db, month, attraction_id),
     }

@@ -51,6 +51,7 @@ function departureEarly() {
 }
 
 function canDepartNow(p, n) {
+  if(p.departureBlocked||p.assign?.blocked)return false;
   if(p.entryGroup&&n<p.assign.departAt-.01)return false;
   if(p.entryGroup&&(p.entryGroup.blocked||p.entryGroup.members.find(m=>m.pid===p.pid)?.confirmed))return false;
   return departureTimeReady(p,n);
@@ -97,13 +98,14 @@ function groupedChips(people,chip,n,allowGroup=false){
     const g=p.entryGroup;if(seen.has(g.id))return '';seen.add(g.id);
     const here=people.filter(q=>q.entryGroup?.id===g.id);
     const button=allowGroup?`<button type="button" class="primary" data-group-depart="${esc(g.members[0].pid)}" ${groupCanDepart(g,n)&&!confirmationBlocked()?'':'disabled'}>整组上岗</button>`:'';
-    return `<div class="rt-entry-group" data-entry-group="${esc(g.id)}"><div class="rt-entry-head"><strong>${esc(g.line)}线 · ${g.members.length}人一组</strong><span>${g.confirmed}/${g.members.length}</span>${button}</div>${here.map(chip).join('')}</div>`;
+    return `<div class="rt-entry-group" data-entry-group="${esc(g.id)}"><div class="rt-entry-head"><strong>${esc(g.line)}线 · ${g.members.length}人一组</strong><span>${g.confirmed}/${g.members.length} 已确认安排</span>${button}</div><p>全员确认后一起前往，现场无需再次操作手机。</p>${here.map(chip).join('')}</div>`;
   }).join('');
 }
 
-function postSwapForm(line,from,to){
-  formBox('选择岗位交换方式','<label>交换方式<select name="swapMode"><option value="posts">只交换岗位，人员留在原位置</option><option value="with_people">岗位和人员一起交换</option></select></label><p>交换不重置人员已累计的站岗时间；定岗需先取消。</p>',
-    values=>adjustPreview({action:'post_order',line,i:from,target_i:to,swapMode:values.swapMode}),{okText:'预览影响'});
+function postSwapForm(line,from,to,targetLine=line){
+  const source=RT.data.day.lines.find(x=>x.id===line)?.posts[from],target=RT.data.day.lines.find(x=>x.id===targetLine)?.posts[to];
+  formBox('选择岗位交换方式',`<p>${esc(line)}线 · ${esc(source?.name||'待核实')} ↔ ${esc(targetLine)}线 · ${esc(target?.name||'待核实')}</p><label>交换方式<select name="swapMode"><option value="posts">只交换岗位，人员留在原位置</option><option value="with_people">岗位和人员一起交换</option></select></label><p>累计站岗时间保留；跨线人员在原线的时长记入记录，再从当前时刻计算新线路时长。定岗需先取消。</p>`,
+    values=>adjustPreview({action:'post_order',line,i:from,target_line:targetLine,target_i:to,swapMode:values.swapMode}),{okText:'预览影响'});
 }
 function personDrop(pid,line,i){
   const p=personOf(pid);if(!p)return;
@@ -297,7 +299,7 @@ async function checkPendingConfirmation() {
     const pending = RT.pendingConfirmation;
     const out = await rtApi(`/api/rotation/confirmation?token=${encodeURIComponent(pending.token)}&date=${encodeURIComponent(pending.date)}`);
     storePendingConfirmation(null);
-    toast(out.result?.status==='waiting'?'已核实本人到位，仍在等待同行人':out.result?.status==='superseded'?'此前同行安排已调整，请查看最新任务':out.confirmed ? '已核实：确认成功，画面已同步' : '本次未确认，请查看最新安排后重新确认', !out.confirmed);
+    toast(out.result?.status==='waiting'?'已核实本人安排确认，仍在等待同行人':out.result?.status==='superseded'?'此前同行安排已调整，请查看最新任务':out.confirmed ? '已核实：确认成功，画面已同步' : '本次未确认，请查看最新安排后重新确认', !out.confirmed);
     await RT.load();
   } catch (_) { /* Keep unresolved operations blocked until connectivity returns. */ }
   finally { RT.checkingConfirmation = false; }
@@ -318,8 +320,9 @@ function confirmRotation(p, action, path, wholeGroup=false) {
   let text = action === 'depart' ? assignmentDescription(p.assign) : '请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
   if(action==='depart'&&p.entryGroup){
     if(!wholeGroup&&RT.me?.employee_no&&RT.me.employee_no!==p.pid){toast('协同上岗请本人在待办确认',true);return;}
-    text=wholeGroup?`<p>确认以下人员整组上岗：</p><p>${p.entryGroup.members.map(m=>`${esc(m.name)} → ${esc(p.entryGroup.line)}线 · ${esc(m.entryPost||'待核实')}`).join('<br>')}</p>`:text+`<p>同组 ${p.entryGroup.members.map(m=>esc(m.name)).join('、')}；${p.entryGroup.confirmed}/${p.entryGroup.members.length}人确认。全部本人确认后统一执行。</p>`;
+    text=wholeGroup?`<p>确认以下人员整组上岗：</p><p>${p.entryGroup.members.map(m=>`${esc(m.name)} · ${esc(m.task||'上岗')} → ${esc(p.entryGroup.line)}线 · ${esc(m.entryPost||'待核实')}`).join('<br>')}</p>`:text+`<p>同组 ${p.entryGroup.members.map(m=>esc(m.name)).join('、')}；${p.entryGroup.confirmed}/${p.entryGroup.members.length}人确认。出发前全员确认后一起前往，现场无需再次操作手机。</p>`;
   }
+  if(action==='depart'){const routes=p.entryGroup?.routes||p.departureRoutes||[];text+=`<h4>现场通知与接替去向</h4><ul>${routes.map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul><p>确认接受安排，按方案前往通知并接替，现场无需再次操作手机。下线人员回休息室后确认休息／吃饭。</p>`;}
   if(action==='arrive'&&p.mealOptions?.canChoose)text+=`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线，提交时再次核对。</p>`;
   if(action==='arrive'&&p.mealOptions?.forced)text+='<p>已到原有强制饭点，本次安排吃饭。</p>';
   confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : '到达休息室'}`, text,
@@ -343,7 +346,7 @@ function confirmRotation(p, action, path, wholeGroup=false) {
       }
       RT.submitting = false;
       storePendingConfirmation(null);
-      toast(out.result?.status==='waiting'?'已确认本人到位，等待同行人':out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : '已确认到达休息室');
+      toast(out.result?.status==='waiting'?'已确认上岗安排，等待同行人':out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : '已确认到达休息室');
       // The mutation succeeded even if the subsequent view refresh fails.
       try { await RT.load(); } catch (_) { toast('确认成功，等待画面恢复同步'); }
       return true;
@@ -394,6 +397,18 @@ function startLocalTicker() {
 
 function personOf(pid) {
   return RT.data && RT.data.day ? RT.data.day.persons.find(p => p.pid === pid) : null;
+}
+
+function assignmentPlanText(p,n=nowMin()){
+  if(!p.assign)return '';
+  if(p.assign.blocked||p.departureBlocked)return '安排失效，待主管核对';
+  if(p.assignmentLocked&&p.state!=='ready'&&(p.readyAt??n)-n>3)return '同行组合已固定';
+  return p.assignmentLocked||p.state==='ready'||(p.readyAt??n)-n<=3+1e-9?'安排已固定':'预计安排 · 最后3分钟固定';
+}
+function departureForecast(people,n,compact=false){
+  const list=people.filter(p=>['rest','meal'].includes(p.state)&&p.assign&&!p.entryHold).sort((a,b)=>a.assign.departAt-b.assign.departAt);
+  if(!list.length)return '';
+  return `<details class="rt-departure-preview" ${compact?'':'open'}><summary><span class="rt-forecast-full">餐休中的预计去向 · ${list.length}人（仅预告）</span><span class="rt-forecast-short">去向预告 ${list.length}人</span></summary><p class="field-hint">仍按原时间休息／吃饭，结束后才可确认。超过3分钟可调整，以出发前最新任务为准。</p><div class="rt-chips">${list.map(p=>`<div class="rt-chip dim"><span class="rt-nm">${esc(p.name)}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${p.state==='meal'?'吃饭':p.breakKind==='meal_rest'?'饭后休息':'休息'}剩余 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · ${assignmentPlanText(p,n)}</span></div>`).join('')}</div></details>`;
 }
 
 function goText(p) {

@@ -93,3 +93,60 @@ def test_post_swap_modes_preserve_person_line_time(mode, expected):
     assert [x['name'] for x in eng.line('A')['posts']][:2] == ['A1','A0']
     assert eng.P['a']['lineStart'] == 480 and eng.P['b']['lineStart'] == 490
     assert len(hooks.segments) == before
+
+
+@pytest.mark.parametrize('mode', ['posts', 'with_people'])
+def test_cross_line_posts_swap_configuration_people_and_accounted_time(mode):
+    eng, hooks = live_day([person(p, '07:00', '21:00') for p in ('a', 'b')], lines=two_lines())
+    seat(eng, 'a', 'A', 0, '08:00'); seat(eng, 'b', 'B', 1, '08:10')
+    eng.act_post_order('A', 0, 1, 540, 'operator', swap_mode=mode, target_lid='B')
+    assert eng.line('A')['posts'][0]['name'] == 'B1'
+    assert eng.line('B')['posts'][1]['name'] == 'A0'
+    if mode == 'posts':
+        assert occupants(eng, 'A')[0] == 'a' and occupants(eng, 'B')[1] == 'b'
+        assert eng.P['a']['lineStart'] == 480 and eng.P['b']['lineStart'] == 490
+        assert hooks.segments == []
+    else:
+        assert occupants(eng, 'A')[0] == 'b' and occupants(eng, 'B')[1] == 'a'
+        assert eng.P['a']['line'] == 'B' and eng.P['b']['line'] == 'A'
+        assert eng.P['a']['lineStart'] == eng.P['b']['lineStart'] == 540
+        assert hooks.segments == [('a', 'A', 480, 540), ('b', 'B', 490, 540)]
+    assert hooks.events[-1]['detail']['target_line'] == 'B'
+
+
+def test_cross_line_people_only_drag_keeps_posts_and_updates_line_accounting():
+    eng, hooks = live_day([person(p, '07:00', '21:00') for p in ('a', 'b')], lines=two_lines())
+    seat(eng, 'a', 'A', 0, '08:00'); seat(eng, 'b', 'B', 1, '08:10')
+    eng.act_move('a', 'B', 1, 540, 'operator')
+    assert occupants(eng, 'A')[0] == 'b' and occupants(eng, 'B')[1] == 'a'
+    assert eng.line('A')['posts'][0]['name'] == 'A0'
+    assert eng.line('B')['posts'][1]['name'] == 'B1'
+    assert eng.P['a']['line'] == 'B' and eng.P['b']['line'] == 'A'
+    assert hooks.segments == [('a', 'A', 480, 540), ('b', 'B', 490, 540)]
+
+
+def test_cross_line_prestart_swap_remaps_crew_and_seven_without_starting_time():
+    eng, hooks = live_day([person(p, '10:00', '21:00') for p in ('a', 'b')], lines=two_lines())
+    eng.line('A')['posts'][0].update(occ='a', since=None)
+    eng.line('B')['posts'][1].update(occ='b', since=None)
+    eng.d['plan']['crew'] = {'A#0': 'a', 'B#1': 'b'}
+    eng.d['plan']['seven'] = {'A#0': 'a'}
+    eng.act_post_order('A', 0, 1, 540, 'operator', swap_mode='with_people', target_lid='B')
+    assert eng.d['plan']['crew'] == {'A#0': 'b', 'B#1': 'a'}
+    assert eng.d['plan']['seven'] == {'B#1': 'a'}
+    assert all(p['state'] == 'notyet' and p['lineStart'] is None for p in eng.P.values())
+    assert not hooks.segments
+
+
+@pytest.mark.parametrize('mode', ['posts', 'with_people'])
+@pytest.mark.parametrize('problem', ['hold', 'duplicate', 'closed'])
+def test_cross_line_swap_rejects_unsafe_change_without_mutation(mode, problem):
+    eng, _ = live_day([person(p, '07:00', '21:00') for p in ('a', 'b')], lines=two_lines())
+    seat(eng, 'a', 'A', 0, '08:00'); seat(eng, 'b', 'B', 1, '08:10')
+    if problem == 'hold': eng.line('B')['posts'][1]['hold'] = {'pid':'b', 'since':500}
+    if problem == 'duplicate': eng.line('A')['posts'][1]['name'] = 'B1'
+    if problem == 'closed': eng.line('B')['posts'][1]['open'] = False
+    before = deepcopy(eng.d)
+    with pytest.raises(ActionError):
+        eng.act_post_order('A', 0, 1, 540, 'operator', swap_mode=mode, target_lid='B')
+    assert eng.d == before

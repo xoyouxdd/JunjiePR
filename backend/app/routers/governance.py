@@ -555,6 +555,13 @@ def reopen_month(
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "重新开启原因必填")
+    effective = month_closure_scope(db, month, attraction_id)
+    if attraction_id is not None and effective and effective.attraction_id is None:
+        raise HTTPException(409, detail={
+            "code": "MONTH_CLOSE_SCOPE_MISMATCH",
+            "message": "本月实际受全部景点圈月结限制；请由最高管理员选择全部景点圈并填写原因后临时开放，单圈操作不会解除全局限制。",
+            "month": month, "reopen_target_attraction_id": None, "effective_scope": "全部景点圈",
+        })
     scope_filter = MonthClosure.attraction_id == attraction_id if attraction_id is not None else MonthClosure.attraction_id.is_(None)
     row = db.query(MonthClosure).filter(
         MonthClosure.closure_month == month,

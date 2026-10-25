@@ -15,9 +15,12 @@ async function main(){try{
   let ready=false;for(let i=0;i<90;i++){try{if((await fetch(base+'/health')).ok){ready=true;break;}}catch{}if(server.exitCode!==null)break;await sleep(500);}assert(ready,log);
   for(const engine of (process.env.ROTATION_DAILY_ENGINES||'edge').split(',')){
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
+    // Reset this isolated simulator for every browser; previous runs may have advanced it.
     const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true});
     assert((await context.request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}})).ok());
     assert((await context.request.post(base+'/api/rotation/enter',{data:{account:'7777777'}})).ok());
+    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-05',time:'03:30'}})).ok());
+    if(engine!=='edge'){assert((await context.request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-06',force:true}})).ok());const fresh=await context.request.get(base+'/api/rotation/daily/2026-10-06').then(r=>r.json());assert((await context.request.post(base+'/api/rotation/daily/2026-10-06',{data:{action:'draft_generate',revision:fresh.revision}})).ok());}
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(base+'/rotation');await page.locator('[data-tab=draft]').click();
     await page.locator('[data-daily-date-button="2026-10-06"]').click();
@@ -54,11 +57,29 @@ async function main(){try{
     await choose('A#0','B#0');await page.waitForFunction(()=>document.querySelector('#draftClose')?.value==='20:00');
     after=await data();assert.deepEqual(after.draft.plan,before.draft.plan,'stale write changed assignments');
     const historicalBefore=await context.request.get(base+'/api/rotation/daily/2026-10-04').then(r=>r.json());
-    await page.locator('[data-daily-date]').fill('2026-10-04');await page.locator('[data-daily-date]').dispatchEvent('change');await page.locator('[data-daily-time]').waitFor();
-    await page.locator('[data-daily-time]').fill('07:00');await page.locator('[data-daily-time]').dispatchEvent('change');
-    await page.getByRole('heading',{name:'2026-10-04 · 轮岗回看'}).waitFor();assert.equal(await page.locator('[data-daily-person]').count(),0);
+    await page.locator('[data-daily-date]').fill('2026-10-04');await page.locator('[data-daily-date]').dispatchEvent('change');await page.getByRole('heading',{name:'2026-10-04 · 开班安排回顾'}).waitFor();
+    await page.getByRole('heading',{name:'2026-10-04 · 开班安排回顾'}).waitFor();assert.equal(await page.locator('[data-daily-person]').count(),0);
     const historicalAfter=await context.request.get(base+'/api/rotation/daily/2026-10-04').then(r=>r.json());
     assert.equal(historicalBefore.revision,historicalAfter.revision,'history modified live state');
+    // Today's enabled board stays editable until the first shift, then freezes all shifts.
+    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'04:00'}})).ok());
+    await context.request.get(base+'/api/rotation/board');
+    await page.locator('[data-daily-date]').fill('2026-10-06');await page.locator('[data-daily-date]').dispatchEvent('change');
+    await page.locator('[data-daily-person="A#0"]').waitFor();
+    before=await data();assert(before.can_edit&&before.prestart_live);
+    await choose('A#0','B#0');after=await data();
+    const liveBoard=await context.request.get(base+'/api/rotation/board').then(r=>r.json());
+    assert.deepEqual(after.day.lines,liveBoard.day.lines);
+    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'07:15'}})).ok());
+    await context.request.get(base+'/api/rotation/board');
+    await page.locator('[data-daily-reload]').click();
+    await page.getByRole('heading',{name:'2026-10-06 · 开班安排回顾'}).waitFor();
+    const frozen=await data();assert(frozen.frozen&&!frozen.can_edit);assert.equal(frozen.opening_source,'opening');
+    assert.equal(await page.locator('[data-daily-person]').count(),0);
+    assert.equal(await page.locator('.rt-daily-board [draggable=true]').count(),0);
+    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'12:30'}})).ok());
+    await context.request.get(base+'/api/rotation/board');
+    assert.deepEqual((await data()).day,frozen.day,'opening changed after later shift');
     // Member and screen identities retain the original initialization restriction.
     await context.request.post(base+'/api/rotation/enter',{data:{account:'9100000'}});
     assert.equal((await context.request.get(base+'/api/rotation/daily?month=2026-10')).status(),403);
