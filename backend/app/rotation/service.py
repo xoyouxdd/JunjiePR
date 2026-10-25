@@ -599,11 +599,13 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
             else:
                 reason = p.get("downReason") or "推岗"
                 step = ("arrive", "请确认已到休息室", f"你已下线（{reason}），在个人待办或大屏确认后系统安排休息或吃饭。")
+        elif p.get('role')=='op' and st in ('op','notyet'):
+            step = ('arrive', '可确认去休息', '开园前可随时人工确认，按实际确认时间开始休息。')
         elif st == "pending":
             step = ("arrive", "请确认已到休息室", "OP 阶段结束，在个人待办或大屏确认后转入休息区开始轮岗。")
         elif st in ("rest", "meal"):
             word = "吃饭" if st == "meal" else "饭后剩余休息时间" if p.get("breakKind") == "meal_rest" else "休息"
-            body = "倒计时结束后才可轮岗，不提前派岗。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
+            body = "正常轮岗须等倒计时结束；现场强制安排须填写原因并预览确认。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
             step = ("rest", f"{word}至 {fmt(p['readyAt'])}", body)
         elif st == "ready":
             if p.get('entryHold'):
@@ -690,7 +692,7 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
     context = {"epoch": eng.d.get("confirmationEpoch"), "date": eng.d["date"],
                "pid": p["pid"], "action": action, "sequence": p.get("confirmationSequence", 0),
                "closed": eng.d.get("closed", False)}
-    if action in ("depart", "entry_adjust"):
+    if action in ("depart", "entry_adjust", "group_depart"):
         a = assignment_view(eng, p)
         context.update(assign=a, readyAt=p.get("readyAt"), breakStart=p.get("breakStart"))
         from app.rotation.cooperation import plan
@@ -708,11 +710,15 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
 
 
 def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
-    from app.rotation.cooperation import plan, upcoming
+    from app.rotation.cooperation import plan, upcoming, upcoming_shift
     if not hasattr(eng, '_upcoming_routes'):
         eng._upcoming_routes = upcoming(eng, now)
     group = plan(eng, p, now)
     av = assignment_view(eng, p)
+    if group and av:
+        own=next((member for member in group['members'] if member['pid']==p['pid']),None)
+        if own and own.get('entryPost'):
+            av['entryPost']=own['entryPost']
     a = p.get("assign")
     L, i = eng.find_post(p["pid"]) if p.get("state") == "onpost" else (None, None)
     preparing = None
@@ -726,8 +732,9 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "lineStart": p.get("lineStart"), "readyAt": p.get("readyAt"), "breakKind": p.get("breakKind"),
         "assign": av, "flags": p.get("flags", []), "tags": p.get("tags", []), "away": p.get("away"),
         "entryGroup": group, "entryHold": p.get('entryHold'),
+        "interruptedBreak": p.get('interruptedBreak'), "leaveReason": p.get('leaveReason'),
         "postHold": L['posts'][i].get('hold') if L else None,
-        "upcomingShift": bool(p.get('state') == 'notyet' and 0 < p['start'] - now <= 30),
+        "upcomingShift": upcoming_shift(p, now),
         "previewAssign": eng._upcoming_routes.get(p['pid']),
         "walkbackSince": p.get("walkbackSince"), "arriveAt": p.get("arriveAt"), "ate": p.get("ate"),
         "mealEligible": eng.meal_eligible(p), "downReason": p.get("downReason"), "after": p.get("after"),
@@ -736,8 +743,8 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "preparing": preparing,
         "scheduledRestStart": p['start'] if p.get('state') == 'notyet' and eng.opening_rest_candidate(p) else None,
         "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
-                               (["entry_return"] if p.get('entryHold') else ["arrive"] if p.get("state") in ("walkback", "pending") else
-                                (["depart", "entry_adjust"] if group else ["depart"]) if p.get("assign") and p.get("state") in ("rest", "ready", "meal") else [])},
+                               (["entry_return"] if p.get('entryHold') else ["arrive"] if p.get("state") in ("walkback", "pending", "op") or p.get('role')=='op' and p.get('state')=='notyet' else
+                                (["depart", "entry_adjust", "group_depart"] if group else ["depart"]) if p.get("assign") and p.get("state") in ("rest", "ready", "meal") else [])},
         "canDepart": bool(p.get("state") == "ready" and a and now >= (p.get("readyAt") or now) - 0.01
                           and now >= a.get("notBefore", 0) - 0.01
                           and now >= a["departAt"] - (0 if group else eng.S["departEarly"]) - 0.01),
@@ -961,6 +968,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
     act = body.get("action")
     if not isinstance(act, str) or act not in LIVE_ACTIONS:
         raise ActionError("不支持的操作")
+    if act=='move' and body.get('force') is True and not body.get('expected_snapshot'):
+        raise ActionError('强制安排必须先预览影响并确认')
     if act not in {"post", "post_order", "line", "set_close"}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
@@ -998,7 +1007,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         before = None
         if token is not None:
             p = eng.P[pid]
-            if token != confirmation_token(eng, p, act):
+            token_action='group_depart' if act=='depart' and body.get('group_confirm') is True else act
+            if token != confirmation_token(eng, p, token_action):
                 raise ConfirmationConflict("轮岗安排已更新，请查看最新安排后重新确认")
             before = assignment_view(eng, p) if act == "depart" else None
         reason = str(body.get("reason") or "").strip()
@@ -1023,7 +1033,16 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
                 solo = body.get('single', False)
                 if not isinstance(solo, bool):
                     raise ActionError('单人模式参数无效')
-                entry_result = confirm(eng, pid, now, actor, token, solo, body.get('missing'))
+                group_confirm=body.get('group_confirm',False)
+                if not isinstance(group_confirm,bool):
+                    raise ActionError('整组确认参数无效')
+                if group_confirm:
+                    if not token or solo:
+                        raise ActionError('整组确认须使用当前步骤标识，不能同时选择单人模式')
+                    from app.rotation.cooperation import confirm_group
+                    entry_result=confirm_group(eng,pid,now,actor,body.get('expected_plan'))
+                else:
+                    entry_result = confirm(eng, pid, now, actor, token, solo, body.get('missing'))
             else:
                 eng.act_depart(pid, now, actor)
         elif act == 'entry_return':
@@ -1111,11 +1130,20 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
                 if entry_result['status'] == 'executed':
                     for other_pid, other_token in entry_result.get('tokens', {}).items():
                         old = state.get('confirmations', {}).get(other_token)
-                        if old and other_pid != pid:
+                        if other_pid != pid or other_token != token:
                             other = eng.P[other_pid]
                             ol, oi = eng.find_post(other_pid)
-                            old.update(status='executed', state=other['state'], minute=now,
-                                       line=ol['id'] if ol else None, post=ol['posts'][oi]['name'] if ol else None)
+                            if old:
+                                old.update(status='executed', state=other['state'], minute=now,
+                                           line=ol['id'] if ol else None, post=ol['posts'][oi]['name'] if ol else None)
+                            else:
+                                other['confirmationSequence']=other.get('confirmationSequence',0)+1
+                                state.setdefault('confirmations',{})[other_token]={
+                                    'pid':other_pid,'action':'depart','date':day,'minute':now,
+                                    'source':getattr(actor,'kind','manager'),'state':other['state'],
+                                    'line':ol['id'] if ol else None,'post':ol['posts'][oi]['name'] if ol else None,
+                                    'status':'executed','group':entry_result.get('group'),'token':other_token,
+                                    'sequence':other['confirmationSequence'],'assignment':entry_result.get('assignments',{}).get(other_pid)}
         eng.tick(now)
         state["lastTick"] = max(float(state.get("lastTick", now)), now)
         sync_notices(db, attraction_id, state, eng, now)

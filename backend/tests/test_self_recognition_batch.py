@@ -43,6 +43,29 @@ def send(client, items, key):
                        files={"image": ("evidence.png", picture(), "image/png")})
 
 
+@pytest.mark.parametrize('batch',[False,True])
+def test_submission_timing_tracks_image_and_commit_without_business_content(caplog,batch):
+    import logging
+    with TestClient(app) as client:
+        login(client,'CMTEST01')
+        item=dict(entry(client,'计时诊断'),same_day_duplicate_confirmed=True)
+        with caplog.at_level(logging.INFO,logger='uvicorn.error.recognition_timing'):
+            if batch:
+                response=send(client,[item],'timing-batch')
+            else:
+                response=client.post('/api/recognitions',data={**item,'idempotency_key':'timing-single'},
+                                    files={'image':('evidence.png',picture(),'image/png')})
+        assert response.status_code==200,response.text
+        trace=json.loads(next(r.message.split(' ',1)[1] for r in reversed(caplog.records)
+                              if r.message.startswith('recognition_request_timing ')))
+        assert trace['request_id']==response.headers['x-recognition-request-id']
+        assert trace['received_bytes']>0 and trace['body_complete_ms'] is not None
+        assert {'image_write_ms','image_validate_ms','record_ms','commit_ms'}<=trace['stages_ms'].keys()
+        if batch: assert 'write_lock_ms' in trace['stages_ms']
+        assert response.json()['records' if batch else 'record']
+        assert '计时诊断' not in json.dumps(trace,ensure_ascii=False)
+
+
 @pytest.mark.parametrize("batch", [False, True])
 @pytest.mark.parametrize("format", ["HEIF", "MPO"])
 def test_iphone_heif_with_jpeg_filename_can_be_registered_and_previewed(batch, format):

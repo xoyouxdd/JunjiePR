@@ -14,6 +14,7 @@ from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionMonthlyQuota, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
 from app.recognition_encouragement import encouragement_options
+from app.recognition_timing import identify, stage
 from app.v2_services import ACTING_TA_GSM_RECOGNIZER_CODES, FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, SENIOR_RECOGNIZER_CODES, base_role_at, scoring_category, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
 from app.routers._shared import (
     ATTENDANCE_FILTER_STATUSES,
@@ -134,9 +135,11 @@ async def create_recognition(
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
-    return await _create_recognition(request, recognition_date, occurred_attraction_id,
-        recognition_type_id, recognizer_employee_id, content, employee_id,
-        idempotency_key, same_day_duplicate_confirmed, image, db, user)
+    identify(user.id)
+    with stage('record_ms'):
+        return await _create_recognition(request, recognition_date, occurred_attraction_id,
+            recognition_type_id, recognizer_employee_id, content, employee_id,
+            idempotency_key, same_day_duplicate_confirmed, image, db, user)
 
 
 async def _create_recognition(request, recognition_date, occurred_attraction_id,
@@ -337,7 +340,8 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
             audit_payload["image"] = {"sha256": file_row.sha256, "size": file_row.file_size, "type": file_row.mime_type}
         write_audit(db, user.employee, "登记签卡", "recognition", row.id, after=audit_payload, ip_address=client_ip(request))
         if commit:
-            db.commit()
+            with stage('commit_ms'):
+                db.commit()
     except IntegrityError as exc:
         if not commit:
             raise
@@ -381,6 +385,7 @@ async def create_self_recognition_batch(
     user: V2User = Depends(current_user),
 ):
     """One upload and one transaction, with ordinary independent recognition rows."""
+    identify(user.id)
     if user.base_role.code not in FRONTLINE_CODES or "SELF_RECOGNITION" not in user.permissions:
         raise HTTPException(403, "此入口仅供CM/TR及TA主管本人登记")
     key = normalize_request_key(idempotency_key)
@@ -423,7 +428,8 @@ async def create_self_recognition_batch(
         # Authentication reads have already opened a session; acquire a write
         # reservation before validating quotas and recording the complete batch.
         db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
+        with stage('write_lock_ms'):
+            db.execute(text("BEGIN IMMEDIATE"))
         previous = existing_submission(db, user.id, "recognition_batch", key, RecognitionRecord, payload_digest)
         if previous:
             records = [existing_submission(db, user.id, "recognition_batch_item", f"{key}:{i}", RecognitionRecord) for i in range(len(items))]
@@ -436,10 +442,11 @@ async def create_self_recognition_batch(
         results = []
         for index, item in enumerate(items, 1):
             try:
-                result = await _create_recognition(request, item["recognition_date"], item["occurred_attraction_id"],
-                    item["recognition_type_id"], str(item["recognizer_employee_id"]), item["content"],
-                    None, None, item.get("same_day_duplicate_confirmed", False), None, db, user,
-                    shared_file=shared, commit=False)
+                with stage('record_ms'):
+                    result = await _create_recognition(request, item["recognition_date"], item["occurred_attraction_id"],
+                        item["recognition_type_id"], str(item["recognizer_employee_id"]), item["content"],
+                        None, None, item.get("same_day_duplicate_confirmed", False), None, db, user,
+                        shared_file=shared, commit=False)
             except HTTPException as exc:
                 detail = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
                 detail["entry_index"] = index
@@ -448,7 +455,8 @@ async def create_self_recognition_batch(
             results.append(result)
             remember_submission(db, user.id, "recognition_batch_item", f"{key}:{index-1}", result["record"]["id"])
         remember_submission(db, user.id, "recognition_batch", key, results[0]["record"]["id"], payload_digest)
-        db.commit()
+        with stage('commit_ms'):
+            db.commit()
     except Exception:
         db.rollback()
         if shared:

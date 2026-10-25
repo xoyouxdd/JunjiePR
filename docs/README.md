@@ -21,8 +21,9 @@
 | [excel-export-presentation.md](excel-export-presentation.md) | Excel总览、完整明细、低频列折叠与同批次核对 |
 | [local-update-20261011.md](local-update-20261011.md) | 10月11日讨论与本地落实清单 |
 | [local-update-20261019.md](local-update-20261019.md) | 10月19日导出优化、我的荣誉与名称落实复查 |
-| [rotation.md](rotation.md) | 轮岗看板：正式员工入口、分级权限、本人待办确认、线路详情、同步、每日班表及隔离测试机制 |
+| [rotation.md](rotation.md) | 轮岗看板：正式员工入口、分级权限、强制安排、预排调整、协同确认、每日班表及隔离测试机制 |
 | [self-recognition-batch.md](self-recognition-batch.md) | 本人认可多条登记与共用照片 |
+| [recognition-upload-timing.md](recognition-upload-timing.md) | 认可提交分段诊断、日志字段及后台上传讨论边界 |
 | [announcements.md](announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
 | [announcement-image-generation.md](announcement-image-generation.md) | 公告模板制图、个人待用素材、图片上传和访问权限 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |

@@ -33,6 +33,7 @@ def test_projection_is_pure_and_shows_final_positions():
     routes = {r['pid']: r['to'] for r in view['routes']}
     assert routes['old1'] == '下班'
     assert routes['a'] == 'A1' and routes['b'] == 'A0'
+    assert {m['pid']:m['entryPost'] for m in view['members']} == {'a':'A1','b':'A0'}
     assert {r['pid']: r['to'] for r in view['soloRoutes']}['old1'] == '下班'
 
 
@@ -114,6 +115,28 @@ def test_three_person_cohort_requires_all_votes():
     assert set(occupants(eng, 'A')) == {'a', 'b', 'c'}
 
 
+def test_board_group_confirmation_executes_all_and_cannot_be_used_by_member():
+    eng, _=fixture()
+    view=C.plan(eng,eng.P['a'],540)
+    before=deepcopy(eng.d)
+    with pytest.raises(ActionError,match='个人待办'):
+        C.confirm_group(eng,'a',540,actor('a'),view['id'])
+    assert eng.d==before
+    out=C.confirm_group(eng,'a',540,SimpleNamespace(kind='supervisor'),view['id'])
+    assert out['status']=='executed' and out['participants']==['a','b']
+    assert occupants(eng,'A')[:2]==['b','a']
+
+
+def test_board_group_rejects_early_rest_without_partial_movement():
+    eng, _=fixture()
+    eng.P['b'].update(state='rest',readyAt=550)
+    view=C.plan(eng,eng.P['a'],540)
+    before=deepcopy(eng.d)
+    with pytest.raises(ActionError):
+        C.confirm_group(eng,'a',540,SimpleNamespace(kind='supervisor'),view['id'])
+    assert eng.d==before
+
+
 def test_route_change_cancels_old_waiting_receipt():
     eng, _ = fixture()
     out=C.confirm(eng, 'a', 540, actor('a'), 'token')
@@ -145,6 +168,26 @@ def test_upcoming_only_projects_last_ten_minutes_without_live_writes():
     assert C.upcoming(eng, 529) == {}
     assert set(C.upcoming(eng, 530)) == {'a', 'b'}
     assert eng.d == before and len(hooks.events) == count
+
+
+@pytest.mark.parametrize('start,now,expected', [
+    (420,390,False),(420,419,False),(435,405,False),(435,434,False),
+    (450,419.99,False),(450,420,True),(450,449.99,True),(450,450,False),
+    (480,449.99,False),(480,450,True),(480,480,False),
+])
+def test_only_later_shifts_appear_within_thirty_minutes(start,now,expected):
+    assert C.upcoming_shift({'state':'notyet','start':start},now) is expected
+    assert not C.upcoming_shift({'state':'onpost','start':start},now)
+
+
+@pytest.mark.parametrize('start', [420,435])
+def test_opening_crews_never_receive_forecast_routes(start):
+    eng,_=fixture()
+    for pid in ('a','b'):
+        eng.P[pid].update(state='notyet',start=start,readyAt=None,assign=None)
+    before=deepcopy(eng.d)
+    assert C.upcoming(eng,start-5)=={}
+    assert eng.d==before
 
 
 def test_excluded_and_opening_rest_keep_existing_rules():

@@ -262,14 +262,14 @@ async function renderHrEmployees(){
       const out=await api('/api/hr/import-employees',{method:'POST',body:check});if(!request.isCurrent())return;
       const duplicates=out.duplicates||[],expired=out.expired||[];
       if(duplicates.length||expired.length){
-        const list=(items)=>items.map(r=>`<li>第${r.row}行 · ${esc(r.employee_no)} · ${esc(r.name)}</li>`).join('');
+        const list=(items)=>items.map(r=>`<li>第${r.row}行 · ${esc(r.employee_no)} · ${esc(r.name)}${r.reason?` · ${esc(r.reason)}`:''}</li>`).join('');
         if(!await confirmModal('导入预检',`<p>将新增 ${out.would_create} 人，跳过已有员工 ${duplicates.length} 人。</p>${duplicates.length?`<p>以下员工已存在，跳过后不覆盖原信息：</p><ul>${list(duplicates)}</ul>`:''}${expired.length?`<p>以下 ${expired.length} 人实习已到期，将创建为停用状态：</p><ul>${list(expired)}</ul>`:''}`,duplicates.length?'跳过已有员工并继续':'确认创建'))return;
       }
       if(!request.isCurrent())return;
       const body=form();body.append('expected_digest',out.digest);body.append('skip_existing',duplicates.length?'true':'false');
       const saved=await api('/api/hr/import-employees',{method:'POST',body});
       toast(`新增 ${saved.created} 人，跳过 ${saved.skipped||0} 人`);
-      if(saved.duplicates?.length)await confirmModal('导入已完成',`<p>新增 ${saved.created} 人。以下已有员工已跳过：</p><ul>${saved.duplicates.map(r=>`<li>第${r.row}行 · ${esc(r.employee_no)} · ${esc(r.name)}</li>`).join('')}</ul>`,'知道了');
+      if(saved.duplicates?.length)await confirmModal('导入已完成',`<p>新增 ${saved.created} 人。以下已占用工号已跳过：</p><ul>${saved.duplicates.map(r=>`<li>第${r.row}行 · ${esc(r.employee_no)} · ${esc(r.name)}${r.reason?` · ${esc(r.reason)}`:''}</li>`).join('')}</ul>`,'知道了');
       request.refresh(renderHrEmployees);
     }catch(error){toast(error.message,true)}finally{button.disabled=false}
   };

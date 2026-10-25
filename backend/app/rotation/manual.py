@@ -15,9 +15,10 @@ def apply(eng, body, now, actor):
     if not isinstance(body['line'],str):raise ActionError('线路选择不正确')
     if act=='move' and not isinstance(body.get('pid'),str):raise ActionError('工号必须是字符串')
     if act=='move':
-        _require(body,'pid');eng.act_move(body['pid'],body['line'],body['i'],now,actor)
+        _require(body,'pid');eng.act_move(body['pid'],body['line'],body['i'],now,actor,
+            force=action_boolean(body,'force') if 'force' in body else False,reason=str(body.get('reason') or '').strip())
     elif act=='post_order':
-        _require(body,'target_i');eng.act_post_order(body['line'],body['i'],body['target_i'],now,actor)
+        _require(body,'target_i');eng.act_post_order(body['line'],body['i'],body['target_i'],now,actor,swap_mode=body.get('swapMode'))
     elif act=='post':
         opened=action_boolean(body,'open')
         eng.act_post(body['line'],body['i'],opened,now,actor,
@@ -45,7 +46,9 @@ def preview(db,attraction_id,body):
             for L in d['lines']:
                 for x in L['posts']:
                     if x.get('occ')==pid:return L['id']+' · '+x['name']
-            return {'walkback':'下线，待到休息室确认','rest':'休息','ready':'待出发','meal':'吃饭'}.get(d['persons'][pid]['state'],d['persons'][pid]['state'])
+            return {'walkback':'下线，待到休息室确认','rest':'休息','ready':'待出发','meal':'吃饭',
+                    'notyet':'未到班次 · 待安排','done':'已离岗','away':'圈外人员','op':'OP待确认休息',
+                    'pending':'待到大屏确认休息','excluded':'OJT/不轮岗'}.get(d['persons'][pid]['state'],'待核实')
         changes=[p['name']+'：'+position(state,pid)+' → '+position(after,pid) for pid,p in state['persons'].items() if position(state,pid)!=position(after,pid)]
         changes += [f"{L['id']} · {x['name']}：{'开岗' if x.get('open') else '关闭'}" for L in after['lines'] for x in L['posts'] if next((old.get('open') for line in state['lines'] if line['id']==L['id'] for old in line['posts'] if old['name']==x['name']),None)!=x.get('open')]
-        return {'expected_snapshot':token,'changes':changes,'summary':'取消待撤岗计划' if body.get('cancelClose') else '岗位顺序调整' if body['action']=='post_order' else '定时调整' if body.get('openAt') or body.get('closeAt') else '现场调整'}
+        return {'expected_snapshot':token,'changes':changes,'summary':'强制安排上岗' if body.get('force') else '取消待撤岗计划' if body.get('cancelClose') else '只交换岗位' if body.get('swapMode')=='posts' else '岗位和人员一起交换' if body.get('swapMode')=='with_people' else '岗位顺序调整' if body['action']=='post_order' else '定时调整' if body.get('openAt') or body.get('closeAt') else '现场调整'}

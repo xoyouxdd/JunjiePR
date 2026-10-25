@@ -158,6 +158,8 @@ def me(attraction_id: int | None = None, db: Session = Depends(formal_db), user:
 @router.post('/me/act')
 def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     from app.rotation.participation import personal_scope
+    if payload.get('group_confirm'):
+        raise HTTPException(403,'个人待办只能确认本人到位，不能整组代确认')
     if payload.get('pid',user.employee.employee_no) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
     if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust'): raise HTTPException(403, '只可确认本人轮岗待办')

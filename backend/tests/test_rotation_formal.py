@@ -175,6 +175,53 @@ def test_formal_cohort_votes_survive_reload_tokens_remain_stable_and_commit_toge
         assert next(p for p in ps if p['pid']=='9710010')['state']=='onpost'
 
 
+def test_operator_group_depart_after_one_person_voted_is_atomic_and_idempotent():
+    seed_cohort(three=True)
+    with TestClient(app) as member,TestClient(app) as operator:
+        login(member,'9710000');login(operator,'9710020')
+        p=ok(member.get('/api/rotation-board/me'))['person']
+        personal={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}
+        assert ok(member.post('/api/rotation-board/me/act',json=personal))['result']['status']=='waiting'
+        board=ok(operator.get('/api/rotation-board/board'))
+        p=next(p for p in board['day']['persons'] if p['pid']=='9710000')
+        assert p['assign']['entryPost']=='岗位3'
+        body={'action':'depart','pid':p['pid'],'confirmation_token':p['confirmationTokens']['group_depart'],
+              'group_confirm':True,'expected_plan':p['entryGroup']['id']}
+        assert body['confirmation_token']!=personal['confirmation_token']
+        assert member.post('/api/rotation-board/me/act',json=body).status_code==403
+        result=ok(operator.post('/api/rotation-board/act',json=body))
+        assert result['result']['status']=='executed'
+        assert ok(operator.post('/api/rotation-board/act',json=body))['duplicate']
+        receipt=ok(member.get('/api/rotation-board/confirmation',params={'date':date.today().isoformat(),'token':personal['confirmation_token']}))
+        assert receipt['result']['status']=='executed' and receipt['result']['post']=='岗位3'
+        ps=ok(operator.get('/api/rotation-board/board'))['day']['persons']
+        assert all(next(p for p in ps if p['pid']==no)['state']=='onpost' for no in ['9710000','9710010','9710050'])
+
+
+def test_forced_meal_placement_requires_preview_and_records_interruption():
+    aid=seed_cohort()
+    with SessionLocal() as db:
+        db.info['rotation_formal']=True
+        with S.transaction(db):
+            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
+            now=state['lastTick']
+            state['persons']['9710000'].update(state='meal',breakKind='meal',breakStart=now-5,
+                                               readyAt=now+30,ate=True,assign=None)
+            S.save_day(db,row,state)
+    with TestClient(app) as operator:
+        login(operator,'9710020')
+        body={'action':'move','pid':'9710000','line':'A1','i':0,'force':True,'reason':'现场应急支援'}
+        assert operator.post('/api/rotation-board/act',json=body).status_code==400
+        preview=ok(operator.post('/api/rotation-board/adjust/preview',json=body))
+        assert preview['summary']=='强制安排上岗'
+        ok(operator.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':preview['expected_snapshot']}))
+        ps=ok(operator.get('/api/rotation-board/board'))['day']['persons']
+        entrant=next(p for p in ps if p['pid']=='9710000')
+        original=next(p for p in ps if p['pid']=='9710020')
+        assert entrant['state']=='onpost' and entrant['interruptedBreak']['kind']=='meal'
+        assert original['state']=='walkback' and original['readyAt'] is None
+
+
 def test_formal_single_relief_then_missing_person_returns_with_new_task():
     seed_cohort()
     with TestClient(app) as a,TestClient(app) as b:
@@ -233,6 +280,14 @@ def test_formal_upcoming_counts_do_not_move_posts_or_skip_opening_rest():
         assert p['state']=='notyet' and p.get('line') is None
         p.update(start=435)
         assert S.person_view(eng,p,430,{})['scheduledRestStart']==435
+        assert not S.person_view(eng,p,405,{})['upcomingShift']
+        assert not S.person_view(eng,p,434,{})['upcomingShift']
+        p.update(start=420)
+        assert not S.person_view(eng,p,390,{})['upcomingShift']
+        p.update(start=450)
+        assert not S.person_view(eng,p,419.99,{})['upcomingShift']
+        assert S.person_view(eng,p,420,{})['upcomingShift']
+        assert not S.person_view(eng,p,450,{})['upcomingShift']
 
 
 def test_three_member_missing_one_recombines_with_relief_priority_and_new_consents():

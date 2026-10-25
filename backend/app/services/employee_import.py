@@ -52,15 +52,22 @@ def preflight(db, user, content, allowed_circles, allowed_roles):
             old=db.query(Employee).filter_by(employee_no=no).first()
             account=db.query(UserAccount).filter_by(login_account=no).first()
             if old or account:
-                if old and old.attraction_id in ({circle.id} if allowed_circles is None else allowed_circles):
-                    old_role=role_at(db,old.id)
-                    if old_role and old_role.code not in allowed_roles:
-                        errors.append(prefix+'员工号已被占用，超出当前可管理范围');continue
+                # Occupied numbers are skip-only, never an update/transfer.
+                # A conflict must not prevent safe new rows reaching confirmation.
+                in_scope=old is not None and (allowed_circles is None or old.attraction_id in allowed_circles)
+                old_role=role_at(db,old.id) if in_scope else None
+                visible=in_scope and (old_role is None or old_role.code in allowed_roles)
+                if visible:
+                    reason='已存在，本次跳过，不覆盖原档案'
                     if old.account_deleted_at:
-                        errors.append(prefix+f'员工号{no}已删除留档，请通过新建员工的重新入职流程注册');continue
-                    duplicates.append({'row':rownum,'employee_no':no,'name':old.name,'id':old.id})
-                    continue
-                errors.append(prefix+'员工号已被占用，无法导入');continue
+                        reason='已删除留档，本次跳过；重新入职请使用新建员工'
+                    duplicates.append({'row':rownum,'employee_no':no,'name':old.name,'id':old.id,'reason':reason})
+                else:
+                    # Only echo the workbook's row/number. Do not disclose the
+                    # stored employee's name, ID, circle, role or account details.
+                    duplicates.append({'row':rownum,'employee_no':no,'name':'信息受限',
+                                       'reason':'员工号已被占用，仅可跳过，不修改原档案'})
+                continue
             try:
                 from app.rotation.temporary import pending
                 pending(db,no,name,circle.id)

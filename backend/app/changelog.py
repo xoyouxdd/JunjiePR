@@ -7,6 +7,20 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.25.1", "date": "2026-10-25", "status": "candidate",
+        "items": [
+            {"summary": "员工导入占用工号支持预检后跳过",
+             "detail": "已占用工号不再提前中断整批导入，预检列出行号、可见员工信息及跳过说明，明确确认后只新增合法新员工。超出可管理范围的占用记录不返回姓名、档案ID、景点圈或角色；已有账号、档案和留档状态不修改，权限及重新入职规则不变。",
+             "audiences": ["HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"], "permissions": ["HR_MANAGE"]},
+            {"summary": "轮岗现场调整与协同上岗完善",
+             "detail": "OP开园前可手动确认开始休息；拖岗位名称可选择只交换岗位或连人交换，拖姓名调整人员。休息、吃饭和饭后休息均可填写原因、预览后强制上岗，原岗位人员下线等待确认休息，餐休中断留痕。修复开园前撤岗顺推和病假清除预排；预计上班只显示晚于07:15的后续班次，于各自上班前30分钟出现，07:00和07:15不计入预计。人员去重，圈外人员分病假、出圈及OJT。协同人员在休息及待出发区成组展示各自岗位，看板可整组上岗，个人待办仍须全员逐一确认。定岗、权限及正常餐休限制保留。",
+             "audiences": ["all"]},
+            {"summary": "认可提交增加分段耗时诊断",
+             "detail": "单条及多条认可提交增加请求关联标识与接收、图片落盘/校验、业务记录和数据库提交耗时日志，便于排查上传等待；日志不记录图片内容、填写内容、密码或令牌。登记、待复核和计分流程不变，本版未启用后台图片上传。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.24.4", "date": "2026-10-24", "status": "candidate",
         "items": [
             {"summary": "完善复核切页处理与发布验证",

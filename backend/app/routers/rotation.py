@@ -223,7 +223,8 @@ def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: Rot
     try:
         return service.do_live_action(db, rotation_attraction_id(db), actor,
                                       {"action": payload["action"], "pid": payload.get("pid"),
-                                       "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice")})
+                                       "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice"),
+                                       "group_confirm": payload.get('group_confirm',False),"expected_plan":payload.get('expected_plan')})
     except service.ActionError as exc:
         raise _action_error(exc) from exc
 

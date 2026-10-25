@@ -26,7 +26,7 @@ async function main(){
     if(url.endsWith('/preview'))return {expected_snapshot:'b'.repeat(64),summary:'现场调整',changes:['测试甲：A · 塔台 → 下线']};
     return {ok:true};
    };
-   adjustmentHeader();RT.render();
+   adjustmentHeader();RT.render();document.dispatchEvent(new Event('DOMContentLoaded'));
   });
   await page.getByRole('button',{name:'登录调整',exact:true}).click();
   await page.locator('[name=mode]').selectOption('tr');await page.locator('[name=account]').fill('TRTEST');await page.locator('[name=credential]').fill('123456789012');
@@ -42,6 +42,29 @@ async function main(){
   await page.getByRole('button',{name:'执行调整',exact:true}).click();
   await page.getByRole('heading',{name:'调整已完成',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>window.bodies.filter(x=>x.url.endsWith('/act')).length),1);
+  await page.getByRole('button',{name:'继续调整',exact:true}).click();
+  await page.evaluate(()=>{
+    const p={...RT.data.day.persons[0],pid:'meal',name:'餐休人员',state:'meal',line:null,lineStart:null,breakKind:'meal',readyAt:630,assign:null};
+    RT.data.day.persons.push(p);RT.render();
+  });
+  const meal=page.locator('[data-drag-pid="meal"]'),target=page.locator('[data-post="A#0"]');
+  assert.equal(await meal.getAttribute('draggable'),'true');
+  const transfer=await page.evaluateHandle(()=>new DataTransfer());
+  await meal.dispatchEvent('dragstart',{dataTransfer:transfer});await target.dispatchEvent('drop',{dataTransfer:transfer});
+  assert.match(await page.getByRole('dialog').innerText(),/剩余餐休 30 分钟.*测试甲将下线/);
+  await page.locator('[name=reason]').fill('现场应急支援');await page.getByRole('button',{name:'预览影响',exact:true}).click();
+  await page.getByRole('button',{name:'执行调整',exact:true}).click();
+  await page.getByRole('heading',{name:'调整已完成',exact:true}).waitFor();
+  const forced=await page.evaluate(()=>window.bodies.filter(x=>x.url.endsWith('/act')).at(-1).body);
+  assert.equal(forced.action,'move');assert.equal(forced.force,true);assert.equal(forced.reason,'现场应急支援');assert.equal(forced.pid,'meal');
+  await page.getByRole('button',{name:'继续调整',exact:true}).click();
+  const postTransfer=await page.evaluateHandle(()=>new DataTransfer());
+  await page.locator('[data-drag-post="A#0"]').dispatchEvent('dragstart',{dataTransfer:postTransfer});
+  await page.locator('[data-post="A#1"]').dispatchEvent('drop',{dataTransfer:postTransfer});
+  await page.locator('[name=swapMode]').selectOption('with_people');
+  await page.getByRole('button',{name:'预览影响',exact:true}).click();await page.getByRole('button',{name:'执行调整',exact:true}).click();
+  await page.getByRole('heading',{name:'调整已完成',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.bodies.filter(x=>x.url.endsWith('/act')).at(-1).body.swapMode),'with_people');
   await page.getByRole('button',{name:'继续调整',exact:true}).click();
   await page.evaluate(()=>{adjustmentState.expires_at=new Date(Date.now()-1).toISOString();adjustmentTick();});
   await page.getByRole('button',{name:'登录调整',exact:true}).waitFor();

@@ -100,6 +100,9 @@ def plan(eng, p, now):
               'confirmed': 0, 'routes': [], 'soloRoutes': [], 'blocked': None, 'soloBlocked': None}
     try:
         result['routes'] = simulate(eng, group, now)
+        for member in result['members']:
+            route=next((r for r in result['routes'] if r['pid']==member['pid']),None)
+            member['entryPost']=route['to'] if route else None
     except E.ActionError as exc:
         result['blocked'] = str(exc)
     context.update(routes=result['routes'], blocked=result['blocked'])
@@ -172,12 +175,41 @@ def confirm(eng, pid, now, actor, token, solo=False, missing=None):
     return {'status': 'executed', 'participants': [q['pid'] for q in group], 'group': view['id'], 'tokens': dict(votes)}
 
 
+def confirm_group(eng, pid, now, actor, expected):
+    """An authorized board action is explicit whole-group confirmation, not a personal vote."""
+    from app.rotation.service import ConfirmationConflict, confirmation_token, assignment_view
+    if getattr(actor,'kind',None) not in ('screen','supervisor','manager'):
+        raise E.ActionError('个人待办必须逐人确认，不能代替整组上岗')
+    p=eng.P[pid];view=plan(eng,p,now)
+    if not view or view['id']!=expected:
+        raise ConfirmationConflict('协同岗位安排已变化，请刷新后重新确认')
+    if view['blocked']:
+        raise E.ActionError(view['blocked'])
+    group=members(eng,p)
+    for member in group:
+        if member['state']!='ready' or now < max(member.get('readyAt') or now,member['assign']['departAt'],member['assign'].get('notBefore',0))-.01:
+            raise E.ActionError('组员休息未结束或尚未到上岗时间，请单独预览强制安排')
+    simulate(eng,group,now)
+    votes=eng.d.get('entryVotes',{}).get(view['id'],{})
+    tokens={member['pid']:votes.get(member['pid']) or confirmation_token(eng,member,'depart') for member in group}
+    assignments={member['pid']:assignment_view(eng,member) for member in group}
+    for member in group:
+        eng.act_depart(member['pid'],now,actor)
+    eng.h.log('entry_group',actor,pid,view['line'],None,{'group':view['id'],'participants':list(tokens),'routes':view['routes']})
+    return {'status':'executed','participants':list(tokens),'group':view['id'],'tokens':tokens,'assignments':assignments}
+
+
+def upcoming_shift(p, now):
+    """Opening 07:00/07:15 crews use their normal areas, not later-shift forecasts."""
+    return bool(p.get('state') == 'notyet' and p['start'] > 435 and 0 < p['start'] - now <= 30)
+
+
 def upcoming(eng, now):
     """The ten-minute route is a forecast, never a reservation or timed action."""
     result = {}
     if not eng.d.get('cooperativeEntry') or eng.d.get('closed'):
         return result
-    times = sorted({p['start'] for p in eng.P.values() if p['state'] == 'notyet' and now < p['start'] <= now + 10
+    times = sorted({p['start'] for p in eng.P.values() if upcoming_shift(p, now) and p['start'] <= now + 10
                     and first_entry(p) and not p.get('entryHold')})
     for at in times:
         projected = clone(eng)
@@ -193,6 +225,9 @@ def upcoming(eng, now):
                 entry = target_index if a['mode'] == 'push7' and target_line is line else (indices[0] if indices else None)
                 a['entryPost'] = line['posts'][entry]['name'] if entry is not None else None
                 a['group'] = plan(projected, q, at)
+                if a['group']:
+                    member=next(m for m in a['group']['members'] if m['pid']==p['pid'])
+                    a['entryPost']=member.get('entryPost')
                 result[p['pid']] = a
     return result
 

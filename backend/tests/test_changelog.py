@@ -89,7 +89,7 @@ def test_current_covered_sick_history_note_is_visible_to_every_role() -> None:
 
 def test_changelog_filters_by_role() -> None:
     cm = visible_releases("CM", {"SELF_RECOGNITION"})
-    admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN", "DECLARATION_STATS_VIEW", "HR_MONTHLY_REPORT"})
+    admin = visible_releases("SYSTEM_ADMIN", {"SYSTEM_ADMIN", "DECLARATION_STATS_VIEW", "HR_MONTHLY_REPORT", "HR_MANAGE"})
     gsm = visible_releases("GSM", {"POC_ISSUE", "DATA_EXPORT"})
     cm_text = " ".join(item["summary"] for release in cm for item in release["items"])
     admin_text = " ".join(item["summary"] for release in admin for item in release["items"])
@@ -100,14 +100,14 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    assert cm[0]["current"] is True  # Announcement UI improvements concern every account.
+    assert cm[0]["current"] is True
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert cm[0]["items"][0]["summary"] == "完善复核切页处理与发布验证"
+    assert cm[0]["items"][0]["summary"] == "轮岗现场调整与协同上岗完善"
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
-    assert gsm[0]["items"][0]["summary"] == "完善复核切页处理与发布验证"
+    assert gsm[0]["items"][0]["summary"] == "轮岗现场调整与协同上岗完善"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -116,6 +116,9 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
+    assert admin[0]['items'][0]['summary']=='员工导入占用工号支持预检后跳过'
+    assert '员工导入占用工号支持预检后跳过' not in cm_text
+    assert '员工导入占用工号支持预检后跳过' not in gsm_text
 
 
 def test_changelog_requires_matching_role_and_all_extra_permissions() -> None:
@@ -157,19 +160,20 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in cm["release"]["items"]] == ["完善复核切页处理与发布验证"]
+        assert [item['summary'] for item in cm['release']['items']]==['轮岗现场调整与协同上岗完善']
+        assert cm['read'] is False
+        assert client.post('/api/changelog/announcement/read',json={'version':APP_VERSION}).status_code==200
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in tr["release"]["items"]] == ["完善复核切页处理与发布验证"]
+        assert [item['summary'] for item in tr['release']['items']]==['轮岗现场调整与协同上岗完善']
+        assert tr['read'] is False
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in hr["release"]["items"]] == [
-            "完善复核切页处理与发布验证"]
+            "员工导入占用工号支持预检后跳过", "轮岗现场调整与协同上岗完善", "认可提交增加分段耗时诊断"]
         assert hr["read"] is False
-        client.post("/api/logout")
-        login(client, "OMTEST01")
         first = client.get("/api/changelog/announcement").json()
         history = client.get("/api/changelog").json()["releases"]
         assert first["read"] is False
@@ -178,6 +182,27 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         assert first["release"]["items"] == history[0]["items"]
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.get("/api/changelog/announcement").json()["read"] is True
+        client.post('/api/logout');login(client,'HR01','HR123')
+        assert client.get('/api/changelog/announcement').json()['read'] is True
+        client.post('/api/logout');login(client,'OMTEST01')
+        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']]==['轮岗现场调整与协同上岗完善']
+
+
+def test_import_skip_note_requires_hr_role_and_manage_permission():
+    item=RELEASES[0]['items'][0]
+    for role in ('HR_CIRCLE','HR_ADMIN','SYSTEM_ADMIN'):
+        assert item_visible(item,role,{'HR_MANAGE'})
+        assert not item_visible(item,role,{'SYSTEM_ADMIN'})
+    for role in ('CM','TR','SUPERVISOR','GSM','OM'):
+        assert not item_visible(item,role,{'HR_MANAGE'})
+
+
+def test_recognition_timing_note_requires_system_admin_role_and_permission():
+    item=next(i for i in RELEASES[0]['items'] if i['summary']=='认可提交增加分段耗时诊断')
+    assert item_visible(item,'SYSTEM_ADMIN',{'SYSTEM_ADMIN'})
+    assert not item_visible(item,'SYSTEM_ADMIN',set())
+    assert not item_visible(item,'HR_ADMIN',{'SYSTEM_ADMIN'})
+    assert not item_visible(item,'CM',{'SYSTEM_ADMIN'})
 
 
 def test_current_release_items_match_roles_and_permissions() -> None:

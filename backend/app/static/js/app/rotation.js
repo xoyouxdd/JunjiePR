@@ -20,7 +20,7 @@ const hm=value=>`${String(Math.floor(value/60)%24).padStart(2,'0')}:${String(Mat
 function entryRoutes(routes){return (routes||[]).map(r=>`<li><strong>${esc(r.name)}</strong>：${esc(r.from)} → ${esc(r.to)}</li>`).join('');}
 function entryCard(p){
   const g=p.entryGroup;if(!g)return '';
-  return `<section class="rt-entry-group"><h4>${esc(g.line)}线 · ${g.members.length}人协同上岗</h4><p role="status">${g.confirmed} / ${g.members.length} 人已确认到位</p><ul>${g.members.map(m=>`<li>${esc(m.name)} · ${hm(m.start)}–${hm(m.end)} · ${m.confirmed?'已确认':'待本人确认'}</li>`).join('')}</ul><p>全部本人确认后统一执行</p><ul>${entryRoutes(g.routes)}</ul>${g.blocked?`<p role="alert">${esc(g.blocked)}</p>`:''}</section>`;
+  return `<section class="rt-entry-group"><h4>${esc(g.line)}线 · ${g.members.length}人协同上岗</h4><p role="status">${g.confirmed} / ${g.members.length} 人已确认到位</p><ul>${g.members.map(m=>`<li>${esc(m.name)} → ${esc(m.entryPost||'待核实岗位')} · ${hm(m.start)}–${hm(m.end)} · ${m.confirmed?'已确认':'待本人确认'}</li>`).join('')}</ul><p>全部本人确认后统一执行</p><ul>${entryRoutes(g.routes)}</ul>${g.blocked?`<p role="alert">${esc(g.blocked)}</p>`:''}</section>`;
 }
 function taskLine(line,pid){
   if(!line)return '';
@@ -64,7 +64,7 @@ function mountRotationTasks(host,request,onComplete){
       if(personalEmpty){personalEmpty.hidden=!!p;personalEmpty.textContent='当前没有已发布的本人轮岗安排，请等待主管更新班表。';}
       if(!p){host.innerHTML=scopeHtml;bindScope();return;}
       const g=p.entryGroup,voted=g?.members.find(m=>m.pid===p.pid)?.confirmed;
-      const a=p.assign,action=p.entryHold?'entry_return':['walkback','pending'].includes(p.state)?'arrive':p.state==='ready'&&p.canDepart&&!voted&&!g?.blocked?'depart':null;
+      const a=p.assign,action=p.entryHold?'entry_return':(['walkback','pending'].includes(p.state)||(p.role==='op'&&['op','notyet'].includes(p.state)))?'arrive':p.state==='ready'&&p.canDepart&&!voted&&!g?.blocked?'depart':null;
       const waiting=p.scheduledRestStart!==null&&p.scheduledRestStart!==undefined;
       const status=waiting?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:['rest','meal'].includes(p.state)?`${p.state==='meal'?'吃饭':'休息'}至 ${hm(p.readyAt)}`:p.state==='heading'?`前往 ${esc(a?.line||'')} 线，预计${hm(p.arriveAt)}到岗`:p.state==='onpost'?`在 ${esc(p.line)} 线 · ${esc(p.post)}`:p.state==='ready'&&!action?'等待上岗时间':action==='arrive'?'待确认休息／吃饭':p.state==='done'?'当日轮岗已结束':'请留意当日轮岗安排';
       const result=data.confirmations?.[0];

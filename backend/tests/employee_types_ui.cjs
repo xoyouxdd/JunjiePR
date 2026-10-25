@@ -32,6 +32,22 @@ const root=path.resolve(__dirname,'../..');let server,browser,log='';const sleep
     await page.locator('#newEmployee').waitFor({state:'attached'});people=await ctx.request.get(base+'/api/hr/employees').then(r=>r.json());assert(people.some(p=>p.employee_no===next&&p.employee_type==='Intern'));assert.equal(people.find(p=>p.employee_no===no).name,'界面合成实习生');
     for(const width of [320,390,430,768,1024,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' directory overflow '+width);}
     const shots=process.env.EMPLOYEE_TYPE_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await page.setViewportSize({width:390,height:844});await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(shots,engine+'-employee-mobile.png')});await page.setViewportSize({width:1440,height:1000});await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(shots,engine+'-employee-desktop.png')});}
-    assert.deepEqual(errors,[]);console.log(engine+': actual create/edit, Intern/date visibility, V3 preview/skip, preserved old data, mobile/desktop layout passed');await browser.close();browser=null;
+    const dwarf=await browser.newContext({viewport:{width:1280,height:900}}),dwarfPage=await dwarf.newPage();dwarfPage.on('pageerror',e=>errors.push(e.message));
+    assert((await dwarf.request.post(base+'/api/login',{data:{employee_no:'HR-DWARF',password:'type-fixture-only'}})).ok());
+    await dwarf.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}});
+    await dwarfPage.goto(base+'/');await dwarfPage.locator('.tabs-desktop [data-tab=hrEmployees]').click();await dwarfPage.locator('#importEmployees').waitFor({state:'attached'});
+    await dwarfPage.locator('details').filter({has:dwarfPage.locator('#importEmployees')}).locator('summary').click();
+    const foreign=String(9852000+(index-1)*10),own=String(Number(foreign)+1),fresh=String(Number(foreign)+2);
+    const occupied=await ctx.request.get(base+'/__fixture/occupied-workbook?index='+(index-1));assert(occupied.ok());
+    await dwarfPage.locator('#importEmployeesWorkbook').setInputFiles({name:'occupied-synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await occupied.body()});
+    await dwarfPage.locator('#importEmployees [type=submit]').click();const previewDialog=dwarfPage.getByRole('dialog',{name:'导入预检'});await previewDialog.waitFor();
+    const previewText=await previewDialog.innerText();assert.match(previewText,/将新增 1 人，跳过已有员工 2 人/);assert(previewText.includes('信息受限')&&previewText.includes('仅可跳过'));assert(!previewText.includes('不可泄露原姓名'+foreign));assert(previewText.includes('不可泄露原姓名'+own));
+    await dwarfPage.locator('[data-modal-cancel]').click();
+    assert(!(await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json())).some(p=>p.employee_no===fresh),'Cancel cannot create an employee');
+    await dwarfPage.locator('#importEmployees [type=submit]').click();await previewDialog.waitFor();await dwarfPage.locator('[data-modal-confirm]').click();await dwarfPage.getByRole('dialog',{name:'导入已完成'}).waitFor();
+    assert(!(await dwarfPage.getByRole('dialog',{name:'导入已完成'}).innerText()).includes('不可泄露原姓名'+foreign));await dwarfPage.locator('[data-modal-confirm]').click();
+    const dwarfPeople=await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json());assert(dwarfPeople.some(p=>p.employee_no===fresh));assert.equal(dwarfPeople.find(p=>p.employee_no===own).name,'不可泄露原姓名'+own);
+    const allPeople=await ctx.request.get(base+'/api/hr/employees').then(r=>r.json());const untouched=allPeople.find(p=>p.employee_no===foreign);assert(untouched&&untouched.name==='不可泄露原姓名'+foreign&&untouched.employee_type==='Comp28'&&!untouched.account_enabled);
+    await dwarf.close();assert.deepEqual(errors,[]);console.log(engine+': actual create/edit, dates, V3 preview/skip and dwarf-HR occupied-number cancel/confirm/redaction passed');await browser.close();browser=null;
   }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(3000)]);}}})().catch(e=>{console.error(e);process.exitCode=1;});

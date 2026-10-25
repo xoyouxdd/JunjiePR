@@ -111,27 +111,28 @@ function boardView() {
 }
 
 function poolView(n) {
-  const ps = RT.data.day.persons;
+  const posted=new Set(RT.data.day.lines.flatMap(line=>line.posts.map(post=>post.occ).filter(Boolean)));
+  const ps = RT.data.day.persons.filter(p=>!posted.has(p.pid));
+  const displayed=new Set();
   const by = states => ps.filter(p => states.includes(poolState(p, n)));
-  const section = (title, list, chip) => `<section class="rt-sect"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? list.map(chip).join('') : '暂无'}</div></section>`;
-  const button = (p, sub, extra = '', cls = '') => `<button type="button" class="rt-chip ${cls}" data-pid="${esc(p.pid)}"><span class="rt-nm">${esc(p.name)}${extra}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
+  const section = (title, list, chip,grouped=false) => {list.forEach(p=>displayed.add(p.pid));return `<section class="rt-sect"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? grouped?groupedChips(list,chip,n,isManager()&&title==='待出发'):list.map(chip).join('') : '暂无'}</div></section>`;};
+  const button = (p, sub, extra = '', cls = '') => `<button type="button" class="rt-chip ${cls}" data-pid="${esc(p.pid)}"${isManager()&&['notyet','onpost','rest','meal','ready'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:''}><span class="rt-nm">${esc(p.name)}${extra}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${badges(p)}</button>`;
   let html = '';
-  const upcoming=ps.filter(p=>p.upcomingShift&&!waitingInitialRest(p));
+  const upcoming=ps.filter(p=>p.upcomingShift&&!waitingInitialRest(p)&&!opWaiting(p));
   if(upcoming.length)html += section('即将上班 · 预计人数',upcoming,p=>button(p,`${hm(p.start)}–${hm(p.end)} · 班次未开始${p.previewAssign?` · 预计进入 ${esc(p.previewAssign.line)}线 · ${esc(p.previewAssign.entryPost||'入口岗')}`:''}`,'','dim'));
-  const groups=new Map();for(const p of ps){if(p.entryGroup)groups.set(p.entryGroup.id,p.entryGroup);}
-  for(const g of groups.values())html+=`<section class="rt-sect rt-entry-group"><h2>${esc(g.line)}线 · 协同上岗 <span class="rt-n">${g.confirmed}/${g.members.length}</span></h2>${g.members.map(m=>button(personOf(m.pid),`${hm(m.start)}–${hm(m.end)} · ${m.confirmed?'已到位，等待同行':'待本人确认'}`)).join('')}<ul>${g.routes.map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul>${g.blocked?`<p role="alert">${esc(g.blocked)}</p>`:''}</section>`;
-  html += section('待出发', by(['ready']).filter(p=>!p.entryGroup&&!p.entryHold).sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9)), p => {
+  html += section('待出发', by(['ready']).filter(p=>!p.entryHold).sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9)), p => {
     if (!p.assign) return button(p, '等待分配', '', 'dim');
     const over = n - p.assign.departAt;
     return button(p, over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发', '', over >= 2 ? 'late' : 'due');
-  });
-  html += section('待到大屏点去休息', by(['walkback', 'pending']).sort((a, b) => (a.walkbackSince || 0) - (b.walkbackSince || 0)), p => button(p, p.state === 'pending' ? 'OP 结束待定' : `下线 ${Math.max(0, Math.floor(n - (p.walkbackSince || n)))} 分钟（${esc(p.downReason || '推岗')}）`));
+  },true);
+  html += section('待到大屏点去休息', ps.filter(p=>['walkback','pending'].includes(p.state)||opWaiting(p)).sort((a, b) => (a.walkbackSince || 0) - (b.walkbackSince || 0)), p => button(p, opWaiting(p)?'OP · 可提前确认去休息':p.state === 'pending' ? 'OP 结束待定' : `下线 ${Math.max(0, Math.floor(n - (p.walkbackSince || n)))} 分钟（${esc(p.downReason || '推岗')}）`));
   html += section('吃饭区', by(['meal']).sort((a,b)=>a.readyAt-b.readyAt), p=>button(p, `吃饭至 ${hm(p.readyAt)}，剩余 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟`, '', 'meal'));
-  const resting=by(['rest']).sort((a,b)=>restUntil(a)-restUntil(b));
-  html += section(`休息区 <span class="rt-hint">${restSummary(resting)}</span>`, resting, p=>button(p, waitingInitialRest(p)?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:`${p.breakKind === 'meal_rest' ? '饭后剩余休息时间：' : ''}至 ${hm(restUntil(p))}，剩余 ${Math.max(0,Math.ceil(restUntil(p)-n))} 分钟`, '', 'rest'));
-  html += section('暂离和出圈', by(['away']), p => button(p, `${esc(p.away ? p.away.reason : '')}${p.away && p.away.until !== null && p.away.until !== undefined ? `，${hm(p.away.until)} 回` : ''}`, '', 'dim'));
+  const resting=by(['rest']).filter(p=>!p.entryHold).sort((a,b)=>restUntil(a)-restUntil(b));
+  html += section(`休息区 <span class="rt-hint">${restSummary(resting)}</span>`, resting, p=>button(p, waitingInitialRest(p)?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:`${p.breakKind === 'meal_rest' ? '饭后剩余休息时间：' : ''}至 ${hm(restUntil(p))}，剩余 ${Math.max(0,Math.ceil(restUntil(p)-n))} 分钟`, '', 'rest'),true);
+  const outside=ps.filter(outsideKind);outside.forEach(p=>displayed.add(p.pid));
+  html+=`<section class="rt-sect rt-outside"><h2>圈外人员<span class="rt-n">${outside.length}</span></h2>${['病假','出圈','OJT'].map(kind=>`<div data-outside-kind="${kind}"><h3>${kind==='出圈'?'出圈（含暂离）':kind}</h3><div class="rt-chips">${outside.filter(p=>outsideKind(p)===kind).map(p=>button(p,esc(p.leaveReason||p.away?.reason||p.label||kind)+(p.away?.until!=null?` · ${hm(p.away.until)} 回`:''),'','dim')).join('')||'暂无'}</div></div>`).join('')}</section>`;
   if(ps.some(p=>p.entryHold))html += section('待本人到场重新领取安排',ps.filter(p=>p.entryHold),p=>button(p,'同行任务已调整 · 不记为缺勤','','dim'));
-  const others = by(['op', 'notyet', 'excluded', 'done']).filter(p=>!p.upcomingShift).sort((a, b) => a.start - b.start);
+  const others = by(['op', 'notyet', 'excluded', 'done']).filter(p=>!displayed.has(p.pid)).sort((a, b) => a.start - b.start);
   html += `<section class="rt-sect"><h2>其他人员<span class="rt-n">${others.length}</span><span class="rt-hint">OP、未到岗、不轮岗、已下班</span></h2><div class="rt-scroll"><table class="rt-table">${others.map(p => `<tr data-pid="${esc(p.pid)}" tabindex="0"><td>${esc(p.name)}</td><td>${hm(p.start)}-${hm(p.end)}</td><td>${STATE_NAME[p.state] || ''}${p.label ? `：${esc(p.label)}` : ''}</td></tr>`).join('')}</table></div></section>`;
   return html;
 }
@@ -149,7 +150,7 @@ function personMenu(p) {
     ${p.absences.length ? `<dt>固定暂离</dt><dd>${p.absences.map(a => `${hm(a.start)}-${hm(a.end)} ${esc(a.label)}${a.missed ? '（错过）' : ''}`).join('；')}</dd>` : ''}
     ${p.note ? `<dt>备注</dt><dd>${esc(p.note)}</dd>` : ''}</dl>`;
   const actions = [];
-  if (p.state === 'walkback' || p.state === 'pending') actions.push(['arrive', '代点去休息', 'primary']);
+  if (p.state === 'walkback' || p.state === 'pending'||opWaiting(p)) actions.push(['arrive', '代点去休息', 'primary']);
   if (canDepartNow(p, nowMin())&&(!p.entryGroup||me.employee_no===p.pid)) actions.push(['depart', p.entryGroup?'确认本人到位':'代点去轮岗', 'primary']);
   if (['rest', 'meal', 'ready'].includes(p.state) && p.state !== 'ready') actions.push(['undo', '撤回去休息', 'secondary']);
   if (['rest', 'meal', 'ready'].includes(p.state)) actions.push(['reassign', '改派去向', 'secondary']);
@@ -233,6 +234,8 @@ function lineMenu(lid) {
 
 $app.addEventListener('click', event => {
   if (!isManager() || tab !== 'board' || !RT.data.day || RT.data.day.status !== 'live') return;
+  const groupButton=event.target.closest('[data-group-depart]');
+  if(groupButton){const p=personOf(groupButton.dataset.groupDepart);if(p)confirmRotation(p,'depart','/api/rotation/act',true);return;}
   if(event.target.closest('[data-live-close]')&&!me.adjustment){formBox('调整当天闭园时间','<label>闭园时间<input type="time" name="close" value="'+esc(RT.data.day.closeAt||'')+'" required></label>',f=>act('/api/rotation/act',{action:'set_close',close:f.close},'闭园时间已更新'));return;}
   const person = event.target.closest('[data-pid]');
   if (person) { const p = personOf(person.dataset.pid); if (p) personMenu(p); return; }
@@ -250,7 +253,7 @@ $app.addEventListener('dragstart', event => {
   if(tab==='draft')return;
   const source = event.target.closest('[data-drag-pid],tr[data-pid]');
   const pid = source?.dataset.dragPid || source?.dataset.pid;
-  if (!isManager() || tab !== 'board' || (!event.target.closest('[data-drag-post]')&&!['notyet','onpost'].includes(personOf(pid)?.state))) {event.preventDefault(); return;}
+  if (!isManager() || tab !== 'board' || (!event.target.closest('[data-drag-post]')&&!['notyet','onpost','rest','meal','ready'].includes(personOf(pid)?.state))) {event.preventDefault(); return;}
   RT.pressing = true;
   RT.dragging = true;
   event.dataTransfer.setData('text/plain',event.target.closest('[data-drag-post]')?'post:'+event.target.closest('[data-drag-post]').dataset.dragPost:pid);
@@ -263,7 +266,7 @@ $app.addEventListener('drop', async event => {
   if (!isManager() || tab !== 'board' || !target) return;
   event.preventDefault(); RT.pressing = false; RT.dragging = false;
   const [line, index] = target.dataset.post.split('#');
-  const raw=event.dataTransfer.getData('text/plain');if(raw.startsWith('post:')){const [source,from]=raw.slice(5).split('#');if(source!==line){toast('岗位顺序只能在本线内调整',true);return;}await adjustPreview({action:'post_order',line,i:Number(from),target_i:Number(index)});}else await adjustPreview({action:'move',pid:raw,line,i:Number(index)});
+  const raw=event.dataTransfer.getData('text/plain');if(raw.startsWith('post:')){const [source,from]=raw.slice(5).split('#');if(source!==line){toast('岗位交换只能在本线内进行',true);return;}postSwapForm(line,Number(from),Number(index));}else personDrop(raw,line,Number(index));
 });
 $app.addEventListener('dragend', () => {RT.pressing = false; RT.dragging = false;});
 
@@ -473,6 +476,7 @@ function bindRoster() {
 // ---------------------------------------------------------------- 记录
 
 const EVENT_NAME = {
+  force_place:'强制安排上岗',entry_group:'整组上岗',entry_ready:'本人确认到位',entry_solo:'调整单人上岗',entry_adjust:'调整协同组合',entry_return:'本人到场重新领取安排',
   post_hold:'设置持续定岗',post_resume:'结束定岗', publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
   arrive: '去休息', arrive_done: '去休息后下班', arrive_away: '去休息后转暂离', depart: '去轮岗', undo_arrive: '撤回去休息', away: '暂离/出圈', back: '回池',
   initial_rest:'班次开始自动休息', reassign: '改派', leave: '离岗', flag: '标记', move:'现场人员调整',post_order:'岗位顺序调整',post_schedule_close:'计划撤岗',post_open: '开岗', post_close: '撤岗', line_on: '启用线', line_off: '停用线', set_close: '改闭园时间',
@@ -490,6 +494,9 @@ function detailText(item) {
   if (d.line && item.type === 'depart') parts.push(`去 ${d.line}`);
   if (d.close) parts.push(`闭园 ${d.close}`);
   if (d.flag) parts.push(`${d.on ? '标记' : '取消'}${d.flag}`);
+  if(item.type==='force_place'&&d.previous)parts.push(`${({meal:'吃饭',meal_rest:'饭后休息',rest:'休息'})[d.previous.kind]||'休息'}中断，剩余 ${Math.ceil(d.previous.remaining||0)} 分钟${d.replaced?'，原人员下线待确认休息':''}`);
+  if(item.type==='post_order'&&d.mode)parts.push(d.mode==='posts'?'只交换岗位':d.mode==='with_people'?'岗位和人员一起交换':'调整岗位顺序');
+  if(item.type==='entry_group')parts.push(`${d.participants?.length||0}人整组执行`);
   return parts.join('，');
 }
 
@@ -583,7 +590,7 @@ function memberView() {
   const n = nowMin();
   const open = d.notices.filter(x => x.status === 'open');
   const done = d.notices.filter(x => x.status !== 'open');
-  const action = p && ['walkback', 'pending'].includes(p.state) ? 'arrive' : p?.assign ? 'depart' : null;
+  const action = p && (['walkback', 'pending'].includes(p.state)||opWaiting(p)) ? 'arrive' : p?.assign ? 'depart' : null;
   const can = action === 'arrive' || (action === 'depart' && canDepartNow(p, n));
   const actionButton = action ? `<div class="rt-actions"><button type="button" class="primary" data-member-act="${action}" ${can && !confirmationBlocked() ? '' : 'disabled'}>${RT.pendingConfirmation ? '正在核实确认结果' : RT.submitting ? '正在提交' : action === 'arrive' ? '确认已到休息室' : can ? '去轮岗' : '等待出发'}</button></div>` : '';
   const todo = `<section class="panel rt-todo"><div class="rt-todo-head"><h2>待办</h2><span class="rotation-test-badge">测试</span></div>

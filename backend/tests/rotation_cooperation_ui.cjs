@@ -47,7 +47,26 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     for(const width of [320,390,430,768,1440]){await b.setViewportSize({width,height:900});assert.equal(await b.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,name+' board overflow '+width);}
     const shots=process.env.ROTATION_FORMAL_SCREENSHOTS;
     if(shots){await contexts[0].request.post(base+'/__fixture/cohort');await a.reload();await a.locator('.rt-entry-group').waitFor();await a.setViewportSize({width:390,height:844});fs.mkdirSync(shots,{recursive:true});await a.screenshot({path:path.join(shots,name+'-cohort-mobile.png'),fullPage:true});await b.reload();await b.locator('.rt-entry-group').first().waitFor();await b.setViewportSize({width:1440,height:1000});await b.screenshot({path:path.join(shots,name+'-cohort-board.png'),fullPage:true});}
-    assert.deepEqual(errors,[]);console.log(name+': real two-account group confirmation, no early movement, single relief, self return, five-width inbox/board passed');
+    // Operator completes a group after one self-vote, without replaying that vote token.
+    const operator=await browser.newContext({viewport:{width:1440,height:1000}});
+    assert((await operator.request.post(base+'/api/login',{data:{employee_no:'9710020',password:'formal-fixture-2026'}})).ok());
+    assert((await contexts[0].request.post(base+'/__fixture/cohort',{data:{three:true}})).ok());
+    const self=await contexts[0].request.get(base+'/api/rotation-board/me').then(r=>r.json());
+    assert.equal(self.person.assign.entryPost,'岗位3');
+    assert((await contexts[0].request.post(base+'/api/rotation-board/me/act',{data:{action:'depart',confirmation_token:self.person.confirmationTokens.depart}})).ok());
+    const board=await operator.newPage();board.on('pageerror',e=>errors.push(e.message));
+    await board.goto(base+'/rotation-board');await board.locator('[data-group-depart]').waitFor();
+    assert.equal(await board.locator('[data-entry-group]').count(),1);
+    assert.equal(await board.locator('.rt-entry-group ul').count(),0);
+    assert.match(await board.locator('.rt-entry-group').innerText(),/岗位3/);
+    await board.locator('[data-group-depart]').click();
+    assert.match(await board.getByRole('dialog').innerText(),/确认以下人员整组上岗/);
+    await board.getByRole('button',{name:'确认去轮岗',exact:true}).click();
+    await board.waitForFunction(()=>!document.querySelector('[data-group-depart]'));
+    const result=await contexts[0].request.get(base+'/api/rotation-board/me').then(r=>r.json());
+    assert.equal(result.person.state,'onpost');assert.equal(result.person.post,'岗位3');
+    await operator.close();
+    assert.deepEqual(errors,[]);console.log(name+': personal N/N, operator whole-group after prior vote, final posts, no route details, single relief, self return and five-width layout passed');
     await browser.close();browser=null;
   }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(3000)]);}}})().catch(e=>{console.error(e);process.exitCode=1;});

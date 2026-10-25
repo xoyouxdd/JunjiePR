@@ -28,6 +28,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 | [docs/excel-export-presentation.md](docs/excel-export-presentation.md) | Excel总览、完整明细、低频列折叠与同批次核对 |
 | [docs/rotation.md](docs/rotation.md) | 轮岗看板：正式员工入口、分级权限、本人待办确认、线路详情、同步、每日班表及隔离测试机制 |
 | [docs/self-recognition-batch.md](docs/self-recognition-batch.md) | 本人认可多条登记与共用照片 |
+| [docs/recognition-upload-timing.md](docs/recognition-upload-timing.md) | 认可提交分段耗时诊断与后台上传讨论 |
 | [docs/announcements.md](docs/announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
 | [docs/announcement-image-generation.md](docs/announcement-image-generation.md) | 公告模板制图、照片上传和素材访问 |
 | [docs/getting-started.md](docs/getting-started.md) | 本地运行、测试、数据目录 |

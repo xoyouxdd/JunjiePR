@@ -19,6 +19,7 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.v2_models import StoredFile
+from app.recognition_timing import stage
 
 
 register_heif_opener()
@@ -155,14 +156,16 @@ def detect_image_type(content: bytes) -> tuple[str, str] | None:
 async def save_image_upload(db: Session, upload: UploadFile, uploader_id: int, *, file_dir: Path, max_bytes=BUSINESS_ATTACHMENT_MAX_BYTES, persist: bool = True) -> StoredFile:
     staging_key = f"{uuid4().hex}.upload"
     staging_path = file_dir / staging_key
-    file_size, digest = await _stream_upload_to_path(upload, staging_path, max_bytes=max_bytes, empty_message="认可图片不能为空", label="认可图片")
+    with stage('image_write_ms'):
+        file_size, digest = await _stream_upload_to_path(upload, staging_path, max_bytes=max_bytes, empty_message="认可图片不能为空", label="认可图片")
     try:
         with staging_path.open("rb") as source:
             header = source.read(16)
             if not detect_image_type(header):
                 logger.warning("recognition_image_rejected stage=file_signature bytes=%s container_mime=%s", file_size, get_file_mimetype(header) or "unrecognized")
                 raise HTTPException(400, f"认可图片格式无效，仅支持{RECOGNITION_IMAGE_FORMATS}")
-        detected = await _validate_image_in_worker(staging_path)
+        with stage('image_validate_ms'):
+            detected = await _validate_image_in_worker(staging_path)
         extension, mime_type = detected
         storage_key = f"{uuid4().hex}{extension}"
         path = file_dir / storage_key
