@@ -242,7 +242,7 @@ button.rt-chip { cursor: pointer; }
 .rotation-screen .rt-mins { font-size:12px; white-space:nowrap; }
 .rotation-screen .rt-pool { min-width:0; min-height:0; display:flex; flex-direction:column; gap:10px; }
 .rotation-screen .rt-sect { min-height:0; display:flex; flex-direction:column; padding:10px; overflow:hidden; flex:1 1 0; }
-.rotation-screen .rt-sect.rt-ready { flex:0 1 auto; max-height:min(240px,30vh); }
+.rotation-screen .rt-sect.rt-ready { flex:1 1 0; max-height:min(240px,30vh); }
 .rotation-screen .rt-sect.rt-resting { flex:1.2 1 0; }
 .rotation-screen .rt-sect.rt-meals { flex:.8 1 0; }
 .rotation-screen .rt-sect.is-empty { flex:0 0 auto; }
@@ -304,6 +304,14 @@ button.rt-chip { cursor: pointer; }
 .rt-entry-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:6px; }
 .rt-entry-head button { min-height:44px; margin-left:auto; }
 .rt-outside h3 { font-size:14px; margin:12px 0 6px; }
+.rotation-screen .rt-outside-scroll { display:block; }
+.rotation-screen .rt-outside-members { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+@media (min-width:960px) {
+  .rotation-screen .rt-sect:not(.is-empty) { min-height:113px; }
+  .rotation-screen .rt-sect.rt-ready:not(.is-empty),
+  .rotation-screen .rt-sect.rt-arrivals:not(.is-empty),
+  .rotation-screen .rt-sect.rt-resting:not(.is-empty) { min-height:135px; }
+}
 .rt-pn[draggable="true"], [data-drag-pid][draggable="true"] { cursor:grab; }
 /* Continuous staffing is visible on every board, including CM read-only views. */
 .rt-line .rt-post.holding{background:#fff8eb;border-color:#d8bd86}
