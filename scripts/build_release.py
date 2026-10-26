@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import argparse
 import json
 import re
 import stat
@@ -195,11 +196,25 @@ def run_test_suite() -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-only", action="store_true", help="Validate checkout/version/docs/source whitelist without tests, packaging or deployment")
+    args = parser.parse_args()
     ensure_clean_checkout()
-    run_test_suite()
     version = read_app_version()
     ensure_release_contract(version)
     commit = git_commit()
+    release_sources()
+    if args.check_only:
+        print(f"RELEASE_PRECHECK_OK version={version} commit={commit}")
+        return
+    run_test_suite()
+    # Tests may take a long time: refuse a checkout changed during validation.
+    ensure_clean_checkout()
+    if git_commit() != commit:
+        raise RuntimeError("Git commit changed during release validation")
+    ensure_release_contract(version)
+    if read_app_version() != version:
+        raise RuntimeError("APP_VERSION changed during release validation")
     destination = WORKSPACE / package_name(version)
     temp_path = destination.with_name(destination.name + ".partial")
     if temp_path.exists():

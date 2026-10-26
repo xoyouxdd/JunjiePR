@@ -224,7 +224,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
                 raise HTTPException(400, "代理TA GSM期间的认可人必须是GSM、AM或OM" if target_duty_code == "TA_GSM" else "主管的认可人必须是TA GSM、GSM、AM或OM")
         recognizer_name = recognizer.name
         recognizer_role_name = recognizer_role.name
-        fraction = recognition_score_for_role(db, recognizer_role.id, recognition_date)
+        fraction = recognition_score_for_role(db, recognizer_role.id, recognition_date, target_role.code)
     if not is_self and not special_rule and target_duty_code == "TA_SUPERVISOR" and user.role.code in LEADER_CODES:
         raise HTTPException(403, "该员工认可日期处于代理TA主管期间，主管和TA主管不能为其代录加分")
     quota_code = recognition_type.code if special_rule and special_rule["monthly_limit"] else None

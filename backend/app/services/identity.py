@@ -311,6 +311,13 @@ def earliest_roles(db: Session, employee_ids: list[int] | set[int]) -> dict[int,
     return {employee_id: row.role for employee_id, row in first.items()}
 
 
+def recipient_recognition_score(score: Decimal, recognizer_code: str, recipient_base_code: str | None) -> Decimal:
+    """Acting Lead stays CM/TR; only formal Lead receives the Lead rate."""
+    if recipient_base_code == 'SUPERVISOR':
+        return {'GSM': Decimal('0.50'), 'AM': Decimal('1.00')}.get(recognizer_code, score)
+    return score
+
+
 def recognizer_options(db: Session, attraction_id: int, on_date: str | date | None = None) -> list[dict]:
     eligibility_date = on_date.isoformat() if isinstance(on_date, date) else (str(on_date or date.today().isoformat()))
     if eligibility_date < RECOGNIZER_ELIGIBILITY_START:
@@ -381,6 +388,7 @@ def recognizer_options(db: Session, attraction_id: int, on_date: str | date | No
                 "role_code": role.code,
                 "role_name": role.name,
                 "score": float(score_for(role.id)),
+                "supervisor_score": float(recipient_recognition_score(score_for(role.id), role.code, "SUPERVISOR")),
                 "group_key": group_key,
                 "group_label": group_label,
                 "group_order": group_order,
@@ -390,7 +398,7 @@ def recognizer_options(db: Session, attraction_id: int, on_date: str | date | No
     return sorted(result, key=lambda row: (row["group_order"], row["role_order"], row["name"], row["id"]))
 
 
-def recognition_score_for_role(db: Session, role_id: int, on_date: str) -> Decimal:
+def recognition_score_for_role(db: Session, role_id: int, on_date: str, recipient_base_code: str | None = None) -> Decimal:
     rule = (
         db.query(RecognitionScoreRule)
         .filter(
@@ -410,7 +418,9 @@ def recognition_score_for_role(db: Session, role_id: int, on_date: str) -> Decim
         )
     if not rule:
         raise HTTPException(400, "该认可人角色尚未配置分值")
-    return Decimal(str(rule.score)).quantize(SCORE_UNIT)
+    score = Decimal(str(rule.score)).quantize(SCORE_UNIT)
+    role = db.get(Role, role_id)
+    return recipient_recognition_score(score, role.code, recipient_base_code)
 
 
 def employee_active_on(employee: Employee, on_date: str) -> bool:

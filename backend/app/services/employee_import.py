@@ -21,33 +21,23 @@ def selection_map(decisions):
     if not isinstance(decisions, list) or len(decisions) > 10000:
         raise HTTPException(400, '导入选择格式不正确')
     choices = {}
-    fields = {'row', 'action', 'name_mode', 'custom_name', 'clear_type', 'clear_end'}
+    fields = {'row', 'action'}
     for choice in decisions:
         if not isinstance(choice, dict) or set(choice) - fields or type(choice.get('row')) is not int:
             raise HTTPException(400, '导入选择格式不正确')
         row = choice['row']
         if row in choices or choice.get('action') not in ('skip', 'update'):
             raise HTTPException(400, '导入选择重复或操作不正确')
-        if any(key in choice and type(choice[key]) is not bool for key in ('clear_type', 'clear_end')):
-            raise HTTPException(400, '清空字段选项必须为布尔值')
         choices[row] = choice
     return choices
 
 
-def replacement(old, raw, choice):
-    mode = choice.get('name_mode', 'system')
-    if mode not in ('system', 'excel', 'custom'):
-        raise HTTPException(400, '请选择保留系统姓名、采用Excel姓名或输入新姓名')
-    name = old.name if mode == 'system' else raw['姓名'] if mode == 'excel' else choice.get('custom_name')
-    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 100:
-        raise HTTPException(400, '最终姓名必填，且不能超过100个字符')
-    value = None if choice.get('clear_type') else raw['Type'] if raw['Type'] is not None and str(raw['Type']).strip() else old.employee_type
-    kind, _ = normalize(value, None)
-    end = None
-    if kind == 'Intern' and not choice.get('clear_end'):
-        end = normalize_import_date(raw['实习结束日期']) if raw['实习结束日期'] is not None and str(raw['实习结束日期']).strip() else old.internship_ends_on
+def replacement(old, raw):
+    # Overwrite the two supported fields with the workbook, including blank cells.
+    kind, _ = normalize(raw['Type'], None)
+    end = normalize_import_date(raw['实习结束日期']) if kind == 'Intern' else None
     kind, end = normalize(kind, end)
-    return {'name': old.name if mode == 'system' else name.strip(), 'employee_type': kind, 'internship_ends_on': end}
+    return {'name': old.name, 'employee_type': kind, 'internship_ends_on': end}
 
 
 def preflight(db, user, content, allowed_circles, allowed_roles, decisions=None):
@@ -95,7 +85,7 @@ def preflight(db, user, content, allowed_circles, allowed_roles, decisions=None)
                 visible=in_scope and (old_role is None or old_role.code in allowed_roles)
                 cross=old is not None and (not same_circle or not in_scope)
                 can_update=bool(same_circle and visible and not old.account_deleted_at
-                                and (account is None or account.employee_id==old.id))
+                                and (account is None or account.employee_id==old.id) and old.name==name)
                 item={'row':rownum,'employee_no':no,'name':'信息受限','excel_name':name,
                       'can_update':can_update,'name_conflict':False,'selected_action':'skip'}
                 if cross:
@@ -107,11 +97,13 @@ def preflight(db, user, content, allowed_circles, allowed_roles, decisions=None)
                                 current={'name':old.name,'employee_type':old.employee_type,'internship_ends_on':old.internship_ends_on},
                                 incoming={'name':name,'employee_type':None if raw['Type'] is None else str(raw['Type']).strip(),
                                           'internship_ends_on':None if raw['实习结束日期'] is None else str(raw['实习结束日期'])},
-                                reason='本圈员工已存在，可选择仅覆盖Type、适用的实习结束日期及明确选择的姓名；角色和景点圈不变')
+                                reason='可覆盖为文件中的Type和实习结束日期；角色和景点圈不变')
                     if old.account_deleted_at:
                         item['reason']='已删除留档，本次跳过；重新入职请使用新建员工'
-                    elif not can_update:
+                    elif account is not None and account.employee_id!=old.id:
                         item['reason']='员工号关联账号冲突，仅可跳过，请先核对账号档案'
+                    elif old.name!=name:
+                        item['reason']='员工号一致、姓名不一致，仅可跳过；请到系统员工管理中核对并修改姓名后重新导入'
                 else:
                     item['reason']='员工号已存在，当前HR无权查看该档案；本次跳过，不修改原信息'
                 # Bind confirmation to current ownership, role, values and account state,
@@ -124,25 +116,25 @@ def preflight(db, user, content, allowed_circles, allowed_roles, decisions=None)
                     'deleted':str(old.account_deleted_at) if old else None,
                     'account':None if account is None else [account.id,account.employee_id,account.enabled],
                     'own_account':None if own_account is None else [own_account.id,own_account.enabled,str(own_account.disabled_at)]})
-                if choice['action']=='update':
-                    if not can_update:
-                        raise HTTPException(403,prefix+'此员工仅可跳过，不能通过导入覆盖或转圈')
-                    if old.name==name and choice.get('name_mode')=='custom':
-                        raise HTTPException(400,prefix+'工号和姓名一致时仅可覆盖Type及实习结束日期，不能通过本条改名')
+                if can_update:
                     try:
-                        after=replacement(old,raw,choice)
+                        after=replacement(old,raw)
                     except (ValueError,HTTPException) as exc:
                         raise HTTPException(400,prefix+str(exc.detail if isinstance(exc,HTTPException) else exc)) from exc
                     before={'name':old.name,'employee_type':old.employee_type,'internship_ends_on':old.internship_ends_on}
                     changes={key:{'before':before[key],'after':value} for key,value in after.items() if before[key]!=value}
-                    item.update(selected_action='update' if changes else 'unchanged',after=after,changes=changes)
-                    if changes:
+                    item.update(after=after,changes=changes,unchanged=not bool(changes))
+                    if not changes:
+                        item['selected_action']='unchanged'
+                        unchanged+=1
+                    elif choice['action']=='update':
+                        item['selected_action']='update'
                         updates.append({'row':rownum,'employee_id':old.id,'employee_no':no,'before':before,'after':after,'changes':changes})
                         if is_due(after['employee_type'],after['internship_ends_on']):
                             expired.append({'row':rownum,'employee_no':no,'name':after['name'],
                                             'internship_ends_on':after['internship_ends_on'],'action':'update'})
-                    else:
-                        unchanged+=1
+                elif choice['action']=='update':
+                    raise HTTPException(403,prefix+item['reason'])
                 duplicates.append(item)
                 continue
             if role not in allowed_roles:

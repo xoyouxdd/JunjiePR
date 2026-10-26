@@ -2371,10 +2371,37 @@ body.rotation-personal-only #tabs{display:none;}
 body.rotation-personal-only #app{display:grid;gap:12px;}
 body.rotation-personal-only .rt-line{margin-top:12px;}
 
-/* Per-row employee workbook decisions, contained within the existing HR modal. */
-.hr-import-row { min-width:0; display:grid; gap:10px; padding:12px; border:1px solid var(--line,#dbe4ee); border-radius:10px; overflow-wrap:anywhere; }
-.hr-import-row legend { padding:0 6px; font-weight:700; }
-.hr-import-row p { margin:0; }
-.hr-import-row [data-import-edit] { display:grid; gap:10px; }
-.hr-import-row [data-import-edit][hidden],.hr-import-row [data-import-custom][hidden] { display:none; }
-.hr-import-row :is(input:not([type=checkbox]),select) { width:100%; min-width:0; box-sizing:border-box; }
+/* Employee import: overwrite from file or skip, with nonempty original values. */
+.hr-import-modal { width:min(960px,100%); display:flex; flex-direction:column; overflow:hidden; max-height:90dvh; }
+.hr-import-modal form { display:flex; flex-direction:column; min-height:0; gap:10px; }
+.hr-import-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.hr-import-toolbar .actions { margin:0; }
+.hr-import-toolbar button { padding:8px 12px; }
+.hr-import-help { margin:0; }
+.hr-import-list { overflow:auto; min-height:0; max-height:55dvh; border:1px solid var(--line,#dbe4ee); border-radius:8px; overscroll-behavior:contain; }
+.hr-import-row { display:grid; grid-template-columns:76px minmax(150px,.7fr) minmax(200px,1.3fr); gap:8px 14px; align-items:center; padding:12px; border-bottom:1px solid var(--line,#dbe4ee); overflow-wrap:anywhere; }
+.hr-import-row:last-child { border-bottom:0; }
+.hr-import-row.is-selected { background:#eef6ff; }
+.hr-import-pick { display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; }
+.hr-import-pick input { width:18px; height:18px; flex-shrink:0; }
+.hr-import-person,.hr-import-change { display:grid; gap:4px; min-width:0; }
+.hr-import-row small { color:var(--text-label); font-size:12px; }
+.hr-import-row .hr-import-reason { color:#a34a13; }
+.hr-import-modal .modal-actions { margin-top:0; flex-shrink:0; }
+@media(max-width:600px) {
+  .hr-import-modal { padding:14px; max-height:92dvh; }
+  .hr-import-row { grid-template-columns:64px minmax(0,1fr); gap:6px 8px; padding:10px 8px; }
+  .hr-import-change { grid-column:2; }
+  .hr-import-toolbar { font-size:13px; }
+  .hr-import-modal .form-modal-subtitle { margin-bottom:8px; }
+}
+
+/* Selected recognition photo: local preview and native-file removal. */
+.evidence-selected { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:10px; padding:10px; background:var(--btn-secondary-bg,#eef3f9); border-radius:8px; }
+.evidence-selected[hidden],.evidence-selected [hidden] { display:none; }
+.evidence-thumbnail { display:grid; place-items:center; width:112px; height:90px; padding:0; overflow:hidden; border:1px solid var(--line); background:#fff; border-radius:6px; }
+.evidence-thumbnail img { width:100%; height:100%; object-fit:contain; }
+.evidence-selected-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; flex:1; min-width:140px; }
+.evidence-selected-actions button { width:auto; padding:8px 10px; }
+.evidence-selected-actions small { flex-basis:100%; color:var(--text-label); font-size:12px; }
+.evidence-selected>p { flex-basis:100%; margin:0; }

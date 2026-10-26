@@ -8,7 +8,7 @@
 .\backend\.venv\Scripts\python.exe scripts\build_release.py
 ```
 
-打包脚本在工作区干净检查之后会**自动跑一次全量测试**，任一模块失败即拒绝出包——本项目不使用 CI，这里是最后一道自动关卡。也可以先单独跑一遍看失败详情：`.\backend\.venv\Scripts\python.exe backend\tests\run_all.py`。
+打包脚本先检查干净工作区、版本/最新更新记录、文档本地链接和源码白名单，再**自动跑一次全量测试**；失败即拒绝出包。测试完成后重新核对工作区与提交。本项目不使用 CI。日常上线统一使用 [发布入口](deployment.md)，不要先手动全量测试或打包，再调用发布入口导致重复验证。`--check-only` 仅作本地快速预检，不产生生产包，也不能代替完整验证。已有包的严格复用条件及当前自动缓存限制见部署文档。
 
 完整验证包含 Python、纯 Node.js 回归及 Playwright/Edge 本地 DOM 夹具，运行时要求见 [getting-started.md](getting-started.md)。发布入口只调用打包器，由打包器统一执行完整验证，避免连续重复运行同一套测试；任一模块失败或运行时缺失均不能出包。
 

@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
+import pytest
 
 
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="recognition-supervisor-performance-"))
@@ -201,3 +202,37 @@ def test_who_may_deduct_supervisors() -> None:
         login(client, "AMTEST01")
         assert deduct(client, "TAGSMTEST01", "WARNING_1", "am-deduct-tagsm").status_code == 403
         assert deduct(client, "SUPTEST01", "STATEMENT", "am-deduct-sup").status_code == 403
+
+
+@pytest.mark.parametrize('target_no,recognizer_no,expected',[
+    ('SUPTEST01','GSMTEST01',0.5),('SUPTEST01','AMTEST01',1.0),
+    ('TATEST01','GSMTEST01',1.0),('TATEST01','AMTEST01',1.5),
+    ('TRTEST01','GSMTEST01',1.0),('TRTEST01','AMTEST01',1.5),
+])
+def test_recognition_rate_uses_recipient_base_identity(target_no,recognizer_no,expected):
+    from app.v2_models import EmployeeActingDuty, Role
+    from app.services.identity import base_role_at, duty_code_at
+    with TestClient(app) as client:
+        if target_no=='TRTEST01':
+            with SessionLocal() as db:
+                eid=db.query(Employee).filter_by(employee_no=target_no).one().id
+                role_id=db.query(Role).filter_by(code='TA_SUPERVISOR').one().id
+                if not db.query(EmployeeActingDuty).filter_by(employee_id=eid,role_id=role_id).first():
+                    db.add(EmployeeActingDuty(employee_id=eid,role_id=role_id,starts_on=date.today().isoformat(),status='active'))
+                    db.commit()
+        login(client,target_no)
+        if target_no!='SUPTEST01':
+            with SessionLocal() as db:
+                assert base_role_at(db,employee_id(target_no)).code in ('CM','TR')
+                assert duty_code_at(db,employee_id(target_no))=='TA_SUPERVISOR'
+        response=recognize(client,recognizer_no=recognizer_no,key=f'base-rate-{target_no}-{recognizer_no}',self_image=True)
+        assert response.status_code==200,response.text
+        record=response.json()['record'];assert record['fraction']==expected
+        with SessionLocal() as db:
+            saved=db.get(RecognitionRecord,record['id']);assert float(saved.fraction)==expected
+        options=client.get('/api/options').json()
+        circle_id=next(row['id'] for row in options['employee_circles'] if row['name']=='热力追踪')
+        choices=client.get('/api/recognizers',params={'attraction_id':circle_id}).json()
+        signer=next(row for row in choices if row.get('employee_no')==recognizer_no)
+        assert signer['supervisor_score']==(0.5 if recognizer_no=='GSMTEST01' else 1)
+        assert signer['score']==(1 if recognizer_no=='GSMTEST01' else 1.5)

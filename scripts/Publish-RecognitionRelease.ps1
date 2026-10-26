@@ -31,9 +31,19 @@ try {
     $commit = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-f]{40}$') { throw 'Cannot determine Git commit' }
 
+    & git fetch origin main
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch GitHub main' }
+    $mainCommit = (& git rev-parse refs/remotes/origin/main).Trim()
+    if ($LASTEXITCODE -ne 0 -or $mainCommit -ne $commit) { throw 'Checkout must match latest GitHub main before release' }
+    & $python scripts\build_release.py --check-only
+    if ($LASTEXITCODE -ne 0) { throw 'Release precheck failed' }
+    & ssh @sshOptions $remote 'exit 0'
+    if ($LASTEXITCODE -ne 0) { throw 'Deployment SSH precheck failed' }
+
     # The packager owns the full test gate and refuses to build on failure.
     & $python scripts\build_release.py
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+    if ((& git rev-parse HEAD).Trim() -ne $commit) { throw 'Git commit changed during release build' }
 
     $versionMatch = Select-String -LiteralPath (Join-Path $repo 'backend\app\version.py') -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
     if (-not $versionMatch) { throw 'APP_VERSION missing' }

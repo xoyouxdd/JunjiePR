@@ -28,44 +28,42 @@ const root=path.resolve(__dirname,'../..');let server,browser,log='';const sleep
     await edit.locator('[type=submit]').click();await edit.waitFor({state:'detached'});await row.locator('.hr-person-type').filter({hasText:'2099-12-18'}).waitFor();
     const excel=await ctx.request.get(base+`/__fixture/workbook?existing=${no}&new=${next}`);await page.locator('details').filter({has:page.locator('#importEmployees')}).locator('summary').click();
     await page.locator('#importEmployeesWorkbook').setInputFiles({name:'synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await excel.body()});await page.locator('#importEmployees [type=submit]').click();
-    await page.getByRole('dialog',{name:'导入预检'}).waitFor();assert.match(await page.getByRole('dialog',{name:'导入预检'}).innerText(),/已有员工/);await page.getByRole('button',{name:'查看最终变更',exact:true}).click();await page.getByRole('dialog',{name:'确认导入变更'}).waitFor();await page.getByRole('button',{name:'确认导入',exact:true}).click();await page.getByRole('dialog',{name:'导入已完成'}).waitFor();await page.getByRole('button',{name:'知道了',exact:true}).click();
+    await page.getByRole('dialog',{name:'确认导入',exact:true}).waitFor();await page.getByRole('button',{name:'确认导入',exact:true}).click();await page.getByRole('dialog',{name:'导入已完成'}).waitFor();await page.getByRole('button',{name:'知道了',exact:true}).click();
     await page.locator('#newEmployee').waitFor({state:'attached'});people=await ctx.request.get(base+'/api/hr/employees').then(r=>r.json());assert(people.some(p=>p.employee_no===next&&p.employee_type==='Intern'));assert.equal(people.find(p=>p.employee_no===no).name,'界面合成实习生');
     for(const width of [320,390,430,768,1024,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' directory overflow '+width);}
     const shots=process.env.EMPLOYEE_TYPE_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await page.setViewportSize({width:390,height:844});await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(shots,engine+'-employee-mobile.png')});await page.setViewportSize({width:1440,height:1000});await row.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(shots,engine+'-employee-desktop.png')});}
-    const dwarf=await browser.newContext({viewport:{width:1280,height:900}}),dwarfPage=await dwarf.newPage();dwarfPage.on('pageerror',e=>errors.push(e.message));
+    const dwarf=await browser.newContext({viewport:{width:1440,height:900}}),dwarfPage=await dwarf.newPage();dwarfPage.on('pageerror',e=>errors.push(e.message));
     assert((await dwarf.request.post(base+'/api/login',{data:{employee_no:'HR-DWARF',password:'type-fixture-only'}})).ok());
     await dwarf.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}});
     await dwarfPage.goto(base+'/');await dwarfPage.locator('.tabs-desktop [data-tab=hrEmployees]').click();await dwarfPage.locator('#importEmployees').waitFor({state:'attached'});
     await dwarfPage.locator('details').filter({has:dwarfPage.locator('#importEmployees')}).locator('summary').click();
-    const foreign=String(9852000+(index-1)*10),own=String(Number(foreign)+1),fresh=String(Number(foreign)+2);
-    const occupied=await ctx.request.get(base+'/__fixture/occupied-workbook?index='+(index-1));assert(occupied.ok());
-    await dwarfPage.locator('#importEmployeesWorkbook').setInputFiles({name:'occupied-synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await occupied.body()});
-    await dwarfPage.locator('#importEmployees [type=submit]').click();const previewDialog=dwarfPage.getByRole('dialog',{name:'导入预检'});await previewDialog.waitFor();
-    const previewText=await previewDialog.innerText();assert.match(previewText,/将新增 1 人；已有员工 2 人/);assert(previewText.includes('热力追踪')&&previewText.includes('仅可跳过')&&previewText.includes('跨圈调动'));assert(previewText.includes('不可泄露原姓名'+foreign));assert(previewText.includes('不可泄露原姓名'+own));
-    await dwarfPage.locator('[data-modal-cancel]').click();
-    assert(!(await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json())).some(p=>p.employee_no===fresh),'Cancel cannot create an employee');
-    await dwarfPage.locator('#importEmployees [type=submit]').click();await previewDialog.waitFor();await dwarfPage.getByRole('button',{name:'查看最终变更',exact:true}).click();await dwarfPage.getByRole('dialog',{name:'确认导入变更'}).waitFor();await dwarfPage.getByRole('button',{name:'确认导入',exact:true}).click();await dwarfPage.getByRole('dialog',{name:'导入已完成'}).waitFor();
-    assert(!(await dwarfPage.getByRole('dialog',{name:'导入已完成'}).innerText()).includes('不可泄露原姓名'+foreign));await dwarfPage.getByRole('button',{name:'知道了',exact:true}).click();
-    const dwarfPeople=await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json());assert(dwarfPeople.some(p=>p.employee_no===fresh));assert.equal(dwarfPeople.find(p=>p.employee_no===own).name,'不可泄露原姓名'+own);
-    const allPeople=await ctx.request.get(base+'/api/hr/employees').then(r=>r.json());const untouched=allPeople.find(p=>p.employee_no===foreign);assert(untouched&&untouched.name==='不可泄露原姓名'+foreign&&untouched.employee_type==='Comp28'&&!untouched.account_enabled);
-    // Existing own-circle employee: explicit custom rename and Type replacement.
-    await dwarfPage.locator('details').filter({has:dwarfPage.locator('#importEmployees')}).locator('summary').click();
-    await dwarfPage.locator('#importEmployeesWorkbook').setInputFiles({name:'occupied-synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await occupied.body()});
-    await dwarfPage.locator('#importEmployees [type=submit]').click();await previewDialog.waitFor();
-    const ownCard=previewDialog.locator('[data-import-row="3"]'),foreignCard=previewDialog.locator('[data-import-row="2"]');
-    assert.equal(await foreignCard.locator('[name=action]').count(),0);
-    await ownCard.locator('[name=action]').selectOption('update');
-    await ownCard.locator('[name=name_mode]').selectOption('custom');
-    await ownCard.locator('[name=custom_name]').fill('导入自定义合成姓名');
-    for(const width of [320,390,430,768,1440]){await dwarfPage.setViewportSize({width,height:900});assert.equal(await dwarfPage.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' import decision overflow '+width);}
-    if(shots){await dwarfPage.setViewportSize({width:390,height:844});await dwarfPage.locator('#toast').evaluate(el=>el.classList.remove('show'));await previewDialog.evaluate(el=>Promise.all(el.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{}))));await dwarfPage.screenshot({path:path.join(shots,engine+'-import-choice-mobile.png')});}
-    await dwarfPage.getByRole('button',{name:'查看最终变更',exact:true}).click();
-    const finalDialog=dwarfPage.getByRole('dialog',{name:'确认导入变更'});await finalDialog.waitFor();
-    assert.match(await finalDialog.innerText(),/更新 1 人，其中改名 1 人/);assert.match(await finalDialog.innerText(),/Comp28.*Comp40/);assert.match(await finalDialog.innerText(),/导入自定义合成姓名/);
-    if(shots){await dwarfPage.locator('[data-import-row]').first().waitFor({state:'detached'});await finalDialog.evaluate(el=>Promise.all(el.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{}))));await dwarfPage.screenshot({path:path.join(shots,engine+'-import-final-mobile.png')});}
+    const workbook=await ctx.request.get(base+'/__fixture/simple-workbook?index='+(index-1));assert(workbook.ok());
+    await dwarfPage.locator('#importEmployeesWorkbook').setInputFiles({name:'员工导入.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:await workbook.body()});
+    await dwarfPage.locator('#importEmployees [type=submit]').click();
+    const previewDialog=dwarfPage.getByRole('dialog',{name:'确认导入',exact:true});await previewDialog.waitFor();
+    assert.equal(await previewDialog.locator('[data-import-row]').count(),6);
+    assert.equal(await previewDialog.locator('[data-import-row="5"]').count(),0,'identical row should not prompt');
+    assert.equal(await previewDialog.locator('[data-import-row="4"] [data-import-original]').count(),0,'both original values empty should be omitted');
+    assert.match(await previewDialog.locator('[data-import-row="3"] [data-import-original]').innerText(),/原Type：Intern.*原实习结束：2099-11-30/);
+    assert.equal(await previewDialog.locator('[data-import-row="2"] [data-import-original]').innerText(),'原Type：Comp28');
+    assert(await previewDialog.locator('[data-import-row="6"] [name=action]').isDisabled());
+    assert.match(await previewDialog.locator('[data-import-row="6"]').innerText(),/陈雨.*陈宇/s);assert.match(await previewDialog.locator('[data-import-row="6"]').innerText(),/系统员工管理/);
+    assert(await previewDialog.locator('[data-import-row="7"] [name=action]').isDisabled());
+    await previewDialog.locator('[data-import-all]').click();assert.equal(await previewDialog.locator('[name=action]:checked').count(),4);
+    await previewDialog.locator('[data-import-none]').click();assert.equal(await previewDialog.locator('[name=action]:checked').count(),0);
+    await previewDialog.locator('[data-import-all]').click();
+    for(const width of [320,390,600,768,1440]){
+      await dwarfPage.setViewportSize({width,height:844});assert.equal(await dwarfPage.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' simple import overflow '+width);
+      const bounds=await previewDialog.evaluate(el=>{const b=el.querySelector('[type=submit]').getBoundingClientRect();return {top:b.top,bottom:b.bottom,height:innerHeight,scroll:el.scrollHeight-el.clientHeight};});assert(bounds.top>=0&&bounds.bottom<=bounds.height&&bounds.scroll<=1,engine+' fixed confirm '+width);
+    }
+    if(shots){for(const width of [1440,390]){await dwarfPage.setViewportSize({width,height:844});await previewDialog.evaluate(el=>Promise.all(el.getAnimations({subtree:true}).map(a=>a.finished.catch(()=>{}))));await dwarfPage.screenshot({path:path.join(shots,engine+'-import-simple-'+width+'.png')});}}
     await dwarfPage.getByRole('button',{name:'确认导入',exact:true}).click();await dwarfPage.getByRole('dialog',{name:'导入已完成'}).waitFor();await dwarfPage.getByRole('button',{name:'知道了',exact:true}).click();
-    const updated=await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json());
-    const ownAfter=updated.find(p=>p.employee_no===own);assert.equal(ownAfter.name,'导入自定义合成姓名');assert.equal(ownAfter.employee_type,'Comp40');assert.equal(ownAfter.account_enabled,false);
-    await dwarf.close();assert.deepEqual(errors,[]);console.log(engine+': actual create/edit, dates, V3 preview/skip, cross-circle disclosure/skip and own-circle custom-name/type update passed');await browser.close();browser=null;
+    const peopleAfter=await dwarf.request.get(base+'/api/hr/employees').then(r=>r.json()),firstNo=9860000+(index-1)*100;
+    const get=n=>peopleAfter.find(person=>person.employee_no===String(firstNo+n));
+    assert.equal(get(0).employee_type,'Comp40');assert.equal(get(1).internship_ends_on,'2099-12-31');assert.equal(get(2).employee_type,'Intern');assert.equal(get(3).employee_type,'Comp40');assert.equal(get(4).name,'陈雨');assert.equal(get(4).employee_type,'Comp28');assert.equal(get(6).employee_type,'');
+    const allPeople=await ctx.request.get(base+'/api/hr/employees').then(r=>r.json());assert.equal(allPeople.find(person=>person.employee_no===String(firstNo+5)).employee_type,'Comp28');
+    assert.equal(get(0).account_enabled,false);
+    await dwarf.close();assert.deepEqual(errors,[]);console.log(engine+': employee create/edit, two-choice file overwrite, unchanged omission, nonempty originals, mismatch/cross-circle skip and actual import passed');await browser.close();browser=null;
+
   }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(3000)]);}}})().catch(e=>{console.error(e);process.exitCode=1;});

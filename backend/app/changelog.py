@@ -7,6 +7,23 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.26.2", "date": "2026-10-26", "status": "candidate",
+        "items": [
+            {"summary": "认可照片支持预览与删除重选",
+             "detail": "选图后显示本地缩略图，可查看大图、删除并重新拍照或选择相册；删除同步清空文件输入与页内缓存，仅提交当前真实照片。沿用原上传、校验和提交幂等规则。",
+             "audiences": ["all"]},
+            {"summary": "正式Lead普通认可分值修正",
+             "detail": "GSM认可本职主管计0.5分，AM认可计1分；本职CM/TR的代理TA Lead仍按CM/TR分值。页面提示与服务端一致，固定分值认可、POC、月度上限和已保存签卡不追溯重算。",
+             "audiences": ["all"]},
+            {"summary": "员工导入覆盖选择简化",
+             "detail": "同工号同姓名的本圈可管理员工仅选择按文件覆盖Type及实习期限或跳过，文件空值也覆盖清空。姓名不一致只跳过，需在员工管理核对；不通过导入改名。预检展示变化并重新核验，保留权限、停用及事务规则。",
+             "audiences": ["HR_CIRCLE", "HR_ADMIN", "SYSTEM_ADMIN"], "permissions": ["HR_MANAGE"]},
+            {"summary": "发布版本与验证期间变更检查补强",
+             "detail": "完善源码、版本和验证期间变更的检查，防止打包混入未验证修改；部署仍需明确授权并沿用备份、健康核验和失败回滚流程。",
+             "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+        ],
+    },
+    {
         "version": "2026.10.26.1", "date": "2026-10-26", "status": "candidate",
         "items": [
             {"summary": "轮岗预排固定窗口与跨线调整完善",

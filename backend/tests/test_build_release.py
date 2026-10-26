@@ -206,4 +206,48 @@ def test_packaging_runs_the_full_suite_first() -> None:
     assert "tests" in source and "run_all.py" in source
     assert "refusing to build a release package" in source
     body = source[source.index("def main() -> None:"):]
-    assert body.index("run_test_suite()") < body.index("release_sources()")
+    assert body.index("ensure_release_contract(version)") < body.index("run_test_suite()")
+    assert body.index("run_test_suite()") < body.index("manifest = build_manifest")
+
+
+def test_precheck_does_not_run_tests_or_create_package(monkeypatch):
+    mod = load_build_release()
+    calls = []
+    monkeypatch.setattr(mod.sys, "argv", ["build_release.py", "--check-only"])
+    monkeypatch.setattr(mod, "ensure_clean_checkout", lambda: calls.append("clean"))
+    monkeypatch.setattr(mod, "read_app_version", lambda: "1.2.3")
+    monkeypatch.setattr(mod, "ensure_release_contract", lambda version: calls.append("contract"))
+    monkeypatch.setattr(mod, "git_commit", lambda: "a" * 40)
+    monkeypatch.setattr(mod, "release_sources", lambda: calls.append("sources"))
+    monkeypatch.setattr(mod, "run_test_suite", lambda: pytest.fail("precheck ran full suite"))
+    monkeypatch.setattr(mod, "build_manifest", lambda *args: pytest.fail("precheck packaged sources"))
+    mod.main()
+    assert calls == ["clean", "contract", "sources"]
+
+
+def test_invalid_release_contract_blocks_before_full_suite(monkeypatch):
+    mod = load_build_release()
+    monkeypatch.setattr(mod.sys, "argv", ["build_release.py"])
+    monkeypatch.setattr(mod, "ensure_clean_checkout", lambda: None)
+    monkeypatch.setattr(mod, "read_app_version", lambda: "1.2.3")
+    def invalid(version):
+        raise RuntimeError("version mismatch")
+    monkeypatch.setattr(mod, "ensure_release_contract", invalid)
+    monkeypatch.setattr(mod, "run_test_suite", lambda: pytest.fail("invalid contract reached tests"))
+    with pytest.raises(RuntimeError, match="version mismatch"):
+        mod.main()
+
+
+def test_changed_commit_during_full_suite_refuses_package(monkeypatch):
+    mod = load_build_release()
+    monkeypatch.setattr(mod.sys, "argv", ["build_release.py"])
+    monkeypatch.setattr(mod, "ensure_clean_checkout", lambda: None)
+    monkeypatch.setattr(mod, "read_app_version", lambda: "1.2.3")
+    monkeypatch.setattr(mod, "ensure_release_contract", lambda version: None)
+    commits = iter(["a" * 40, "b" * 40])
+    monkeypatch.setattr(mod, "git_commit", lambda: next(commits))
+    monkeypatch.setattr(mod, "release_sources", lambda: [])
+    monkeypatch.setattr(mod, "run_test_suite", lambda: None)
+    monkeypatch.setattr(mod, "build_manifest", lambda *args: pytest.fail("changed commit was packaged"))
+    with pytest.raises(RuntimeError, match="Git commit changed"):
+        mod.main()
