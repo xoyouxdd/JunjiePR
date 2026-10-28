@@ -143,7 +143,7 @@ def seed_cohort(three=False, mixed=False):
                 post.update(open=True,opened=True,manual=False,openAt=None,closeAt=None,hold101Role=None)
                 post.pop('hold',None);post.pop('hold101',None)
             for i,no in enumerate(['9710020','9710030','9710040']):
-                p=deepcopy(state['persons']['9710020']);p.update(pid=no,name='模拟岗位人员'+str(i),state='onpost',line='A1',lineStart=now-30,
+                p=deepcopy(state['persons']['9710020']);p.update(pid=no,name='模拟岗位人员'+str(i),role='rotation',state='onpost',line='A1',lineStart=now-30,
                     end=1440,visited=['A1'],assign=None,absences=[],ate=False,readyAt=None,breakKind=None,breakStart=None)
                 state['persons'][no]=p;line['posts'][i].update(key='fixture-'+str(i),name='岗位'+str(i+1),occ=no,since=now-30)
                 p['continuousStart']=now-30
@@ -558,7 +558,7 @@ def seed_assignment_window(remaining=2):
     return aid
 
 
-def test_formal_early_plan_window_blocks_redistribution_and_allows_reviewed_failed_route_repair():
+def test_formal_issued_task_is_locked_but_closed_line_refreshes_destination():
     seed_assignment_window()
     with TestClient(app) as operator,TestClient(app) as cm:
         login(operator,'9710020');login(cm,'9710000')
@@ -573,11 +573,14 @@ def test_formal_early_plan_window_blocks_redistribution_and_allows_reviewed_fail
         assert not people['9710010']['canDepart']
         ok(operator.post('/api/rotation-board/act',json={'action':'line','line':'A1','active':False}))
         blocked=ok(cm.get('/api/rotation-board/me'))['person']
-        assert blocked['assign']['line']=='A1' and blocked['assign']['blocked'] and not blocked['canDepart']
+        assert blocked['assign']['line']=='B1' and not blocked['assign'].get('blocked') and not blocked['canDepart']
+        assert blocked['readyAt']==own['readyAt'], 'refresh must not shorten rest'
+        assert blocked['task']['allowedAt']==own['task']['allowedAt']
+        assert blocked['task']['deadlineAt']==own['task']['deadlineAt']
         body={'action':'move','pid':'9710000','line':'B1','i':0,'force':True,'reason':'原线路停用，现场核对后安排'}
-        preview=ok(operator.post('/api/rotation-board/adjust/preview',json=body))
-        ok(operator.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':preview['expected_snapshot']}))
-        assert ok(cm.get('/api/rotation-board/me'))['person']['line']=='B1'
+        # Refreshed valid tasks remain protected; a force flag cannot bypass rest.
+        assert operator.post('/api/rotation-board/adjust/preview',json=body).status_code==400
+        assert ok(cm.get('/api/rotation-board/me'))['person']['state']=='rest'
 
 
 def test_screen_666_uses_formal_board_and_has_only_rotation_confirmation_permission():

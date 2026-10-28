@@ -298,6 +298,7 @@ def plan(eng, now):
             if first_at>now+3+EPS: break
             cohort=[p for p in candidates if max(p['assign']['departAt'],p.get('readyAt') or now,p['assign'].get('notBefore',0))-first_at<=1+EPS]
             at=max(max(p['assign']['departAt'],p.get('readyAt') or now,p['assign'].get('notBefore',0)) for p in cohort)
+            if at>now+3+EPS:break  # Issue the whole round only three minutes before its latest ready time.
             changed=_build_batch(eng,line,cohort,at,now) or changed
             for p in cohort:
                 candidates.remove(p)

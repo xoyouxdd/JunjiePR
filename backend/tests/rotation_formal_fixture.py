@@ -18,6 +18,27 @@ def assignment_window(payload: dict):
 @app.get('/__fixture/pool')
 def pool():
     return {'checked_out':engine.pool.checkedout()}
+
+@app.post('/__fixture/room')
+def room(payload: dict):
+    from app.v2_database import SessionLocal
+    from app.rotation import service as S
+    from datetime import date
+    aid=seed_cohort()
+    with SessionLocal() as db:
+        db.info['rotation_formal']=True
+        with S.transaction(db):
+            cfg=S.load_config(db,aid);settings=S.settings_of(cfg)
+            settings.update(mealEarliest='00:00',mealAfterStart=0,mealForceAfterStart=0 if payload.get('forced') else 9999)
+            cfg.settings_json=S._dumps(settings)
+            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
+            p=state['persons']['9710000']
+            p.update(state='walkback',start=now-180,end=now+360,line=None,lineStart=None,continuousStart=None,
+                     assign=None,ate=False,arriveAnchor=None,breakKind=None,breakStart=None,readyAt=None,
+                     walkbackSince=now,lastDeparture={'line':'A1','post':'上客1'},after='rest')
+            state['closeAt']='23:59'
+            S.save_day(db,row,state)
+    return {'ok':True}
 @app.post('/__fixture/cohort')
 def cohort(payload: dict | None = None):
     if payload and payload.get('cross'):
@@ -52,7 +73,8 @@ def display():
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
             base=deepcopy(state['persons']['9710020']);post_base=deepcopy(state['lines'][0]['posts'][0])
-            state['persons']={pid:p for pid,p in state['persons'].items() if pid in ('9710000','9710010','9710050')}
+            state['persons']={pid:p for pid,p in state['persons'].items() if pid in ('9710000','9710010','9710050','9710020')}
+            state['persons']['9710020'].update(state='excluded',role='excluded',line=None,lineStart=None,continuousStart=None,assign=None)
             state['lines']=[];state['rotationTasks']={};state['plan'].update(crew={},seven={},push7=[],lost=[])
             counter=0
             for lid,names in groups:
@@ -67,7 +89,7 @@ def display():
                         state['persons'][pid]=p;post.update(occ=pid,since=p['lineStart'])
                     line['posts'].append(post)
                 state['lines'].append(line)
-            for i,p in enumerate(list(state['persons'].values())[:3]):
+            for i,p in enumerate(state['persons'][pid] for pid in ('9710000','9710010','9710050')):
                 p.update(name='轮岗员'+str(70+i),state='ready',readyAt=now-1+i/2,assign={'line':'A1','mode':'push','departAt':now-1+i/2},start=540,end=1080)
             for i in range(12):
                 p=deepcopy(base);pid='rest-'+str(i);p.update(pid=pid,name='轮岗员'+str(40+i),state='rest',role='rotation',line=None,lineStart=None,

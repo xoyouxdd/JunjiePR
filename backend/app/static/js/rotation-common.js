@@ -441,18 +441,30 @@ function badges(p) {
   return out.length ? `<span class="rt-badges">${out.join('')}</span>` : '';
 }
 
-function lineCard(L, n, ops) {
-  const persons = RT.data.day.persons;
+function rotationPostRow(cls,attrs,label,person,meta){
+  return `<div class="${cls}"${attrs}>${label}${person}<span class="rt-mins">${meta}</span></div>`;
+}
+function lineCard(L, n, ops, view = {}) {
+  const persons = view.day?.persons || RT.data.day.persons;
+  const lookup = pid => persons.find(p => p.pid === pid);
+  const daily = !!view.daily, editable = daily && view.editable && !L.standby;
   const incoming = persons.filter(p => p.assign && p.assign.line === L.id).sort((a, b) => a.assign.departAt - b.assign.departAt);
   const openIdx = L.posts.map((x, i) => (x.open ? i : -1)).filter(i => i >= 0);
   const exitIndex = openIdx.length ? openIdx[openIdx.length - 1] : -1;
   const rows = L.posts.map((x, i) => {
     let cls = 'rt-post', who, mins = '';
+    if(daily){
+      cls+=' rt-daily-slot'+(!x.open?' closed':'');
+      const key=L.id+'#'+i,p=lookup(x.occ);
+      const label=view.editable?`<button type="button" class="rt-pn rt-daily-post" data-daily-rename="${esc(key)}" ${editable?`draggable="true" data-daily-post="${esc(key)}"`:''} aria-label="${esc(x.name)}，双击改名${editable?'，拖拽交换岗位':''}">${esc(x.name)}</button>`:`<span class="rt-pn">${esc(x.name)}</span>`;
+      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="交换人员 ${esc(key)}">${esc(p?.name||'空岗')}</button>`:`<span class="rt-who-name">${esc(p?.name||'空岗')}</span>`;
+      return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',label,person,x.open?(p?'预排':'空岗'):'未开岗');
+    }
     if (!L.active) { cls += ' closed'; who = '待命'; }
     else if (!x.open) { cls += ' closed'; who = x.openAt && !x.opened ? `${esc(x.openAt)} 开` : '未开'; }
     else if (!x.occ) { cls += ' vacant'; who = '空岗'; }
     else {
-      const p = personOf(x.occ);
+      const p = lookup(x.occ);
       who = esc(p ? p.name : x.occ);
       if (p && p.flags.includes('7点岗') && !p.flags.includes('推7点下来')) who += '<span class="rt-badge p7">7点</span>';
       if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">${preparingText(p.preparing)}</span>`; }
@@ -469,12 +481,12 @@ function lineCard(L, n, ops) {
       cls += ' pending-remove'; who += `<span class="rt-schedule-label">待撤 ${esc(x.closeAt)}</span>`;
     }
     const attrs = ops ? ` data-post="${esc(L.id)}#${i}" tabindex="0" role="button"` : '';
-    const drag=ops&&x.occ&&['notyet','onpost'].includes(personOf(x.occ)?.state)?` draggable="true" data-drag-pid="${esc(x.occ)}"`:'';
-    return `<div class="${cls}${x.hold101?' holding101':''}"${attrs}><${ops?'button type="button"':'span'} class="rt-pn"${ops?` draggable="true" data-drag-post="${esc(L.id)}#${i}" ${x.key?`data-wf-rename="${esc(x.key)}"`:''} aria-label="${esc(x.name)}，双击改名，拖拽交换岗位"`:''}>${esc(x.name)}</${ops?'button':'span'}><span class="rt-who-name"${drag}>${who}</span><span class="rt-mins">${mins}</span></div>`;
+    const drag=ops&&x.occ&&['notyet','onpost'].includes(lookup(x.occ)?.state)?` draggable="true" data-drag-pid="${esc(x.occ)}"`:'';
+    return rotationPostRow(cls+(x.hold101?' holding101':''),attrs,`<${ops?'button type="button"':'span'} class="rt-pn"${ops?` draggable="true" data-drag-post="${esc(L.id)}#${i}" ${x.key?`data-wf-rename="${esc(x.key)}"`:''} aria-label="${esc(x.name)}，双击改名，拖拽交换岗位"`:''}>${esc(x.name)}</${ops?'button':'span'}>`,`<span class="rt-who-name"${drag}>${who}</span>`,mins);
   }).join('');
-  const inc = incoming.length&&!RT.data?.day?.taskWorkflow ? `<div class="rt-incoming">即将进线：${incoming.slice(0, 3).map(p => `<b>${esc(p.name)}</b> ${p.state === 'heading' ? '前往中' : hm(p.assign.departAt)}`).join('，')}${incoming.length > 3 ? ` 等 ${incoming.length} 人` : ''}</div>` : '';
+  const inc = !daily&&incoming.length&&!RT.data?.day?.taskWorkflow ? `<div class="rt-incoming">即将进线：${incoming.slice(0, 3).map(p => `<b>${esc(p.name)}</b> ${p.state === 'heading' ? '前往中' : hm(p.assign.departAt)}`).join('，')}${incoming.length > 3 ? ` 等 ${incoming.length} 人` : ''}</div>` : '';
   const occupied = L.posts.filter(x => x.open && x.occ).length;
   const opened = L.posts.filter(x => x.open).length;
   const head = ops ? ` data-line="${esc(L.id)}" tabindex="0" role="button"` : '';
-  return `<div class="rt-line${L.active ? '' : ' off'}"><div class="rt-line-head g-${esc(L.group || '')}"${head}><span class="rt-lid">${esc(L.id)}</span><span>${L.active ? `${occupied}/${opened} 岗` : '待命线'}</span></div>${rows}${inc}</div>`;
+  return `<div class="rt-line${L.active ? '' : ' off'}"><div class="rt-line-head g-${esc(L.group || '')}"${head}><span class="rt-lid">${esc(L.id)}</span><span>${daily?`${opened}/${L.posts.length} 岗`:L.active ? `${occupied}/${opened} 岗` : '待命线'}</span></div>${rows}${inc}</div>`;
 }

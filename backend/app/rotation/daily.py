@@ -68,6 +68,10 @@ def prestart(state, now):
             and all(p['state'] in ('notyet', 'excluded') for p in state['persons'].values()))
 
 
+def draft_editable(state, work_date, today, now):
+    return work_date > today or work_date == today and now < first_start(state)
+
+
 def plan_revision(state):
     content = {'lines': state['lines'], 'plan': state['plan'], 'closeAt': state.get('closeAt'),
                'persons': {pid: {k: p.get(k) for k in ('role', 'start', 'end', 'state')} for pid, p in state['persons'].items()}}
@@ -120,7 +124,9 @@ def day_payload(db,attraction_id,work_date,at=None):
     result['opening_source'] = None
     if at is None and state:
         editable_live = work_date == today and prestart(state, now)
-        result['can_edit'] = bool(work_date >= today and (row.status == 'draft' or editable_live))
+        result['can_edit'] = bool(row.status == 'draft' and draft_editable(state, work_date, today, now) or editable_live)
+        result['can_generate'] = result['can_generate'] and result['can_edit']
+        result['can_publish'] = row.status == 'draft' and work_date == today
         if result['can_edit']:
             result['draft'] = deepcopy(state)
             result['day'] = planned_view(db, cfg, attraction_id, work_date, state) if row.status == 'draft' else present(db, cfg, attraction_id, work_date, state, now)
@@ -186,6 +192,8 @@ def edit(db,attraction_id,actor,work_date,body):
     if not valid_live and (type(revision) is not int or revision!=(row.version if row else 0)):raise S.ConfirmationConflict('班表已更新，请刷新后重新调整')
     action=body.get('action')
     if not isinstance(action,str):raise S.ActionError('操作必须是字符串')
+    if state and row.status=='draft' and not draft_editable(state,work_date,today,now) and action!='publish':
+        raise S.ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
     if action=='draft_generate':
         if body.get('force'):raise S.ActionError('每日班表不支持清空运行记录')
         S.do_draft_action(db,attraction_id,actor,{'action':action,'date':work_date})
@@ -195,6 +203,25 @@ def edit(db,attraction_id,actor,work_date,body):
     upload=S.roster_upload_for(db,attraction_id,work_date)
     if action=='publish' and upload and state.get('rosterUploadId') and state['rosterUploadId']!=upload.id:
         raise S.ActionError('上传班表已更新，请重新生成并核对预排后启用')
+    if action=='draft_rename_post':
+        engine=S.E.Engine(state,S.settings_of(cfg),None)
+        line,index,post=engine.plan_post(body.get('post'))
+        name=body.get('name')
+        if not isinstance(name,str) or not 1<=len(name.strip())<=40:
+            raise S.ActionError('岗位名称须为1至40字')
+        name=name.strip()
+        if body.get('expected_name')!=post['name']:
+            raise S.ConfirmationConflict('岗位名称或位置已变化，请刷新后重新修改')
+        if any(i!=index and p['name']==name for i,p in enumerate(line['posts'])):
+            raise S.ActionError('本线路已有同名岗位')
+        old=post['name']
+        if old==name:return
+        from app.rotation.workflow import initialize
+        initialize(engine)  # Bind 101 identity before a first prearrangement rename.
+        post['name']=name
+        S.save_day(db,row,state)
+        S.DbHooks(db,attraction_id,work_date).log(action,actor,None,line['id'],name,{'from':old,'to':name,'post':body['post']})
+        return
     if action in ('draft_swap_people','draft_swap_posts'):
         source,target=body.get('source'),body.get('target')
         if action=='draft_swap_people' and isinstance(source,str) and source.startswith('person:'):

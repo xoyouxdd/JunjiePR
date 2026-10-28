@@ -7,6 +7,12 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.28.5", "date": "2026-10-28", "status": "candidate",
+        "items": [{"summary": "轮岗派发时间与班表交互完善",
+                   "detail": "同轮按最晚允许出发时间提前三分钟统一派发，不缩短任何人的餐休；预排与实时看板共用线路、岗位和人员分区渲染，人员和岗位通过拖拽交换，岗位支持双击改名。首班开始后每日班表固定，未启用的今日预排仍可发布；修正重复读取班表，手机回休息室与上岗前确认完整接入新版界面，展示下岗来源、餐休选择、任务时间、接替路线和前后对比；确认安排后提示前往执行。",
+                   "audiences": ["all"]}],
+    },
+    {
         "version": "2026.10.28.4", "date": "2026-10-28", "status": "candidate",
         "items": [{"summary": "头像装扮收进个人设置",
                    "detail": "GSM及以上取消独立我的信息页面，电脑点顶部个人头像、手机在更多的身份卡中打开装扮弹窗；恢复原手机业务入口。主管首页及本人勋章入口保留，HR账号不显示装扮入口。",

@@ -25,12 +25,14 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   const health=await mobile.request.get(base+'/health').then(r=>r.json());await mobile.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}});
   await phone.goto(base+'/?view=actionCenter');await phone.locator('[data-formal-rotation-todo] .rt-task-comparison').waitFor({timeout:15000});
   assert.equal(await phone.locator('.rt-task-columns .rt-task-line').count(),2);
+  assert.equal(await phone.locator('[data-confirm-page=depart] .rt-confirm-times strong').count(),2);
+  assert.equal(await phone.locator('.rt-confirm-routes>div').count()>0,true);
   for(const width of [320,390,800,1024,1440]){
    await screenPage.setViewportSize({width,height:1000});await board.setViewportSize({width,height:1000});await phone.setViewportSize({width,height:900});
    for(const p of [screenPage,board,phone])assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' overflow '+width);
   }
   if(engine==='edge'){
-   const shots=path.join(root,'.handover_review/rotation-workflow-20261028');await screenPage.setViewportSize({width:1440,height:1000});await screenPage.screenshot({path:path.join(shots,'screen.png'),fullPage:true});await phone.setViewportSize({width:390,height:844});await phone.screenshot({path:path.join(shots,'phone.png'),fullPage:true});
+   const shots=path.join(root,'.handover_review/rotation-workflow-20261028');await screenPage.setViewportSize({width:1440,height:1000});await screenPage.screenshot({path:path.join(shots,'screen.png'),fullPage:true});await phone.setViewportSize({width:390,height:844});await phone.screenshot({path:path.join(shots,'phone.png'),fullPage:true});await phone.locator('[data-confirm-page=depart]').screenshot({path:path.join(shots,'phone-depart.png'),style:'.tabs-mobile{visibility:hidden!important}'});
    // Confirm only this person's task; the other two remain independent.
    await phone.locator('[data-rotation-task=depart]').click();await phone.locator('[data-modal-confirm]').click();
    await screenPage.waitForFunction(()=>RT.data.day.persons.find(p=>p.pid==='9710000').state==='onpost');
@@ -58,7 +60,41 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
    await manager.request.post(base+'/__fixture/display');await screenPage.reload();await screenPage.locator('.rt-workflow-board .rt-line').nth(8).waitFor();await screenPage.setViewportSize({width:1440,height:1000});
    await screenPage.screenshot({path:path.join(root,'.handover_review/rotation-workflow-20261028/screen.png'),fullPage:true});
   }
-  assert.deepEqual(errors,[]);console.log(engine+': shared screen, isolated permissions, inline rename, personal routes, undo and 5 widths passed');
+  // Real arrival UI, choice eligibility, retained selection, forced meal and idempotent receipt.
+  for(const forced of [false,true]){
+   const setup=await manager.request.post(base+'/__fixture/room',{data:{forced}});assert(setup.ok(),await setup.text()+'\n'+log);
+   await phone.reload();await phone.locator('[data-confirm-page=room]').waitFor();
+   assert.match(await phone.locator('.rt-confirm-origin').innerText(),/A1.*上客1/s);
+   assert(await phone.locator('.rt-confirm-page h3').evaluate(el=>parseFloat(getComputedStyle(el).fontSize)>=22));
+   const own=await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json());
+   assert.equal(own.person.mealOptions.forced,forced);
+   if(!forced){
+    assert(own.person.mealOptions.canChoose);
+    await phone.locator('[name=formalRotationMeal][value=meal]').check();
+    await phone.locator('.rt-confirm-page h3').click();
+    await phone.waitForTimeout(5500);
+    assert(await phone.locator('[name=formalRotationMeal][value=meal]').isChecked());
+   }else{
+    assert.equal(await phone.locator('[name=formalRotationMeal][value=rest]').count(),0);
+    assert(await phone.locator('[name=formalRotationMeal][value=meal]').isDisabled());
+   }
+   for(const width of [320,390,736]){
+    await phone.setViewportSize({width,height:900});
+    assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' room overflow '+width);
+   }
+   if(engine==='edge'&&!forced){await phone.setViewportSize({width:390,height:844});await phone.locator('[data-confirm-page=room]').screenshot({path:path.join(root,'.handover_review/rotation-workflow-20261028/phone-room.png'),style:'.tabs-mobile{visibility:hidden!important}'});}
+   await phone.locator('[data-rotation-task=arrive]').click();await phone.locator('[data-modal-confirm]').click();
+   await phone.getByText('吃饭已开始',{exact:true}).waitFor();
+   assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'meal');
+   assert.equal(await phone.locator('[data-rotation-task=arrive]').count(),0);
+  }
+  assert((await manager.request.post(base+'/__fixture/room',{data:{forced:false}})).ok());
+  await phone.reload();await phone.locator('[data-confirm-page=room]').waitFor();
+  assert(await phone.locator('[name=formalRotationMeal][value=rest]').isChecked());
+  await phone.locator('[data-rotation-task=arrive]').click();await phone.locator('[data-modal-confirm]').click();
+  await phone.getByText('休息已开始',{exact:true}).waitFor();
+  assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'rest');
+  assert.deepEqual(errors,[]);console.log(engine+': shared screen, isolated permissions, inline rename, personal routes, undo, room/rest/meal confirmations and 5 widths passed');
   await browser.close();browser=null;
  }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(3000)]);}}})().catch(e=>{console.error(e);process.exitCode=1;});

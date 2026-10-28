@@ -30,13 +30,13 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     // A's response is lost after commit; retry uses the same receipt and cannot push twice.
     await a.route('**/api/rotation-board/me/act',async route=>{await route.fetch();await route.abort('failed');},{times:1});
     await a.locator('[data-rotation-task=depart]').click();await a.locator('[data-modal-confirm]').click();
-    await a.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('在 A1 线'));
+    await a.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('已确认上岗安排，请前往 A1线'));
     const afterA=(await read(0)).person,stillB=(await read(1)).person;
     assert.equal(afterA.state,'onpost');assert.equal(stillB.state,'ready');
     assert.equal(stillB.confirmationTokens.depart,beforeB.confirmationTokens.depart);
     assert.equal((await contexts[0].request.post(base+'/api/rotation-board/me/act',{data:{action:'depart',confirmation_token:beforeA.confirmationTokens.depart}}).then(r=>r.json())).duplicate,true);
     await b.locator('[data-rotation-task=depart]').click();await b.locator('[data-modal-confirm]').click();
-    await b.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('在 A1 线'));
+    await b.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('已确认上岗安排，请前往 A1线'));
     const afterB=(await read(1)).person;assert.equal(afterB.state,'onpost');assert.equal(afterB.post,'岗位2');
     for(const width of [320,390,430,768,1440]){for(const page of pages){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,name+' overflow '+width);}}
     assert.deepEqual(errors,[]);console.log(name+': independent mixed personal routes, lost-response recovery, unchanged peer token, duplicate protection and five widths passed');

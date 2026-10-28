@@ -574,6 +574,7 @@ class Engine:
             raise ActionError('该人员正在定岗，请先取消定岗')
         if p.get('lineStart') is not None:
             self.h.segment(p['pid'], L['id'], p['lineStart'], now)
+        p['lastDeparture'] = {'line': L['id'], 'post': L['posts'][i]['name']}
         p['line'] = None
         p['lineStart'] = None
 
@@ -716,6 +717,8 @@ class Engine:
     def assignment_locked(self, p, now):
         if (p.get('assign') or {}).get('taskId'):
             return True
+        if self.d.get('taskWorkflow'):
+            return False  # Estimated destinations aren't issued tasks, including an earlier cohort member.
         def own(q):
             return bool(q.get('assign') and q['state'] in ('rest', 'meal', 'ready')
                         and (q['state'] == 'ready' or (q.get('readyAt') if q.get('readyAt') is not None else now) - now <= 3 + 1e-9))

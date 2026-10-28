@@ -283,7 +283,7 @@ function initialDraftView(data) {
   const listSelect=(kind,n,pool)=>Array.from({length:n},(_,i)=>`<select data-list="${kind}">${option(plan[kind][i],pool)}</select>`).join(' ');
   const roleSelect=p=>`<select data-role="${esc(p.pid)}">${[['rotation','轮岗'],['op','OP'],['excluded','不轮岗']].map(([v,t])=>`<option value="${v}" ${p.role===v?'selected':''}>${t}</option>`).join('')}</select>`;
   return `<section class="panel"><h2>${esc(draft.date)} · ${data.prestart_live?'开班前看板':'预排看板'}</h2>
-    <p class="field-hint">${data.prestart_live?'今天首班开始前与看板同步；首班开始后固定整份班表，之后在看板调整。':'未来日期只保存预排，不提前开始计时。岗位和人员可拖拽交换。'}</p>
+    <p class="field-hint">${data.prestart_live?'今天首班开始前与看板同步；首班开始后固定整份班表，之后在看板调整。':'未来日期只保存预排，不提前开始计时。岗位和人员可拖拽交换，双击岗位名称修改。'}</p>
     ${dailyBoard(data,true)}
     <details class="rt-daily-settings"><summary>预排设置 · 岗位人员、闭园时间、任务与角色</summary>
       ${draft.draftAlerts.map(a=>`<div class="rt-warn">${esc(a)}</div>`).join('')}
@@ -312,19 +312,12 @@ async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,pre
   finally{if(generation===daily.request){daily.loading=false;if(tab==='draft'){RT.render(false,true);}}}
 }
 function dailyBoard(data,editable=false){
-  const d=data.day;if(!d)return '';
-  const people=Object.fromEntries(d.persons.map(p=>[p.pid,p]));
-  const seated=new Set(d.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean)));
-  const lines=d.lines.map(l=>`<article class="rt-line${l.active?'':' off'}"><header class="rt-line-head g-${esc(l.group||'')}"><strong class="rt-lid">${esc(l.id)}</strong><span>${l.posts.filter(x=>x.open).length}/${l.posts.length} 岗</span></header>${l.posts.map((x,i)=>{const key=`${l.id}#${i}`,p=people[x.occ],can=editable&&!l.standby;return `<div class="rt-post rt-daily-slot${x.open?'':' closed'}" ${can?`data-daily-slot="${esc(key)}"`:''}>${can?`<button type="button" class="rt-pn rt-daily-post" draggable="true" data-daily-post="${esc(key)}" aria-label="交换岗位 ${esc(x.name)}">${esc(x.name)}</button><button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="交换人员 ${esc(key)}">${esc(p?.name||'空岗')}</button>`:`<span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${esc(p?.name||'空岗')}</span>`}<span class="rt-mins">${x.open?(p?'预排':'空岗'):'未开岗'}</span></div>`;}).join('')}</article>`).join('');
-  const unseated=d.persons.filter(p=>!seated.has(p.pid));
-  const initialRest=p=>p.role==='rotation'&&p.state==='notyet'&&[420,435].includes(p.start);
-  const pendingRest=p=>['walkback','pending','op'].includes(p.state)||p.role==='op'&&p.state==='notyet';
-  const section=(title,list)=>`<section class="rt-sect"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(p=>{const can=editable&&p.role==='rotation';return `<${can?'button type="button" draggable="true" data-daily-person="person:'+esc(p.pid)+'"':'div'} class="rt-chip">${rotationName(p)}<span class="rt-sub">${p.role==='op'?'OP':p.role==='excluded'?'不轮岗':p.state==='notyet'?(data.frozen?'开班预排':'班次未开始'):esc(STATE_NAME[p.state]||'待安排')}</span></${can?'button':'div'}>`;}).join(''):'暂无'}</div></section>`;
-  return `<div class="rt-board rt-daily-board"><div class="rt-lines">${lines}</div><div class="rt-pool">${section('待出发',unseated.filter(p=>p.state==='ready'))}${section('待确定休息',unseated.filter(pendingRest))}${section('吃饭区',unseated.filter(p=>p.state==='meal'))}${section('休息区',unseated.filter(p=>p.state==='rest'||initialRest(p)))}${section('圈外人员',unseated.filter(p=>p.state==='away'))}${section('其他人员',unseated.filter(p=>!['ready','walkback','pending','op','meal','rest','away'].includes(p.state)&&!initialRest(p)&&!pendingRest(p)))}</div></div>`;
+  if(!data.day)return '';
+  return `<div class="rt-workflow-board">${workflowBoardContent(data.day,0,false,{daily:true,editable,frozen:data.frozen})}</div>`;
 }
 function dailyHistory(data){
   const note=data.opening_source==='late_publish'?`首班之后才启用轮岗，展示 ${hm(data.as_of)} 启用时固定的开班安排。`:data.opening_source==='unstarted_draft'?'此日期保留了未启用的预排，仅供回顾。':data.opening_source==='opening'?`首班 ${hm(data.as_of)} 开始时已固定，后续看板调整不改变本班表。`:data.opening_source==='initial_draft'?'此日期没有首班固定快照，展示当时保存的初始预排。':data.opening_source==='earliest_record'?'此日期没有首班固定快照，展示最早保存记录，仅供回顾。':'此日期没有开班快照，仅保留末次状态供回顾。';
-  return `<section class="panel"><h2>${esc(data.date)} · 开班安排回顾</h2><p class="field-hint">只读 · ${esc(note)} 实际轮岗变化请到记录查看。</p>${dailyBoard(data)}</section>`;
+  return `<section class="panel"><h2>${esc(data.date)} · 开班安排回顾</h2><p class="field-hint">只读 · ${esc(note)} 实际轮岗变化请到记录查看。</p>${dailyBoard(data)}${data.can_publish?'<button type="button" class="primary" data-d="publish">发布并开始轮岗</button>':''}</section>`;
 }
 function draftView(){
   const data=daily.data,calendar=daily.calendar;
@@ -332,7 +325,7 @@ function draftView(){
   if(!data||daily.loading)return controls;
   const roster=`<section class="panel"><details><summary>上传班表 · ${data.roster.people.length}人${data.roster.file_name?' · '+esc(data.roster.file_name):''}</summary><div class="rt-scroll"><table class="rt-table"><thead><tr><th>姓名</th><th>工号</th><th>班次原文</th></tr></thead><tbody>${data.roster.people.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.employee_no)}</td><td>${esc(p.cell)}</td></tr>`).join('')}</tbody></table></div></details></section>`;
   if(data.can_edit){
-    return controls+roster+`<section class="panel"><h3>调整当日预排</h3><p class="field-hint">拖拽人员或岗位进行交换，支持跨线；岗位连同预排人员移动。</p><span role="status" data-daily-selection>拖拽到目标位置交换</span>${data.roster_changed?'<p class="rt-warn">上传班表已更新，当前预排仍为原安排，不会自动启用；请重新生成并核对。</p>':''}</section>`+initialDraftView(data);
+    return controls+roster+`<section class="panel"><h3>调整当日预排</h3><p class="field-hint">拖拽人员或岗位进行交换，支持跨线；岗位连同预排人员移动，双击岗位名称修改。</p><span role="status" data-daily-selection>拖拽到目标位置交换</span>${data.roster_changed?'<p class="rt-warn">上传班表已更新，当前预排仍为原安排，不会自动启用；请重新生成并核对。</p>':''}</section>`+initialDraftView(data);
   }
   if(data.day||data.times.length||data.legacy_history){
     return controls+roster+dailyHistory(data);
@@ -362,6 +355,24 @@ function dailyChoose(key,mode=daily.mode){
     return dailySend({action:mode==='posts'?'draft_swap_posts':'draft_swap_people',source,target:key});
   });
 }
+function dailyRenamePost(button){
+  if(daily.busy||daily.loading||!daily.data?.can_edit||RT.editingPost)return;
+  const key=button.dataset.dailyRename,name=button.textContent,date=daily.date,request=daily.request;
+  const input=document.createElement('input');input.type='text';input.className='rt-inline-post-name';input.value=name;input.maxLength=40;input.setAttribute('aria-label','岗位名称');
+  let finished=false;daily.source=null;RT.editingPost=true;button.replaceWith(input);input.focus();input.select();
+  const finish=async save=>{
+    if(finished)return;finished=true;const value=input.value.trim();
+    try{
+      if(save&&!value)toast('岗位名称须为1至40字',true);
+      else if(save&&value!==name){
+        if(daily.date!==date||daily.request!==request){toast('班表已变化，请重新修改',true);return;}
+        await dailySend({action:'draft_rename_post',post:key,expected_name:name,name:value});
+      }
+    }finally{RT.editingPost=false;if(input.isConnected)input.replaceWith(button);if(tab==='draft')RT.render(false,true);}
+  };
+  input.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key==='Escape'){event.preventDefault();event.stopPropagation();void finish(event.key==='Enter');}});
+  input.addEventListener('blur',()=>void finish(true));
+}
 function bindDraft(){
   const month=$app.querySelector('[data-daily-month]'),date=$app.querySelector('[data-daily-date]');
   if(month)month.onchange=()=>{if(month.value)void loadDaily(month.value+'-01','');};
@@ -373,13 +384,17 @@ function bindDraft(){
   $app.querySelectorAll('[data-daily-mode]').forEach(b=>b.onclick=()=>{daily.mode=b.dataset.dailyMode;daily.source=null;RT.render(false,true);});
   $app.querySelectorAll('[data-daily-person],[data-daily-post]').forEach(b=>{
     const mode=b.dataset.dailyPerson?'people':'posts',key=b.dataset.dailyPerson||b.dataset.dailyPost;
-    let touchStart=null,suppressClickUntil=0;
-    b.onclick=()=>{if(Date.now()>=suppressClickUntil)dailyChoose(key,mode);};
+    let touchStart=null;
+    b.onclick=()=>{};
     b.onpointerdown=e=>{if(e.pointerType!=='touch'||daily.busy)return;touchStart={x:e.clientX,y:e.clientY};RT.dragging=true;b.setPointerCapture(e.pointerId);};
-    b.onpointerup=e=>{if(!touchStart)return;const moved=Math.hypot(e.clientX-touchStart.x,e.clientY-touchStart.y)>12;touchStart=null;RT.dragging=false;RT.pressing=false;if(!moved)return;suppressClickUntil=Date.now()+500;e.preventDefault();const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-daily-slot]');if(target){daily.source=key;daily.mode=mode;dailyChoose(target.dataset.dailySlot,mode);}};
+    b.onpointerup=e=>{if(!touchStart)return;const moved=Math.hypot(e.clientX-touchStart.x,e.clientY-touchStart.y)>12;touchStart=null;RT.dragging=false;RT.pressing=false;if(!moved)return;e.preventDefault();const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-daily-slot]');if(target){daily.source=key;daily.mode=mode;dailyChoose(target.dataset.dailySlot,mode);}};
     b.onpointercancel=()=>{touchStart=null;RT.dragging=false;RT.pressing=false;};
     b.ondragstart=e=>{if(daily.busy){e.preventDefault();return;}RT.dragging=true;e.dataTransfer.setData('text/plain',JSON.stringify({mode,key}));};
     b.ondragend=()=>{RT.dragging=false;RT.pressing=false;};
+  });
+  $app.querySelectorAll('[data-daily-rename]').forEach(button=>{
+    button.ondblclick=event=>{event.preventDefault();event.stopPropagation();dailyRenamePost(button);};
+    button.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();dailyRenamePost(button);}};
   });
   $app.querySelectorAll('[data-daily-slot]').forEach(el=>{
     el.ondragover=e=>e.preventDefault();
@@ -628,6 +643,7 @@ RT.render = (fromTicker,forceDaily=false) => {
   }
   // Refresh an idle editable daily board on live changes or the first-shift boundary.
   if(tab==='draft'&&!forceDaily&&daily.data?.can_edit&&daily.date<=RT.data.clock.date&&!daily.loading&&!daily.busy&&!editing()){
+    // Drafts and enabled boards both become read-only at the first shift.
     const boundary=daily.date<RT.data.clock.date||nowMin()>=daily.data.first_start;
     if(boundary||!daily.source&&!fromTicker&&daily.liveVersion!==RT.data.version){void loadDaily(daily.date,'',false);return;}
   }

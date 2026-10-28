@@ -104,10 +104,10 @@ def test_changelog_filters_by_role() -> None:
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert cm[0]["items"][0]["summary"] == "头像装扮收进个人设置"
+    assert cm[0]["items"][0]["summary"] == "轮岗派发时间与班表交互完善"
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
-    assert gsm[0]["items"][0]["summary"] == "头像装扮收进个人设置"
+    assert gsm[0]["items"][0]["summary"] == "轮岗派发时间与班表交互完善"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -116,7 +116,7 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
-    assert admin[0]['items'][0]['summary']=='头像装扮收进个人设置'
+    assert admin[0]['items'][0]['summary']=='轮岗派发时间与班表交互完善'
     assert '员工导入占用工号支持预检后跳过' not in cm_text
     assert '员工导入占用工号支持预检后跳过' not in gsm_text
 
@@ -160,19 +160,19 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in cm['release']['items']]==['头像装扮收进个人设置']
+        assert [item['summary'] for item in cm['release']['items']]==['轮岗派发时间与班表交互完善']
         assert cm['read'] is False
         assert client.post('/api/changelog/announcement/read',json={'version':APP_VERSION}).status_code==200
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in tr['release']['items']]==['头像装扮收进个人设置']
+        assert [item['summary'] for item in tr['release']['items']]==['轮岗派发时间与班表交互完善']
         assert tr['read'] is False
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in hr["release"]["items"]] == [
-            "头像装扮收进个人设置"]
+            "轮岗派发时间与班表交互完善"]
         assert hr["read"] is False
         first = client.get("/api/changelog/announcement").json()
         history = client.get("/api/changelog").json()["releases"]
@@ -185,7 +185,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post('/api/logout');login(client,'HR01','HR123')
         assert client.get('/api/changelog/announcement').json()['read'] is True
         client.post('/api/logout');login(client,'OMTEST01')
-        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']]==['头像装扮收进个人设置']
+        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']]==['轮岗派发时间与班表交互完善']
 
 
 def test_import_skip_note_requires_hr_role_and_manage_permission():

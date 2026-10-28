@@ -26,7 +26,29 @@ async function main(){try{
     await page.locator('[data-daily-date-button="2026-10-06"]').click();
     await page.locator('[data-daily-person="A#0"]').waitFor({timeout:10000}).catch(async e=>{console.error(await page.locator('body').innerText(),errors);throw e;});
     async function data(){const r=await context.request.get(base+'/api/rotation/daily/2026-10-06');assert(r.ok());return r.json();}
-    async function choose(a,b){await page.locator(`[data-daily-person="${a}"]`).click();await page.locator(`[data-daily-person="${b}"]`).click();await page.getByRole('button',{name:'确认交换',exact:true}).click();await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading);}
+    async function choose(a,b){await page.locator(`[data-daily-person="${a}"]`).dragTo(page.locator(`[data-daily-person="${b}"]`));await page.getByRole('button',{name:'确认交换',exact:true}).click();await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading);}
+    // Post clicks remain available for drag; double-click enters inline rename,
+    // without accidentally opening a swap dialog on the second click.
+    let renameWrites=0;
+    page.on('request',request=>{if(request.method()==='POST'&&request.postDataJSON()?.action==='draft_rename_post')renameWrites++;});
+    const originalName=await page.locator('[data-daily-rename="A#0"]').textContent();
+    await page.locator('[data-daily-rename="A#0"]').dblclick();
+    await page.getByRole('textbox',{name:'岗位名称',exact:true}).fill('预排入口新名称');
+    assert.equal(await page.locator('#rtModal [role=dialog]').count(),0);
+    await page.getByRole('textbox',{name:'岗位名称',exact:true}).press('Enter');
+    await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.editingPost&&document.querySelector('[data-daily-rename="A#0"]')?.textContent==='预排入口新名称');
+    assert.equal((await data()).draft.lines[0].posts[0].name,'预排入口新名称');
+    assert.equal(renameWrites,1,'Enter/blur submitted the same rename twice');
+    await page.locator('[data-daily-rename="A#0"]').dblclick();
+    await page.getByRole('textbox',{name:'岗位名称',exact:true}).fill('不保存的名称');
+    await page.getByRole('textbox',{name:'岗位名称',exact:true}).press('Escape');
+    assert.equal(await page.locator('[data-daily-rename="A#0"]').textContent(),'预排入口新名称');
+    assert.equal(renameWrites,1,'Escape saved a cancelled edit');
+    await page.locator('[data-daily-rename="A#0"]').dblclick();
+    await page.getByRole('textbox',{name:'岗位名称',exact:true}).fill(originalName);
+    await page.locator('.rt-daily h2').click();
+    await page.waitForFunction(name=>!daily.busy&&!daily.loading&&!RT.editingPost&&document.querySelector('[data-daily-rename="A#0"]')?.textContent===name,originalName);
+    assert.equal(renameWrites,2,'blur must save exactly once');
     let before=await data();await choose('A#0','B#0');
     await page.waitForFunction(pid=>document.querySelector('[data-draft][data-key="A#0"]')?.value===pid,before.draft.plan.crew['B#0']);
     let after=await data();assert.equal(after.draft.plan.crew['A#0'],before.draft.plan.crew['B#0']);
@@ -72,19 +94,45 @@ async function main(){try{
     assert.deepEqual(after.day.lines,liveBoard.day.lines);
     assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'07:15'}})).ok());
     await context.request.get(base+'/api/rotation/board');
-    await page.locator('[data-daily-reload]').click();
+    await page.evaluate(async()=>{await RT.load();RT.render(true);});
     await page.getByRole('heading',{name:'2026-10-06 · 开班安排回顾'}).waitFor();
     const frozen=await data();assert(frozen.frozen&&!frozen.can_edit);assert.equal(frozen.opening_source,'opening');
     assert.equal(await page.locator('[data-daily-person]').count(),0);
     assert.equal(await page.locator('.rt-daily-board [draggable=true]').count(),0);
+    assert.equal(await page.locator('[data-daily-rename]').count(),0);
     assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'12:30'}})).ok());
     await context.request.get(base+'/api/rotation/board');
     assert.deepEqual((await data()).day,frozen.day,'opening changed after later shift');
+    // An unpublished draft also freezes at first_start without repeated reads.
+    assert((await context.request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-06',force:true}})).ok());
+    let draftReads=0;
+    page.on('request',request=>{if(request.method()==='GET'&&new URL(request.url()).pathname==='/api/rotation/daily/2026-10-06')draftReads++;});
+    await page.locator('[data-daily-reload]').click();
+    await page.waitForFunction(()=>daily.data?.frozen&&!daily.data.can_edit&&!daily.loading);
+    await page.evaluate(async()=>{await RT.load();});
+    await page.waitForFunction(()=>!daily.loading);
+    assert(await page.evaluate(()=>nowMin()>=daily.data.first_start));
+    let settledReads=draftReads;
+    for(let i=0;i<4;i++){
+      await page.evaluate(()=>RT.render(true));
+      await page.waitForFunction(()=>!daily.loading);
+      assert.equal(draftReads,settledReads,'unpublished draft refetched on a clock render');
+      assert(await page.locator('.rt-daily-board').isVisible());
+      assert.equal(await page.getByText('正在读取班表…',{exact:true}).count(),0);
+    }
+    // Frozen daily history ignores later live-board version changes.
+    await page.evaluate(()=>{RT.data.version++;RT.render(false);});
+    await page.waitForFunction(()=>!daily.loading);
+    assert.equal(draftReads,settledReads);
+    settledReads=draftReads;
+    await page.evaluate(()=>{RT.render(true);RT.render(false);});
+    await page.waitForFunction(()=>!daily.loading);
+    assert.equal(draftReads,settledReads);
     // Member and screen identities retain the original initialization restriction.
     await context.request.post(base+'/api/rotation/enter',{data:{account:'9100000'}});
     assert.equal((await context.request.get(base+'/api/rotation/daily?month=2026-10')).status(),403);
     assert.equal((await context.request.post(base+'/api/rotation/daily/2026-10-06',{data:{action:'draft_generate',revision:after.revision}})).status(),403);
-    assert.deepEqual(errors,[]);console.log(engine+': daily calendar, future plan, swaps, stale editor, history, permission and six widths passed');
+    assert.deepEqual(errors,[]);console.log(engine+': daily calendar, future plan, swaps, stale editor, history, automatic opening freeze, unpublished-draft refresh stability, permission and six widths passed');
     await browser.close();browser=null;
   }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(5000)]);}/* Keep the isolated DB as diagnostic evidence; never delete across shells. */}}

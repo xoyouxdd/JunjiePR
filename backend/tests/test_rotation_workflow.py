@@ -34,11 +34,29 @@ def test_minute_cohort_has_one_deadline_and_independent_longest_first_routes():
     assert eng.P['old0']['continuousStart']==510
 
 
+def test_whole_round_is_issued_three_minutes_before_latest_ready_without_shortening_rest():
+    eng,_=fixture()
+    for i in range(3):eng.P['new'+str(i)]['state']='rest'
+    assert not W.plan(eng,537)
+    assert all(not W.task_for(eng,eng.P['new'+str(i)]) for i in range(3))
+    assert all(not eng.assignment_locked(eng.P['new'+str(i)],537) for i in range(3))
+    W.plan(eng,538)
+    for i in range(3):
+        p=eng.P['new'+str(i)];task=W.task_for(eng,p)
+        assert task['allowedAt']==541 and task['deadlineAt']==544
+        assert task['allowedAt']>=p['readyAt']
+        assert eng.assignment_locked(p,538)
+        with pytest.raises(ActionError):eng.act_depart(p['pid'],540.9,'screen')
+        p['state']='ready'
+    for i in range(3):eng.act_depart('new'+str(i),541,'screen')
+
+
 def test_one_person_relief_stops_at_longest_middle_post():
     eng,_=fixture(1);eng.P['old1']['continuousStart']=400
     W.plan(eng,540);eng.act_depart('new0',540,'screen')
     assert occupants(eng,'A')==['new0','old0','old2','old3','old4']
     assert eng.P['old1']['state']=='walkback'
+    assert eng.P['old1']['lastDeparture']=={'line':'A','post':eng.d['lines'][0]['posts'][1]['name']}
 
 
 def test_mixed_downshift_uses_prefix_then_remaining_ordinary_rotation():

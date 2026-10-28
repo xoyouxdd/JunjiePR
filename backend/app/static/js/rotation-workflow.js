@@ -17,16 +17,32 @@ function workflowComparison(p){
   const table=(posts,after)=>`<div class="rt-task-line"><header>${esc(t.line)}</header>${posts.map((x,i)=>`<div class="rt-task-slot ${after&&x.occ!==t.beforePosts[i]?.occ?'changed':''}"><span>${esc(x.name)}</span><strong>${esc(x.occName||'空岗')}</strong></div>`).join('')}</div>`;
   return `<section class="rt-task-comparison"><h4>执行本任务前后</h4><div class="rt-task-columns"><div><p>执行前 · 当前站位</p>${table(t.beforePosts,false)}</div><div><p>执行后 · 预计站位</p>${table(t.afterPosts,true)}</div></div><small>蓝色仅标出本任务变化，不代表其他任务已经执行。</small></section>`;
 }
-function workflowPools(n,ops){
-  const day=RT.data.day,posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean))),ps=day.persons.filter(p=>!posted.has(p.pid)),seen=new Set();
+function workflowPools(n,ops,view={}){
+  const day=view.day||RT.data.day,posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean))),ps=day.persons.filter(p=>!posted.has(p.pid)),seen=new Set();
   const section=(title,list,chip,cls='')=>{list.forEach(p=>seen.add(p.pid));return `<section class="rt-sect ${cls}${list.length?'':' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(chip).join(''):'暂无'}</div></section>`;};
   const drag=p=>ops&&['rest','meal','ready','notyet'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:'';
   const card=(p,action,body,cls='')=>{
+    if(view.daily){
+      const can=view.editable&&p.role==='rotation';
+      return `<${can?'button type="button" draggable="true" data-daily-person="person:'+esc(p.pid)+'"':'div'} class="rt-chip ${cls}">${rotationName(p)}${body}</${can?'button':'div'}>`;
+    }
     if(!ops&&!document.body.classList.contains('rotation-screen'))action=null;
     const tag=action?'button':'div',can=action==='depart'?canDepartNow(p,n):action==='arrive'?p.state!=='notyet'||n>=p.start:true;
     return `<${tag}${action?' type="button"':''} class="rt-chip ${cls}"${action?` data-wf-pid="${esc(p.pid)}" data-wf-action="${action}" ${can&&!confirmationBlocked()?'':'aria-disabled="true"'}`:''}${drag(p)}>${rotationName(p)}${body}${badges(p)}</${tag}>`;
   };
   let html='';
+  if(view.daily){
+    const initial=p=>p.role==='rotation'&&p.state==='notyet'&&[420,435].includes(p.start);
+    const pending=p=>['walkback','pending','op'].includes(p.state)||p.role==='op'&&p.state==='notyet';
+    const chip=p=>card(p,null,`<span class="rt-sub">${p.role==='op'?'OP':p.role==='excluded'?'不轮岗':p.state==='notyet'?(view.frozen?'开班预排':'班次未开始'):esc(STATE_NAME[p.state]||'待安排')}</span>`);
+    html+=section('待出发',ps.filter(p=>p.state==='ready'),chip,'rt-ready');
+    html+=section('待确定休息',ps.filter(pending),chip,'rt-arrivals');
+    html+=section('吃饭区',ps.filter(p=>p.state==='meal'),chip,'rt-meals');
+    html+=section('休息区',ps.filter(p=>p.state==='rest'||initial(p)),chip,'rt-resting');
+    html+=section('圈外人员',ps.filter(p=>p.state==='away'),chip,'rt-outside');
+    html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),chip,'rt-others');
+    return html;
+  }
   html+=section('待出发',ps.filter(p=>!p.entryHold&&poolState(p,n)==='ready'),p=>card(p,p.assign?'depart':null,`${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}<span class="rt-task-summary">${workflowTaskSummary(p)}</span><span class="rt-sub">${p.task?`${hm(p.task.allowedAt)} 可出发 · ${hm(p.task.deadlineAt)} 前确认`:p.assign?hm(p.assign.departAt)+' 出发':'等待安排'}</span>${p.task?.transferredFromName?`<span class="rt-transfer">转接自 ${esc(p.task.transferredFromName)}</span>`:''}`,'wait'),'rt-ready');
   html+=section('待确定休息',ps.filter(p=>p.state==='walkback'||p.state==='pending'||opWaiting(p)),p=>card(p,'arrive',`<span class="rt-sub">${opWaiting(p)?'OP · 待确认休息':p.after==='done'?'轮岗结束，回休息室确认':'已下线，到休息室后确认'}</span>`),'rt-arrivals');
   html+=section('吃饭区',ps.filter(p=>p.state==='meal'),p=>card(p,null,`<span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟</span>${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}`,'meal'),'rt-meals');
@@ -36,9 +52,13 @@ function workflowPools(n,ops){
   html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),p=>card(p,null,`<span class="rt-sub">${esc(p.state==='notyet'?'班次未开始':STATE_NAME[p.state]||'')}</span>`,'dim'),'rt-others');
   return html;
 }
+function workflowBoardContent(day,n,ops,view={}){
+  const context={...view,day};
+  return `<div class="rt-board${view.daily?' rt-daily-board':''}"><div class="rt-lines">${day.lines.map(line=>lineCard(line,n,ops,context)).join('')}</div><div class="rt-pool">${workflowPools(n,ops,context)}</div></div>`;
+}
 function workflowBoardView(n,ops){
   const d=RT.data.day,pre=d.persons.length&&n<Math.min(...d.persons.map(p=>p.start));
-  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools"><button type="button" class="secondary ${d.hold101Active?'rt-101-on':''}" data-wf-101>${d.hold101Active?'取消 101 定岗':'101 定岗'}</button><button type="button" class="secondary" data-wf-undo>返回上一步</button></div>`:''}</div>${pre?'<p class="field-hint">只保存预排，不提前计时。岗位名双击修改，人员及岗位通过拖拽交换。</p>':''}<div class="rt-board"><div class="rt-lines">${d.lines.map(l=>lineCard(l,n,ops)).join('')}</div><div class="rt-pool">${workflowPools(n,ops)}</div></div></section>`;
+  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools"><button type="button" class="secondary ${d.hold101Active?'rt-101-on':''}" data-wf-101>${d.hold101Active?'取消 101 定岗':'101 定岗'}</button><button type="button" class="secondary" data-wf-undo>返回上一步</button></div>`:''}</div>${pre?'<p class="field-hint">只保存预排，不提前计时。岗位名双击修改，人员及岗位通过拖拽交换。</p>':''}${workflowBoardContent(d,n,ops)}</section>`;
 }
 function workflowUndo(){
   const lines=RT.data.day.lines;

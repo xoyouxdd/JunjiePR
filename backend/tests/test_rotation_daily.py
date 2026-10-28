@@ -33,6 +33,44 @@ def edit(rotation, **body):
         D.edit(db, rotation.attraction_id, '测试', FUTURE, {'revision': data['revision'], **body})
 
 
+def test_future_post_rename_preserves_plan_and_rejects_invalid_or_stale_edits(rotation):
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        state['lines'][0]['posts'][0]['name']='塔台';S.save_day(db,row,state)
+    before=read(rotation);original=before['draft']['lines'][0]['posts'][0]['name']
+    edit(rotation,action='draft_rename_post',post='A#0',expected_name=original,name='新入口')
+    after=read(rotation)
+    assert after['draft']['lines'][0]['posts'][0]['name']=='新入口'
+    assert after['draft']['lines'][0]['posts'][0]['hold101Role']=='tower'
+    assert after['draft']['plan']==before['draft']['plan']
+    assert after['draft']['persons']==before['draft']['persons']
+    for name in ('', ' '*3, '字'*41, 123, after['draft']['lines'][0]['posts'][1]['name']):
+        with pytest.raises(S.ActionError):edit(rotation,action='draft_rename_post',post='A#0',expected_name='新入口',name=name)
+        assert read(rotation)['draft']==after['draft']
+    with pytest.raises(S.ConfirmationConflict):edit(rotation,action='draft_rename_post',post='A#0',expected_name=original,name='旧页面改名')
+    with rotation.factory() as db,pytest.raises(S.ConfirmationConflict):
+        D.edit(db,rotation.attraction_id,'测试',FUTURE,{'revision':before['revision'],'action':'draft_rename_post','post':'A#0','expected_name':original,'name':'旧版本'})
+    edit(rotation,action='draft_swap_posts',source='A#0',target='A#1')
+    assert read(rotation)['draft']['lines'][0]['posts'][1]['name']=='新入口'
+    assert read(rotation)['draft']['lines'][0]['posts'][1]['key']==after['draft']['lines'][0]['posts'][0]['key']
+
+
+def test_prestart_rename_syncs_live_board_and_frozen_day_is_readonly(rotation):
+    live(rotation);before=read(rotation,DAY);old=before['draft']['lines'][0]['posts'][0]['name']
+    daily_edit_today(rotation,before,action='draft_rename_post',post='A#0',expected_name=old,name='开班前改名')
+    after=read(rotation,DAY)
+    with rotation.factory() as db:board=S.board_payload(db,rotation.attraction_id)['day']
+    assert board['lines'][0]['posts'][0]['name']=='开班前改名'
+    assert after['draft']['plan']==before['draft']['plan']
+    assert all(p['state']=='notyet' and p['lineStart'] is None for p in after['day']['persons'])
+    set_clock(rotation,DAY,435);frozen=read(rotation,DAY)
+    assert frozen['frozen'] and frozen['day']['lines'][0]['posts'][0]['name']=='开班前改名'
+    with pytest.raises(S.ActionError,match='已固定'):
+        daily_edit_today(rotation,action='draft_rename_post',post='A#0',expected_name='开班前改名',name='不能覆盖历史')
+    assert read(rotation,DAY)['day']==frozen['day']
+
+
 def test_future_preview_swap_and_stale_revision_are_atomic(rotation):
     prepare(rotation)
     before = read(rotation)
@@ -301,3 +339,23 @@ def test_late_publish_labels_actual_capture_instead_of_claiming_earlier_snapshot
     result=read(rotation,DAY)
     assert result['frozen'] and not result['can_edit']
     assert result['opening_source']=='late_publish' and result['as_of']==600
+
+
+def test_unpublished_today_freezes_at_first_shift_but_can_still_publish(rotation):
+    draft(rotation)
+    before=read(rotation,DAY)
+    assert before['can_edit']
+    set_clock(rotation,DAY,before['first_start'])
+    frozen=read(rotation,DAY)
+    assert frozen['frozen'] and not frozen['can_edit'] and not frozen['can_generate']
+    assert frozen['can_publish']
+    for action in ('draft_rename_post','draft_swap_people','draft_generate','draft_discard'):
+        with rotation.factory() as db,pytest.raises(S.ActionError,match='已固定'):
+            D.edit(db,rotation.attraction_id,'test',DAY,{'action':action,'revision':frozen['revision']})
+    with rotation.factory() as db,pytest.raises(S.ActionError,match='已固定'):
+        S.do_draft_action(db,rotation.attraction_id,'test',{'action':'draft_role','date':DAY,'pid':'1','role':'excluded'})
+    with rotation.factory() as db:
+        D.edit(db,rotation.attraction_id,'test',DAY,{'action':'publish','revision':frozen['revision']})
+    published=read(rotation,DAY)
+    assert published['frozen'] and not published['can_edit']
+    assert [[(p['name'],p['occ']) for p in l['posts']] for l in published['day']['lines']]==[[ (p['name'],p['occ']) for p in l['posts']] for l in frozen['day']['lines']]

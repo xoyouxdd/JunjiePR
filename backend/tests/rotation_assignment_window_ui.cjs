@@ -15,7 +15,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   await reset(4);await personal.goto(base+'/?view=actionCenter');await personal.locator('[data-formal-rotation-todo]').getByText(/预计安排/).waitFor();
   assert.equal(await personal.locator('[data-rotation-task=depart]').count(),0);
   let data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(!data.person.assignmentLocked&&!data.person.canDepart);
-  await reset(3);await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/安排已固定/).waitFor();
+  await reset(3);await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/本轮任务已派发/).waitFor();
   data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(data.person.assignmentLocked&&!data.person.canDepart);
   assert.equal((await op.request.post(base+'/api/rotation-board/act',{data:{action:'reassign',pid:'9710000',line:'B1'}})).status(),400);
   assert((await op.request.post(base+'/api/rotation-board/act',{data:{action:'reassign',pid:'9710010',line:'A1'}})).ok());
@@ -24,13 +24,13 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   for(const width of [320,390,430,768,1440]){await board.setViewportSize({width,height:900});assert.equal(await board.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' preview overflow '+width);}
   const shots=process.env.ROTATION_WINDOW_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await board.setViewportSize({width:390,height:844});await board.evaluate(()=>{RT.dragging=true;document.querySelector('.rt-resting .rt-chip').scrollIntoView({block:'center'});});try{await board.screenshot({path:path.join(shots,engine+'-route-preview.png')});}finally{await board.evaluate(()=>{RT.dragging=false;});}await personal.screenshot({path:path.join(shots,engine+'-fixed-personal.png'),fullPage:true});}
   assert((await op.request.post(base+'/api/rotation-board/act',{data:{action:'line',line:'A1',active:false}})).ok());
-  await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/待主管核对/).waitFor();
+  await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/安排：B1线/).waitFor();
   assert.equal(await personal.locator('[data-rotation-task=depart]').count(),0);
-  data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert.equal(data.person.assign.line,'A1');assert(data.person.assign.blocked);
+  data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert.equal(data.person.assign.line,'B1');assert(!data.person.assign.blocked);assert(!data.person.canDepart);
   await reset(0);data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(data.person.canDepart,JSON.stringify(data.person));await personal.reload();await personal.locator('[data-rotation-task=depart]').waitFor();
   await personal.locator('[data-rotation-task=depart]').click();await personal.locator('[data-modal-confirm]').click();
-  await personal.locator('[data-formal-rotation-todo]').getByText(/在 A1 线/).waitFor();
-  assert.deepEqual(errors,[]);console.log(engine+': early preview, exact 3-minute lock, no early departure, mutable teammate, blocked fixed route, final confirmation and widths passed');
+  await personal.locator('[data-formal-rotation-todo]').getByText(/已确认上岗安排，请前往 A1线/).waitFor();
+  assert.deepEqual(errors,[]);console.log(engine+': early preview, exact 3-minute lock, no early departure, mutable teammate, closed-line route refresh, final confirmation and widths passed');
   await browser.close();browser=null;
  }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(3000)]);}}})().catch(e=>{console.error(e);process.exitCode=1;});

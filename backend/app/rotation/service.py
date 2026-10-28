@@ -813,6 +813,9 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "upcomingShift": upcoming_shift(p, now),
         "previewAssign": eng._upcoming_routes.get(p['pid']),
         "walkbackSince": p.get("walkbackSince"), "arriveAt": p.get("arriveAt"), "ate": p.get("ate"),
+        "lastDeparture": deepcopy(p.get('lastDeparture')),
+        "arrivalOutcome": ('away' if p.get('after')=='closing' or eng.d.get('closed') else eng._arrive_outcome(p,now)[0])
+            if p.get('state') in ('walkback','pending','op') else None,
         "mealEligible": eng.meal_eligible(p), "downReason": p.get("downReason"), "after": p.get("after"),
         "mealOptions": eng.meal_options(p, now),
         "visited": p.get("visited", []), "mark": p.get("mark", ""), "absences": p.get("absences", []),
@@ -1307,6 +1310,10 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
         except ValueError as exc:
             raise ActionError("日期格式需为 YYYY-MM-DD") from exc
         row = day_row(db, attraction_id, day)
+        if row and row.status == 'draft' and act != 'publish' and not body.get('force'):
+            from app.rotation.daily import draft_editable
+            if not draft_editable(day_state(row), day, clock_day, now):
+                raise ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
         if act == "draft_generate":
             if row and any(x.get('hold') for L in day_state(row).get('lines', []) for x in L['posts']):
                 raise ActionError('当日还有定岗人员，请先取消定岗再重新生成班表')
