@@ -1,6 +1,7 @@
 // Account-backed, self-only honor collection. Presentation never changes scores.
 import { api, json } from './api.js';
 import { esc, memberHomeMonthLabel } from './format.js';
+import { bindCelebration } from './celebration.js';
 
 const skins=[
   ['sea','星海','星环 · 深蓝展台'],['gold','鎏金','压印 · 金属底座'],
@@ -40,7 +41,10 @@ function mountHonors(host,{month,cardHTML,rank,bindCeremony,onMonth,isCurrent}){
     const target=host.querySelector('.honor-content');
     target.innerHTML=view==='memory'?memory():view==='skins'?wardrobe():collection();
     if(saving)host.querySelectorAll('[data-honor-record],[data-honor-favorite],[data-honor-skin-choice]').forEach(button=>button.disabled=true);
-    if(view!=='memory'&&rank.status==='ranked')cleanup=bindCeremony(target,{autoplay});
+    if(view!=='memory'&&rank.status==='ranked'){
+      const button=document.createElement('button');button.type='button';button.className='secondary';button.dataset.celebrate='';button.textContent='庆祝一下 · 随机';target.querySelector('.honor-display')?.append(button);
+      const ceremony=bindCeremony(target,{autoplay}),celebration=bindCelebration(target);cleanup=()=>{ceremony?.();celebration();};
+    }
   }
   async function load(){
     const token=++loadToken;

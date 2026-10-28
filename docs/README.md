@@ -37,6 +37,7 @@
 | [workbench-experience.md](workbench-experience.md) | 今日工作、连续登记与后台导出边界 |
 | [security.md](security.md) | 仓库边界与内部约定 |
 | [changelog.md](changelog.md) | 应用内更新记录的数据源 |
+| [avatar-artwork.md](avatar-artwork.md) | 头像装扮、素材来源、内部授权与低负担接入 |
 | [maintain.md](maintain.md) | 改代码时文档改哪 |
 
 运维与发布脚本的命令细节写在脚本旁边：[../scripts/README.md](../scripts/README.md)。

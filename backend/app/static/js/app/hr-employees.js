@@ -7,6 +7,7 @@ import { gotoTab } from './navigation.js';
 import { opt } from './records.js';
 import { app, state } from './state.js';
 import { toast } from './toast.js';
+import { avatarMarkup, bindDirectoryAvatars } from './avatars.js';
 
 const HR_DUTY_ROLE_CODES=['TA_SUPERVISOR','TA_GSM'];
 
@@ -70,7 +71,7 @@ function hrEditable(employee){return !employee.account_deleted_at&&state.options
 function hrPersonHead(groupLabel){return `<div class="hr-person-row hr-person-head" aria-hidden="true"><span>员工</span><span>角色</span><span>Type／身份标识</span><span>${groupLabel}</span><span>状态</span><span></span></div>`;}
 
 function hrPersonRow(employee,groupCell){
-  return `<div class="hr-person-row" data-hr-person="${employee.id}" data-status="${esc(hrDisplayStatus(employee))}" data-search="${esc(`${employee.name} ${employee.employee_no}`.toLowerCase())}"><div class="hr-person-name"><strong>${esc(employee.name)}</strong><small>${esc(employee.employee_no)}</small></div><div class="hr-person-identity">${hrIdentityTags(employee)}</div><div class="hr-person-type">${hrTypeCell(employee)}</div><div class="hr-person-group">${groupCell}</div><div class="hr-person-status">${hrStatusCell(employee)}</div><div class="hr-person-actions">${hrEditable(employee)?`<button type="button" class="secondary" data-hr-edit="${employee.id}">编辑</button>`:'<span class="not-applicable" title="仅最高管理员可编辑">只读</span>'}</div></div>`;
+  return `<div class="hr-person-row" data-hr-person="${employee.id}" data-status="${esc(hrDisplayStatus(employee))}" data-search="${esc(`${employee.name} ${employee.employee_no}`.toLowerCase())}"><div class="hr-person-name">${avatarMarkup(employee.avatar_key,employee.name,{deferred:true})}<strong>${esc(employee.name)}</strong><small>${esc(employee.employee_no)}</small></div><div class="hr-person-identity">${hrIdentityTags(employee)}</div><div class="hr-person-type">${hrTypeCell(employee)}</div><div class="hr-person-group">${groupCell}</div><div class="hr-person-status">${hrStatusCell(employee)}</div><div class="hr-person-actions">${hrEditable(employee)?`<button type="button" class="secondary" data-hr-edit="${employee.id}">编辑</button>`:'<span class="not-applicable" title="仅最高管理员可编辑">只读</span>'}</div></div>`;
 }
 
 // 组员行唯一可直接修改的项目：所属小组。
@@ -172,6 +173,7 @@ function hrEditEmployee(employee,organization){const page=captureViewContext();
 }
 
 function bindHrOrganization(organization){const page=captureViewContext();
+  registerPageCleanup(bindDirectoryAvatars(document.getElementById('hrOrgTree')));
   const people=hrOrganizationPeople(organization),search=document.getElementById('hrSearch'),statusFilter=document.getElementById('hrStatusFilter'),circleFilter=document.getElementById('hrCircleFilter');
   const refresh=()=>{
     const query=search.value.trim().toLowerCase(),status=statusFilter.value,circle=circleFilter?circleFilter.value:'all';

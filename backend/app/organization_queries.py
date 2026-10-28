@@ -9,6 +9,7 @@ from app.v2_models import Attraction, Employee, EmployeeActingDuty, EmployeeLOAP
 from datetime import date, datetime, timedelta
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
+from app.services.avatars import avatar_keys
 
 
 def group_display_metadata_bulk(db: Session, group_ids: list[int] | set[int], on_date: str | None = None) -> dict[int, dict]:
@@ -195,6 +196,7 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
         return {}
     value = on_date or date.today().isoformat()
     employee_ids = [employee.id for employee in employees]
+    avatars = avatar_keys(db, employee_ids)
     role_map = roles_at(db, employee_ids, value)
     base_role_map = base_roles_at(db, employee_ids, value)
     duty_map = duties_at_bulk(db, employee_ids, value)
@@ -286,6 +288,7 @@ def employee_payloads(db: Session, employees: list[Employee], on_date: str | Non
         "id": employee.id,
         "employee_no": employee.employee_no,
         "name": employee.name,
+        "avatar_key": avatars.get(employee.id, ""),
         "role_code": role.code if role else "",
         "role_name": role.name if role else "未配置",
         "base_role_code": base_role_map[employee.id].code if base_role_map.get(employee.id) else "",

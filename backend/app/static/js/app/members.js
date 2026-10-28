@@ -5,10 +5,11 @@ import { attachmentControl, bindFilePreviews } from './files.js';
 import { esc, fmt, fmtDeduction, monthNow, prefersReducedMotion } from './format.js';
 import { coveredSickDisclosure, splitCoveredSickRecords } from './records.js';
 import { app } from './state.js';
+import { avatarMarkup } from './avatars.js';
 
 function memberScoreRow(row){
   const button=(kind,label,value,scoreClass='')=>`<button type="button" class="member-score-link ${scoreClass}" data-member-detail="${kind}" data-employee-id="${row.employee_id}" aria-expanded="false" title="查看${label}明细">${value}</button>`;
-  return `<tr class="member-score-row" data-member-row="${row.employee_id}"><th><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name)}</small></th><td>${button('recognition','加分','+'+fmt(row.recognition_score),'score-positive')}</td><td>${button('deduction','扣分',fmtDeduction(row.deduction_score),'score-negative')}</td><td>${button('attendance','全勤分',fmt(row.attendance_score))}</td><td>${button('all','综合分',fmt(row.total_score),'member-total-link')}</td></tr>`;
+  return `<tr class="member-score-row" data-member-row="${row.employee_id}"><th>${avatarMarkup(row.avatar_key,row.employee_name)}<strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)} · ${esc(row.role_name)}</small></th><td>${button('recognition','加分','+'+fmt(row.recognition_score),'score-positive')}</td><td>${button('deduction','扣分',fmtDeduction(row.deduction_score),'score-negative')}</td><td>${button('attendance','全勤分',fmt(row.attendance_score))}</td><td>${button('all','综合分',fmt(row.total_score),'member-total-link')}</td></tr>`;
 }
 
 function memberAttachment(record){

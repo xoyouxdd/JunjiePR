@@ -6,6 +6,10 @@ import { render } from './context.js';
 import { bindDialogLayer, leaveLayer } from './dialogs.js';
 import { esc } from './format.js';
 import { app, has, state, tabs } from './state.js';
+import { avatarMarkup, showAvatarSettings } from './avatars.js';
+
+const avatarAllowed=()=>!['HR_CIRCLE','HR_ADMIN'].includes(state.me?.base_role_code||state.me?.role_code)&&!state.me?.rotation_temporary;
+const openAvatarSettings=()=>showAvatarSettings({onSaved:renderUserBadge});
 
 // 本职计分（CM/TR代理TA主管、主管含代理TA GSM）但菜单按管理角色显示时，补上本人成绩入口。
 function isActingFrontline(){return ['CM','TR','SUPERVISOR'].includes(state.me?.base_role_code)&&!['CM','TR'].includes(state.me?.role_code);}
@@ -27,7 +31,11 @@ function menuItems() {
   if(has('DECLARATION_STATS_VIEW'))items.push(['declarationStatistics','声明登记统计']);
   if(has('HR_MONTHLY_REPORT')&&['GSM','AM','OM','SYSTEM_ADMIN'].includes(r))items.push(['hrMonthlyReport','HR月报制作']);
   if(r==='SYSTEM_ADMIN')items.splice(5,0,['operations','系统运营']);
-  if(isActingFrontline())items.unshift(['home','我的成绩']);
+  const personalAllowed=!['HR_CIRCLE','HR_ADMIN'].includes(state.me.base_role_code||r);
+  if(personalAllowed&&!items.some(([id])=>id==='home')){
+    const scored=['CM','TR','SUPERVISOR'].includes(state.me.base_role_code)||['TA_SUPERVISOR','SUPERVISOR'].includes(r);
+    if(scored)items.unshift(['home','首页']);
+  }
   items.splice(['CM','TR'].includes(r)?1:0,0,['actionCenter','待办']);
   if(state.me.rotation_entry)items.push(['rotationTest','轮岗看板']);
   items.splice(Math.min(items.length,1),0,['announcements','公告中心']);
@@ -62,7 +70,10 @@ function mobilePrimaryIds(items){
   const ids=((['CM','TR'].includes(state.me.base_role_code)&&isActingFrontline()?MOBILE_PRIMARY_TABS.ACTING_FRONTLINE:MOBILE_PRIMARY_TABS[state.me.role_code])||['actionCenter']).filter(id=>available.has(id));
   if(available.has('announcements')&&!ids.includes('announcements'))ids.splice(1,0,'announcements');
   for(const [id] of items){ if(ids.length>=MOBILE_PRIMARY_COUNT) break; if(!ids.includes(id)&&!NAV_FOOTER_IDS.includes(id)) ids.push(id); }
-  return ids.slice(0,MOBILE_PRIMARY_COUNT);
+  const primary=ids.slice(0,MOBILE_PRIMARY_COUNT);
+  const personal=available.has('home')&&['CM','TR','TA_SUPERVISOR','SUPERVISOR'].includes(state.me.role_code)?'home':null;
+  if(personal&&!primary.includes(personal))primary[primary.length-1]=personal;
+  return primary;
 }
 
 function userIdentityParts(){
@@ -79,12 +90,16 @@ function renderUserBadge(){
   const sep=' · ';
   badge.innerHTML=`<span class="badge-part">${esc(p.name)}</span><span class="badge-part${p.circle?' badge-part-optional':''}">${sep}${esc(p.role)}</span>${p.circle?`<span class="badge-part">${sep}${esc(p.circle)}</span>`:''}${p.members?`<span class="badge-part badge-part-optional">${sep}${esc(p.members)}</span>`:''}`;
   badge.title=[p.name,p.role,p.circle,p.members].filter(Boolean).join(' · ');
+  if(avatarAllowed()){
+    badge.insertAdjacentHTML('afterbegin',`<button type="button" class="nav-avatar-button" data-avatar-settings aria-label="装扮头像">${avatarMarkup(state.me.avatar_key,p.name)||`<span aria-hidden="true">${esc((p.name||'我').slice(0,1))}</span>`}</button>`);
+    badge.querySelector('[data-avatar-settings]').onclick=openAvatarSettings;
+  }
 }
 
 function mobileIdentityCard(){
   const p=userIdentityParts();
   const rows=[['姓名',p.name],['工号',p.employeeNo],['角色',p.role],['景点圈',p.circle],['组员',p.members]].filter(([,v])=>v);
-  return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></section>`;
+  return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${avatarAllowed()?'<button type="button" class="secondary" data-avatar-settings>装扮头像</button>':''}</section>`;
 }
 
 const NAV_FOOTER_IDS=['password'];
@@ -137,7 +152,7 @@ function navIcon(id){
     grid:'<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/>',
     circle:'<circle cx="12" cy="12" r="8"/>',
   };
-  return `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner[id]||inner.circle}</svg>`;
+  return `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner[id]||(id==='profile'?inner.hrEmployees:inner.circle)}</svg>`;
 }
 
 function groupedMenu(items){
@@ -264,6 +279,7 @@ function renderTabs() {
   tabs.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;closeDrawer();renderTabs();render();});
   tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawerLayer=null;leaveLayer(drawer,()=>{drawer.hidden=true;});}});});
   tabs.querySelector('[data-close-more]')?.addEventListener('click',closeDrawer);
+  tabs.querySelector('[data-avatar-settings]')?.addEventListener('click',()=>{closeDrawer();openAvatarSettings();});
   tabs.querySelector('[data-mobile-logout]')?.addEventListener('click',logout);
 }
 

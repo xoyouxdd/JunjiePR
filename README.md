@@ -42,6 +42,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 | [docs/workbench-experience.md](docs/workbench-experience.md) | 今日工作、连续登记与后台导出边界 |
 | [docs/security.md](docs/security.md) | 仓库边界与内部约定 |
 | [docs/changelog.md](docs/changelog.md) | 应用内「更新记录」怎么维护 |
+| [docs/avatar-artwork.md](docs/avatar-artwork.md) | 头像装扮、素材来源、内部授权与低负担接入 |
 | [docs/maintain.md](docs/maintain.md) | 改代码时文档改哪 |
 | [docs/local-update-20261011.md](docs/local-update-20261011.md) | 10月11日讨论与本地落实清单 |
 

@@ -73,6 +73,14 @@ class Employee(Base):
     attraction = relationship("Attraction")
 
 
+class EmployeeAvatarPreference(Base):
+    """Cosmetic identity only; never participates in scoring."""
+    __tablename__ = "employee_avatar_preferences"
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), primary_key=True)
+    avatar_key: Mapped[str] = mapped_column(String(80), default="")
+    frame: Mapped[str] = mapped_column(String(40), default="plain")
+
+
 class EmployeeHonorStyle(Base):
     """Self-only presentation preference; never participates in scoring."""
 

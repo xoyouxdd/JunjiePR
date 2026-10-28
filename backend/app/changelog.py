@@ -7,6 +7,28 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.28.4", "date": "2026-10-28", "status": "candidate",
+        "items": [{"summary": "头像装扮收进个人设置",
+                   "detail": "GSM及以上取消独立我的信息页面，电脑点顶部个人头像、手机在更多的身份卡中打开装扮弹窗；恢复原手机业务入口。主管首页及本人勋章入口保留，HR账号不显示装扮入口。",
+                   "audiences": ["all"]}],
+    },
+    {
+        "version": "2026.10.28.3", "date": "2026-10-28", "status": "candidate",
+        "items": [
+            {"summary": "非HR账号统一提供个人头像入口",
+             "detail": "主管及代理TA主管的个人入口统一命名为首页，手机底栏直接可见；GSM、AM、OM及最高管理员等非计分身份增加我的信息，可选择头像与普通边框，不显示不适用的个人积分或勋章。景点圈HR和HR管理员不提供头像装扮。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
+        "version": "2026.10.28.2", "date": "2026-10-28", "status": "candidate",
+        "items": [
+            {"summary": "个人头像与轻量庆祝",
+             "detail": "我的信息可选择主题头像和个人边框，历史月度边框须来自本人有效勋章；组员列表与组织树仅显示静态头像。HR提示保留完整内容并默认收起，月度勋章仍由本人主动展开，新增四种随机短庆祝效果，支持减少动态效果。",
+             "audiences": ["all"]},
+        ],
+    },
+    {
         "version": "2026.10.28.1", "date": "2026-10-28", "status": "candidate",
         "items": [
             {"summary": "轮岗任务独立执行与超时转接",

@@ -6,6 +6,7 @@ import { esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, portalP
 import { bindWithdraw, recognitionCard } from './records.js';
 import { app, state } from './state.js';
 import { mountHonors } from './honors.js';
+import { mountAvatarWardrobe } from './avatars.js';
 
 // 首页"我的信息"：组员显示所在小组与主管/代理主管；主管显示所带小组。
 function homeGroupInfo(organization){
@@ -138,7 +139,9 @@ function homeQueryState(request,selectedMonth,error){
 }
 
 let homeRankCleanup=null;
+let homeAvatarCleanup=null;
 async function renderHome(){
+  homeAvatarCleanup?.();homeAvatarCleanup=null;
   homeRankCleanup?.();homeRankCleanup=null;
   const request=beginViewRequest();
   const currentMonth=memberHomeMonths()[0];
@@ -173,7 +176,7 @@ async function renderHome(){
     rejected:(d.records||[]).filter(r=>r.status==='rejected').length,
   };
   const summaryMarkup=`<p class="home-recognition-summary" aria-label="${esc(selectedMonthLabel)}签卡汇总"><span>已计分<strong>${esc(summary.credited)}</strong>张</span>${summary.pending?`<span class="home-recognition-pending">待复核<strong>${esc(summary.pending)}</strong>张</span>`:''}${summary.uncredited?`<span>已确认未计分<strong>${esc(summary.uncredited)}</strong>张</span>`:''}${summary.rejected?`<span>不通过<strong>${esc(summary.rejected)}</strong>张</span>`:''}</p>`;
-  const rankMarkup=d.monthly_rank_available===true?'<div class="member-rank-entry"><button type="button" class="secondary" id="homeRankView" aria-expanded="false" aria-controls="homeRankContent">查看我的月度勋章</button><div id="homeRankContent" hidden></div></div>':'';
+  const rankMarkup=`<div id="homeAvatar"></div>`+(d.monthly_rank_available===true?`<details class="member-rank-rules home-hr-notice"><summary>HR提示与月度勋章说明</summary><p>${rankStatement}</p><p>仅本人主动查看，不公开排行榜，不新增奖惩或绩效评定依据。</p></details><div class="member-rank-entry"><button type="button" class="secondary" id="homeRankView" aria-expanded="false" aria-controls="homeRankContent">查看我的月度勋章</button><div id="homeRankContent" hidden></div></div>`:'');
   if(!request.write(`<div class="section-gap">
     <section class="panel member-home-panel" data-season="${season}"><div class="home-info-heading"><h2>我的信息</h2>${homeMonthControl(selectedMonth)}<span class="badge${d.month_closed?' member-month-closed':''}">${esc(monthStatus)}</span>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div>${rankMarkup}<div class="member-info-grid">
       <div><span>姓名 / ${organization?'月结角色':'当前角色'}</span><strong>${esc(state.me.name)} · ${esc(organization?.role_label||state.me.role_label||state.me.role_name)}</strong></div>
@@ -190,6 +193,7 @@ async function renderHome(){
   </div>`))return;
   bindHomeMonth();
   const rankButton=document.getElementById('homeRankView');
+  homeAvatarCleanup=mountAvatarWardrobe(document.getElementById('homeAvatar'),{isCurrent:()=>request.isCurrent()});registerPageCleanup(homeAvatarCleanup);
   if(rankButton)rankButton.onclick=async()=>{
     const host=document.getElementById('homeRankContent'),panel=host.closest('.member-home-panel');
     if(rankButton.getAttribute('aria-expanded')==='true'){

@@ -194,6 +194,8 @@ async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     for name, value in SECURITY_HEADERS.items():
         response.headers.setdefault(name, value)
+    if request.url.path.startswith('/static/images/avatars/') and response.status_code == 200:
+        response.headers.setdefault('Cache-Control', 'no-cache' if request.url.path.endswith('/catalog.json') else 'public, max-age=3600')
     if request_is_https(request):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     return response

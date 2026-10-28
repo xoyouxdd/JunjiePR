@@ -17,6 +17,7 @@ from app.security import password_policy_error, request_is_https
 from app.routers._shared import client_ip, group_display_metadata_bulk
 from app.rotation.access import can_enter as can_enter_rotation, find_rotation_account, rotation_login
 from app.routers.rotation_board import can_enter as can_enter_formal_rotation
+from app.services.avatars import own_avatar
 
 router = APIRouter()
 
@@ -38,6 +39,7 @@ def user_payload(db: Session, user: V2User) -> dict:
         "id": user.id,
         "employee_no": user.employee.employee_no,
         "name": user.name,
+        **own_avatar(db, user.id),
         "role_code": user.role.code,
         "role_name": user.role.name,
         "base_role_code": user.base_role.code,

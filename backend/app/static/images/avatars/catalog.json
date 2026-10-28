@@ -1,0 +1,1363 @@
+{
+  "version": 1,
+  "avatars": [
+    {
+      "key": "base-01-01",
+      "name": "兔朱迪",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-01-64.webp",
+          "bytes": 962,
+          "sha256": "9739bd6fac78de77e7d2a6694ad88217af2bf6d4ca7fccab4967ad3c6174e2c7"
+        },
+        "160": {
+          "file": "base-01-01-160.webp",
+          "bytes": 4080,
+          "sha256": "e1c4f591f3b4fa9e788369d960dc3265d227959d3c8216d7b79e3d8aaf2bb174"
+        }
+      }
+    },
+    {
+      "key": "base-01-02",
+      "name": "狐尼克",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-02-64.webp",
+          "bytes": 948,
+          "sha256": "d3a4ca8a0b4b495adc5008559b7f7d3b886acf0114a54c36001376503543c007"
+        },
+        "160": {
+          "file": "base-01-02-160.webp",
+          "bytes": 3836,
+          "sha256": "6cce0d82f3bd9b4fcb23d436e11c0e0f25bb928389eb424e077d0d2bea8fce9a"
+        }
+      }
+    },
+    {
+      "key": "base-01-03",
+      "name": "牛局长",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-03-64.webp",
+          "bytes": 1104,
+          "sha256": "2e70622df0d68b82cab6298b2a15439f1f56b1c622ba5e0570a302514cfb948c"
+        },
+        "160": {
+          "file": "base-01-03-160.webp",
+          "bytes": 4698,
+          "sha256": "05ed45c60f012dfb7a71cb89b6cb7550b44ab154a9cbf136e414df2b79dd80cf"
+        }
+      }
+    },
+    {
+      "key": "base-01-04",
+      "name": "豹警官",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-04-64.webp",
+          "bytes": 1312,
+          "sha256": "9dd70dd5773b154296d47e754c34461d27e7ad791a47fcb783b2d4447c597bb9"
+        },
+        "160": {
+          "file": "base-01-04-160.webp",
+          "bytes": 5398,
+          "sha256": "21542de9d53bc66630ee0d80f2f71a8ffde2fa194597ada7dd47498d7c7a3100"
+        }
+      }
+    },
+    {
+      "key": "base-01-05",
+      "name": "闪电",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-05-64.webp",
+          "bytes": 1098,
+          "sha256": "9dbae2069d38c4c4580a23b63372e2a8ec012896b9f2cc15dbad7289c61fa05a"
+        },
+        "160": {
+          "file": "base-01-05-160.webp",
+          "bytes": 4908,
+          "sha256": "ed7d6c2144d03f633e7d25f41556a17c61d2e799fd543eb5694320f5ac12d74b"
+        }
+      }
+    },
+    {
+      "key": "base-01-06",
+      "name": "大先生",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-06-64.webp",
+          "bytes": 1012,
+          "sha256": "67a64d194a83ef08b2d160669749667f104db07e8e5416d444c157e1d8396143"
+        },
+        "160": {
+          "file": "base-01-06-160.webp",
+          "bytes": 4620,
+          "sha256": "a53453e7b3ac152c5c6c74b65895447d889542969c415161b72de7edb837b915"
+        }
+      }
+    },
+    {
+      "key": "base-01-07",
+      "name": "芬尼克",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-07-64.webp",
+          "bytes": 832,
+          "sha256": "02b25c7036e27ab7a2a82fc95ab293dc45255dc773fa689163a662354a546882"
+        },
+        "160": {
+          "file": "base-01-07-160.webp",
+          "bytes": 3480,
+          "sha256": "c76e77a1aa9a685bfcc8c2a3e4ad8ad6b5ea5bebb01de4cdd5b5c71987abcd0b"
+        }
+      }
+    },
+    {
+      "key": "base-01-08",
+      "name": "夏奇羊",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-08-64.webp",
+          "bytes": 892,
+          "sha256": "323f9d376041df33f50647343b34b7eef39a580b22f435cfb453f8c018e4801d"
+        },
+        "160": {
+          "file": "base-01-08-160.webp",
+          "bytes": 3842,
+          "sha256": "3cf5bc78f0a8c68707026e14cf83f11bf9f284a599a15294309c22b63a1ce82b"
+        }
+      }
+    },
+    {
+      "key": "base-01-09",
+      "name": "羊副市长",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-09-64.webp",
+          "bytes": 1076,
+          "sha256": "74e5af55f2080c72d03500b48fdd00baa9ba434fd4f177fdf48decd639b0d2e5"
+        },
+        "160": {
+          "file": "base-01-09-160.webp",
+          "bytes": 4612,
+          "sha256": "123bfc703993023805f4c5e0b0d80899ecb82fb551334f7f1791d422d53dfa39"
+        }
+      }
+    },
+    {
+      "key": "base-01-10",
+      "name": "狮市长",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-10-64.webp",
+          "bytes": 1112,
+          "sha256": "0464ae0507fa2d70b1387a48f791c34554da7a960efe08bb7c6c59dbe43a16c8"
+        },
+        "160": {
+          "file": "base-01-10-160.webp",
+          "bytes": 4938,
+          "sha256": "25bb6024ef31ec27da442a6786b3d15ae02ac818c1b1198bac541e61e37b3c9d"
+        }
+      }
+    },
+    {
+      "key": "base-01-11",
+      "name": "牦牛亚克斯",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-11-64.webp",
+          "bytes": 1172,
+          "sha256": "46d0ce2b89f51864d645720923556f13a47c71e7368e554487be56f8b27f0aa8"
+        },
+        "160": {
+          "file": "base-01-11-160.webp",
+          "bytes": 5412,
+          "sha256": "3491968a1b4688656976f59934ea6c90d54237c784b69ae019ec70b3126599c8"
+        }
+      }
+    },
+    {
+      "key": "base-01-12",
+      "name": "杜克",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-12-64.webp",
+          "bytes": 1118,
+          "sha256": "9eb5573e3eaff48e448ee7ca06aa90a9ab43876774c82797a6d38c0a56c80992"
+        },
+        "160": {
+          "file": "base-01-12-160.webp",
+          "bytes": 5074,
+          "sha256": "76e8f16833678ccef9a0e9b987f4e752a797c880403b0b771baee758a29c3130"
+        }
+      }
+    },
+    {
+      "key": "base-01-13",
+      "name": "朱迪妈妈",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-13-64.webp",
+          "bytes": 794,
+          "sha256": "5ae6138307ee794947e23128d296e69292c6c71b321f17d959c2e7b107415ccf"
+        },
+        "160": {
+          "file": "base-01-13-160.webp",
+          "bytes": 3270,
+          "sha256": "5288b8d07d46ab08f524c2a83b6ac3b5cb4c34da4a4f85f50ab261a2ea791973"
+        }
+      }
+    },
+    {
+      "key": "base-01-14",
+      "name": "朱迪爸爸",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-14-64.webp",
+          "bytes": 974,
+          "sha256": "305bd3540deee5f71e8b1d5f596eab094d71ccacc789d8a79216dd2e9fc24998"
+        },
+        "160": {
+          "file": "base-01-14-160.webp",
+          "bytes": 4100,
+          "sha256": "ea2ff047827c246d4ffafd9f35fca986f30ab75ff9ff2e4d5a67b3b187a17063"
+        }
+      }
+    },
+    {
+      "key": "base-01-15",
+      "name": "吉丁",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-15-64.webp",
+          "bytes": 984,
+          "sha256": "63c2579a9c8f5682607665d4d7b12a3812d3ccc0abae0f61dd25a983c2fe22cd"
+        },
+        "160": {
+          "file": "base-01-15-160.webp",
+          "bytes": 4190,
+          "sha256": "e0bba4d65f061fb39d6661951d23964e92b924975a64097921daa7f2ed9000f3"
+        }
+      }
+    },
+    {
+      "key": "base-01-16",
+      "name": "奥特顿先生",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-16-64.webp",
+          "bytes": 904,
+          "sha256": "bc2a191bde8aa3f4e54c662abccc74a928258e7d919c317bba990ab2dab52472"
+        },
+        "160": {
+          "file": "base-01-16-160.webp",
+          "bytes": 4366,
+          "sha256": "e831f991196d89a2e50c1ddf60e52a50516a6a6db6eed992a88db3c276bdd35a"
+        }
+      }
+    },
+    {
+      "key": "base-01-17",
+      "name": "奥特顿太太",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-17-64.webp",
+          "bytes": 914,
+          "sha256": "3943a8fd831e146fc94bc4e4e14e7b97735fe7d3fd81c0f6f7c821008d73a962"
+        },
+        "160": {
+          "file": "base-01-17-160.webp",
+          "bytes": 4122,
+          "sha256": "5b4323f3056ed12266fa6cf6e732ca1bfb580b7f1bd4efab4735ab81a4b30c36"
+        }
+      }
+    },
+    {
+      "key": "base-01-18",
+      "name": "曼查斯",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-18-64.webp",
+          "bytes": 732,
+          "sha256": "572ad38607a5bef2605db412233c62b4a6e430c51b0911e49996549ac4196ec1"
+        },
+        "160": {
+          "file": "base-01-18-160.webp",
+          "bytes": 3372,
+          "sha256": "c47e25205efe0434426c6c245b67a65a9f6fb7bb76a4ebac8ec4a4583cd6716f"
+        }
+      }
+    },
+    {
+      "key": "base-01-19",
+      "name": "道格",
+      "group": "疯狂动物城",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "base-01-19-64.webp",
+          "bytes": 1154,
+          "sha256": "ba143f5c4dae598c3ce72f372c8e2688bd6b8a4a066fc2d1fdc923237249be19"
+        },
+        "160": {
+          "file": "base-01-19-160.webp",
+          "bytes": 4950,
+          "sha256": "cd39610fd6fd61b9189501fb2fbbefc6bd92e7296659cf73956c6f16b22c438c"
+        }
+      }
+    },
+    {
+      "key": "base-02-01",
+      "name": "松栗探矿员",
+      "group": "矿山探索（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-02-01-64.webp",
+          "bytes": 1338,
+          "sha256": "3f0de866dad862ceb3087cdff99b4a2fedc396f0f4a1ec5191abfcd1c16c7792"
+        },
+        "160": {
+          "file": "base-02-01-160.webp",
+          "bytes": 7682,
+          "sha256": "fc1f5ec057a88d45805e2ea26bbcbdd3c52f782de753fc75784743c06bfcd62e"
+        }
+      }
+    },
+    {
+      "key": "base-02-02",
+      "name": "青石獾伙伴",
+      "group": "矿山探索（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-02-02-64.webp",
+          "bytes": 1378,
+          "sha256": "eee3dcc080da9a0332d5f776e8b91d6659d870415dc56f0b18faf35bf5a0fad5"
+        },
+        "160": {
+          "file": "base-02-02-160.webp",
+          "bytes": 7884,
+          "sha256": "395ca9caa6307ae96666514ae39c6bfbb4d3191f1916e67b5a40ed7a7c7e2826"
+        }
+      }
+    },
+    {
+      "key": "base-02-03",
+      "name": "山花土拨鼠",
+      "group": "矿山探索（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-02-03-64.webp",
+          "bytes": 1382,
+          "sha256": "c15ebfdb7e06941ddac267cd492cc73978356917c91f7f5d7b11458e313c05ca"
+        },
+        "160": {
+          "file": "base-02-03-160.webp",
+          "bytes": 8310,
+          "sha256": "99d3a36c21636b322249144c0897f3ba361f70bddbb824eafaba09566be7f8f0"
+        }
+      }
+    },
+    {
+      "key": "base-03-01",
+      "name": "花领喜鹊",
+      "group": "奇想茶会（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-03-01-64.webp",
+          "bytes": 1548,
+          "sha256": "ac4e84f82ac6b439c479bad85d5eb92651f6fb3bccc5ad37edeedf82d5c0d5e6"
+        },
+        "160": {
+          "file": "base-03-01-160.webp",
+          "bytes": 8096,
+          "sha256": "68390f6d83a12dd8083a24130aa007552dec7aa9e8a60b86d06158f10cc2acea"
+        }
+      }
+    },
+    {
+      "key": "base-03-02",
+      "name": "莓帽绒鼠",
+      "group": "奇想茶会（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-03-02-64.webp",
+          "bytes": 1406,
+          "sha256": "1da01a65413e99965c57ddd47ed441bdd5a129c12d04855ff7749e267b454ef0"
+        },
+        "160": {
+          "file": "base-03-02-160.webp",
+          "bytes": 7718,
+          "sha256": "0b3ccfd70555c27cf2b0f4b63b50c0ffa2ed6909da9a2af4ab5e3f51b6ac287a"
+        }
+      }
+    },
+    {
+      "key": "base-03-03",
+      "name": "玫羽小飞蛾",
+      "group": "奇想茶会（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-03-03-64.webp",
+          "bytes": 1282,
+          "sha256": "16628466f47e7c6b52f4674c3278b961840caad81d27b61fdf2a037e41c63e0e"
+        },
+        "160": {
+          "file": "base-03-03-160.webp",
+          "bytes": 6860,
+          "sha256": "5df0f4b71889bd807ca0202a8b37f54646f886148667b8340260d9233f824e3d"
+        }
+      }
+    },
+    {
+      "key": "base-04-01",
+      "name": "蕨叶小刺猬",
+      "group": "森林伙伴（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-04-01-64.webp",
+          "bytes": 1534,
+          "sha256": "c5b66e02b5e2169250c9eacb5b76e922c7a412e2b91902a32963267a4791ef0d"
+        },
+        "160": {
+          "file": "base-04-01-160.webp",
+          "bytes": 8982,
+          "sha256": "c5f0ad316a4d621d0dd77e478d37d16aa8ff63cf35fbcbbb3a5fbbfbe121eb10"
+        }
+      }
+    },
+    {
+      "key": "base-04-02",
+      "name": "蓝披风睡鼠",
+      "group": "森林伙伴（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-04-02-64.webp",
+          "bytes": 1390,
+          "sha256": "9b935e8002586ea8a06b4849c2e7f543681f2857c8eedb153342bf5fe9710eeb"
+        },
+        "160": {
+          "file": "base-04-02-160.webp",
+          "bytes": 7822,
+          "sha256": "51394a18046dc7b4184bb21b5a1f5937737ff9809e7e2a039febd357fb64e7ee"
+        }
+      }
+    },
+    {
+      "key": "base-04-03",
+      "name": "花环小鹿",
+      "group": "森林伙伴（原创）",
+      "kind": "original",
+      "images": {
+        "64": {
+          "file": "base-04-03-64.webp",
+          "bytes": 1386,
+          "sha256": "f46ed8625b1baf14302806a190e18eae7cb4b60e5651d3d088398f2cc9a4792e"
+        },
+        "160": {
+          "file": "base-04-03-160.webp",
+          "bytes": 7516,
+          "sha256": "1e0480903ebd0a47192a6374f84fa7a6e1f74018467fc401081f6e5c2aaa3120"
+        }
+      }
+    },
+    {
+      "key": "character-white-rabbit",
+      "name": "白兔先生",
+      "group": "爱丽丝梦游仙境迷宫",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-white-rabbit-64.webp",
+          "bytes": 1404,
+          "sha256": "345fb918fe5f975ec0306500e7e459c0aa2b4b2fd8a57836e25dffbbb61c2c00"
+        },
+        "160": {
+          "file": "character-white-rabbit-160.webp",
+          "bytes": 8096,
+          "sha256": "f9825b4146134112d440576efea4d059750f858c27790163c8618dc02b22698d"
+        }
+      }
+    },
+    {
+      "key": "character-cheshire-cat",
+      "name": "柴郡猫",
+      "group": "爱丽丝梦游仙境迷宫",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-cheshire-cat-64.webp",
+          "bytes": 1250,
+          "sha256": "17bb505ba0ca6a945c7326ae72c09a3b34c271ee4e8e39e09fa837500ebfc050"
+        },
+        "160": {
+          "file": "character-cheshire-cat-160.webp",
+          "bytes": 6880,
+          "sha256": "d999b81e880ab8ba23beb38212e777de81e5e5037dee3092a8edbe53d074e992"
+        }
+      }
+    },
+    {
+      "key": "character-mad-hatter",
+      "name": "疯帽子",
+      "group": "爱丽丝梦游仙境迷宫",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-mad-hatter-64.webp",
+          "bytes": 1374,
+          "sha256": "55af28fc5104f9f4d37818c92cf0f656fb4ce8c7d70bfd82891695811d0f823a"
+        },
+        "160": {
+          "file": "character-mad-hatter-160.webp",
+          "bytes": 7352,
+          "sha256": "a334c94de608ac37f0fc68c3033cd54fee428d9d760d33d11b280db86766c97e"
+        }
+      }
+    },
+    {
+      "key": "character-alice",
+      "name": "爱丽丝",
+      "group": "爱丽丝梦游仙境迷宫",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-alice-64.webp",
+          "bytes": 1532,
+          "sha256": "0d8de3d22957045e5b7024917f76998063bd7d8d1a6fc94a0e62dbb30ade7aea"
+        },
+        "160": {
+          "file": "character-alice-160.webp",
+          "bytes": 8308,
+          "sha256": "c664bf08f5f82b4bd9b044bef08d5b19480e621cba0ff7dc78173a14b1b16a45"
+        }
+      }
+    },
+    {
+      "key": "character-march-hare",
+      "name": "三月兔",
+      "group": "爱丽丝梦游仙境迷宫",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-march-hare-64.webp",
+          "bytes": 1596,
+          "sha256": "39ae60706da05230983f96272d8572c35514d66d5df671f3bc34b5e4d4a10960"
+        },
+        "160": {
+          "file": "character-march-hare-160.webp",
+          "bytes": 9588,
+          "sha256": "d2f931ba18a84427b5344cd25073486aff64e8a800da9079a6d07bc63be19249"
+        }
+      }
+    },
+    {
+      "key": "character-dormouse",
+      "name": "睡鼠",
+      "group": "爱丽丝梦游仙境迷宫",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-dormouse-64.webp",
+          "bytes": 1574,
+          "sha256": "5551fb5fcdc7abc91a95eccc63982fbc5bbf8e5688bc594b6d6341318836ea3f"
+        },
+        "160": {
+          "file": "character-dormouse-160.webp",
+          "bytes": 9218,
+          "sha256": "a4116ddd3e7c9ba47bcb2fd9257841ae669650184f5f091c9e766bc34ec64a08"
+        }
+      }
+    },
+    {
+      "key": "character-white-queen",
+      "name": "白皇后",
+      "group": "爱丽丝梦游仙境迷宫",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-white-queen-64.webp",
+          "bytes": 1174,
+          "sha256": "8e200f6945036adbb794db834b8675c799eae9a5f083e2b548439fc688386191"
+        },
+        "160": {
+          "file": "character-white-queen-160.webp",
+          "bytes": 6946,
+          "sha256": "65fa232288bf6fea53fed19d993f5131cb9272c3f1cc886539cad011eff57534"
+        }
+      }
+    },
+    {
+      "key": "character-rabbit",
+      "name": "瑞比",
+      "group": "百亩森林 / 旋转疯蜜罐",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-rabbit-64.webp",
+          "bytes": 1262,
+          "sha256": "9edbe9422a94414f2f20ff59ab077987f2372b3f662d2c9cee7ec0507709313a"
+        },
+        "160": {
+          "file": "character-rabbit-160.webp",
+          "bytes": 8004,
+          "sha256": "805491bd6f19dc9369e2144233e066d9f8214436dc7ec9a4379f88361722a31b"
+        }
+      }
+    },
+    {
+      "key": "character-owl",
+      "name": "猫头鹰",
+      "group": "百亩森林 / 旋转疯蜜罐",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-owl-64.webp",
+          "bytes": 1434,
+          "sha256": "e95508805a2bf5aeac122f6caddd559a93a8a8cbe6af83156ab29ab7e3014720"
+        },
+        "160": {
+          "file": "character-owl-160.webp",
+          "bytes": 7874,
+          "sha256": "cf4f934d314b557675fdd439c5e62e3f48cda6ff68eaca276cbda152f67e8720"
+        }
+      }
+    },
+    {
+      "key": "character-kanga",
+      "name": "袋鼠妈妈",
+      "group": "百亩森林 / 旋转疯蜜罐",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-kanga-64.webp",
+          "bytes": 1374,
+          "sha256": "0c7e65f3af9674fe475e0b70bd1b02b1e63b8ff6d21432b99530ed98655bdc15"
+        },
+        "160": {
+          "file": "character-kanga-160.webp",
+          "bytes": 8098,
+          "sha256": "c4aec10aa6047f8804d6b476c64c3f6317c8ebeb7abd8abac37c75d1539a9140"
+        }
+      }
+    },
+    {
+      "key": "character-roo",
+      "name": "小豆",
+      "group": "百亩森林 / 旋转疯蜜罐",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "character-roo-64.webp",
+          "bytes": 1562,
+          "sha256": "e0b44a4ca60de30d9b41ba6d30c59a89852110b8a9a54bdb45ac83af050470d3"
+        },
+        "160": {
+          "file": "character-roo-160.webp",
+          "bytes": 9018,
+          "sha256": "97b41c6e1d1dd11e3869612a38640bc9af07485cbd18be3613c07cc8ba4578b0"
+        }
+      }
+    },
+    {
+      "key": "character-official-cinderella",
+      "name": "仙蒂瑞拉",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-cinderella-64.webp",
+          "bytes": 1344,
+          "sha256": "54db0a2009776e35bf63149871988684d6d56e6c17b6bd592b3ee6d021c8e7d1"
+        },
+        "160": {
+          "file": "character-official-cinderella-160.webp",
+          "bytes": 5748,
+          "sha256": "d22074b99242d75adf89764ea4585376c56892998081e9890cc95f154a8fc9e9"
+        }
+      },
+      "source_page": "https://princess.disney.com/cinderella",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/g_cinderella1950_09_17805_8981f847_8270f75c.jpeg?region=1%2C0%2C1298%2C730",
+      "crop_box": [
+        405,
+        0,
+        765,
+        360
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-belle",
+      "name": "贝儿",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-belle-64.webp",
+          "bytes": 888,
+          "sha256": "dd2cbf12ef4e497d505a1b2ae09da70dc1c0af86f8b4b585baadd58a3e406044"
+        },
+        "160": {
+          "file": "character-official-belle-160.webp",
+          "bytes": 3678,
+          "sha256": "064d4b5a6fd19a988ac989ba680b4eb1c60c8efa0f8fc87ff65fb7708cf0f1ca"
+        }
+      },
+      "source_page": "https://princess.disney.com/belle",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/gallery_princess_belle_2_f4a938c0_89a697db.jpeg?region=3%2C0%2C2175%2C1223",
+      "crop_box": [
+        750,
+        40,
+        1350,
+        640
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-ariel",
+      "name": "爱丽儿",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-ariel-64.webp",
+          "bytes": 1172,
+          "sha256": "11395b98f8856c1d357633900df3e960798720152fc75106752a2787bda9c95f"
+        },
+        "160": {
+          "file": "character-official-ariel-160.webp",
+          "bytes": 4464,
+          "sha256": "ec27fae4e4d57acc8e87870331a32877047c6582c455aee3cbf86d4f80903d84"
+        }
+      },
+      "source_page": "https://princess.disney.com/ariel",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/gallery_princess_ariel_5_28dcc9e3_fa4db5a4.jpeg?region=3%2C0%2C2175%2C1223",
+      "crop_box": [
+        800,
+        30,
+        1450,
+        680
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-snowwhite",
+      "name": "白雪公主",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-snowwhite-64.webp",
+          "bytes": 1112,
+          "sha256": "308b917072c251c5b3bb9a76ef40aeaaed3345495eb4e8c382cc2e961298e15b"
+        },
+        "160": {
+          "file": "character-official-snowwhite-160.webp",
+          "bytes": 3564,
+          "sha256": "da0866442c77dc2c3c43e4eab3ff915b7466499b8a89ce1c54d7043b2fd635ca"
+        }
+      },
+      "source_page": "https://princess.disney.com/snow-white",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/gallery_princess_snowwhite_3_aeb1adbd_ffd5de98.jpeg?region=3%2C0%2C2175%2C1223",
+      "crop_box": [
+        920,
+        100,
+        1470,
+        650
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-aurora",
+      "name": "爱洛",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-aurora-64.webp",
+          "bytes": 848,
+          "sha256": "e6e87ce55b41256d6f0586e1db24f931a6f6a800532d813fc6989e113585b667"
+        },
+        "160": {
+          "file": "character-official-aurora-160.webp",
+          "bytes": 3698,
+          "sha256": "0ead4d40b6c9d7ff42ef101136559d8252d6cca0b8a296acdbd240da36eeab92"
+        }
+      },
+      "source_page": "https://princess.disney.com/aurora",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/gallery_princess_aurora_3_7b8a0543_4c6bf93a.jpeg?region=3%2C0%2C2175%2C1223",
+      "crop_box": [
+        250,
+        150,
+        950,
+        850
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-jasmine",
+      "name": "茉莉",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-jasmine-64.webp",
+          "bytes": 984,
+          "sha256": "fec19484ac29d656a8ced20bc3f39b74c6db61d754c2a0f95d00f5f082dee883"
+        },
+        "160": {
+          "file": "character-official-jasmine-160.webp",
+          "bytes": 3488,
+          "sha256": "030b67325842537d0f593b424427820d96adf099abbf3cb697f2601d12880883"
+        }
+      },
+      "source_page": "https://princess.disney.com/jasmine",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/gallery_princess_jasmine_2_1abea4ca_41f20a9a.jpeg?region=3%2C0%2C2175%2C1223",
+      "crop_box": [
+        780,
+        100,
+        1780,
+        1100
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-rapunzel",
+      "name": "乐佩",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-rapunzel-64.webp",
+          "bytes": 690,
+          "sha256": "af794bce1c3c9b22317f0e8f0b92d562aeef50a6bf5426a97b0aee55a414baf6"
+        },
+        "160": {
+          "file": "character-official-rapunzel-160.webp",
+          "bytes": 2470,
+          "sha256": "ee1d28604711e26c085ab626f52e00ec1008b49ec0e8c3cad1680c7cca2c559b"
+        }
+      },
+      "source_page": "https://princess.disney.com/rapunzel",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/gallery_princess_rapunzel_5_10e81cd6_fa73993f.jpeg?region=3%2C0%2C2175%2C1223",
+      "crop_box": [
+        550,
+        90,
+        1250,
+        790
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-elsa",
+      "name": "艾莎",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-elsa-64.webp",
+          "bytes": 840,
+          "sha256": "c460c3cc0baec235c9e5771b918e25149162d8390f2ee3dd21594ac983c78e44"
+        },
+        "160": {
+          "file": "character-official-elsa-160.webp",
+          "bytes": 3058,
+          "sha256": "3b2ea0465a6a538dfc706466556a5494efaf907bfc1a7fcbfa7d85319bf7a758"
+        }
+      },
+      "source_page": "https://frozen.disney.com/",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/ct_frozen_elsa_18466_22a50822_ad6090d1.jpeg?region=0%2C0%2C600%2C600",
+      "crop_box": [
+        0,
+        0,
+        600,
+        600
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-anna",
+      "name": "安娜",
+      "group": "公主与童话角色",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-anna-64.webp",
+          "bytes": 910,
+          "sha256": "af7f0813dd06e9be767402c16c4a9dc4380da8530dc88d77ffa76a3a36a54639"
+        },
+        "160": {
+          "file": "character-official-anna-160.webp",
+          "bytes": 3506,
+          "sha256": "7459b04f8e4dcbcc09ae6243ed2618c779320b63597901e2adc54406b4cef4f3"
+        }
+      },
+      "source_page": "https://frozen.disney.com/",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/ct_frozen_anna_18466_6775584b_520ae44b.jpeg?region=0%2C0%2C600%2C600",
+      "crop_box": [
+        0,
+        0,
+        600,
+        600
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-dopey",
+      "name": "糊涂蛋",
+      "group": "七个小矮人矿山车",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-dopey-64.webp",
+          "bytes": 1136,
+          "sha256": "4b412ba261d953cc70e9c3330ea3610cfc88342feabca1fd6f0c5bc89efd7e2d"
+        },
+        "160": {
+          "file": "character-official-dopey-160.webp",
+          "bytes": 3614,
+          "sha256": "ddfb861e0f296e0b9d5cd6dd841dff063d14603275670967ed23b0e960bdd6c7"
+        }
+      },
+      "source_page": "https://movies.disney.com/snow-white-and-the-seven-dwarfs",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/pp_snowwhiteandthesevendwarfs_herobanner_19871_2_5dd91374.jpeg?region=0%2C0%2C2048%2C880",
+      "crop_box": [
+        245,
+        240,
+        425,
+        420
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-sleepy",
+      "name": "瞌睡虫",
+      "group": "七个小矮人矿山车",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-sleepy-64.webp",
+          "bytes": 1286,
+          "sha256": "9305e65c9a307ea9409865dac50f71b67a063f8e0e971cfb0dde9f2ab56677f8"
+        },
+        "160": {
+          "file": "character-official-sleepy-160.webp",
+          "bytes": 4432,
+          "sha256": "86c0d371bac2dabb45642a51bcb93511989dddb2f7b5a2fa4517b31ecf6e2bd9"
+        }
+      },
+      "source_page": "https://movies.disney.com/snow-white-and-the-seven-dwarfs",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/pp_snowwhiteandthesevendwarfs_herobanner_19871_2_5dd91374.jpeg?region=0%2C0%2C2048%2C880",
+      "crop_box": [
+        400,
+        190,
+        625,
+        415
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-bashful",
+      "name": "害羞鬼",
+      "group": "七个小矮人矿山车",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-bashful-64.webp",
+          "bytes": 1134,
+          "sha256": "b300812182ee2b8cf39bdd0e7d6454f5424c9be13e6c55779d03eb6a8542f6d0"
+        },
+        "160": {
+          "file": "character-official-bashful-160.webp",
+          "bytes": 3444,
+          "sha256": "a219cb8af18c2ce7903744a1de6599d97057f4530f04402bdff7e0f75e870ee8"
+        }
+      },
+      "source_page": "https://movies.disney.com/snow-white-and-the-seven-dwarfs",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/pp_snowwhiteandthesevendwarfs_herobanner_19871_2_5dd91374.jpeg?region=0%2C0%2C2048%2C880",
+      "crop_box": [
+        630,
+        150,
+        840,
+        360
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-grumpy",
+      "name": "爱生气",
+      "group": "七个小矮人矿山车",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-grumpy-64.webp",
+          "bytes": 1176,
+          "sha256": "def30786424dbd492500689c167c0aab02fe956e4e5de295a21021057d0b5fc3"
+        },
+        "160": {
+          "file": "character-official-grumpy-160.webp",
+          "bytes": 3656,
+          "sha256": "11ac7417c4284b5b2e88b825261c750be138cf70dd775adc73e827aada7c32d6"
+        }
+      },
+      "source_page": "https://movies.disney.com/snow-white-and-the-seven-dwarfs",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/pp_snowwhiteandthesevendwarfs_herobanner_19871_2_5dd91374.jpeg?region=0%2C0%2C2048%2C880",
+      "crop_box": [
+        825,
+        145,
+        1060,
+        380
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-happy",
+      "name": "开心果",
+      "group": "七个小矮人矿山车",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-happy-64.webp",
+          "bytes": 1172,
+          "sha256": "be16f9a89e2753579b2830d741e83b1537607bacdf58585c3667d58e60dd9943"
+        },
+        "160": {
+          "file": "character-official-happy-160.webp",
+          "bytes": 3818,
+          "sha256": "b43d2a3034963faaf14750d47f946b5dfe69a9897a0473744359b3c9bbc14bb3"
+        }
+      },
+      "source_page": "https://movies.disney.com/snow-white-and-the-seven-dwarfs",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/pp_snowwhiteandthesevendwarfs_herobanner_19871_2_5dd91374.jpeg?region=0%2C0%2C2048%2C880",
+      "crop_box": [
+        1040,
+        70,
+        1290,
+        320
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-sneezy",
+      "name": "喷嚏精",
+      "group": "七个小矮人矿山车",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-sneezy-64.webp",
+          "bytes": 1208,
+          "sha256": "693701595f7d69a1d3f80734fb1e60555c2d8498696d3805c03258a5aee24281"
+        },
+        "160": {
+          "file": "character-official-sneezy-160.webp",
+          "bytes": 3716,
+          "sha256": "3774ff36158dbe13d92e9936f55667a59960f38d7078e6d14187d642ef080b1e"
+        }
+      },
+      "source_page": "https://movies.disney.com/snow-white-and-the-seven-dwarfs",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/pp_snowwhiteandthesevendwarfs_herobanner_19871_2_5dd91374.jpeg?region=0%2C0%2C2048%2C880",
+      "crop_box": [
+        1340,
+        35,
+        1590,
+        285
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "character-official-doc",
+      "name": "万事通",
+      "group": "七个小矮人矿山车",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "character-official-doc-64.webp",
+          "bytes": 1136,
+          "sha256": "b60c35710ced5c6b7fbfbeb093ff957ec2b341569796113215421c124a9568fd"
+        },
+        "160": {
+          "file": "character-official-doc-160.webp",
+          "bytes": 3728,
+          "sha256": "06937dcd3609db4cc50d87cf9911b5af0f7d1bbfbb9e6bfae7a9f1adba852652"
+        }
+      },
+      "source_page": "https://movies.disney.com/snow-white-and-the-seven-dwarfs",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/pp_snowwhiteandthesevendwarfs_herobanner_19871_2_5dd91374.jpeg?region=0%2C0%2C2048%2C880",
+      "crop_box": [
+        1590,
+        0,
+        1870,
+        280
+      ],
+      "authorization": "User confirmed internal use authorization on 2026-10-28"
+    },
+    {
+      "key": "zoo-gary",
+      "name": "蛇盖瑞",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "zoo-gary-64.webp",
+          "bytes": 1340,
+          "sha256": "1605931062bc887bcbab4c8449f31c9a90bc8629865764767adeaf1679cb6a5f"
+        },
+        "160": {
+          "file": "zoo-gary-160.webp",
+          "bytes": 6026,
+          "sha256": "cdfeb03df21946a92953ac1835d50ebb705fbb96335e65dd7f918af720ef3366"
+        }
+      },
+      "generator": "built-in image_gen",
+      "prompt_subject": "Gary De’Snake, the friendly blue pit viper from Zootopia 2, expressive large eyes and two visible fangs"
+    },
+    {
+      "key": "zoo-nibbles",
+      "name": "海狸Nibbles",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "zoo-nibbles-64.webp",
+          "bytes": 1312,
+          "sha256": "5239a88cc97c1c52de014d9e970f49f254f27be1d1bb8a9e9eeb1a0d7bee8f47"
+        },
+        "160": {
+          "file": "zoo-nibbles-160.webp",
+          "bytes": 6498,
+          "sha256": "ada50da4539b394c9322a6cf74bbe4065c4d75c4100c1fb573f13b029eebaeb2"
+        }
+      },
+      "generator": "built-in image_gen",
+      "prompt_subject": "Nibbles Maplestick from Zootopia 2, enthusiastic female beaver with prominent incisors and a practical fishing vest"
+    },
+    {
+      "key": "zoo-frufru",
+      "name": "Fru Fru",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "zoo-frufru-64.webp",
+          "bytes": 1178,
+          "sha256": "8c0410c52565a32b80aead35e4e291949484116367db536416be515827b15a17"
+        },
+        "160": {
+          "file": "zoo-frufru-160.webp",
+          "bytes": 5446,
+          "sha256": "04ad5da98a8b31037cf0ae336312c7d25850062fae38d01a16752f3e37380ccf"
+        }
+      },
+      "generator": "built-in image_gen",
+      "prompt_subject": "Fru Fru from Zootopia, tiny elegant Arctic shrew, pointed shrew nose, round ears, fashionable pink dress, definitely a shrew not sheep"
+    },
+    {
+      "key": "zoo-fuzzby",
+      "name": "Dr. Fuzzby",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "zoo-fuzzby-64.webp",
+          "bytes": 1262,
+          "sha256": "63a563f84b7d0e0ad39265ede595a1de9b1ba9d1b427b44653514bb59db3a23d"
+        },
+        "160": {
+          "file": "zoo-fuzzby-160.webp",
+          "bytes": 6534,
+          "sha256": "ee5621fde3ee42746082bdf65085b4dc5429c1befa7ec29c22fd018c16452a77"
+        }
+      },
+      "generator": "built-in image_gen",
+      "prompt_subject": "Dr. Fuzzby from Zootopia 2, friendly female quokka therapist with large pink glasses"
+    },
+    {
+      "key": "zoo-pawbert",
+      "name": "猞猁Pawbert",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "zoo-pawbert-64.webp",
+          "bytes": 1226,
+          "sha256": "c9671f310d90ddce06764e6ef7f43d63a3670906d6e5d928da13b20a82437fa0"
+        },
+        "160": {
+          "file": "zoo-pawbert-160.webp",
+          "bytes": 6358,
+          "sha256": "a4ea794a4e280cc12789cf4e803c40dfe17fd133c039e06e41f716b7ede2cc9a"
+        }
+      },
+      "generator": "built-in image_gen",
+      "prompt_subject": "Pawbert Lynxley from Zootopia 2, young male lynx, distinctive tufted ears and cheek fur, relaxed smile"
+    },
+    {
+      "key": "zoo-winddancer",
+      "name": "马市长Winddancer",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "zoo-winddancer-64.webp",
+          "bytes": 1234,
+          "sha256": "86016760685f31575baedab8fc09bc24a76d1da6a2d2f8f3acd99b9719d23483"
+        },
+        "160": {
+          "file": "zoo-winddancer-160.webp",
+          "bytes": 4808,
+          "sha256": "f0b80f43f55c2d0326300450fa989d1e750de6f22210d279d58c75e58c4925b6"
+        }
+      },
+      "source_page": "https://www.disney.co.jp/column/zootopia",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/jp_column_disney17_23e8e15c.png",
+      "crop_box": [
+        430,
+        35,
+        790,
+        395
+      ]
+    },
+    {
+      "key": "zoo-judy-casual",
+      "name": "朱迪·日常便装",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "zoo-judy-casual-64.webp",
+          "bytes": 752,
+          "sha256": "588fa07b4dc018cd0fa9cafc2984cd1ba72c0e6828871734ded00d154fe8206f"
+        },
+        "160": {
+          "file": "zoo-judy-casual-160.webp",
+          "bytes": 2554,
+          "sha256": "647c87b046ac2b22b56ef9ce23111d5aa660e95a9df49de6277111784b2f312a"
+        }
+      },
+      "source_page": "https://www.disney.co.jp/fc/zootopia2",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/zootopia2_gallery_1600_900_02_fcfcaad1.jpeg",
+      "crop_box": [
+        850,
+        160,
+        1450,
+        760
+      ]
+    },
+    {
+      "key": "zoo-nick-casual",
+      "name": "尼克·休闲装",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "zoo-nick-casual-64.webp",
+          "bytes": 956,
+          "sha256": "ebf816bb0c85b0d46c2c6a661535140ce39a3200ba91379f7a6a30e5aa1dcd65"
+        },
+        "160": {
+          "file": "zoo-nick-casual-160.webp",
+          "bytes": 3464,
+          "sha256": "d7dabb622103ae889da462bbc17383dc0024154b446b5727c24a1b67ec9720dc"
+        }
+      },
+      "source_page": "https://www.disney.co.jp/fc/zootopia2",
+      "source_image": "https://lumiere-a.akamaihd.net/v1/images/zootopia2_gallery_1600_900_02_fcfcaad1.jpeg",
+      "crop_box": [
+        240,
+        0,
+        840,
+        600
+      ]
+    },
+    {
+      "key": "zoo-clawhauser-donut",
+      "name": "豹警官·甜甜圈",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "official-authorized",
+      "images": {
+        "64": {
+          "file": "zoo-clawhauser-donut-64.webp",
+          "bytes": 1274,
+          "sha256": "2910d23e95b54634b9782d6d589050e49bb6dcadc3c264b513d35c8980236236"
+        },
+        "160": {
+          "file": "zoo-clawhauser-donut-160.webp",
+          "bytes": 6098,
+          "sha256": "a097560609dfec6855eea459657d4afd476aa3cacd0537c940247aa0992ff363"
+        }
+      },
+      "source_page": "https://store.disney.co.jp/special/zootopia-10th/",
+      "source_image": "https://cdns7.shopdisney.disney.co.jp/is/image/ShopDisneyJP/zootopia-10th_260206_3200_860_top?$xlargeFull2x$&fit=constrain,1&fmt=webp-alpha",
+      "crop_box": [
+        1870,
+        80,
+        2270,
+        480
+      ]
+    },
+    {
+      "key": "zoo-flash-driving",
+      "name": "闪电·兜风",
+      "group": "疯狂动物城 · 新伙伴与装扮",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "zoo-flash-driving-64.webp",
+          "bytes": 1200,
+          "sha256": "67fdfeccc9505d28b59f399fb60651301c2ad26f8161ffe98fa66653da4e756f"
+        },
+        "160": {
+          "file": "zoo-flash-driving-160.webp",
+          "bytes": 6240,
+          "sha256": "b4de3cba785baf7a1266cfc9f79919fb25df767fc1810f675e0e6e4e3ca7b1f4"
+        }
+      },
+      "generator": "built-in image_gen",
+      "prompt_subject": "Flash the sloth from Zootopia, recognizable slow smiling sloth face in shirt and tie, hands on a small steering wheel at the bottom of the portrait"
+    }
+  ]
+}

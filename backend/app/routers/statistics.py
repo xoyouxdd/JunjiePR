@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
@@ -26,7 +27,8 @@ from app.excel_presentation import finalize_statistics_workbook, save_export_wor
 from app.score_queries import employee_month_scores
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
-from app.v2_models import Attraction, AuditLog, Employee, EmployeeHonorMemory, EmployeeHonorStyle
+from app.v2_models import Attraction, AuditLog, Employee, EmployeeAvatarPreference, EmployeeHonorMemory, EmployeeHonorStyle, EmployeeMonthRankSnapshot
+from app.services.avatars import avatar_catalog, own_avatar
 from app.v2_watermark import watermark_workbook
 from app.services.attendance import ensure_month_attendance
 from app.services.audit import write_audit
@@ -39,6 +41,73 @@ from app.services.performance_rankings import gsm_recognizer_ranking_payload, pr
 from app.services.statistics_trends import TREND_DEFAULT_MONTHS, TREND_MAX_MONTHS, TREND_SCORE_FIELDS, statistics_trend_payload as _statistics_trend_payload, trend_month_keys
 
 router = APIRouter()
+
+
+class AvatarPreferenceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    avatar_key: str
+    frame: str = "plain"
+
+
+def avatar_frame_choices(db, user):
+    choices = [{"key": key, "label": label} for key, label in
+               (("plain", "简洁"), ("autumn", "秋日金"), ("ocean", "晴空蓝"), ("forest", "森林绿"))]
+    if monthly_ranks_enabled() and user.base_role.code in SCORED_BASE_CODES:
+        months = db.query(EmployeeMonthRankSnapshot.score_month).filter(
+            EmployeeMonthRankSnapshot.employee_id == user.id,
+            EmployeeMonthRankSnapshot.score_month < date.today().strftime("%Y-%m")
+        ).distinct().order_by(EmployeeMonthRankSnapshot.score_month.desc()).limit(12).all()
+        for (month,) in months:
+            rank = member_month_rank(db, month, user.employee)
+            if rank.get("status") == "ranked" and rank.get("month_closed"):
+                choices.append({"key": f"medal:{month}:{rank['tier']}", "label": f"{month} · {rank['label']}"})
+    return choices
+
+
+@router.get("/self-avatar")
+def get_self_avatar(response: Response, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    if user.base_role.code in {"HR_CIRCLE", "HR_ADMIN"}:
+        raise HTTPException(403, "HR账号不使用个人头像装扮")
+    if getattr(user, "rotation_temporary", False):
+        raise HTTPException(403, "临时轮岗账号不支持员工头像装扮")
+    response.headers.update({"Cache-Control": "private, no-store", "Vary": "Cookie"})
+    return {**own_avatar(db, user.id), "frames": avatar_frame_choices(db, user)}
+
+
+@router.put("/self-avatar")
+def save_self_avatar(payload: AvatarPreferenceUpdate, response: Response,
+                     db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    if user.base_role.code in {"HR_CIRCLE", "HR_ADMIN"}:
+        raise HTTPException(403, "HR账号不使用个人头像装扮")
+    if getattr(user, "rotation_temporary", False):
+        raise HTTPException(403, "临时轮岗账号不支持员工头像装扮")
+    response.headers.update({"Cache-Control": "private, no-store", "Vary": "Cookie"})
+    if payload.avatar_key and payload.avatar_key not in avatar_catalog():
+        raise HTTPException(422, "请选择头像库中的有效头像")
+    # Saving ordinary frames never loads monthly ranks. A medal frame validates
+    # only its selected month; opening the wardrobe loads the bounded history.
+    frames = [{"key": key} for key in ("plain", "autumn", "ocean", "forest")]
+    match = re.fullmatch(r"medal:(\d{4}-(?:0[1-9]|1[0-2])):(0|10|20|30|40|50|60|70|80|90)", payload.frame)
+    if match and monthly_ranks_enabled() and user.base_role.code in SCORED_BASE_CODES:
+        month, tier = match.groups()
+        if month < date.today().strftime("%Y-%m"):
+            rank = member_month_rank(db, month, user.employee)
+            if rank.get("status") == "ranked" and rank.get("month_closed") and rank.get("tier") == int(tier):
+                frames.append({"key": payload.frame})
+    if payload.frame not in {item["key"] for item in frames}:
+        raise HTTPException(422, "请选择可用边框；历史月度勋章可能已重开或失效")
+    row = db.get(EmployeeAvatarPreference, user.id)
+    if row is None:
+        row = EmployeeAvatarPreference(employee_id=user.id)
+        db.add(row)
+    row.avatar_key, row.frame = payload.avatar_key, payload.frame
+    write_audit(db, user.employee, "avatar_preference", "employee", user.id, after=payload.model_dump())
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "头像刚刚被其他页面更新，请重新打开后保存")
+    return own_avatar(db, user.id)
 
 
 class HonorPreferenceUpdate(BaseModel):

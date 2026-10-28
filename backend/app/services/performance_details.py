@@ -353,6 +353,10 @@ def member_score_summary_payload(
     ensure_month_attendance(db, month, selected_ids)
     db.commit()
     rows = monthly_member_score_rows(db, month, selected_ids, employees=employees, score_loader=score_loader)
+    from app.services.avatars import avatar_keys
+    avatars = avatar_keys(db, selected_ids)
+    for row in rows:
+        row["avatar_key"] = avatars.get(row["employee_id"], "")
     rows.sort(key=lambda row: (-row["total_score"], row["employee_no"], row["employee_id"]))
     return {"month": month, "rows": rows}
 
