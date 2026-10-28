@@ -29,6 +29,8 @@ ROOT = HERE.parent
 PYTHON = sys.executable
 BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "deduction_type_picker_ui.cjs", "frontend_modules.cjs", "mobile_filter_layout_ui.cjs", "monthly_rank_ui.cjs", "recognition_upload_ui.cjs", "rotation_confirmation_ui.cjs", "rotation_adjustment_ui.cjs", "rotation_tablet_ui.cjs", "rotation_daily_ui.cjs", "rotation_formal_ui.cjs", "rotation_post_holds_ui.cjs", "rotation_cooperation_ui.cjs", "rotation_temporary_ui.cjs", "rotation_roster_independence_ui.cjs", "employee_types_ui.cjs", "video_learning_ui.cjs"}
 BROWSER_TESTS.update({"rotation_assignment_window_ui.cjs", "month_close_scope_ui.cjs", "recognition_photo_ui.cjs"})
+BROWSER_TESTS.add("workspace_compact_ui.cjs")
+BROWSER_TESTS.add("rotation_workflow_ui.cjs")
 ESM_VM_TESTS = {"view_lifecycle.cjs"}
 
 

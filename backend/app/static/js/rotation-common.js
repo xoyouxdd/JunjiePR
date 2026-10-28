@@ -51,6 +51,8 @@ function departureEarly() {
 }
 
 function canDepartNow(p, n) {
+  if(RT.data?.day?.taskWorkflow&&!p.task)return false;
+  if(p.task&&(!p.canDepart||n<p.task.allowedAt-1e-8||n>p.task.deadlineAt+1e-8))return false;
   if(p.departureBlocked||p.assign?.blocked)return false;
   if(p.entryGroup&&n<p.assign.departAt-.01)return false;
   if(p.entryGroup&&(p.entryGroup.blocked||p.entryGroup.members.find(m=>m.pid===p.pid)?.confirmed))return false;
@@ -93,6 +95,7 @@ function groupCanDepart(group,n){
   return !group.blocked&&group.members.every(m=>{const p=personOf(m.pid);return p&&p.state==='ready'&&p.assign&&n>=Math.max(p.readyAt??n,p.assign.departAt,p.assign.notBefore??0)-.01;});
 }
 function groupedChips(people,chip,n,allowGroup=false){
+  if(RT.data?.day?.taskWorkflow)return people.map(chip).join('');
   const seen=new Set();return people.map(p=>{
     if(!p.entryGroup)return chip(p);
     const g=p.entryGroup;if(seen.has(g.id))return '';seen.add(g.id);
@@ -103,6 +106,7 @@ function groupedChips(people,chip,n,allowGroup=false){
 }
 
 function postSwapForm(line,from,to,targetLine=line){
+  if(RT.data?.day?.taskWorkflow){void adjustPreview({action:'post_order',line,i:from,target_line:targetLine,target_i:to,swapMode:'with_people'});return;}
   const source=RT.data.day.lines.find(x=>x.id===line)?.posts[from],target=RT.data.day.lines.find(x=>x.id===targetLine)?.posts[to];
   formBox('选择岗位交换方式',`<p>${esc(line)}线 · ${esc(source?.name||'待核实')} ↔ ${esc(targetLine)}线 · ${esc(target?.name||'待核实')}</p><label>交换方式<select name="swapMode"><option value="posts">只交换岗位，人员留在原位置</option><option value="with_people">岗位和人员一起交换</option></select></label><p>累计站岗时间保留；跨线人员在原线的时长记入记录，再从当前时刻计算新线路时长。定岗需先取消。</p>`,
     values=>adjustPreview({action:'post_order',line,i:from,target_line:targetLine,target_i:to,swapMode:values.swapMode}),{okText:'预览影响'});
@@ -317,16 +321,16 @@ function confirmRotation(p, action, path, wholeGroup=false) {
   const token = p.confirmationTokens?.[wholeGroup?'group_depart':action];
   if (!token) { toast('任务已变化，请等待最新画面', true); scheduleLoad(); return; }
   if (action === 'depart' && !(wholeGroup&&p.entryGroup?groupCanDepart(p.entryGroup,nowMin()):canDepartNow(p, nowMin()))) { toast('休息未结束或还没到出发时间', true); return; }
-  let text = action === 'depart' ? assignmentDescription(p.assign) : '请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
+  let text = action === 'depart' ? assignmentDescription(p.assign) : action==='entry_return'?`原任务已${p.taskTimeout?.transferredToName?'转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'进入待转接'}，确认知晓后重新领取安排。`:'请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
   if(action==='depart'&&p.entryGroup){
     if(!wholeGroup&&RT.me?.employee_no&&RT.me.employee_no!==p.pid){toast('协同上岗请本人在待办确认',true);return;}
     text=wholeGroup?`<p>确认以下人员整组上岗：</p><p>${p.entryGroup.members.map(m=>`${esc(m.name)} · ${esc(m.task||'上岗')} → ${esc(p.entryGroup.line)}线 · ${esc(m.entryPost||'待核实')}`).join('<br>')}</p>`:text+`<p>同组 ${p.entryGroup.members.map(m=>esc(m.name)).join('、')}；${p.entryGroup.confirmed}/${p.entryGroup.members.length}人确认。出发前全员确认后一起前往，现场无需再次操作手机。</p>`;
   }
-  if(action==='depart'){const routes=p.entryGroup?.routes||p.departureRoutes||[];text+=`<h4>现场通知与接替去向</h4><ul>${routes.map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul><p>确认接受安排，按方案前往通知并接替，现场无需再次操作手机。下线人员回休息室后确认休息／吃饭。</p>`;}
+  if(action==='depart'){const routes=p.entryGroup?.routes||p.departureRoutes||[];text+=`<h4>现场通知与接替去向</h4><ul>${routes.map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul>${p.task?workflowComparison(p):''}<p>确认接受安排，按方案前往通知并接替。下线人员回休息室后确认休息／吃饭。</p>`;}
   if(action==='arrive'&&p.mealOptions?.canChoose)text+=`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线，提交时再次核对。</p>`;
   if(action==='arrive'&&p.mealOptions?.forced)text+='<p>已到原有强制饭点，本次安排吃饭。</p>';
   confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : '到达休息室'}`, text,
-    action === 'depart' ? '确认去轮岗' : '确认已到达', async () => {
+    action === 'depart' ? '确认去轮岗' : action==='entry_return'?'确认知晓，重新领取':'确认已到达', async () => {
       if (confirmationBlocked()) { toast('当前连接不可用，请稍后确认', true); return false; }
       RT.submitting = true;
       storePendingConfirmation({token, pid:p.pid, date: RT.data.clock.date});
@@ -453,9 +457,10 @@ function lineCard(L, n, ops) {
       if (p && p.flags.includes('7点岗') && !p.flags.includes('推7点下来')) who += '<span class="rt-badge p7">7点</span>';
       if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">${preparingText(p.preparing)}</span>`; }
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;
-      else if (p && p.lineStart !== null && p.lineStart !== undefined) mins = `${Math.max(0, Math.floor(n - p.lineStart))} 分`;
+      else if (p && (p.continuousStart??p.lineStart) !== null && (p.continuousStart??p.lineStart) !== undefined) mins = `${Math.max(0, Math.floor(n - (p.continuousStart??p.lineStart)))} 分`;
+      if(p?.waitingReplacement)who+='<span class="rt-badge prep">待接替下班 · 留守</span>';
     }
-    if(x.hold){cls+=' holding';who+=`<span class="rt-badge post-hold" title="${esc(x.hold.reason)}">定岗 · ${hm(Math.floor(x.hold.since))}起</span>`;}
+    if(x.hold){cls+=' holding';who+=`<span class="rt-badge post-hold">${x.hold101?'101':'定岗'} · ${hm(Math.floor(x.hold.since))}起</span>`;}
     if (i === exitIndex) cls += ' exit';
     const scheduled = value => /^\d{2}:\d{2}$/.test(value || '') ? Number(value.slice(0,2))*60+Number(value.slice(3)) : null;
     if (L.active && !x.open && !x.opened && scheduled(x.openAt) > n) {
@@ -465,9 +470,9 @@ function lineCard(L, n, ops) {
     }
     const attrs = ops ? ` data-post="${esc(L.id)}#${i}" tabindex="0" role="button"` : '';
     const drag=ops&&x.occ&&['notyet','onpost'].includes(personOf(x.occ)?.state)?` draggable="true" data-drag-pid="${esc(x.occ)}"`:'';
-    return `<div class="${cls}"${attrs}><span class="rt-pn"${ops?` draggable="true" data-drag-post="${esc(L.id)}#${i}" title="选择只交换岗位或连人交换"`:''}>${esc(x.name)}</span><span class="rt-who-name"${drag}>${who}</span><span class="rt-mins">${mins}</span></div>`;
+    return `<div class="${cls}${x.hold101?' holding101':''}"${attrs}><${ops?'button type="button"':'span'} class="rt-pn"${ops?` draggable="true" data-drag-post="${esc(L.id)}#${i}" ${x.key?`data-wf-rename="${esc(x.key)}"`:''} aria-label="${esc(x.name)}，双击改名，拖拽交换岗位"`:''}>${esc(x.name)}</${ops?'button':'span'}><span class="rt-who-name"${drag}>${who}</span><span class="rt-mins">${mins}</span></div>`;
   }).join('');
-  const inc = incoming.length ? `<div class="rt-incoming">即将进线：${incoming.slice(0, 3).map(p => `<b>${esc(p.name)}</b> ${p.state === 'heading' ? '前往中' : hm(p.assign.departAt)}`).join('，')}${incoming.length > 3 ? ` 等 ${incoming.length} 人` : ''}</div>` : '';
+  const inc = incoming.length&&!RT.data?.day?.taskWorkflow ? `<div class="rt-incoming">即将进线：${incoming.slice(0, 3).map(p => `<b>${esc(p.name)}</b> ${p.state === 'heading' ? '前往中' : hm(p.assign.departAt)}`).join('，')}${incoming.length > 3 ? ` 等 ${incoming.length} 人` : ''}</div>` : '';
   const occupied = L.posts.filter(x => x.open && x.occ).length;
   const opened = L.posts.filter(x => x.open).length;
   const head = ops ? ` data-line="${esc(L.id)}" tabindex="0" role="button"` : '';

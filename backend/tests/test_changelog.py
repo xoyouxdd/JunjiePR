@@ -104,10 +104,10 @@ def test_changelog_filters_by_role() -> None:
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert cm[0]["items"][0]["summary"] == "认可照片支持预览与删除重选"
+    assert cm[0]["items"][0]["summary"] == "轮岗任务独立执行与超时转接"
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
-    assert gsm[0]["items"][0]["summary"] == "认可照片支持预览与删除重选"
+    assert gsm[0]["items"][0]["summary"] == "轮岗任务独立执行与超时转接"
     assert "新增公告中心与版本查收" in cm_text
     assert "公告授权和管理员兜底交接" not in cm_text
     assert "本人认可支持一次登记多条" in cm_text
@@ -116,7 +116,7 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
-    assert admin[0]['items'][0]['summary']=='认可照片支持预览与删除重选'
+    assert admin[0]['items'][0]['summary']=='轮岗任务独立执行与超时转接'
     assert '员工导入占用工号支持预检后跳过' not in cm_text
     assert '员工导入占用工号支持预检后跳过' not in gsm_text
 
@@ -160,19 +160,19 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in cm['release']['items']]==['认可照片支持预览与删除重选', '正式Lead普通认可分值修正']
+        assert [item['summary'] for item in cm['release']['items']]==['轮岗任务独立执行与超时转接','休息室大屏与正式轮岗联动']
         assert cm['read'] is False
         assert client.post('/api/changelog/announcement/read',json={'version':APP_VERSION}).status_code==200
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in tr['release']['items']]==['认可照片支持预览与删除重选', '正式Lead普通认可分值修正']
+        assert [item['summary'] for item in tr['release']['items']]==['轮岗任务独立执行与超时转接','轮岗现场调整与按线恢复','休息室大屏与正式轮岗联动']
         assert tr['read'] is False
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in hr["release"]["items"]] == [
-            "认可照片支持预览与删除重选", "正式Lead普通认可分值修正", "员工导入覆盖选择简化", "发布版本与验证期间变更检查补强"]
+            "轮岗任务独立执行与超时转接", "休息室大屏与正式轮岗联动"]
         assert hr["read"] is False
         first = client.get("/api/changelog/announcement").json()
         history = client.get("/api/changelog").json()["releases"]
@@ -185,7 +185,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post('/api/logout');login(client,'HR01','HR123')
         assert client.get('/api/changelog/announcement').json()['read'] is True
         client.post('/api/logout');login(client,'OMTEST01')
-        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']]==['认可照片支持预览与删除重选', '正式Lead普通认可分值修正']
+        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']]==['轮岗任务独立执行与超时转接','休息室大屏与正式轮岗联动']
 
 
 def test_import_skip_note_requires_hr_role_and_manage_permission():
@@ -205,13 +205,24 @@ def test_recognition_timing_note_requires_system_admin_role_and_permission():
     assert not item_visible(item,'CM',{'SYSTEM_ADMIN'})
 
 
-def test_current_import_update_note_requires_hr_role_and_manage_permission():
-    item=next(i for i in RELEASES[0]['items'] if i['summary']=='员工导入覆盖选择简化')
+def test_import_update_note_requires_hr_role_and_manage_permission():
+    item=next(i for r in RELEASES if r['version']=='2026.10.26.2' for i in r['items'] if i['summary']=='员工导入覆盖选择简化')
     for role in ('HR_CIRCLE','HR_ADMIN','SYSTEM_ADMIN'):
         assert item_visible(item,role,{'HR_MANAGE'})
         assert not item_visible(item,role,set())
     for role in ('CM','TR','SUPERVISOR','GSM','OM'):
         assert not item_visible(item,role,{'HR_MANAGE'})
+
+
+def test_compact_workspace_notes_follow_existing_role_and_data_permissions():
+    current=next(r for r in RELEASES if r['version']=='2026.10.27.1')
+    work,records,trend=current['items']
+    for role in ('CM','TR','SUPERVISOR','GSM','HR_CIRCLE','SYSTEM_ADMIN'):
+        assert item_visible(work,role,set())
+        assert item_visible(trend,role,{'DATA_VIEW'})
+        assert not item_visible(trend,role,set())
+    assert item_visible(records,'GSM',set())
+    assert not item_visible(records,'CM',set())
 
 
 def test_current_release_items_match_roles_and_permissions() -> None:

@@ -93,6 +93,8 @@ def confirmation_setup(rotation, *, outgoing=False):
                                     breakStart=445, end=1000,
                                     assign={'line':'A', 'mode':'chain', 'target':'2',
                                             'why':'推出圈' if outgoing else '推下班', 'departAt':470})
+        eng,_=S.engine_for(db,cfg,row,state)
+        eng.tick(470)
         S.save_day(db, row, state)
     with rotation.factory() as db:
         p = S.member_payload(db, rotation.attraction_id, '1')['person']

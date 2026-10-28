@@ -239,6 +239,12 @@ def confirmation(token: str, date: str, attraction_id: int | None = None, db: Se
                 None if capabilities(user)['can_operate'] and aid==user.employee.attraction_id else user.employee.employee_no)
 
 
+@router.post('/undo/preview')
+def undo_preview(payload:dict,db:Session=Depends(formal_db),user:V2User=Depends(operator)):
+    from app.rotation.history import preview
+    return call(preview,db,user.employee.attraction_id,payload.get('line'))
+
+
 @router.get('/daily')
 def month(month: str, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     return call(D.month_payload, db, user.employee.attraction_id, month)

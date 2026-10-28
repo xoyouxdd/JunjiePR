@@ -14,6 +14,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.role_constants import FRONTLINE_CODES, SCORE_UNIT, SUPERVISOR_SCORING_START_MONTH
+from app.score_policy import loa_month_exclusion
 from app.services.identity import base_role_at, base_roles_at, employee_active_on
 from app.v2_models import (
     AttendanceMonthlyScore, AttendanceRule, Employee, EmployeeLOAPeriod, Role,
@@ -87,6 +88,7 @@ def attendance_day_totals(
     employee_id: int,
     month: str,
     sick_rows: list[SickLeaveRecord] | None = None,
+    *, loa_excluded: bool | None = None,
 ) -> tuple[Decimal, Decimal, bool]:
     if sick_rows is None:
         sick_rows = (
@@ -103,7 +105,7 @@ def attendance_day_totals(
     # LOA is neither an inferred weekday absence nor a partial score deduction.
     # If it touches this month, source records remain auditable elsewhere but
     # attendance fields must not participate in any count or score.
-    is_full_month_loa = loa_excludes_month(db, employee_id, month)
+    is_full_month_loa = loa_excludes_month(db, employee_id, month) if loa_excluded is None else loa_excluded
     if is_full_month_loa:
         return Decimal("0.0"), Decimal("0.0"), True
     charged_days = min(Decimal("22.0"), sum(day_values.values(), Decimal("0.0")))
@@ -209,11 +211,13 @@ def ensure_month_attendance(
     db: Session,
     month: str,
     employee_ids: list[int] | set[int] | None = None,
+    *, persist: bool = True,
 ) -> dict[int, AttendanceMonthlyScore]:
     """Create missing monthly attendance rows in batches and leave current rows untouched.
 
     Sick-leave and employee-change workflows recalculate their affected employee directly,
     so statistics reads do not need to rewrite every employee on every request.
+    With persist=False, missing rows remain transient and never enter the session.
     """
     employee_query = db.query(Employee)
     if employee_ids is not None:
@@ -266,6 +270,9 @@ def ensure_month_attendance(
     threshold = Decimal(str(rule.zero_threshold)).quantize(SCORE_UNIT)
     calculated_at = datetime.now()
     pending_rows: list[dict] = []
+    excluded_ids = {eid for (eid,) in db.query(Employee.id).filter(
+        Employee.id.in_(missing_ids), loa_month_exclusion(Employee.id, month),
+    ).all()}
     for employee in missing:
         end_role = end_roles.get(employee.id)
         if not attendance_scored_role(end_role, month):
@@ -275,6 +282,7 @@ def ensure_month_attendance(
             employee.id,
             month,
             [row for row in sick_rows if row.employee_id == employee.id],
+            loa_excluded=employee.id in excluded_ids,
         )
         eligible = employee_active_on(employee, end_date) and not is_full_month_loa
         final, total_deduction = calculate_attendance_score(
@@ -298,6 +306,14 @@ def ensure_month_attendance(
                 "calculated_at": calculated_at,
             }
         )
+    if pending_rows and not persist:
+        numeric_fields = {'actual_sick_days', 'charged_sick_days', 'base_score',
+                          'perfect_bonus', 'sick_deduction', 'final_score'}
+        records.update({values['employee_id']: AttendanceMonthlyScore(**{
+            key: Decimal(str(value)) if key in numeric_fields else value
+            for key, value in values.items()
+        }) for values in pending_rows})
+        return records
     if pending_rows:
         db.execute(
             text(

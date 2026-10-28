@@ -19,10 +19,10 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(data.person.assignmentLocked&&!data.person.canDepart);
   assert.equal((await op.request.post(base+'/api/rotation-board/act',{data:{action:'reassign',pid:'9710000',line:'B1'}})).status(),400);
   assert((await op.request.post(base+'/api/rotation-board/act',{data:{action:'reassign',pid:'9710010',line:'A1'}})).ok());
-  await board.goto(base+'/rotation-board');await board.locator('.rt-departure-preview').waitFor();
-  assert.match(await board.locator('.rt-departure-preview').innerText(),/仍按原时间休息/);assert.match(await board.locator('.rt-departure-preview').innerText(),/安排已固定/);
+  await board.goto(base+'/rotation-board');await board.locator('[data-drag-pid="9710000"]').waitFor();
+  assert.match(await board.locator('[data-drag-pid="9710000"]').innerText(),/剩 3 分钟/);assert.match(await board.locator('[data-drag-pid="9710000"]').innerText(),/A1/);
   for(const width of [320,390,430,768,1440]){await board.setViewportSize({width,height:900});assert.equal(await board.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' preview overflow '+width);}
-  const shots=process.env.ROTATION_WINDOW_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await board.setViewportSize({width:390,height:844});await board.evaluate(()=>{RT.dragging=true;document.querySelector('.rt-departure-preview').scrollIntoView({block:'center'});});try{await board.screenshot({path:path.join(shots,engine+'-route-preview.png')});}finally{await board.evaluate(()=>{RT.dragging=false;});}await personal.screenshot({path:path.join(shots,engine+'-fixed-personal.png'),fullPage:true});}
+  const shots=process.env.ROTATION_WINDOW_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await board.setViewportSize({width:390,height:844});await board.evaluate(()=>{RT.dragging=true;document.querySelector('.rt-resting .rt-chip').scrollIntoView({block:'center'});});try{await board.screenshot({path:path.join(shots,engine+'-route-preview.png')});}finally{await board.evaluate(()=>{RT.dragging=false;});}await personal.screenshot({path:path.join(shots,engine+'-fixed-personal.png'),fullPage:true});}
   assert((await op.request.post(base+'/api/rotation-board/act',{data:{action:'line',line:'A1',active:false}})).ok());
   await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/待主管核对/).waitFor();
   assert.equal(await personal.locator('[data-rotation-task=depart]').count(),0);

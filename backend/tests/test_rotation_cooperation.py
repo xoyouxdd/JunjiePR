@@ -25,6 +25,55 @@ def actor(pid):
     return SimpleNamespace(formal=True, entered_by=SimpleNamespace(employee_no=pid))
 
 
+def test_read_projection_reuses_group_routes_without_changing_tokens_or_actions(monkeypatch):
+    eng, _ = fixture()
+    expected = {pid: C.plan(eng, eng.P[pid], 540) for pid in ('a', 'b')}
+    calls = []
+    original = C.simulate
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(C, 'simulate', counted)
+    eng._read_projection = {}
+    for _ in range(10):
+        for pid in ('a', 'b'):
+            result = C.plan(eng, eng.P[pid], 540)
+            assert result == expected[pid]
+            result['members'].clear()
+    assert len(calls) == 3  # One common route, one solo route per person.
+    del eng._read_projection
+    C.confirm(eng, 'a', 540, actor('a'), 'a-token')
+    assert C.plan(eng, eng.P['b'], 540)['confirmed'] == 1
+    assert C.confirm(eng, 'b', 540, actor('b'), 'b-token')['status'] == 'executed'
+
+
+def test_projection_scope_requires_identical_committed_state_and_clock():
+    from app.rotation import service as S
+    from app.rotation.models import RotationDay, RotationConfig
+    bind = object()
+    db = SimpleNamespace(info={}, get_bind=lambda: bind)
+    row = RotationDay(attraction_id=765432, work_date='2026-10-27', version=1, state_json='{}')
+    cfg = RotationConfig(settings_json='{}', lines_json='[]')
+    first = S._read_projection_cache(db, cfg, row, 540)
+    first['marker'] = True
+    assert S._read_projection_cache(db, cfg, row, 540) is first
+    assert S._read_projection_cache(db, cfg, row, 540.01) == {}
+    row.version += 1
+    assert S._read_projection_cache(db, cfg, row, 540) == {}
+    second = S._read_projection_cache(db, cfg, row, 540)
+    cfg.settings_json = '{"departEarly":0}'
+    assert S._read_projection_cache(db, cfg, row, 540) is not second
+    committed = S._read_projection_cache(db, cfg, row, 540)
+    db.info[S._TRANSACTION_KEY] = {'days': {(row.attraction_id, row.work_date): None}}
+    private = S._read_projection_cache(db, cfg, row, 540)
+    private['uncommitted'] = True
+    db.info.clear()  # A rollback must not publish private projections.
+    assert S._read_projection_cache(db, cfg, row, 540) is committed
+    assert 'uncommitted' not in committed
+    other_db = SimpleNamespace(info={}, get_bind=lambda: object())
+    assert S._read_projection_cache(other_db, cfg, row, 540) is not committed
+
+
 def test_projection_is_pure_and_shows_final_positions():
     eng, hooks = fixture()
     before = deepcopy(eng.d); events = len(hooks.events)

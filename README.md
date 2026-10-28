@@ -10,6 +10,9 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/rotation-workflow-20261028.md](docs/rotation-workflow-20261028.md) | 轮岗独立任务、超时转接、101与大屏正式联动 |
+| [docs/workspace-compact-20261027.md](docs/workspace-compact-20261027.md) | 紧凑认可记录、今日工作、交互趋势及按需组件边界 |
+| [docs/third-party-ui.md](docs/third-party-ui.md) | 本地按需界面组件的来源与许可证 |
 | [docs/video-learning.md](docs/video-learning.md) | 视频学习、分片续传、压缩封面、共享品牌/员工号水印、联网缓存及验证边界 |
 | [docs/mobile-filter-alignment-20261020.md](docs/mobile-filter-alignment-20261020.md) | 四页手机筛选对齐、导出历史完整展示与三引擎验证 |
 | [docs/mobile-upload-compatibility.md](docs/mobile-upload-compatibility.md) | 手机浏览器图片上传共用链路、实收测试与真机验收边界 |

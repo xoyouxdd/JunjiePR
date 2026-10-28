@@ -106,6 +106,7 @@ function boardView() {
   }
   if (d.status === 'ended') return `<section class="panel rt-empty"><h2>${esc(d.date)} 的轮岗已结束</h2><p>${!formalRotation||me.capabilities.can_records?'可在「记录」查看当天的操作日志和个人轮岗记录。':'当天轮岗安排已结束。'}</p></section>`;
   const n = nowMin();
+  if(d.taskWorkflow)return workflowBoardView(n,isManager());
   const alerts = d.alerts.map(a => `<div class="rt-alert ${esc(a.level)}">${esc(a.msg)}</div>`).join('') + d.notices.slice(-3).map(x => `<div class="rt-alert">${hm(x.t)} ${esc(x.msg)}</div>`).join('');
   return `${isManager()&&!me.adjustment&&(!formalRotation||me.capabilities.can_manage)?`<section class="panel"><div class="rt-row"><strong>当天运行 · ${esc(d.date)}</strong><span>闭园 ${esc(d.closeAt||'未设置')}</span><button type="button" class="secondary" data-live-close>调整闭园时间</button></div></section>`:''}${alerts ? `<div class="rt-alerts">${alerts}</div>` : ''}<div class="rt-board"><div class="rt-lines">${d.lines.map(L => lineCard(L, n, isManager())).join('')}</div><div class="rt-pool">${poolView(n)}</div></div>`;
 }
@@ -282,7 +283,7 @@ function initialDraftView(data) {
   const listSelect=(kind,n,pool)=>Array.from({length:n},(_,i)=>`<select data-list="${kind}">${option(plan[kind][i],pool)}</select>`).join(' ');
   const roleSelect=p=>`<select data-role="${esc(p.pid)}">${[['rotation','轮岗'],['op','OP'],['excluded','不轮岗']].map(([v,t])=>`<option value="${v}" ${p.role===v?'selected':''}>${t}</option>`).join('')}</select>`;
   return `<section class="panel"><h2>${esc(draft.date)} · ${data.prestart_live?'开班前看板':'预排看板'}</h2>
-    <p class="field-hint">${data.prestart_live?'今天首班开始前与看板同步；首班开始后固定整份班表，之后在看板调整。':'未来日期只保存预排，不提前开始计时。岗位和人员可拖拽，也可依次点击交换。'}</p>
+    <p class="field-hint">${data.prestart_live?'今天首班开始前与看板同步；首班开始后固定整份班表，之后在看板调整。':'未来日期只保存预排，不提前开始计时。岗位和人员可拖拽交换。'}</p>
     ${dailyBoard(data,true)}
     <details class="rt-daily-settings"><summary>预排设置 · 岗位人员、闭园时间、任务与角色</summary>
       ${draft.draftAlerts.map(a=>`<div class="rt-warn">${esc(a)}</div>`).join('')}
@@ -316,8 +317,10 @@ function dailyBoard(data,editable=false){
   const seated=new Set(d.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean)));
   const lines=d.lines.map(l=>`<article class="rt-line${l.active?'':' off'}"><header class="rt-line-head g-${esc(l.group||'')}"><strong class="rt-lid">${esc(l.id)}</strong><span>${l.posts.filter(x=>x.open).length}/${l.posts.length} 岗</span></header>${l.posts.map((x,i)=>{const key=`${l.id}#${i}`,p=people[x.occ],can=editable&&!l.standby;return `<div class="rt-post rt-daily-slot${x.open?'':' closed'}" ${can?`data-daily-slot="${esc(key)}"`:''}>${can?`<button type="button" class="rt-pn rt-daily-post" draggable="true" data-daily-post="${esc(key)}" aria-label="交换岗位 ${esc(x.name)}">${esc(x.name)}</button><button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="交换人员 ${esc(key)}">${esc(p?.name||'空岗')}</button>`:`<span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${esc(p?.name||'空岗')}</span>`}<span class="rt-mins">${x.open?(p?'预排':'空岗'):'未开岗'}</span></div>`;}).join('')}</article>`).join('');
   const unseated=d.persons.filter(p=>!seated.has(p.pid));
-  const section=(title,list)=>`<section class="rt-sect"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(p=>{const can=editable&&p.role==='rotation';return `<${can?'button type="button" draggable="true" data-daily-person="person:'+esc(p.pid)+'"':'div'} class="rt-chip"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">${hm(p.start)}–${hm(p.end)} · ${p.role==='op'?'OP':p.role==='excluded'?'不轮岗':p.state==='notyet'?(data.frozen?'开班预排':'班次未开始'):esc(STATE_NAME[p.state]||'待安排')}</span></${can?'button':'div'}>`;}).join(''):'暂无'}</div></section>`;
-  return `<div class="rt-board rt-daily-board"><div class="rt-lines">${lines}</div><div class="rt-pool">${section('待出发',unseated.filter(p=>p.state==='ready'))}${section('待到大屏点去休息',unseated.filter(p=>['walkback','pending','op'].includes(p.state)))}${section('吃饭区',unseated.filter(p=>p.state==='meal'))}${section('休息区',unseated.filter(p=>p.state==='rest'))}${section('圈外人员',unseated.filter(p=>p.state==='away'))}${section('其他人员',unseated.filter(p=>!['ready','walkback','pending','op','meal','rest','away'].includes(p.state)))}</div></div>`;
+  const initialRest=p=>p.role==='rotation'&&p.state==='notyet'&&[420,435].includes(p.start);
+  const pendingRest=p=>['walkback','pending','op'].includes(p.state)||p.role==='op'&&p.state==='notyet';
+  const section=(title,list)=>`<section class="rt-sect"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(p=>{const can=editable&&p.role==='rotation';return `<${can?'button type="button" draggable="true" data-daily-person="person:'+esc(p.pid)+'"':'div'} class="rt-chip">${rotationName(p)}<span class="rt-sub">${p.role==='op'?'OP':p.role==='excluded'?'不轮岗':p.state==='notyet'?(data.frozen?'开班预排':'班次未开始'):esc(STATE_NAME[p.state]||'待安排')}</span></${can?'button':'div'}>`;}).join(''):'暂无'}</div></section>`;
+  return `<div class="rt-board rt-daily-board"><div class="rt-lines">${lines}</div><div class="rt-pool">${section('待出发',unseated.filter(p=>p.state==='ready'))}${section('待确定休息',unseated.filter(pendingRest))}${section('吃饭区',unseated.filter(p=>p.state==='meal'))}${section('休息区',unseated.filter(p=>p.state==='rest'||initialRest(p)))}${section('圈外人员',unseated.filter(p=>p.state==='away'))}${section('其他人员',unseated.filter(p=>!['ready','walkback','pending','op','meal','rest','away'].includes(p.state)&&!initialRest(p)&&!pendingRest(p)))}</div></div>`;
 }
 function dailyHistory(data){
   const note=data.opening_source==='late_publish'?`首班之后才启用轮岗，展示 ${hm(data.as_of)} 启用时固定的开班安排。`:data.opening_source==='unstarted_draft'?'此日期保留了未启用的预排，仅供回顾。':data.opening_source==='opening'?`首班 ${hm(data.as_of)} 开始时已固定，后续看板调整不改变本班表。`:data.opening_source==='initial_draft'?'此日期没有首班固定快照，展示当时保存的初始预排。':data.opening_source==='earliest_record'?'此日期没有首班固定快照，展示最早保存记录，仅供回顾。':'此日期没有开班快照，仅保留末次状态供回顾。';
@@ -329,7 +332,7 @@ function draftView(){
   if(!data||daily.loading)return controls;
   const roster=`<section class="panel"><details><summary>上传班表 · ${data.roster.people.length}人${data.roster.file_name?' · '+esc(data.roster.file_name):''}</summary><div class="rt-scroll"><table class="rt-table"><thead><tr><th>姓名</th><th>工号</th><th>班次原文</th></tr></thead><tbody>${data.roster.people.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.employee_no)}</td><td>${esc(p.cell)}</td></tr>`).join('')}</tbody></table></div></details></section>`;
   if(data.can_edit){
-    return controls+roster+`<section class="panel"><h3>调整当日预排</h3><p class="field-hint">拖拽或依次点击两张卡片交换。岗位与人员均可跨线交换；岗位交换连同预排人员移动，7点岗位仍校验班次。</p><div class="rt-row"><button type="button" class="${daily.mode==='people'?'primary':'secondary'}" data-daily-mode="people">人员交换</button><button type="button" class="${daily.mode==='posts'?'primary':'secondary'}" data-daily-mode="posts">岗位交换</button><span role="status" data-daily-selection>${daily.source?'已选第一个位置，请选择目标':'选择或拖拽一个位置开始'}</span></div>${data.roster_changed?'<p class="rt-warn">上传班表已更新，当前预排仍为原安排，不会自动启用；请重新生成并核对。</p>':''}</section>`+initialDraftView(data);
+    return controls+roster+`<section class="panel"><h3>调整当日预排</h3><p class="field-hint">拖拽人员或岗位进行交换，支持跨线；岗位连同预排人员移动。</p><span role="status" data-daily-selection>拖拽到目标位置交换</span>${data.roster_changed?'<p class="rt-warn">上传班表已更新，当前预排仍为原安排，不会自动启用；请重新生成并核对。</p>':''}</section>`+initialDraftView(data);
   }
   if(data.day||data.times.length||data.legacy_history){
     return controls+roster+dailyHistory(data);
@@ -467,6 +470,7 @@ function bindRoster() {
 // ---------------------------------------------------------------- 记录
 
 const EVENT_NAME = {
+  workflow_checkpoint:'操作恢复点',workflow_restore:'恢复线路上一步',rename_post:'岗位改名',hold101:'101定岗',resume101:'取消101定岗',task_timeout:'任务超时',task_transfer:'任务转接',task_refresh:'任务刷新',
   force_place:'强制安排上岗',entry_group:'整组上岗',entry_ready:'本人确认到位',entry_solo:'调整单人上岗',entry_adjust:'调整协同组合',entry_return:'本人到场重新领取安排',
   post_hold:'设置持续定岗',post_resume:'结束定岗', publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
   arrive: '去休息', arrive_done: '去休息后下班', arrive_away: '去休息后转暂离', depart: '去轮岗', undo_arrive: '撤回去休息', away: '暂离/出圈', back: '回池',

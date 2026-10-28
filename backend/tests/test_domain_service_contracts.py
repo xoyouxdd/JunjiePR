@@ -207,6 +207,44 @@ def test_supervisor_attendance_start_and_batch_query_strategy(db):
     assert sum("INSERT OR IGNORE INTO attendance_monthly_scores" in sql for sql in statements) == 1
 
 
+def test_400_person_statistics_matches_materialized_scores_without_writes(db):
+    from app.score_queries import employee_month_scores
+    from app.services.monthly_statistics import statistics_payload
+    for eid in range(7, 401):
+        db.add(Employee(id=eid, employee_no=f'E{eid}', name=f'员工{eid}',
+                        attraction_id=1, hired_on='2020-01-01', is_active=True))
+        db.add(EmployeeRoleAssignment(employee_id=eid, role_id=1, starts_on='2020-01-01'))
+    add_sick_leave(db, 1, '2026-10', '0.5')
+    add_sick_leave(db, 3, '2026-10', '3')
+    db.add(EmployeeLOAPeriod(employee_id=4, starts_on='2026-10-15', ends_on='2026-10-15',
+                            status='ended', created_by=2, created_by_name='主管'))
+    db.commit()
+    ids = list(range(1, 401))
+    statements = []
+    def capture(_conn, _cursor, statement, _params, _ctx, _many):
+        statements.append(statement)
+    event.listen(db.bind, 'before_cursor_execute', capture)
+    try:
+        transient = attendance.ensure_month_attendance(db, '2026-10', ids, persist=False)
+        actual = employee_month_scores(db, '2026-10', ids, attendance_overrides={
+            eid: (row.eligible, row.final_score) for eid, row in transient.items()
+        })
+        statistics_payload(db, '2026-10', attraction_id=1)
+    finally:
+        event.remove(db.bind, 'before_cursor_execute', capture)
+    assert not db.new
+    assert not any(sql.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'SAVEPOINT')) for sql in statements)
+    assert db.query(AttendanceMonthlyScore).count() == 0
+    persisted = attendance.ensure_month_attendance(db, '2026-10', ids)
+    expected = employee_month_scores(db, '2026-10', ids)
+    assert sorted(actual, key=lambda row: row['employee_id']) == sorted(expected, key=lambda row: row['employee_id'])
+    fields = ('eligible', 'actual_sick_days', 'charged_sick_days', 'base_score',
+              'perfect_bonus', 'sick_deduction', 'final_score')
+    assert set(transient) == set(persisted) == set(ids)
+    for eid in ids:
+        assert tuple(getattr(transient[eid], f) for f in fields) == tuple(getattr(persisted[eid], f) for f in fields)
+
+
 def test_audit_routes_employee_circle_and_leaves_commit_to_caller(db):
     employee = db.get(Employee, 1)
     audit.write_audit(db, employee, "人员变更", "employee", 1, before={"姓名": "原名"}, after={"姓名": "新名"})

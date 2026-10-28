@@ -14,7 +14,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     assert((await context.request.post(base+'/api/login',{data:{employee_no:'9710010',password:'formal-fixture-2026'}})).ok());
     await page.goto(base+'/rotation-board');await page.locator('[data-post="A1#0"]').waitFor();
-    await page.locator('[data-post="A1#0"] .rt-pn').click();await page.locator('[data-edit-hold]').click();
+    await page.locator('[data-post="A1#0"] .rt-who-name').click();await page.locator('[data-edit-hold]').click();
     await page.locator('#rtModal [name=reason]').fill('特殊接待 · 合成演示');await page.locator('#rtModal button[type=submit]').click();
     await page.locator('[data-post="A1#0"] .post-hold').waitFor();
     const watcher=await browser.newContext({viewport:{width:390,height:844}}),cm=await watcher.newPage();
@@ -25,7 +25,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
       await page.setViewportSize({width,height:900});assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1));
       if(width===390||width===1440)await page.screenshot({path:path.join(out,name+'-'+width+'.png'),fullPage:true});
     }
-    await page.locator('[data-post="A1#0"] .rt-pn').click();assert.match(await page.locator('#rtModal').innerText(),/特殊接待.*手动取消/s);
+    await page.locator('[data-post="A1#0"] .rt-who-name').click();assert.match(await page.locator('#rtModal').innerText(),/特殊接待.*手动取消/s);
     await page.locator('[data-edit-hold]').click();await page.locator('#rtModal [data-ok]').click();
     await page.locator('[data-post="A1#0"] .post-hold').waitFor({state:'detached'});
     await cm.locator('.rt-post.holding').waitFor({state:'detached',timeout:15000});

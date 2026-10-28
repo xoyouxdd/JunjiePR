@@ -110,7 +110,7 @@ def rotation_whoami(db: Session = Depends(get_db), actor: RotationActor = Depend
         "name": name,
         "employee_no": actor.member_employee_no,
         "attraction_name": ROTATION_ATTRACTION_NAME,
-        "test_mode": True,
+        "test_mode": not actor.formal,
         "adjustment": actor.adjustment, "can_authorize": actor.can_authorize,
         "expires_at": actor.expires_at.isoformat() if actor.expires_at else None,
         "temporary": actor.temporary,
@@ -207,7 +207,11 @@ def rotation_board(db: Session = Depends(get_db), actor: RotationActor = Depends
 
 @router.get("/screen/state")
 def rotation_screen_state(db: Session = Depends(get_db), actor: RotationActor = Depends(require_screen)):
-    payload = service.screen_payload(db, rotation_attraction_id(db))
+    aid=rotation_attraction_id(db)
+    db.rollback()
+    service.tick_attraction(aid,formal=True)
+    payload = service.screen_payload(db, aid)
+    payload['formal']=True
     return payload
 
 
@@ -271,10 +275,10 @@ def rotation_confirmation(token: str, date: str, db: Session = Depends(get_db), 
 @router.post("/act")
 def rotation_act(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
     try:
-        service.do_live_action(db, rotation_attraction_id(db), actor, payload)
+        result=service.do_live_action(db, rotation_attraction_id(db), actor, payload)
     except service.ActionError as exc:
         raise _action_error(exc) from exc
-    return {"ok": True}
+    return result or {"ok": True}
 
 
 @router.post("/draft")
@@ -287,6 +291,13 @@ def rotation_draft(payload: dict, db: Session = Depends(get_db), actor: Rotation
 
 
 # ---------------------------------------------------------------- 名单、记录、配置
+
+@router.post('/undo/preview')
+def rotation_undo_preview(payload:dict,db:Session=Depends(get_db),actor:RotationActor=Depends(require_manager)):
+    from app.rotation.history import preview
+    try:return preview(db,rotation_attraction_id(db),payload.get('line'))
+    except service.ActionError as exc:raise _action_error(exc) from exc
+
 
 ROSTER_MAX_BYTES = 10 * 1024 * 1024
 
@@ -360,10 +371,12 @@ def rotation_config_update(payload: dict, db: Session = Depends(get_db), actor: 
 async def rotation_stream(request: Request, actor: RotationActor = Depends(require_actor)):
     """推送版本号：版本变了，页面再去拉取最新数据。"""
 
+    from app.rotation.namespace import runtime_for
+    runtime=runtime_for(formal=getattr(actor,'formal',False))
     async def events():
         last, idle = None, 0.0
         while not await request.is_disconnected():
-            version = service.RUNTIME.version
+            version = runtime.version
             if version != last:
                 last, idle = version, 0.0
                 yield f"data: {version}\n\n"

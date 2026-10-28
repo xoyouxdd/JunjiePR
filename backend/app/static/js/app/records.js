@@ -62,7 +62,7 @@ function entryCard(row){
   if(row.record_type==='recognition'){
     const actions=row.available_actions.includes('withdraw')?`<button data-entry-withdraw="${row.id}" class="secondary">撤回</button>`:'';
     const evidence=row.image_url?attachmentControl(row.image_url,'查看材料',row.image_preview_kind):'';
-    return `<article class="work-card"><div class="work-card-head">${person}${chip}</div><p>${esc(row.recognition_date)} · 加分 · ${esc(row.recognition_type)} · ${recognitionScoreText(row)}</p><p>签卡人：${esc(row.recognizer_name)}</p><p>${esc(row.content)}${sameDayDuplicateBadge(row)}${evidence}</p>${recognitionScoreNote(row)}<div class="work-card-actions">${actions}</div></article>`;
+    return `<article class="work-card recognition-entry-card"><div class="work-card-head">${person}${chip}</div><p>${esc(row.recognition_date)} · 加分 · ${esc(row.recognition_type)} · ${recognitionScoreText(row)}</p>${sameDayDuplicateBadge(row)}<details class="recognition-card-detail"><summary>查看认可内容与材料</summary><p>签卡人：${esc(row.recognizer_name)}</p><p>${esc(row.content)}${evidence}</p></details>${recognitionScoreNote(row)}<div class="work-card-actions">${actions}</div></article>`;
   }
   if(row.record_type==='sick_leave'){
     const actions=row.available_actions.includes('void')?`<button data-entry-sick-void="${row.id}" class="secondary">作废</button>`:'';

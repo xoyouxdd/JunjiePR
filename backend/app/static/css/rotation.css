@@ -338,3 +338,57 @@ button.rt-chip { cursor: pointer; }
 .rotation-screen .rt-forecast-short { display:inline; }
 .rotation-screen .rt-ready:has(.rt-departure-preview[open]) { overflow:visible; z-index:5; }
 .rotation-screen .rt-ready > .rt-departure-preview[open] { width:min(340px,calc(100% - 16px)); max-height:calc(100dvh - 110px); overflow:auto; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:0 8px 24px #0f172a26; }
+
+/* Personal-route workflow: compact shared board and mobile task comparison. */
+.rt-workflow-board{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.rt-workflow-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.rt-workflow-heading h1{margin:0;font-size:21px}
+.rt-workflow-tools{display:flex;gap:8px;flex-wrap:wrap}
+.rt-workflow-tools button{min-height:40px;font-size:13px}
+.rt-workflow-tools .rt-101-on{border-color:var(--danger);color:var(--danger-text);background:var(--danger-bg)}
+.rotation-page .rt-workflow-board .rt-board{grid-template-columns:minmax(0,1.65fr) minmax(300px,1fr);gap:12px}
+.rotation-page .rt-workflow-board .rt-lines{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;max-height:none;overflow:visible}
+.rotation-page .rt-workflow-board .rt-post{grid-template-columns:minmax(0,.85fr) minmax(0,1fr) auto;gap:4px;padding:8px 6px;min-height:43px;font-size:13px}
+.rotation-page .rt-workflow-board button.rt-pn{min-width:0;min-height:30px;border:0;border-radius:0;background:transparent;color:var(--text-secondary);text-align:left;padding:0;font:inherit;font-size:12px;white-space:normal;overflow-wrap:anywhere}
+.rt-workflow-board .rt-mins{font-size:11px;max-width:3.1em;white-space:normal;text-align:right}
+.rotation-page .rt-workflow-board .rt-chips{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));max-height:none;overflow:visible;gap:6px}
+.rotation-page .rt-workflow-board .rt-chips.empty{display:block}
+.rotation-page .rt-workflow-board .rt-sect{padding:9px;min-height:0;height:auto;max-height:none;overflow:visible}
+.rt-workflow-board .rt-sect.is-empty{display:flex;align-items:center;gap:8px}
+.rt-workflow-board .rt-sect.is-empty h2{margin:0}
+.rt-workflow-board .rt-sect.is-empty .empty{margin-left:auto}
+.rotation-page .rt-workflow-board .rt-sect.is-empty{flex-direction:row;min-height:36px;align-items:center}
+.rotation-page .rt-workflow-board .rt-sect.is-empty .rt-chips.empty{min-height:0;height:auto;padding:0;flex:0 0 auto;line-height:1.4}
+.rotation-page .rt-workflow-board .rt-pool{display:grid;grid-template-rows:none;max-height:none;overflow:visible;gap:8px}
+.rotation-page .rt-workflow-board .rt-chip{min-width:0;min-height:0;padding:8px;border-left-width:3px;text-align:left;font-size:12px}
+.rotation-page .rt-workflow-board .rt-chip .rt-go{font-size:13px;font-weight:650}
+.rt-name-row{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;min-width:0}
+.rt-name-row strong{font-size:16px;color:var(--text-strong)}
+.rt-name-row small{font-size:11px;color:var(--text-secondary);font-weight:400}
+.rt-task-summary{font-size:12px;overflow-wrap:anywhere;line-height:1.5}
+.rt-transfer{font-size:11px;color:var(--warn-text)}
+.rt-post.holding101 .rt-who-name{border:2px solid var(--danger);border-radius:5px;padding:3px;color:var(--text-strong)}
+.rt-post.holding101 .post-hold{display:block;background:transparent;color:var(--danger-text);padding:0}
+.rt-task-comparison{margin:12px 0}
+.rt-task-comparison h4{margin:0 0 7px;font-size:14px}
+.rt-task-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.rt-task-columns p{font-size:11px;color:var(--text-secondary);margin:0 0 5px}
+.rt-task-line{border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--panel)}
+.rt-task-line header{padding:6px 8px;font-weight:700;font-size:17px;background:var(--line-a,#f4a6b8);color:var(--text-strong)}
+.rt-task-slot{display:flex;align-items:center;justify-content:space-between;gap:5px;padding:8px 7px;min-height:36px;border-top:1px solid var(--line);font-size:12px}
+.rt-task-slot span{color:var(--text-secondary);overflow-wrap:anywhere;min-width:0}
+.rt-task-slot strong{font-size:13px;overflow-wrap:anywhere}
+.rt-task-slot.changed{background:var(--info-bg)}
+.rt-task-slot.changed strong{color:var(--primary)}
+.rt-task-comparison>small{display:block;font-size:11px;color:var(--text-secondary);margin-top:6px}
+.rt-inline-post-name{width:100%;min-width:0;padding:4px!important;font-size:14px!important}
+.rt-personal-task .rt-task-comparison{max-width:430px}
+.rt-personal-task:has(.rt-task-comparison) p{margin:6px 0;font-size:13px}
+.rt-personal-task:has(.rt-task-comparison) ul{margin:6px 0;padding-left:20px}
+.rt-personal-task:has(.rt-task-comparison) h4{margin:7px 0;font-size:13px}
+.rt-personal-scope label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
+.rt-personal-task:has(.rt-task-comparison){max-width:460px;margin-left:auto;margin-right:auto;padding:12px}
+.rt-personal-task:has(.rt-task-comparison) .rt-entry-group{padding:0;border:0;margin:8px 0;background:transparent;font-size:13px}
+@media(min-width:1200px){.rotation-page .rt-workflow-board .rt-chips{grid-template-columns:repeat(3,minmax(0,1fr))}.rotation-page .rt-workflow-board .rt-others .rt-chips:not(.empty),.rotation-page .rt-workflow-board .rt-outside .rt-chips:not(.empty){max-height:220px;overflow:auto}}
+@media(max-width:1000px){.rotation-page .rt-workflow-board .rt-board{grid-template-columns:1fr}.rotation-page .rt-workflow-board .rt-lines{grid-template-columns:repeat(4,minmax(0,1fr))}.rotation-page .rt-workflow-board .rt-pool{grid-template-columns:repeat(2,minmax(0,1fr))}.rt-workflow-board .rt-pool .rt-ready,.rt-workflow-board .rt-pool .rt-resting,.rt-workflow-board .rt-pool .rt-others{grid-column:1/-1}.rotation-page .rt-workflow-board .rt-ready .rt-chips{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){.rt-workflow-board{padding:10px}.rt-workflow-heading h1{font-size:18px}.rotation-page .rt-workflow-board .rt-lines{grid-template-columns:repeat(2,minmax(0,1fr))}.rotation-page .rt-workflow-board .rt-pool{grid-template-columns:1fr}.rotation-page .rt-workflow-board .rt-ready .rt-chips{grid-template-columns:repeat(2,minmax(0,1fr))}.rt-workflow-tools button{min-height:44px}.rt-task-slot{min-height:38px}.rt-task-slot strong{font-size:13px}}

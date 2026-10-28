@@ -367,51 +367,40 @@ def statistics_payload(
         candidate_rows = [row for row in candidate_rows if month_category_code(row) in wanted]
     candidate_ids = [row[0].id for row in candidate_rows]
 
-    # Attendance remains materialized for compatibility, but only for employees
-    # in the requested scope. The savepoint keeps statistics and export read-only.
-    statistics_savepoint = db.begin_nested()
-    try:
-        ensure_month_attendance(db, month, candidate_ids)
-        loa_employee_ids = {
-            row[0]
-            for row in db.query(EmployeeLOAPeriod.employee_id)
-            .filter(
-                EmployeeLOAPeriod.employee_id.in_(candidate_ids) if candidate_ids else EmployeeLOAPeriod.employee_id == -1,
-                EmployeeLOAPeriod.status != "cancelled",
-                EmployeeLOAPeriod.starts_on <= month_end,
-                or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= month_start.isoformat()),
-            )
-            .all()
-        }
-        if loa_employee_ids:
-            for employee in db.query(Employee).filter(Employee.id.in_(loa_employee_ids)).all():
-                recalculate_attendance(db, employee, month)
-        db.flush()
-        scores_by_employee = {
-            int(row["employee_id"]): row
-            for row in employee_month_scores(db, month, candidate_ids)
-        }
-        score_rows = []
-        for employee, snapshot, current_attraction in candidate_rows:
-            score = scores_by_employee.get(employee.id)
-            if not score:
-                continue
-            score_rows.append(
-                {
-                    **score,
-                    "account_deleted_at": employee.account_deleted_at,
-                    "attraction_id": snapshot.attraction_id if snapshot else employee.attraction_id,
-                    "attraction_name": snapshot.attraction_name if snapshot else (current_attraction.name if current_attraction else ""),
-                    "organization_basis": "month_close_snapshot" if snapshot else "current",
-                }
-            )
-        score_rows.sort(key=lambda row: (-float(row["total_score"] or 0), str(row["employee_no"])))
-        month_notes = acting_period_notes(db, [int(row["employee_id"]) for row in score_rows], month_start.isoformat(), month_end)
-        for row in score_rows:
-            row["acting_note"] = month_notes.get(int(row["employee_id"]), "")
-    finally:
-        if statistics_savepoint.is_active:
-            statistics_savepoint.rollback()
+    # Missing attendance is calculated transiently. Statistics/export reads
+    # must not acquire a SQLite write lock merely to roll the rows back.
+    attendance = ensure_month_attendance(db, month, candidate_ids, persist=False)
+    loa_employee_ids = {
+        eid for (eid,) in db.query(EmployeeLOAPeriod.employee_id).filter(
+            EmployeeLOAPeriod.employee_id.in_(candidate_ids) if candidate_ids else EmployeeLOAPeriod.employee_id == -1,
+            EmployeeLOAPeriod.status != 'cancelled', EmployeeLOAPeriod.starts_on <= month_end,
+            or_(EmployeeLOAPeriod.ends_on.is_(None), EmployeeLOAPeriod.ends_on >= month_start.isoformat()),
+        ).all()
+    }
+    scores_by_employee = {
+        int(row["employee_id"]): row
+        for row in employee_month_scores(db, month, candidate_ids, attendance_overrides={
+            eid: (row.eligible, row.final_score) for eid, row in attendance.items()
+        })
+    }
+    score_rows = []
+    for employee, snapshot, current_attraction in candidate_rows:
+        score = scores_by_employee.get(employee.id)
+        if not score:
+            continue
+        score_rows.append(
+            {
+                **score,
+                "account_deleted_at": employee.account_deleted_at,
+                "attraction_id": snapshot.attraction_id if snapshot else employee.attraction_id,
+                "attraction_name": snapshot.attraction_name if snapshot else (current_attraction.name if current_attraction else ""),
+                "organization_basis": "month_close_snapshot" if snapshot else "current",
+            }
+        )
+    score_rows.sort(key=lambda row: (-float(row["total_score"] or 0), str(row["employee_no"])))
+    month_notes = acting_period_notes(db, [int(row["employee_id"]) for row in score_rows], month_start.isoformat(), month_end)
+    for row in score_rows:
+        row["acting_note"] = month_notes.get(int(row["employee_id"]), "")
     loa_rows = []
     filtered_score_rows = []
     for row in score_rows:

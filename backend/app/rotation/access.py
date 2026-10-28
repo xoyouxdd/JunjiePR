@@ -145,7 +145,9 @@ def session_actor(request: Request, db: Session) -> RotationActor | None:
     account = db.get(RotationAccount, session.account_id) if session.account_id else None
     if not account or not account.enabled:
         return None
-    return RotationActor(account.kind, account.name, account=account, entered_by=entered_by)
+    screen=account.kind==KIND_SCREEN
+    if screen:db.info['rotation_formal']=True
+    return RotationActor(account.kind, account.name, account=account, entered_by=entered_by,formal=screen)
 
 
 def start_session(
@@ -201,6 +203,16 @@ def rotation_login(db: Session, request: Request, response: Response, account: R
     account.failed_attempts = 0
     account.locked_until = None
     account.last_login_at = datetime.now()
+    if account.kind==KIND_SCREEN:
+        # A device login must not inherit a previous operator's browser grants.
+        from app.v2_models import UserSession
+        from app.rotation.models import RotationAdjustSession
+        from app.rotation.adjustment import COOKIE as ADJUST_COOKIE
+        from app.rotation.temporary import TemporarySession, COOKIE as TEMP_COOKIE
+        for cookie,model in [('rc_v2_session',UserSession),(ADJUST_COOKIE,RotationAdjustSession),(TEMP_COOKIE,TemporarySession)]:
+            raw=request.cookies.get(cookie)
+            if raw:db.query(model).filter_by(token_hash=token_hash(raw)).delete(synchronize_session=False)
+            response.delete_cookie(cookie,secure=request_is_https(request),httponly=True,samesite='lax')
     start_session(db, request, response, account=account)
     write_audit(db, None, f"{KIND_LABELS[account.kind]}账号登录", "rotation_account", account.id, after={"account": account.login_account}, ip_address=request.client.host if request.client else None)
     db.commit()

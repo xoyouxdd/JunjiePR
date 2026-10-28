@@ -49,400 +49,127 @@ def roster_file(day=DAY) -> BytesIO:
     return buf
 
 
-def test_0715_unseated_rest_preview_and_automatic_timer_match_all_apis():
-    day = '2026-10-20'
-    book = Workbook(); book.active.append(['工号','姓名','日期','班次','备注'])
-    for i in range(3): book.active.append([str(9600100+i),f'自动休息测试{i}',day,'07:15-16:15',''])
-    book.active.append(['9600199','晚班不变',day,'09:00-18:00',''])
-    out = BytesIO(); book.save(out)
-    with TestClient(app) as manager, TestClient(app) as member, TestClient(app) as screen:
-        login(manager, 'GSMTEST01'); enter(manager, '7777777')
-        login(member, 'TRTEST01'); login(screen, '6666666', '1243')
-        ok(clock(manager, action='set', date=day, time='03:59'))
-        ok(manager.put('/api/rotation/config', json={'lines':[{'id':'R','posts':[{'name':'入口'}]}], 'settings':{'breakMin':15}}))
-        ok(manager.post('/api/rotation/roster/upload', files={'file':('休息班表.xlsx',out.getvalue(),'application/octet-stream')},data={'scope':'day'}))
-        ok(clock(manager, action='set', date=day, time='07:14'))
-        board = ok(manager.get('/api/rotation/board'))
-        waiting = [p for p in board['day']['persons'] if p['scheduledRestStart'] is not None]
-        assert len(waiting) == 2
-        pid = waiting[0]['pid']; enter(member, pid)
-        for client, url in ((manager,'/api/rotation/board'),(screen,'/api/rotation/screen/state'),(member,'/api/rotation/me')):
-            payload = ok(client.get(url)); p = payload['person'] if 'person' in payload else person(payload,pid)
-            assert p['scheduledRestStart'] == 435 and p['state'] == 'notyet' and p['readyAt'] is None
-            assert not p['canDepart'] and not p['confirmationTokens']
-        ok(clock(manager, action='jump', minutes=1))
-        for client, url in ((manager,'/api/rotation/board'),(screen,'/api/rotation/screen/state'),(member,'/api/rotation/me')):
-            payload = ok(client.get(url)); p = payload['person'] if 'person' in payload else person(payload,pid)
-            assert p['state'] == 'rest' and p['readyAt'] == 450 and p['scheduledRestStart'] is None
-            assert not p['canDepart']
-        board = ok(manager.get('/api/rotation/board'))
-        assert person(board,'9600199')['state'] == 'notyet'
-        assert len([p for p in board['day']['persons'] if p['state']=='onpost']) == 1
-        ok(clock(manager, action='jump', minutes=5))
-        assert person(ok(manager.get('/api/rotation/board')),pid)['readyAt'] == 450
-        ok(clock(manager, action='jump', minutes=10))
-        assert person(ok(manager.get('/api/rotation/board')),pid)['state'] == 'ready'
-
-
-def login(client: TestClient, account: str, password: str = "1234") -> None:
-    response = client.post("/api/login", json={"employee_no": account, "password": password})
-    assert response.status_code == 200, response.text
-
-
-def enter(client: TestClient, account: str) -> None:
-    response = client.post("/api/rotation/enter", json={"account": account})
-    assert response.status_code == 200, response.text
-
+# The dedicated screen now uses formal data; sandbox flow checks use a manager
+# and a personal sandbox session. Formal screen permissions/linkage are covered
+# by test_rotation_formal.py, rather than assuming screen reads sandbox storage.
 
 def ok(response):
-    assert response.status_code == 200, response.text
+    assert response.status_code==200,response.text
     return response.json()
 
 
-def clock(client: TestClient, **body):
-    return client.post("/api/rotation/test-clock", json=body)
+def login(client,account,password='1234'):
+    ok(client.post('/api/login',json={'employee_no':account,'password':password}))
 
 
-def person(board: dict, no: str) -> dict:
-    return next(p for p in board["day"]["persons"] if p["pid"] == no)
+def enter(client,account):ok(client.post('/api/rotation/enter',json={'account':account}))
+def clock(client,**body):return client.post('/api/rotation/test-clock',json=body)
+def person(board,pid):return next(p for p in board['day']['persons'] if p['pid']==pid)
 
 
-def screen_act(screen: TestClient, action: str, pid: str):
-    p = person(ok(screen.get('/api/rotation/screen/state')), pid)
-    return screen.post('/api/rotation/screen/act', json={'action': action, 'pid': pid,
-                       'confirmation_token': p['confirmationTokens'].get(action, '0' * 64)})
+def setup(manager,day,posts,people,time='07:14'):
+    login(manager,'GSMTEST01');enter(manager,'7777777')
+    ok(clock(manager,action='set',date=day,time='03:59'))
+    ok(manager.put('/api/rotation/config',json={'lines':[{'id':'A','posts':posts}],
+        'settings':{'breakMin':15,'parkClose':'22:00','closeDelay':0}}))
+    book=Workbook();book.active.append(['工号','姓名','日期','班次','备注'])
+    for pid,name,shift in people:book.active.append([pid,name,day,shift,''])
+    stream=BytesIO();book.save(stream)
+    ok(manager.post('/api/rotation/roster/upload',files={'file':('fixture.xlsx',stream.getvalue(),'application/octet-stream')},data={'scope':'day'}))
+    ok(clock(manager,action='set',date=day,time=time))
+    return ok(manager.get('/api/rotation/board'))
 
 
-def test_future_opening_waits_for_departure_window_in_every_api():
-    day = '2026-10-08'
-    wb = Workbook()
-    wb.active.append(['工号', '姓名', '日期', '班次', '备注'])
-    wb.active.append(['9100001', '定时开岗员工', day, '07:15-16:15', ''])
-    buf = BytesIO()
-    wb.save(buf)
-    with TestClient(app) as manager, TestClient(app) as screen, TestClient(app) as member:
-        login(manager, 'GSMTEST01')
-        enter(manager, '7777777')
-        login(screen, '6666666', '1243')
-        login(member, 'TRTEST01')
-        ok(clock(manager, action='set', date=day, time='03:59'))
-        ok(manager.put('/api/rotation/config', json={'lines': [{'id': 'C2', 'group': 'C',
-            'posts': [{'name': '单人迎宾', 'openAt': '08:15'}]}], 'settings': {'departEarly': 1}}))
-        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', buf.getvalue(),
-            'application/octet-stream')}, data={'scope': 'day'}))
-        enter(member, '9100001')
-        ok(clock(manager, action='jump', minutes=240))
-        ok(clock(manager, action='jump', minutes=6))
-        for client, path in ((manager, '/api/rotation/board'), (screen, '/api/rotation/screen/state')):
-            p = person(ok(client.get(path)), '9100001')
-            assert p['assign']['departAt'] == 495 and p['readyAt'] <= 485
-            assert p['canDepart'] is False
-        me = ok(member.get('/api/rotation/me'))
-        assert me['settings']['departEarly'] == 1 and me['person']['canDepart'] is False
-        assert any(n['kind'] == 'rest' and '08:15' in n['title'] for n in me['notices'] if n['status'] == 'open')
-        for client, path in ((manager, '/api/rotation/act'), (screen, '/api/rotation/screen/act')):
-            response = screen_act(screen, 'depart', '9100001') if client is screen else client.post(path, json={'action': 'depart', 'pid': '9100001'})
-            assert response.status_code == 400 and '还没到出发时间' in response.text
-        ok(clock(manager, action='jump', minutes=9))
-        p=person(ok(manager.get('/api/rotation/board')), '9100001')
-        assert p['canDepart'] is True and p['assign']['departAt']==495
-        assert p['departureRoutes'] and not p['departureBlocked']
-        ok(manager.put('/api/rotation/config', json={'settings': {'departEarly': 0}}))
-        assert person(ok(screen.get('/api/rotation/screen/state')), '9100001')['canDepart'] is False
-        assert ok(member.get('/api/rotation/me'))['settings']['departEarly'] == 0
-        ok(clock(manager, action='jump', minutes=1))
-        assert person(ok(manager.get('/api/rotation/board')), '9100001')['canDepart'] is True
-        ok(screen_act(screen, 'depart', '9100001'))
-        assert person(ok(manager.get('/api/rotation/board')), '9100001')['state'] == 'onpost'
+def test_prestart_unseated_seven_and_seven_fifteen_rest_timers_start_at_own_shift():
+    day='2026-10-20'
+    with TestClient(app) as manager,TestClient(app) as member:
+        board=setup(manager,day,[{'name':'入口'}],[('9600100','初始甲','07:15-16:15'),('9600101','初始乙','07:15-16:15'),('9600102','早班','07:00-16:00')],time='06:59')
+        waiting=[p for p in board['day']['persons'] if p['scheduledRestStart'] is not None]
+        assert waiting and all(p['readyAt'] is None and p['state']=='notyet' for p in waiting)
+        for p in waiting:
+            login(member,'TRTEST01');enter(member,p['pid'])
+            assert ok(member.get('/api/rotation/me'))['person']['scheduledRestStart']==p['start']
+        ok(clock(manager,action='jump',minutes=16))
+        for p in waiting:
+            current=person(ok(manager.get('/api/rotation/board')),p['pid'])
+            assert current['state']==('ready' if p['start']==420 else 'rest') and current['readyAt']==p['start']+15
 
 
-def test_member_and_screen_share_confirmation_and_member_cannot_act_for_others():
-    day, pid = '2026-10-11', '9300001'
-    wb = Workbook()
-    wb.active.append(['工号','姓名','日期','班次','备注'])
-    wb.active.append([pid,'手机演示',day,'07:15-16:15',''])
-    buf = BytesIO()
-    wb.save(buf)
-    with TestClient(app) as manager, TestClient(app) as screen, TestClient(app) as member:
-        login(manager, 'GSMTEST01')
-        enter(manager, '7777777')
-        login(screen, '6666666', '1243')
-        login(member, 'TRTEST01')
-        ok(clock(manager, action='set', date=day, time='03:59'))
-        ok(manager.put('/api/rotation/config', json={'lines':[{'id':'M','posts':[{'name':'手机入口','openAt':'08:15'}]}],
-                                                    'settings':{'departEarly':0}}))
-        ok(manager.post('/api/rotation/roster/upload', files={'file':('名单.xlsx',buf.getvalue(),'application/octet-stream')},data={'scope':'day'}))
-        enter(member, pid)
-        ok(clock(manager, action='jump', minutes=240))
-        ok(clock(manager, action='jump', minutes=6))
-        p = ok(member.get('/api/rotation/me'))['person']
-        body = {'action':'depart','pid':pid,'confirmation_token':p['confirmationTokens']['depart']}
-        assert member.post('/api/rotation/me/act', json={**body,'pid':'OTHER'}).status_code == 403
-        assert member.post('/api/rotation/me/act', json={**body,'action':'undo'}).status_code == 403
-        assert member.post('/api/rotation/me/act', json={**body,'action':[]}).status_code == 400
-        assert member.post('/api/rotation/screen/act', json=body).status_code == 403
-        assert screen.post('/api/rotation/me/act', json=body).status_code == 403
-        response = member.post('/api/rotation/me/act', json=body)
-        assert response.status_code == 400 and '还没到出发时间' in response.text
-        ok(clock(manager, action='jump', minutes=10))
-        p = ok(member.get('/api/rotation/me'))['person']
-        body['confirmation_token'] = p['confirmationTokens']['depart']
-        first = ok(member.post('/api/rotation/me/act', json=body))
-        duplicate = ok(screen.post('/api/rotation/screen/act', json=body))
-        assert first['result']['line'] == 'M' and first['result']['post'] == '手机入口'
-        assert first['duplicate'] is False and duplicate['duplicate'] is True
-        assert duplicate['result'] == first['result']
-        assert person(ok(screen.get('/api/rotation/screen/state')), pid)['state'] == 'onpost'
-        assert ok(member.get('/api/rotation/me'))['confirmations'][0] == first['result']
-        status = ok(member.get('/api/rotation/confirmation',params={'token':body['confirmation_token'],'date':day}))
-        assert status['confirmed'] and status['result'] == first['result']
-        assert len([r for r in ok(manager.get('/api/rotation/log',params={'date':day}))['items']
-                    if r['type']=='depart' and r['employee_no']==pid]) == 1
+def test_scheduled_opening_is_reserved_but_cannot_execute_before_allowed_time():
+    day='2026-10-08';pid='9100001'
+    with TestClient(app) as manager,TestClient(app) as member:
+        setup(manager,day,[{'name':'迎宾','openAt':'08:15'}],[(pid,'加岗人员','07:15-16:15')],time='08:12')
+        login(member,'TRTEST01');enter(member,pid)
+        p=ok(member.get('/api/rotation/me'))['person']
+        assert p['assign']['departAt']==495 and not p['canDepart']
+        assert member.post('/api/rotation/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}).status_code==400
+        ok(clock(manager,action='jump',minutes=3))
+        p=ok(member.get('/api/rotation/me'))['person'];assert p['task']['allowedAt']==495 and p['task']['deadlineAt']==498
+        result=ok(member.post('/api/rotation/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}))
+        assert result['result']['status']=='executed' and result['result']['post']=='迎宾'
+
+
+def test_personal_confirmation_and_manager_share_receipt_without_impersonation():
+    day='2026-10-11';pid='9300001'
+    with TestClient(app) as manager,TestClient(app) as member:
+        setup(manager,day,[{'name':'入口','openAt':'08:15'}],[(pid,'个人任务','07:15-16:15')],time='08:15')
+        login(member,'TRTEST01');enter(member,pid)
+        p=ok(member.get('/api/rotation/me'))['person'];body={'action':'depart','pid':pid,'confirmation_token':p['confirmationTokens']['depart']}
+        assert member.post('/api/rotation/me/act',json={**body,'pid':'OTHER'}).status_code==403
+        first=ok(member.post('/api/rotation/me/act',json=body));again=ok(manager.post('/api/rotation/act',json=body))
+        assert again['duplicate'] and first['result']==again['result']
+        assert ok(member.get('/api/rotation/confirmation',params={'date':day,'token':body['confirmation_token']}))['confirmed']
+        assert person(ok(manager.get('/api/rotation/board')),pid)['state']=='onpost'
         ok(manager.post('/api/rotation/act',json={'action':'fix_remove','pid':pid,'reason':'测试到达确认'}))
-        p = ok(member.get('/api/rotation/me'))['person']
-        room = {'action':'arrive','confirmation_token':p['confirmationTokens']['arrive']}
-        arrived = ok(member.post('/api/rotation/me/act',json=room))
-        repeated = ok(screen.post('/api/rotation/screen/act',json={**room,'pid':pid}))
-        assert repeated['duplicate'] and repeated['result']==arrived['result']
-        assert ok(member.get('/api/rotation/me'))['confirmations'][0]['action']=='arrive'
-        assert person(ok(screen.get('/api/rotation/screen/state')),pid)['readyAt']==arrived['result']['readyAt']
+        p=ok(member.get('/api/rotation/me'))['person'];room={'action':'arrive','pid':pid,'confirmation_token':p['confirmationTokens']['arrive']}
+        arrived=ok(member.post('/api/rotation/me/act',json=room));repeated=ok(manager.post('/api/rotation/act',json=room))
+        assert repeated['duplicate'] and arrived['result']['readyAt']==repeated['result']['readyAt']
 
 
-def test_manual_opening_default_edit_cancel_and_screen_departure():
-    day = '2026-10-09'
-    wb = Workbook()
-    wb.active.append(['工号', '姓名', '日期', '班次', '备注'])
-    wb.active.append(['9200001', '加岗演示', day, '07:15-16:15', ''])
-    buf = BytesIO()
-    wb.save(buf)
-    with TestClient(app) as manager, TestClient(app) as screen:
-        login(manager, 'GSMTEST01')
-        enter(manager, '7777777')
-        login(screen, '6666666', '1243')
-        ok(clock(manager, action='set', date=day, time='03:59'))
-        ok(manager.put('/api/rotation/config', json={'lines': [{'id': 'C1', 'group': 'C',
-            'posts': [{'name': '单人队末', 'openAt': '09:00'}]}], 'settings': {'departEarly': 1}}))
-        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', buf.getvalue(),
-            'application/octet-stream')}, data={'scope': 'day'}))
-        ok(clock(manager, action='jump', minutes=240))
-        ok(clock(manager, action='jump', minutes=6))
-        request = {'action': 'post', 'line': 'C1', 'i': 0, 'open': True}
-        assert ok(manager.get('/api/rotation/board'))['day']['status'] == 'live'
-        ok(manager.post('/api/rotation/act', json=request))
-        board = ok(manager.get('/api/rotation/board'))
-        assert board['day']['lines'][0]['posts'][0]['openAt'] == '08:08'
-        assert person(board, '9200001')['assign']['mode'] == 'opening'
-        ok(manager.post('/api/rotation/act', json={**request, 'openAt': '08:12'}))
-        locked=person(ok(manager.get('/api/rotation/board')), '9200001')
-        assert locked['assign']['departAt']==488 and locked['assignmentLocked']
-        assert '加岗时间已变化' in locked['assign']['blocked'] and not locked['canDepart']
-        for value in ('08:04', '24:00', 'no-time'):
-            assert manager.post('/api/rotation/act', json={**request, 'openAt': value}).status_code == 400
-        assert person(ok(manager.get('/api/rotation/board')), '9200001')['assign']==locked['assign']
-        ok(manager.post('/api/rotation/act', json={**request, 'open': False}))
-        cancelled=person(ok(manager.get('/api/rotation/board')), '9200001')
-        assert cancelled['assign']['departAt']==488 and cancelled['assign']['blocked']
-        ok(manager.post('/api/rotation/act', json=request))
-        assert not person(ok(manager.get('/api/rotation/board')), '9200001')['assign'].get('blocked')
-        ok(clock(manager, action='jump', minutes=2))
-        assert person(ok(screen.get('/api/rotation/screen/state')), '9200001')['canDepart'] is False
-        assert screen.post('/api/rotation/screen/act', json={'action': 'depart', 'pid': '9200001'}).status_code == 400
-        next_step = ok(clock(manager, action='next'))
-        assert next_step['clock']['minute'] == 488 and next_step['waiting']
-        ok(screen_act(screen, 'depart', '9200001'))
-        assert person(ok(manager.get('/api/rotation/board')), '9200001')['state'] == 'onpost'
-        assert manager.post('/api/rotation/act', json={**request, 'openAt': '08:12'}).status_code == 400
+def test_timeout_is_visible_and_person_must_acknowledge_before_new_task():
+    day='2026-10-12';pid='9400001'
+    with TestClient(app) as manager,TestClient(app) as member:
+        setup(manager,day,[{'name':'入口','openAt':'08:15'}],[(pid,'超时人员','07:15-16:15')],time='08:15')
+        login(member,'TRTEST01');enter(member,pid)
+        p=ok(member.get('/api/rotation/me'))['person'];old=p['confirmationTokens']['depart']
+        ok(clock(manager,action='jump',minutes=4))
+        p=ok(member.get('/api/rotation/me'))['person'];assert p['entryHold'] and p['taskTimeout'] and p['assign'] is None
+        assert member.post('/api/rotation/me/act',json={'action':'depart','confirmation_token':old}).status_code==409
+        ok(member.post('/api/rotation/me/act',json={'action':'entry_return','confirmation_token':p['confirmationTokens']['entry_return']}))
+        p=ok(member.get('/api/rotation/me'))['person'];assert not p['entryHold'] and p['taskTimeout']['acknowledged']
 
 
-def test_full_day_flow_through_the_api() -> None:
-    with TestClient(app) as manager, TestClient(app) as screen, TestClient(app) as member:
-        login(manager, "GSMTEST01")
-        enter(manager, "7777777")
-        login(screen, "6666666", "1243")
-        login(member, "TRTEST01")
-
-        # 配置两条线，上传名单
-        ok(manager.put("/api/rotation/config", json={"lines": LINES}))
-        assert manager.put("/api/rotation/config", json={"lines": [{"id": "X", "posts": []}]}).status_code == 400
-        assert manager.put("/api/rotation/config", json={"settings": {"offLead": "abc"}}).status_code == 400
-        bad = manager.post("/api/rotation/roster/upload", files={"file": ("名单.txt", b"x", "text/plain")}, data={"scope": "week"})
-        assert bad.status_code == 400
-        uploaded = ok(manager.post("/api/rotation/roster/upload", files={"file": ("名单.xlsx", roster_file(), "application/octet-stream")}, data={"scope": "day"}))
-        assert uploaded["entry_count"] == len(ROSTER) and uploaded["start_date"] == DAY
-        summary = ok(manager.get("/api/rotation/roster", params={"date": DAY}))
-        assert summary["available"] and {p["kind"] for p in summary["people"]} == {"rotation", "off"}
-
-        # 模拟一个 CM 工号：名单有了才能进
-        enter(member, "9000001")
-
-        # 草稿只能在模拟时钟到这一天后发布
-        ok(clock(manager, action="set", date=DAY, time="06:30"))
-        ok(manager.post("/api/rotation/draft", json={"action": "draft_generate", "date": DAY}))
-        board = ok(manager.get("/api/rotation/board"))
-        assert board["draft"]["plan"]["seven"] == {"A#1": "9000001"}
-        assert board["draft"]["plan"]["push7"] == ["9000007"]
-        assert manager.post("/api/rotation/draft", json={"action": "publish", "date": "2026-10-05"}).status_code == 400
-        ok(manager.post("/api/rotation/draft", json={"action": "publish", "date": DAY}))
-        assert manager.post("/api/rotation/draft", json={"action": "draft_generate", "date": DAY}).status_code == 400
-
-        # 下一步：推进到第一个需要在大屏操作的时刻
-        step = ok(clock(manager, action="next"))
-        assert step["clock"]["paused"] is True
-        assert step["waiting"] == ["推七甲 点「去轮岗」（A 线）"]
-        assert step["clock"]["minute"] == 7 * 60 + 15
-        early = person(ok(manager.get("/api/rotation/board")), "9000001")
-        assert early["state"] == "onpost" and early["preparing"] == "推7点"
-        assert "7点岗" in early["flags"] and early["lineStart"] == 7 * 60
-        assert clock(manager, action="next").status_code == 400  # 还没处理，不能下一步
-
-        # 大屏只能点去休息、去轮岗
-        assert screen.post("/api/rotation/screen/act", json={"action": "undo", "pid": "9000007"}).status_code == 403
-        assert screen.post("/api/rotation/act", json={"action": "depart", "pid": "9000007"}).status_code == 403
-        ok(screen_act(screen, 'depart', '9000007'))
-        assert screen.post("/api/rotation/screen/act", json={"action": "depart", "pid": "9000007"}).status_code == 400
-
-        assert clock(manager, action="next").status_code == 400  # 点击即替下，已有去休息待办
-        ok(clock(manager, action="jump", minutes=3))
-        board = ok(manager.get("/api/rotation/board"))
-        assert person(board, "9000001")["downReason"] == "推7点下来"
-        assert person(board, "9000007")["post"] == "迎宾"
-
-        # 员工个人页：待办标测试，随状态更新
-        me = ok(member.get("/api/rotation/me"))
-        assert me["test_mode"] is True and me["person"]["state"] == "walkback"
-        assert [n["title"] for n in me["notices"] if n["status"] == "open"] == ["请确认已到休息室"]
-        ok(screen_act(screen, 'arrive', '9000001'))
-        me = ok(member.get("/api/rotation/me"))
-        open_titles = [n["title"] for n in me["notices"] if n["status"] == "open"]
-        assert open_titles == ["休息至 07:33"]
-        assert any(n["status"] == "done" and "已到休息室" in n["title"] for n in me["notices"])
-        assert me["line"] is not None or me["person"]["assign"] is None
-
-        # 主管撤回（大屏不能撤回），再到达时休息仍从第一次到达算起
-        ok(manager.post("/api/rotation/act", json={"action": "undo", "pid": "9000001"}))
-        ok(screen_act(screen, 'arrive', '9000001'))
-        assert person(ok(manager.get("/api/rotation/board")), "9000001")["readyAt"] == 7 * 60 + 33
-        assert manager.post("/api/rotation/act", json={"action": "fix_remove", "pid": "9000002"}).status_code == 400
-
-        # 快进与倍速
-        before = ok(manager.get("/api/rotation/board"))["clock"]["minute"]
-        jumped = ok(clock(manager, action="jump", minutes=30))
-        assert jumped["clock"]["minute"] == before + 30
-        assert clock(manager, action="speed", speed=500).status_code == 400
-        ok(clock(manager, action="speed", speed=30))
-
-        # 记录
-        log = ok(manager.get("/api/rotation/log", params={"date": DAY}))["items"]
-        types = {item["type"] for item in log}
-        assert {"publish", "crew_start", "push7", "depart", "arrive", "undo_arrive"} <= types
-        assert any(item["actor"] == "热力追踪休息室大屏" for item in log)
-        record = ok(manager.get("/api/rotation/person", params={"employee_no": "9000001", "date": DAY}))
-        assert record["segments"][0]["line"] == "A" and record["duties"] == []
-        assert ok(manager.get("/api/rotation/person", params={"employee_no": "9000007", "date": DAY}))["duties"] == [{"date": DAY, "kind": "push7"}]
-
-        # 权限：大屏、模拟员工都不能看主管看板
-        assert screen.get("/api/rotation/board").status_code == 403
-        assert member.get("/api/rotation/board").status_code == 403
-        assert member.post("/api/rotation/test-clock", json={"action": "jump"}).status_code == 403
-        assert ok(screen.get("/api/rotation/screen/state"))["day"]["status"] == "live"
-
-        ok(clock(manager, action="real"))
-
-
-def test_automatic_four_am_prearrangement_and_full_test_reset(monkeypatch):
-    from app.rotation import service
-    original_action = service.do_live_action
-
-    def tick_before_drag(db, attraction_id, actor, body):
-        # Force the previously flaky scheduling: the background ticker runs
-        # after capturing the original plan, but before the first manual edit.
-        if body.get('action') == 'plan_place':
-            service.tick_attraction(attraction_id)
-        return original_action(db, attraction_id, actor, body)
-
-    monkeypatch.setattr(service, 'do_live_action', tick_before_drag)
-    day = '2026-10-06'
-    with TestClient(app) as manager, TestClient(app) as screen:
-        login(manager, 'GSMTEST01')
-        enter(manager, '8888888')
-        login(screen, '6666666', '1243')
-        ok(manager.put('/api/rotation/config', json={'lines': LINES}))
-        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', roster_file(day), 'application/octet-stream')}, data={'scope':'day'}))
-        ok(clock(manager, action='set', date=day, time='03:59'))
-        assert ok(manager.get('/api/rotation/board'))['day'] is None
-        ok(clock(manager, action='jump', minutes=1))
-        board = ok(manager.get('/api/rotation/board'))
-        assert board['day']['status'] == 'live'
-        original_plan = board['day']['plan']
-        from app.v2_database import SessionLocal
-        from app.rotation.models import RotationDay
-        with SessionLocal() as db:
-            previous = db.query(RotationDay).filter(RotationDay.work_date == DAY).first()
-            if previous:
-                assert previous.status == 'ended'
-        assert person(board, '9000001')['lineStart'] is None
-        assert board['day']['lines'][0]['posts'][1]['occ'] == '9000001'
-        ok(manager.post('/api/rotation/act', json={'action':'plan_place','pid':'9000001','line':'A','i':0}))
-        ok(manager.post('/api/rotation/act', json={'action':'post','line':'A','i':2,'open':False}))
-        assert screen.post('/api/rotation/test-clock', json={'action':'reset'}).status_code == 403
-        ok(clock(manager, action='reset'))
-        reset = ok(manager.get('/api/rotation/board'))
-        assert reset['clock']['minute'] == 240 and reset['clock']['paused']
-        assert reset['day']['plan'] == original_plan
-        assert reset['day']['lines'][0]['posts'][2]['open']
-        assert all(p['lineStart'] is None for p in reset['day']['persons'])
-        log = ok(manager.get('/api/rotation/log', params={'date':day}))['items']
-        assert [entry['type'] for entry in log] == ['publish']
-        ok(clock(manager, action='jump', minutes=180))
-        started = ok(manager.get('/api/rotation/board'))
-        assert person(started, '9000001')['lineStart'] == 420
-        assert person(started, '9000002')['lineStart'] is None
-        ok(clock(manager, action='jump', minutes=15))
-        ok(screen_act(screen, 'depart', original_plan['push7'][0]))
-        before_reset = ok(manager.get('/api/rotation/person', params={'employee_no':'9000001','date':day}))
-        assert any(segment['date'] == day for segment in before_reset['segments'])
-        ok(clock(manager, action='reset'))
-        assert ok(manager.get('/api/rotation/board'))['day']['plan'] == original_plan
-        after_reset = ok(manager.get('/api/rotation/person', params={'employee_no':'9000001','date':day}))
-        assert not any(segment['date'] == day for segment in after_reset['segments'])
-        assert after_reset['segments'] == [segment for segment in before_reset['segments'] if segment['date'] != day]
-
-
-def test_reset_restores_persisted_snapshot_not_new_week_or_configuration(monkeypatch):
-    from app.rotation import service
-    from app.rotation.models import RotationSegment
-    from app.v2_database import SessionLocal
-    from app.v2_models import Attraction
-
-    day = '2026-10-07'
+def test_sandbox_new_101_and_post_rename_use_stable_identity():
+    day='2026-10-13'
     with TestClient(app) as manager:
-        login(manager, 'GSMTEST01')
-        enter(manager, '8888888')
-        ok(clock(manager, action='set', date=day, time='03:59'))
-        ok(manager.put('/api/rotation/config', json={'lines': LINES}))
-        ok(manager.post('/api/rotation/roster/upload', files={'file': ('名单.xlsx', roster_file(day), 'application/octet-stream')}, data={'scope':'day'}))
-        ok(clock(manager, action='jump', minutes=1))
-        original_plan = ok(manager.get('/api/rotation/board'))['day']['plan']
-        with SessionLocal() as db:
-            attraction_id = db.query(Attraction).filter_by(name='热力追踪').one().id
-            db.add(RotationSegment(attraction_id=attraction_id, work_date='2026-10-05',
-                employee_no='9000007', line='A', start_min=420,
-                end_min=1020, minutes=600))
-            db.commit()
-        ok(manager.put('/api/rotation/config', json={'lines': list(reversed(LINES))}))
-        service.RUNTIME.cache.clear()  # Prove recovery uses the database snapshot.
+        board=setup(manager,day,[{'name':'塔台'},{'name':'塔协'}],[('9500001','塔台人员','07:15-16:15'),('9500002','塔协人员','07:15-16:15')],time='07:15')
+        key=board['day']['lines'][0]['posts'][0]['key']
+        ok(manager.post('/api/rotation/act',json={'action':'rename_post','post_key':key,'name':'塔台改名'}))
+        ok(manager.post('/api/rotation/act',json={'action':'hold101','on':True}))
+        posts=ok(manager.get('/api/rotation/board'))['day']['lines'][0]['posts']
+        assert all(p['hold101'] for p in posts) and posts[0]['key']==key
+        ok(manager.post('/api/rotation/act',json={'action':'hold101','on':False}))
+        assert not any(p['hold101'] for p in ok(manager.get('/api/rotation/board'))['day']['lines'][0]['posts'])
 
-        def no_recalculation(*args, **kwargs):
-            raise AssertionError('reset must not recalculate the initial plan')
 
-        monkeypatch.setattr(service.E, 'build_draft', no_recalculation)
-        ok(clock(manager, action='reset'))
-        first = ok(manager.get('/api/rotation/board'))
-        assert first['day']['plan'] == original_plan
-        assert [line['id'] for line in first['day']['lines']] == ['A', 'B']
-        assert [line['id'] for line in first['lines']] == ['B', 'A']
-        ok(clock(manager, action='reset'))
-        assert ok(manager.get('/api/rotation/board'))['day']['plan'] == original_plan
-        with SessionLocal() as db:
-            assert db.query(RotationSegment).filter_by(attraction_id=attraction_id,
-                work_date='2026-10-05', employee_no='9000007', minutes=600).count() == 1
+def test_daily_prearrangement_and_full_test_reset_preserve_original_plan():
+    day='2026-10-14'
+    with TestClient(app) as manager:
+        board=setup(manager,day,[{'name':'入口'},{'name':'出口'}],[('9700001','预排甲','07:15-16:15'),('9700002','预排乙','07:15-16:15')],time='04:01')
+        assert board['day']['status']=='live' and board['day']['taskWorkflow']==1
+        before=[p['occ'] for p in board['day']['lines'][0]['posts']]
+        reset=ok(clock(manager,action='reset'))
+        assert reset['clock']['minute']==240
+        after=ok(manager.get('/api/rotation/board'))
+        assert [p['occ'] for p in after['day']['lines'][0]['posts']]==before
+        assert all(p['continuousStart'] is None for p in after['day']['persons'])
+
+
+def test_closed_day_has_no_pending_departures_and_stops_rotation():
+    day='2026-10-15'
+    with TestClient(app) as manager:
+        setup(manager,day,[{'name':'入口'}],[('9800001','闭园人员','07:15-23:00')],time='07:15')
+        ok(manager.post('/api/rotation/act',json={'action':'set_close','close':'07:16'}))
+        ok(clock(manager,action='jump',minutes=2))
+        board=ok(manager.get('/api/rotation/board'))
+        assert board['day']['closed'] and not any(p['canDepart'] for p in board['day']['persons'])

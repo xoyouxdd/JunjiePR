@@ -53,9 +53,11 @@ class Runtime:
         self.lock = threading.RLock()
         self.version = 0
         self.cache: dict[tuple[int, str], tuple[int, dict]] = {}
+        self.projections: dict[tuple, tuple[tuple, dict]] = {}
 
     def bump(self):
         self.version += 1
+        self.projections.clear()
 
 
 RUNTIME = Runtime()
@@ -362,7 +364,7 @@ class DbHooks:
     def log(self, typ, actor, pid, line, post, detail):
         RotationEvent = tables_for(self.db).RotationEvent
         if hasattr(actor, "kind"):
-            actor_type, actor_id, actor_name = ('employee' if getattr(actor,'formal',False) else 'adjustment' if getattr(actor,'adjustment',False) else actor.kind), actor.actor_id, actor.name
+            actor_type, actor_id, actor_name = ('employee' if getattr(actor,'formal',False) and getattr(actor,'entered_by',None) else 'adjustment' if getattr(actor,'adjustment',False) else actor.kind), actor.actor_id, actor.name
             if getattr(actor,'formal',False) and getattr(actor,'temporary',False): actor_type='temporary'
         else:
             actor_type, actor_id, actor_name = "system", None, "系统" if actor == "system" else str(actor)
@@ -438,8 +440,10 @@ def save_day(db: Session, row: RotationDay, state: dict, *, notify: bool = True)
 
 def engine_for(db: Session, cfg: RotationConfig, row: RotationDay, state: dict) -> tuple[E.Engine, DbHooks]:
     hooks = DbHooks(db, row.attraction_id, row.work_date)
-    state['cooperativeEntry'] = bool(db.info.get('rotation_formal'))
-    return E.Engine(state, settings_of(cfg), hooks), hooks
+    from app.rotation import workflow as W
+    eng = E.Engine(state, settings_of(cfg), hooks)
+    eng._workflow_initialized = W.initialize(eng)
+    return eng, hooks
 
 
 def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, target: float) -> bool:
@@ -451,7 +455,7 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
     t = previous_tick
     if t > target:
         t = target
-    changed = False
+    changed = bool(getattr(eng, '_workflow_initialized', False))
     while True:
         t = min(t + STEP, target) if t < target else target
         hooks.now = t
@@ -600,7 +604,8 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
                 reason = p.get("downReason") or "推岗"
                 step = ("arrive", "请确认已到休息室", f"你已下线（{reason}），在个人待办或大屏确认后系统安排休息或吃饭。")
         elif p.get('role')=='op' and st in ('op','notyet'):
-            step = ('arrive', '可确认去休息', '开园前可随时人工确认，按实际确认时间开始休息。')
+            if not eng.d.get('taskWorkflow') or now>=p['start']:
+                step = ('arrive', '可确认去休息', '到休息室后确认，按实际确认时间开始休息。')
         elif st == "pending":
             step = ("arrive", "请确认已到休息室", "OP 阶段结束，在个人待办或大屏确认后转入休息区开始轮岗。")
         elif st in ("rest", "meal"):
@@ -610,7 +615,12 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
         elif st == "ready":
             if p.get('entryHold'):
                 step = ('entry_return', '请本人到场后重新领取安排', '同行任务已调整；本提示不代表缺勤，请到场后在本人待办确认。')
-            elif a and now >= max(a["departAt"] - early, a.get("notBefore", 0)):
+                if p.get('taskTimeout'):
+                    timeout=p['taskTimeout'];receiver=eng.P.get(timeout.get('transferredTo'),{}).get('name')
+                    from app.rotation.workflow import locate
+                    _,_,post=locate(eng,timeout.get('entryKey'))
+                    step=('entry_return', f"{timeout['line']} · {post['name'] if post else '原上岗'}任务超时", ('已转由 '+receiver+' 执行。' if receiver else '等待下一位可分配人员承接。')+'本人确认知晓后再安排新任务。')
+            elif a and now >= max(a["departAt"] - (0 if a.get('taskId') else early), a.get("notBefore", 0)):
                 step = ("depart", f"现在出发去 {a['line']} 线", _go_text(eng, a) + "。在个人待办或休息室大屏确认「去轮岗」。")
             elif a:
                 step = ("rest", f"{fmt(a['departAt'])} 出发去 {a['line']} 线", _go_text(eng, a))
@@ -674,6 +684,17 @@ def assignment_view(eng: E.Engine, p: dict) -> dict | None:
     if not a:
         return None
     av = dict(a)
+    if a.get('taskId'):
+        from app.rotation.workflow import task_view
+        task = task_view(eng,p)
+        if task:
+            av.update(entryPost=task['entryPost'], deadlineAt=task['deadlineAt'],
+                      transferredFromName=task['transferredFromName'])
+            target=eng.P.get(a.get('target'))
+            target_line,index=eng.find_post(a.get('target')) if target else (None,None)
+            if target:av.update(targetName=target['name'],targetLine=target_line['id'] if target_line else None,
+                                targetPost=target_line['posts'][index]['name'] if target_line else None)
+            return av
     L = eng.line(a["line"])
     target = eng.P.get(a.get("target"))
     TL, ti = eng.find_post(a.get("target")) if target else (None, None)
@@ -693,6 +714,11 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
                "pid": p["pid"], "action": action, "sequence": p.get("confirmationSequence", 0),
                "closed": eng.d.get("closed", False)}
     if action in ("depart", "entry_adjust", "group_depart"):
+        from app.rotation.workflow import task_for
+        task = task_for(eng,p)
+        if task:
+            context.update(task=task['id'],revision=task['revision'],expected=task['expected'])
+            return hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         a = assignment_view(eng, p)
         context.update(assign=a, readyAt=p.get("readyAt"), breakStart=p.get("breakStart"))
         from app.rotation.cooperation import plan
@@ -709,10 +735,38 @@ def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
     return hashlib.sha256(json.dumps(context, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def _read_projection_cache(db: Session, cfg: RotationConfig, row: RotationDay, now: float) -> dict:
+    """Share only committed, exact-clock read projections; never an engine/session."""
+    runtime = runtime_for_row(row)
+    day_key = (row.attraction_id, row.work_date)
+    if day_key in db.info.get(_TRANSACTION_KEY, {}).get('days', {}):
+        return {}
+    key = (id(db.get_bind()), *day_key)
+    signature = (row.version, row.state_json, runtime.version, cfg.settings_json, cfg.lines_json, float(now))
+    with runtime.lock:
+        saved = runtime.projections.get(key)
+        if saved and saved[0] == signature:
+            return saved[1]
+        if len(runtime.projections) >= 8:
+            runtime.projections.clear()
+        result = {}
+        runtime.projections[key] = (signature, result)
+        return result
+
+
 def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
     from app.rotation.cooperation import plan, simulate, upcoming, upcoming_shift
+    projection = getattr(eng, '_read_projection', None)
+    person_key = (p['pid'], float(now))
+    if projection is not None and person_key in projection.setdefault('people', {}):
+        return deepcopy(projection['people'][person_key])
     if not hasattr(eng, '_upcoming_routes'):
-        eng._upcoming_routes = upcoming(eng, now)
+        if projection is not None and 'upcoming' in projection:
+            eng._upcoming_routes = projection['upcoming']
+        else:
+            eng._upcoming_routes = upcoming(eng, now)
+            if projection is not None:
+                projection['upcoming'] = eng._upcoming_routes
     group = plan(eng, p, now)
     av = assignment_view(eng, p)
     if group and av:
@@ -721,7 +775,7 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
             av['entryPost']=own['entryPost']
     routes = group['routes'] if group else []
     departure_blocked = group['blocked'] if group else None
-    if av and not group and p.get('state') in ('rest', 'ready', 'meal'):
+    if av and not eng.d.get('taskWorkflow') and not group and not av.get('taskId') and p.get('state') in ('rest', 'ready', 'meal'):
         try:
             routes = simulate(eng, [p], now)
             own_route = next((r for r in routes if r['pid'] == p['pid']), None)
@@ -735,7 +789,17 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
     if p["pid"] in taken:
         ra = eng.P[taken[p["pid"]]].get("assign") or {}
         preparing = {"push7": "推7点", "chain": ra.get("why") or "推下班"}.get(ra.get("mode"))
-    return {
+    from app.rotation import workflow as W
+    task = W.task_view(eng,p)
+    if task:
+        routes = task['routes']
+        departure_blocked = None if W.valid(eng,W.task_for(eng,p)) else '接替路线已变化，请等待最新安排'
+    timeout=None
+    if p.get('taskTimeout'):
+        _,_,timeout_post=W.locate(eng,p['taskTimeout'].get('entryKey'))
+        timeout={**p['taskTimeout'],'entryPost':timeout_post['name'] if timeout_post else '原上岗',
+                 'transferredToName':eng.P.get(p['taskTimeout'].get('transferredTo'),{}).get('name')}
+    result = {
         "pid": p["pid"], "name": p["name"], "state": p.get("state"), "role": p.get("role"),
         "label": p.get("label", ""), "note": p.get("note", ""), "start": p["start"], "end": p["end"],
         "line": p.get("line"), "post": L["posts"][i]["name"] if L else None, "postIndex": i,
@@ -745,7 +809,7 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "assignmentLocked": eng.assignment_locked(p, now),
         "entryGroup": group, "entryHold": p.get('entryHold'),
         "interruptedBreak": p.get('interruptedBreak'), "leaveReason": p.get('leaveReason'),
-        "postHold": L['posts'][i].get('hold') if L else None,
+        "postHold": (L['posts'][i].get('hold') or L['posts'][i].get('hold101')) if L else None,
         "upcomingShift": upcoming_shift(p, now),
         "previewAssign": eng._upcoming_routes.get(p['pid']),
         "walkbackSince": p.get("walkbackSince"), "arriveAt": p.get("arriveAt"), "ate": p.get("ate"),
@@ -753,14 +817,23 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "mealOptions": eng.meal_options(p, now),
         "visited": p.get("visited", []), "mark": p.get("mark", ""), "absences": p.get("absences", []),
         "preparing": preparing,
+        "continuousStart":p.get('continuousStart'),"continuousMinutes":W.continuous_minutes(p,now),
+        "task":task,"taskTimeout":timeout,
+        "waitingReplacement":p.get('state')=='onpost' and now>=p['end'],
         "scheduledRestStart": p['start'] if p.get('state') == 'notyet' and eng.opening_rest_candidate(p) else None,
         "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
                                (["entry_return"] if p.get('entryHold') else ["arrive"] if p.get("state") in ("walkback", "pending", "op") or p.get('role')=='op' and p.get('state')=='notyet' else
                                 (["depart", "entry_adjust", "group_depart"] if group else ["depart"]) if p.get("assign") and p.get("state") in ("rest", "ready", "meal") else [])},
         "canDepart": bool(not departure_blocked and p.get("state") == "ready" and a and now >= (p.get("readyAt") or now) - 0.01
+                          and (not W.enabled(eng) or task)
+                          and (not task or task['allowedAt']-1e-8<=now<=task['deadlineAt']+1e-8)
                           and now >= a.get("notBefore", 0) - 0.01
                           and now >= a["departAt"] - (0 if group else eng.S["departEarly"]) - 0.01),
     }
+
+    if projection is not None:
+        projection['people'][person_key] = deepcopy(result)
+    return result
 
 
 def lines_view(eng: E.Engine) -> list[dict]:
@@ -768,7 +841,10 @@ def lines_view(eng: E.Engine) -> list[dict]:
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
         "walk": eng.walk(L["id"]),
         "posts": [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"),
-                   "occName": eng.P.get(x.get("occ"), {}).get("name"), "since": x.get("since"), "hold": x.get("hold"),
+                   "key":x.get('key'),"occName": eng.P.get(x.get("occ"), {}).get("name"), "since": x.get("since"), "hold": x.get("hold") or x.get('hold101'),
+                   "hold101":bool(x.get('hold101')),"hold101Role":x.get('hold101Role'),
+                   "manualHold":x.get('hold'),
+                   "continuousStart":eng.P.get(x.get('occ'),{}).get('continuousStart'),
                    "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for x in L["posts"]],
     } for L in eng.d["lines"]]
 
@@ -777,9 +853,13 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
     state = day_state(row)
     if "confirmationEpoch" not in state:
         save_day(db, row, state, notify=False)
+    projection = _read_projection_cache(db, cfg, row, now)
+    if 'live' in projection:
+        return deepcopy(projection['live'])
     eng, _ = engine_for(db, cfg, row, state)
+    eng._read_projection = projection
     taken = eng.targeted() if state.get("status") == "live" else {}
-    return {
+    result = {
         "date": state["date"], "status": state["status"],
         "lines": lines_view(eng),
         "persons": [person_view(eng, p, now, taken) for p in state["persons"].values()],
@@ -789,7 +869,12 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
         "plan": state["plan"],
         "draftAlerts": state.get("draftAlerts", []),
         "openTime": state.get("openTime"), "closeAt": state.get("closeAt"), "closed": state.get("closed", False),
+        "taskWorkflow":state.get('taskWorkflow'),"hold101Active":state.get('hold101Active',False),
+        "hold101Recent":state.get('hold101Recent',[]),
     }
+
+    projection['live'] = deepcopy(result)
+    return result
 
 
 @transactional
@@ -903,6 +988,7 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
     if not p:
         return out
     eng, _ = engine_for(db, cfg, row, state)
+    eng._read_projection = _read_projection_cache(db, cfg, row, minute)
     out["person"] = person_view(eng, p, minute, eng.targeted() if state["status"] == "live" else {})
     out["confirmations"] = [r for r in reversed(list(state.get("confirmations", {}).values()))
                             if r["pid"] == employee_no][:20]
@@ -937,13 +1023,14 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
     result = day_state(row).get("confirmations", {}).get(token) if row else None
     if result and employee_no is not None and result["pid"] != employee_no:
         raise ActionError("只能查看自己的确认结果")
-    return {"confirmed": bool(result), "result": result}
+    return {"confirmed": bool(result) and result.get('status') not in ('reversed','superseded'), "result": result}
 
 SCREEN_ACTIONS = {"arrive", "depart", "entry_return", "entry_adjust"}
 LIVE_ACTIONS = {
     "arrive", "depart", "entry_return", "entry_adjust", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
     "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order", "post_hold",
 }
+LIVE_ACTIONS.update({'rename_post','hold101','restore_line'})
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
 
 
@@ -982,7 +1069,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         raise ActionError("不支持的操作")
     if act=='move' and body.get('force') is True and not body.get('expected_snapshot'):
         raise ActionError('强制安排必须先预览影响并确认')
-    if act not in {"post", "post_order", "line", "set_close"}:
+    if act not in {"post", "post_order", "line", "set_close",'rename_post','hold101','restore_line'}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
             raise ActionError("工号必须是字符串")
@@ -1003,6 +1090,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
                 raise ActionError("请刷新后重新确认")
             completed = state.get("confirmations", {}).get(token)
             if completed:
+                if completed.get('status') in ('reversed','superseded'):
+                    raise ConfirmationConflict('原确认已撤销，请查看最新安排')
                 if completed["pid"] != body.get("pid") or completed["action"] != act:
                     raise ActionError("确认任务与人员不匹配")
                 return {"ok": True, "duplicate": True, "result": completed}
@@ -1013,6 +1102,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             raise ConfirmationConflict('安排已变化，请重新预览后提交')
         eng, hooks = engine_for(db, cfg, row, state)
         hooks.now = now
+        from app.rotation import history as H, workflow as W
+        checkpoint_before=H.snapshot(state)
         pid = body.get("pid")
         if pid is not None and pid not in state["persons"] and act != "add_person":
             raise ActionError("今天的名单里没有这个人")
@@ -1027,7 +1118,24 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         entry_result = None
         if act.startswith("fix_") and not reason:
             raise ActionError("更正需要填写原因")
-        if act == "arrive":
+        if act == 'rename_post':
+            _require(body,'post_key','name')
+            line,_,post=W.locate(eng,body['post_key'])
+            if not post:raise ActionError('岗位已变化，请刷新')
+            name=str(body['name']).strip()
+            if not name or len(name)>40:raise ActionError('岗位名称须为1至40字')
+            if any(x is not post and x['name']==name for x in line['posts']):raise ActionError('本线路已有同名岗位')
+            old=post['name'];post['name']=name
+            eng.h.log('rename_post',actor,None,line['id'],name,{'key':post['key'],'from':old,'to':name})
+        elif act == 'hold101':
+            on=action_boolean(body,'on')
+            recent=W.toggle_101(eng,on,now,actor)
+            state['hold101Recent']=recent if on else []
+        elif act == 'restore_line':
+            _require(body,'line','checkpoint','expected_snapshot')
+            if body.get('notified') is not True:raise ActionError('请先核实或确认可立即通知相关人员')
+            H.execute(db,eng,body['line'],body['checkpoint'],now,actor)
+        elif act == "arrive":
             eng.act_arrive(pid, now, actor, meal_choice=body.get('meal_choice'))
         elif act == 'post_hold':
             _require(body, 'line', 'i')
@@ -1061,11 +1169,16 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             p = eng.P[pid]
             if not p.get('entryHold') or p['state'] not in ('ready', 'rest'):
                 raise ActionError('当前没有待恢复的上岗安排')
-            if not getattr(actor, 'formal', False) or actor.entered_by.employee_no != pid:
+            own_member=actor.kind=='member' and actor.member_employee_no==pid
+            if actor.kind!='screen' and not own_member and (not getattr(actor, 'formal', False) or not actor.entered_by or actor.entered_by.employee_no != pid):
                 raise ActionError('请本人确认已到场')
             p.pop('entryHold')
+            if p.get('taskTimeout'):
+                p['taskTimeout']['acknowledged']=True
             eng.h.log('entry_return', actor, pid, None, None, {})
         elif act == 'entry_adjust':
+            if W.enabled(eng):
+                raise ActionError('现为个人独立任务；未确认的超时任务由系统转接，请刷新待办')
             from app.rotation.cooperation import apply_adjustment
             entry_result = apply_adjustment(eng, pid, now, actor, body.get('missing'), body.get('expected_plan'))
         elif act == "undo":
@@ -1133,6 +1246,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
                       "line": L["id"] if L else None, "post": L["posts"][i]["name"] if L else None,
                       "readyAt": p.get("readyAt"), "assignment": before,
                       "sequence": p["confirmationSequence"]}
+            if W.enabled(eng):result['status']='executed'
             if token is not None:
                 result["token"] = token
                 state.setdefault("confirmations", {})[token] = result
@@ -1157,9 +1271,11 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
                                     'status':'executed','group':entry_result.get('group'),'token':other_token,
                                     'sequence':other['confirmationSequence'],'assignment':entry_result.get('assignments',{}).get(other_pid)}
         eng.tick(now)
+        if act!='restore_line':H.record(db,eng,checkpoint_before,'resume101' if act=='hold101' and not state.get('hold101Active') else act,actor,now)
         state["lastTick"] = max(float(state.get("lastTick", now)), now)
         sync_notices(db, attraction_id, state, eng, now)
         save_day(db, row, state)
+        if act=='hold101':return {'ok':True,'recent':state.get('hold101Recent',[])}
         return {"ok": True, "duplicate": False, "result": result} if token is not None else None
 
 
@@ -1298,6 +1414,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             hooks.now = now
             remember_initial_draft(state, cfg)
             eng = E.Engine(state, state["initialSettings"], hooks)
+            from app.rotation.workflow import initialize
+            initialize(eng)
             eng.publish(now, actor)
             state["lastTick"] = now
             write_duties(db, attraction_id, day, plan)
@@ -1312,6 +1430,7 @@ def day_log(db: Session, attraction_id: int, day: str, limit: int = 500) -> list
     rows = (
         db.query(RotationEvent)
         .filter(RotationEvent.attraction_id == attraction_id, RotationEvent.work_date == day)
+        .filter(RotationEvent.event_type != 'workflow_checkpoint')
         .order_by(RotationEvent.id.desc())
         .limit(limit)
         .all()

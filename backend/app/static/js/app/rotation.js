@@ -27,9 +27,15 @@ function taskLine(line,pid){
   return `<div class="rt-line"><div class="rt-line-head"><strong>${esc(line.id)}线 · 岗位详情</strong></div>${line.posts.map(post=>`<div class="rt-post ${post.occ===pid?'me':''}"><span class="rt-pn">${esc(post.name)}</span><span class="rt-who-name">${esc(post.occName||'空岗')}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span><span class="rt-mins">${post.open?'':'未开岗'}</span></div>`).join('')}</div>`;
 }
 
+function personalTaskComparison(p){
+  if(!p.task)return '';
+  const task=p.task,table=(posts,after)=>`<div class="rt-task-line"><header>${esc(task.line)}</header>${posts.map((post,i)=>`<div class="rt-task-slot ${after&&post.occ!==task.beforePosts[i]?.occ?'changed':''}"><span>${esc(post.name)}</span><strong>${esc(post.occName||'空岗')}</strong></div>`).join('')}</div>`;
+  return `<section class="rt-task-comparison"><h4>执行本任务前后</h4><div class="rt-task-columns"><div><p>执行前 · 当前站位</p>${table(task.beforePosts,false)}</div><div><p>执行后 · 预计站位</p>${table(task.afterPosts,true)}</div></div><small>只标出本任务变化。${hm(task.allowedAt)} 可出发，${hm(task.deadlineAt)} 前确认。</small>${task.transferredFromName?`<p>转接自 ${esc(task.transferredFromName)}</p>`:''}</section>`;
+}
+
 function mountRotationTasks(host,request,onComplete){
   if(!host||!state.me.rotation_entry)return;
-  if(!document.getElementById('formalRotationStyles')){const css=document.createElement('link');css.id='formalRotationStyles';css.rel='stylesheet';css.href=portalPath('/static/css/rotation.css');document.head.appendChild(css);}
+  if(!document.getElementById('formalRotationStyles')){const css=document.createElement('link');css.id='formalRotationStyles';css.rel='stylesheet';css.href=portalPath('/static/css/rotation.css')+new URL(import.meta.url).search;document.head.appendChild(css);}
   let busy=false,loading=false,closed=false,data=null,selectedCircle=null,queuedScope=false;
   const key='formalRotation.todo.'+state.me.id;
   let pending=null;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch{}
@@ -67,7 +73,7 @@ function mountRotationTasks(host,request,onComplete){
       const a=p.assign,action=p.entryHold?'entry_return':(['walkback','pending'].includes(p.state)||(p.role==='op'&&['op','notyet'].includes(p.state)))?'arrive':p.state==='ready'&&p.canDepart&&!voted&&!g?.blocked?'depart':null;
       const waiting=p.scheduledRestStart!==null&&p.scheduledRestStart!==undefined;
       const status=waiting?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:['rest','meal'].includes(p.state)?`${p.state==='meal'?'吃饭':'休息'}至 ${hm(p.readyAt)}`:p.state==='heading'?`前往 ${esc(a?.line||'')} 线，预计${hm(p.arriveAt)}到岗`:p.state==='onpost'?`在 ${esc(p.line)} 线 · ${esc(p.post)}`:p.state==='ready'&&!action?'等待上岗时间':action==='arrive'?'待确认休息／吃饭':p.state==='done'?'当日轮岗已结束':'请留意当日轮岗安排';
-      const result=data.confirmations?.[0];
+      const result=data.confirmations?.find(r=>!['reversed','superseded'].includes(r.status));
       host.innerHTML=`${scopeHtml}<section class="panel rt-personal-task"><div class="record-line"><h3>我的轮岗</h3><a class="secondary" href="${portalPath('/rotation-board')}">当日看板</a></div><p>${status}</p>${p.postHold?`<p role="status">持续定岗 · ${hm(p.postHold.since)}起 · ${esc(p.postHold.reason)}，手动取消或零点结束。</p>`:''}${a?`<p>安排：${esc(a.line)}线 · ${esc(a.entryPost||'入口岗位')}，${hm(a.departAt)}出发${a.targetName?' · 替换'+esc(a.targetName):''}</p>`:''}${a?`<p class="field-hint">${a.blocked?'安排失效，待主管核对':p.assignmentLocked?(p.state!=='ready'&&p.readyAt-data.clock.minute>3?'同行组合已固定':'安排已固定'):'预计安排 · 餐休剩余超过3分钟可调整'}；餐休结束后才可确认，以出发前最新任务为准。</p>`:''}${action==='arrive'&&p.mealOptions?.canChoose?'<fieldset><legend>本次选择</legend><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="rest" checked>休息</label><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="meal">吃饭</label></fieldset>':''}${action==='arrive'&&p.mealOptions?.forced?'<p>已到饭点，本次按原规则安排吃饭。</p>':''}${pending?'<p role="status">上次提交结果待核对，可刷新或使用原步骤重试。</p><button type="button" class="primary" data-rotation-retry>重试本次确认</button>':action?`<button type="button" class="primary" data-rotation-task="${action}">${action==='depart'?'确认去上岗':'确认已到休息室'}</button>`:''}${result?`<p class="field-hint">最近安排生效：${hm(result.minute)} · ${result.action==='depart'?esc(result.line)+'线 · '+esc(result.post):'已到休息室'}</p>`:''}${taskLine(data.line,p.pid)}</section>`;
       if(state.me.rotation_temporary||data.attraction_id&&data.attraction_id!==state.me.attraction_id)host.querySelector('a[href]')?.remove();
       if(state.me.rotation_temporary&&data.notices?.some(n=>n.status==='open'))host.querySelector('.rt-personal-task').insertAdjacentHTML('beforeend',`<div role="status">${data.notices.filter(n=>n.status==='open').map(n=>`<p><strong>${esc(n.title)}</strong><br>${esc(n.body)}</p>`).join('')}</div>`);
@@ -75,11 +81,15 @@ function mountRotationTasks(host,request,onComplete){
       bindScope();
       const panel=host.querySelector('.rt-personal-task');
       if(p.departureBlocked)panel.insertAdjacentHTML('beforeend',`<p role="alert">${esc(p.departureBlocked)}</p>`);
-      if(!g&&p.departureRoutes?.length)panel.insertAdjacentHTML('beforeend',`<section class="rt-entry-group"><h4>现场通知与接替去向</h4><ul>${entryRoutes(p.departureRoutes)}</ul><p>确认后前往执行，现场无需再次操作手机。下线人员回休息室后确认休息／吃饭。</p></section>`);
+      if(!g&&p.departureRoutes?.length){
+        const html=`<section class="rt-entry-group"><h4>现场通知与接替去向</h4><ul>${entryRoutes(p.departureRoutes)}</ul><p>前往指定岗位，按以上路线通知并接替。</p></section>`;
+        if(p.task){const target=panel.querySelector('[data-rotation-task],.rt-line');target?.insertAdjacentHTML('beforebegin',html+personalTaskComparison(p));panel.querySelector('.rt-line')?.remove();}
+        else panel.insertAdjacentHTML('beforeend',html);
+      }
       if(g){panel.insertAdjacentHTML('beforeend',entryCard(p));if(p.canDepart&&!g.soloBlocked)panel.insertAdjacentHTML('beforeend','<button type="button" class="secondary" data-entry-single>同行人未到场，调整为单人上岗</button>');}
-      if(p.entryHold)panel.insertAdjacentHTML('afterbegin','<p role="status">本次同行任务已调整，请本人到场后确认，重新领取上岗安排。</p>');
+      if(p.entryHold)panel.insertAdjacentHTML('afterbegin',`<p role="status">${p.taskTimeout?esc(p.taskTimeout.line)+' · '+esc(p.taskTimeout.entryPost)+'任务超时，'+(p.taskTimeout.transferredToName?'已转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'正在等待转接')+'；确认知晓后重新领取。':'本次同行任务已调整，请本人到场后确认，重新领取上岗安排。'}</p>`);
       if(p.upcomingShift)panel.insertAdjacentHTML('afterbegin',`<p>即将上班 · ${hm(p.start)}–${hm(p.end)}${p.previewAssign?` · 预计进入 ${esc(p.previewAssign.line)}线 · ${esc(p.previewAssign.entryPost)}（上岗时再次核对）`:''}</p>${p.previewAssign?.group?`<ul>${entryRoutes(p.previewAssign.group.routes)}</ul>`:''}`);
-      if(action==='entry_return')host.querySelector('[data-rotation-task]').textContent='本人已到场，重新领取安排';
+      if(action==='entry_return')host.querySelector('[data-rotation-task]').textContent=p.taskTimeout?'确认知晓，重新领取':'本人已到场，重新领取安排';
       if(g&&action==='depart')host.querySelector('[data-rotation-task]').textContent='确认上岗安排';
       if(g){
         const groupCard=panel.querySelector('.rt-entry-group'),primary=panel.querySelector('[data-rotation-task]');

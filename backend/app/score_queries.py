@@ -32,15 +32,31 @@ def month_score_employee_ids(db: Session, month: str) -> list[int]:
     return [int(row[0]) for row in rows]
 
 
-def employee_month_scores(db: Session, month: str, employee_ids: Iterable[int]) -> list[dict]:
+def employee_month_scores(db: Session, month: str, employee_ids: Iterable[int], *, attendance_overrides: dict | None = None) -> list[dict]:
     """Calculate monthly scores after pushing month and employee scope into each source."""
     employee_filter, id_params = _employee_filter(employee_ids)
     if not id_params:
         return []
+    extra_params = {}
+    overrides = {eid: value for eid, value in (attendance_overrides or {}).items() if eid in id_params.values()}
+    override_cte, override_select, override_filter = '', '', ''
+    if overrides:
+        values = []
+        for index, (eid, (eligible, score)) in enumerate(overrides.items()):
+            names = [f'attendance_{index}_{part}' for part in ('id', 'eligible', 'score')]
+            extra_params.update(zip(names, (eid, int(eligible), float(score or 0))))
+            values.append('(' + ','.join(':' + name for name in names) + ')')
+        override_cte = 'override_attendance(employee_id,eligible,final_score) AS (VALUES ' + ','.join(values) + '),'
+        override_filter = ' AND employee_id NOT IN (SELECT employee_id FROM override_attendance)'
+        override_select = ' UNION ALL SELECT employee_id,eligible,final_score FROM override_attendance'
     sql = f"""
-        WITH months AS (
+        WITH {override_cte} attendance_inputs AS (
+            SELECT employee_id,eligible,final_score FROM attendance_monthly_scores
+            WHERE attendance_month=:month{employee_filter}{override_filter}
+            {override_select}
+        ), months AS (
             SELECT employee_id FROM recognition_records WHERE recognition_month=:month{employee_filter}
-            UNION SELECT employee_id FROM attendance_monthly_scores WHERE attendance_month=:month{employee_filter}
+            UNION SELECT employee_id FROM attendance_inputs
             UNION SELECT employee_id FROM deduction_records WHERE deduction_month=:month{employee_filter}
         ), recognition_totals AS (
             SELECT employee_id,
@@ -53,8 +69,7 @@ def employee_month_scores(db: Session, month: str, employee_ids: Iterable[int]) 
         ), attendance_totals AS (
             SELECT employee_id,
                    ROUND(CASE WHEN eligible=1 THEN final_score ELSE 0 END, 2) AS attendance_score
-            FROM attendance_monthly_scores
-            WHERE attendance_month=:month{employee_filter}
+            FROM attendance_inputs
         ), deduction_totals AS (
             SELECT employee_id,
                    ROUND(SUM(CASE WHEN status='active' AND (upgrade_role IS NULL OR upgrade_role!='source_second') THEN points ELSE 0 END), 2) AS deduction_score
@@ -73,7 +88,7 @@ def employee_month_scores(db: Session, month: str, employee_ids: Iterable[int]) 
         LEFT JOIN attendance_totals a ON a.employee_id=m.employee_id
         LEFT JOIN deduction_totals d ON d.employee_id=m.employee_id
     """
-    rows = [dict(row) for row in db.execute(text(sql), {"month": month, **id_params}).mappings().all()]
+    rows = [dict(row) for row in db.execute(text(sql), {"month": month, **id_params, **extra_params}).mappings().all()]
     if not rows:
         return rows
     # One scoped lookup for all employees, rather than a per-employee query.

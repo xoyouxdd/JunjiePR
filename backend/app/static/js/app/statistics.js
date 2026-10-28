@@ -1,7 +1,7 @@
 import { queueExport } from './export-tasks.js';
 // Statistics hierarchy, detail navigation and filtered queries.
 import { api } from './api.js';
-import { beginViewRequest, pageTimeout, render } from './context.js';
+import { beginViewRequest, pageTimeout, registerPageCleanup, render } from './context.js';
 import { confirmModal } from './dialogs.js';
 import { bindFilePreviews } from './files.js';
 import { actingNoteMarkup, esc, fmt, fmtDeduction, monthNow, portalPath } from './format.js';
@@ -10,7 +10,7 @@ import { renderTabs } from './navigation.js';
 import { opt } from './records.js';
 import { app, has, state } from './state.js';
 import { toast } from './toast.js';
-import { TREND_SPANS, trendResultsHtml } from './trends.js';
+import { TREND_SPANS, mountTrendChart, trendResultsHtml } from './trends.js';
 
 const statisticsDetailContext = () => new URLSearchParams(location.search);
 
@@ -103,13 +103,30 @@ async function renderStatistics(){
   const form=document.getElementById('statsFilter');
   const preferenceKey=`recognition-v2:statistics-filters:${state.me.employee_no}`,queryButton=form.querySelector('button[type="submit"],button:not([type])'),resultsHost=document.getElementById('statsResults');
   try{const saved=JSON.parse(localStorage.getItem(preferenceKey)||'{}');['month','attraction_id','title','keyword'].forEach(name=>{if(!Object.prototype.hasOwnProperty.call(saved,name))return;const field=form.elements[name],value=String(saved[name]??'');if(name==='month'&&!value)return;if(field&&(!field.options||[...field.options].some(option=>option.value===value)))field.value=value})}catch(_error){}
-  let lastStatistics=null,loadSequence=0;
+  let lastStatistics=null,loadSequence=0,disposeTrend=null,trendMode='total';
+  const clearTrend=()=>{disposeTrend?.();disposeTrend=null;};
+  registerPageCleanup(clearTrend);
   const saveFilters=()=>{try{localStorage.setItem(preferenceKey,JSON.stringify({month:form.elements.month.value,attraction_id:form.elements.attraction_id.value,title:form.elements.title.value,keyword:form.elements.keyword.value}))}catch(_error){}};
   const emptyMessage=formData=>{const values=Object.fromEntries(formData);if(String(values.keyword||'').trim())return '没有匹配当前姓名或员工号的参与计分人员';if(values.attraction_id)return '该景点圈本月没有参与计分人员';if(values.title)return `本月没有符合 ${values.title} 条件的参与计分人员`;return '本月尚无业务数据或参与计分人员'};
-  const load=async()=>{if(!request.isCurrent())return;const requestId=++loadSequence,formData=[...new FormData(form)],qs=new URLSearchParams(formData.filter(([,v])=>v)),expandEmployees=Boolean(String(formData.find(([key])=>key==='keyword')?.[1]||'').trim()),originalText=queryButton.textContent;saveFilters();queryButton.disabled=true;queryButton.textContent='查询中…';resultsHost.innerHTML='<section class="panel"><div class="empty">正在加载统计数据…</div></section>';try{const d=await api('/api/statistics?'+qs);if(requestId!==loadSequence||!request.isCurrent())return;lastStatistics=d;const selectedTitle=d.title||'',averageLabel=selectedTitle?`${selectedTitle}小组平均分`:'CM/TR小组平均分',attractionSelect=form.elements.attraction_id,attractionLabel=attractionSelect.selectedOptions[0]?.textContent||'全部',updatedLabel=d.data_updated_at||'暂无业务更新',organizationBasis=d.organization_basis||'当前组织归属';resultsHost.innerHTML=`<section class="panel"><h2>员工综合分</h2><p class="statistics-scope">统计范围：${esc(d.month)} · ${esc(attractionLabel)} · ${esc(selectedTitle==='SUPERVISOR'?'主管':(selectedTitle||'CM/TR全部'))}；数据更新至 ${esc(updatedLabel)}；组织口径：${esc(organizationBasis)}；平均分按筛选后小组综合分 ÷ 筛选后人数计算。</p><div class="table-wrap"><table class="statistics-hierarchy-table"><thead><tr><th>组织 / 员工</th><th>加分</th><th>扣分</th><th>全勤分</th><th>小组综合分</th><th>${esc(averageLabel)}</th></tr></thead><tbody>${statisticsHierarchyRows(d.hierarchy,emptyMessage(formData))}</tbody></table></div></section><div id="statisticsDetail"></div>`;bindStatisticsHierarchy(d,{expandEmployees})}catch(error){if(requestId===loadSequence&&request.isCurrent())resultsHost.innerHTML=`<section class="panel"><div class="error">${esc(error.message)}</div></section>`}finally{if(requestId===loadSequence&&request.isCurrent()){queryButton.disabled=false;queryButton.textContent=originalText}}};
+  const load=async()=>{if(!request.isCurrent())return;clearTrend();const requestId=++loadSequence,formData=[...new FormData(form)],qs=new URLSearchParams(formData.filter(([,v])=>v)),expandEmployees=Boolean(String(formData.find(([key])=>key==='keyword')?.[1]||'').trim()),originalText=queryButton.textContent;saveFilters();queryButton.disabled=true;queryButton.textContent='查询中…';resultsHost.innerHTML='<section class="panel"><div class="empty">正在加载统计数据…</div></section>';try{const d=await api('/api/statistics?'+qs);if(requestId!==loadSequence||!request.isCurrent())return;lastStatistics=d;const selectedTitle=d.title||'',averageLabel=selectedTitle?`${selectedTitle}小组平均分`:'CM/TR小组平均分',attractionSelect=form.elements.attraction_id,attractionLabel=attractionSelect.selectedOptions[0]?.textContent||'全部',updatedLabel=d.data_updated_at||'暂无业务更新',organizationBasis=d.organization_basis||'当前组织归属';resultsHost.innerHTML=`<section class="panel"><h2>员工综合分</h2><p class="statistics-scope">统计范围：${esc(d.month)} · ${esc(attractionLabel)} · ${esc(selectedTitle==='SUPERVISOR'?'主管':(selectedTitle||'CM/TR全部'))}；数据更新至 ${esc(updatedLabel)}；组织口径：${esc(organizationBasis)}；平均分按筛选后小组综合分 ÷ 筛选后人数计算。</p><div class="table-wrap"><table class="statistics-hierarchy-table"><thead><tr><th>组织 / 员工</th><th>加分</th><th>扣分</th><th>全勤分</th><th>小组综合分</th><th>${esc(averageLabel)}</th></tr></thead><tbody>${statisticsHierarchyRows(d.hierarchy,emptyMessage(formData))}</tbody></table></div></section><div id="statisticsDetail"></div>`;bindStatisticsHierarchy(d,{expandEmployees})}catch(error){if(requestId===loadSequence&&request.isCurrent())resultsHost.innerHTML=`<section class="panel"><div class="error">${esc(error.message)}</div></section>`}finally{if(requestId===loadSequence&&request.isCurrent()){queryButton.disabled=false;queryButton.textContent=originalText}}};
   const loadRecentExports=async()=>{if(!canExport)return;const host=document.getElementById('recentExports');if(!request.isCurrent())return;try{const data=await api('/api/statistics/my-exports');if(!request.isCurrent())return;host.innerHTML=data.items.length?`<details class="recent-export-history"><summary><strong>本人最近景点数据导出</strong><span>${data.items.length} 条记录</span></summary><div class="table-wrap"><table class="recent-export-table"><thead><tr><th>导出时间</th><th>月份</th><th>景点圈</th><th>Title</th><th>员工搜索</th><th>员工数</th></tr></thead><tbody>${data.items.map(row=>`<tr><td data-label="导出时间">${esc(row.exported_at)}</td><td data-label="月份">${esc(row.month)}</td><td data-label="景点圈">${esc(row.attraction_name)}</td><td data-label="Title">${esc(row.title)}</td><td data-label="员工搜索">${esc(row.keyword||'无')}</td><td data-label="员工数">${row.employee_count}</td></tr>`).join('')}</tbody></table></div></details>`:'<span class="field-hint">当前账号暂无景点数据导出记录</span>'}catch(error){if(!request.isCurrent()||error?.name==='AbortError')return;host.innerHTML=`<span class="field-hint">最近导出记录暂时无法加载：${esc(error.message)}</span>`}};
   const spanLabel=app.querySelector('.trend-span'),spanSelect=document.getElementById('trendSpan'),viewButtons=[...app.querySelectorAll('[data-stats-view]')];let statsView='month';
-  const loadTrend=async()=>{if(!request.isCurrent())return;const requestId=++loadSequence,qs=new URLSearchParams();qs.set('month',form.elements.month.value||monthNow());if(form.elements.attraction_id.value)qs.set('attraction_id',form.elements.attraction_id.value);if(form.elements.title.value)qs.set('title',form.elements.title.value);qs.set('months',spanSelect.value);resultsHost.innerHTML='<section class="panel"><div class="empty">正在加载趋势数据…</div></section>';try{const d=await api('/api/statistics/trend?'+qs);if(requestId!==loadSequence||!request.isCurrent())return;resultsHost.innerHTML=trendResultsHtml(d);}catch(error){if(requestId!==loadSequence||!request.isCurrent())return;resultsHost.innerHTML=`<section class="panel"><div class="empty">${esc(error.message)}</div></section>`;toast(error.message,true);}};
+  const drawTrend=data=>{
+    clearTrend();
+    resultsHost.innerHTML=trendResultsHtml(data,trendMode);
+    disposeTrend=mountTrendChart(resultsHost,data,trendMode);
+    resultsHost.querySelectorAll('[data-trend-mode]').forEach(button=>button.onclick=()=>{
+      if(trendMode===button.dataset.trendMode)return;
+      trendMode=button.dataset.trendMode;
+      drawTrend(data);
+      resultsHost.querySelector(`[data-trend-mode="${trendMode}"]`)?.focus({preventScroll:true});
+    });
+    resultsHost.querySelectorAll('[data-trend-month]').forEach(button=>button.onclick=()=>{
+      form.elements.month.value=button.dataset.trendMonth;
+      viewButtons.find(node=>node.dataset.statsView==='month').click();
+    });
+  };
+  const loadTrend=async()=>{if(!request.isCurrent())return;clearTrend();const requestId=++loadSequence,qs=new URLSearchParams();qs.set('month',form.elements.month.value||monthNow());if(form.elements.attraction_id.value)qs.set('attraction_id',form.elements.attraction_id.value);if(form.elements.title.value)qs.set('title',form.elements.title.value);qs.set('months',spanSelect.value);resultsHost.innerHTML='<section class="panel"><div class="empty">正在加载趋势数据…</div></section>';try{const d=await api('/api/statistics/trend?'+qs);if(requestId!==loadSequence||!request.isCurrent())return;drawTrend(d);}catch(error){if(requestId!==loadSequence||!request.isCurrent())return;resultsHost.innerHTML=`<section class="panel"><div class="empty">${esc(error.message)}</div></section>`;toast(error.message,true);}};
   const loadCurrent=()=>statsView==='trend'?loadTrend():load();
   viewButtons.forEach(button=>button.onclick=()=>{if(statsView===button.dataset.statsView)return;statsView=button.dataset.statsView;viewButtons.forEach(other=>{const on=other.dataset.statsView===statsView;other.className=on?'primary':'secondary';other.setAttribute('aria-selected',on?'true':'false');});spanLabel.hidden=statsView!=='trend';const exportButton=document.getElementById('exportBtn');if(exportButton)exportButton.hidden=statsView==='trend';loadCurrent();});
   spanSelect.onchange=()=>{if(statsView==='trend')loadCurrent();};

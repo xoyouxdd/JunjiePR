@@ -241,11 +241,11 @@ class Engine:
         return [i for i, x in enumerate(L['posts']) if x.get('open')]
 
     def rotation_posts(self, L):
-        return [i for i in self.open_posts(L) if not L['posts'][i].get('hold')]
+        return [i for i in self.open_posts(L) if not (L['posts'][i].get('hold') or L['posts'][i].get('hold101'))]
 
     def held(self, pid):
         L, i = self.find_post(pid)
-        return L is not None and bool(L['posts'][i].get('hold'))
+        return L is not None and bool(L['posts'][i].get('hold') or L['posts'][i].get('hold101'))
 
     def act_post_hold(self, lid, i, pid, on, reason, now, actor):
         L, i, x = self.post(lid, i)
@@ -272,6 +272,8 @@ class Engine:
             if self.d.get('closed'):
                 self._push_off(pid, L, i, now, '闭园')
                 x.update(occ=None, open=False)
+            elif self.d.get('taskWorkflow'):
+                pass  # Resume replacement planning; an expired shift still waits for relief.
             else:
                 p = self.person(pid)
                 if now >= p['end']:
@@ -349,7 +351,7 @@ class Engine:
                 x['manual'] = False
         for p in self.P.values():
             p.update(state='notyet', assign=None, visited=[], ate=False, flags=[],
-                     line=None, lineStart=None, readyAt=None, breakKind=None, breakStart=None,
+                     line=None, lineStart=None, continuousStart=None, readyAt=None, breakKind=None, breakStart=None,
                      walkbackSince=None, arriveAt=None, away=None, after=None, lastLine=None,
                      push7done=False, departedAt=None, downReason=None, walkBack=None, arriveAnchor=None,
                      readySince=None)
@@ -373,7 +375,11 @@ class Engine:
         d = self.d
         if d['status'] != 'live':
             return False
+        from app.rotation import workflow as W
+        modern = W.enabled(self)
         changed = self._freeze_daily_opening(now)
+        if modern:
+            changed = W.tick(self, now) or changed
         S = self.S
         plan = d['plan']
         seat = {v: k for k, v in plan['crew'].items()}
@@ -387,7 +393,7 @@ class Engine:
                         x['open'] = True
                         self.h.log('post_open', 'system', None, L['id'], x['name'], {'auto': True})
                     changed = True
-                if x.get('closeAt') and x['open'] and not x.get('hold') and now >= _m(x['closeAt']) and not x.get('closedAuto'):
+                if x.get('closeAt') and x['open'] and not (x.get('hold') or x.get('hold101')) and now >= _m(x['closeAt']) and not x.get('closedAuto'):
                     x['closedAuto'] = True
                     self._close_post(L, i, now, 'system', x.get('closeMode', 'direct'))
                     changed = True
@@ -458,7 +464,7 @@ class Engine:
                 p.pop('entryHold', None)
                 self.h.log('shift_end_unconfirmed' if was == 'walkback' else 'shift_end', 'system', p['pid'], None, None, {})
                 changed = True
-            if p['state'] == 'onpost' and now >= p['end'] and not self.held(p['pid']):
+            if p['state'] == 'onpost' and now >= p['end'] and not self.held(p['pid']) and not modern:
                 L, i = self.find_post(p['pid'])
                 if L is not None:
                     self._leave_line(p, L, i, now)
@@ -466,8 +472,12 @@ class Engine:
                 p['state'] = 'done'
                 self.h.log('shift_end_onpost', 'system', p['pid'], L['id'] if L else None, None, {})
                 changed = True
+        if modern:
+            changed = W.replan(self, now) or changed
         if self._assign_all(now):
             changed = True
+        if modern:
+            changed = W.plan(self, now) or changed
         return changed
 
     def _freeze_daily_opening(self, now):
@@ -495,7 +505,7 @@ class Engine:
         self.d['closed'] = True
         for L in self.d['lines']:
             for i, x in enumerate(L['posts']):
-                if x.get('hold'):
+                if (x.get('hold') or x.get('hold101')):
                     continue
                 x['openBeforeClose'] = bool(x.get('open'))
                 if x.get('occ'):
@@ -513,7 +523,7 @@ class Engine:
     def opening_rest_candidate(self, p):
         """Unseated 07:15 crew rest at shift start; push7 and seated crew keep their flow."""
         plan = self.d['plan']
-        return (p['start'] == 435 and p['role'] == 'rotation'
+        return (p['start'] in ((420,435) if self.d.get('taskWorkflow') else (435,)) and p['role'] == 'rotation'
                 and p['pid'] not in plan['push7']
                 and all(p['pid'] not in plan[kind].values() for kind in ('crew', 'seven'))
                 and not any(a['start'] <= p['start'] < a['end'] for a in p.get('absences', [])))
@@ -538,7 +548,7 @@ class Engine:
                 x['open'] = True
                 x['occ'] = p['pid']
                 x['since'] = t
-                p.update(state='onpost', line=lid, lineStart=t, lastLine=lid)
+                p.update(state='onpost', line=lid, lineStart=t, continuousStart=t, lastLine=lid)
                 p['visited'].append(lid)
                 if p['pid'] in seat7:
                     p['flags'].append('7点岗')
@@ -560,7 +570,7 @@ class Engine:
 
     # -------- 下线
     def _leave_line(self, p, L, i, now):
-        if L['posts'][i].get('hold'):
+        if (L['posts'][i].get('hold') or L['posts'][i].get('hold101')):
             raise ActionError('该人员正在定岗，请先取消定岗')
         if p.get('lineStart') is not None:
             self.h.segment(p['pid'], L['id'], p['lineStart'], now)
@@ -571,6 +581,8 @@ class Engine:
         """把某人从线上替下，进入下线途中，之后要到大屏点“去休息”。"""
         p = self.P[x_pid]
         self._leave_line(p, L, i, now)
+        from app.rotation.workflow import finish_continuous
+        finish_continuous(p,now)
         p['state'] = 'walkback'
         p['walkbackSince'] = now
         p['downReason'] = reason
@@ -580,6 +592,8 @@ class Engine:
 
     def _go_out(self, p, a, now, actor):
         """出圈（固定暂离）：转为暂离，到暂离结束回到池子。"""
+        from app.rotation.workflow import finish_continuous
+        finish_continuous(p,now)
         a['done'] = True
         p['assign'] = None
         p['state'] = 'away'
@@ -590,6 +604,8 @@ class Engine:
         """推下班 / 推出圈：被推出的人不回大屏，直接转为已下班或出圈中。"""
         p = self.P[x_pid]
         self._leave_line(p, L, i, now)
+        from app.rotation.workflow import finish_continuous
+        finish_continuous(p,now)
         p['downReason'] = why
         _, kind, a = self.leave_at(p, now)
         if kind == 'out' and a is not None:
@@ -622,7 +638,7 @@ class Engine:
         depart = p.get('departedAt', now)
         tgt = a.get('target')
         TL, ti = self.find_post(tgt) if tgt else (None, None)
-        if TL is L and L['posts'][ti].get('hold'):
+        if TL is L and (L['posts'][ti].get('hold') or L['posts'][ti].get('hold101')):
             p.update(state='ready', assign=None, readyAt=now, readySince=now)
             self.alert('%s 的目标岗位已定岗，请按新安排上岗' % p['name'], now)
             return
@@ -680,6 +696,8 @@ class Engine:
                 x['since'] = now
 
     def _enter(self, p, L, depart):
+        if p.get('continuousStart') is None:
+            p['continuousStart'] = depart
         p['state'] = 'onpost'
         p['line'] = L['id']
         p['lineStart'] = depart
@@ -696,6 +714,8 @@ class Engine:
         return p.get('readyAt') or now
 
     def assignment_locked(self, p, now):
+        if (p.get('assign') or {}).get('taskId'):
+            return True
         def own(q):
             return bool(q.get('assign') and q['state'] in ('rest', 'meal', 'ready')
                         and (q['state'] == 'ready' or (q.get('readyAt') if q.get('readyAt') is not None else now) - now <= 3 + 1e-9))
@@ -712,6 +732,10 @@ class Engine:
         a = p.get('assign')
         if not a:
             return None
+        if a.get('taskId'):
+            from app.rotation.workflow import task_for, valid
+            task = task_for(self, p)
+            return None if task and valid(self, task) else '原任务已变化'
         try:
             L = self.line(a['line'])
             if not L.get('active'):
@@ -724,7 +748,7 @@ class Engine:
                     return '原接替岗位已持续定岗'
             if a.get('mode') == 'opening':
                 _, _, post = self.post(a['line'], a['post'])
-                if not post.get('openRequest') or post.get('occ') or post.get('hold'):
+                if not post.get('openRequest') or post.get('occ') or (post.get('hold') or post.get('hold101')):
                     return '原加岗位置已变化'
                 if post.get('openAt') and a.get('notBefore') is not None and abs(_m(post['openAt'])-a['notBefore']) > .01:
                     return '原加岗时间已变化'
@@ -757,7 +781,7 @@ class Engine:
         return changed
 
     def _refresh_future_assignments(self, now):
-        board = [[L['id'], L.get('active'), [[x['name'], x.get('open'), x.get('occ'), bool(x.get('hold')),
+        board = [[L['id'], L.get('active'), [[x['name'], x.get('open'), x.get('occ'), bool((x.get('hold') or x.get('hold101'))),
                   x.get('openAt'), x.get('closeAt')] for x in L['posts']]] for L in self.d['lines']]
         if self.d.get('assignmentBoard') == board:
             return False
@@ -896,6 +920,7 @@ class Engine:
                 continue
             depart, _, _, _, p = min(candidates, key=lambda c: c[:4])
             p['assign'] = {'line': L['id'], 'mode': 'opening', 'post': i, 'departAt': depart, 'notBefore': at}
+            if x.get('key'):p['assign']['openingKey']=x['key']
             self.h.log('opening_assign', 'system', p['pid'], L['id'], x['name'], {'departAt': depart})
             changed = True
         return changed
@@ -929,10 +954,14 @@ class Engine:
         ready = self._ready_time(p, now)
         cm = self.close_min()
         best = None
+        modern=bool(self.d.get('taskWorkflow'))
+        reserved={key for task in self.d.get('rotationTasks',{}).values()
+                  if task.get('status') in ('assigned','waiting_transfer') for key in task['expected']} if modern else set()
         for order, L in enumerate(self.d['lines']):
             if not L.get('active'):
                 continue
             idx = self.rotation_posts(L)
+            if modern:idx=[i for i in idx if L['posts'][i].get('key') not in reserved]
             future = sorted(_m(x['openAt']) for x in L['posts']
                             if x.get('openAt') and not x['opened'] and not x['manual'])
             if not idx and not future:
@@ -940,6 +969,7 @@ class Engine:
             walk = self.walk(L['id'])
             arrive0 = ready + walk
             res = sorted([q for q in self.P.values() if q.get('assign') and q['assign']['line'] == L['id']
+                          and (not modern or not q['assign'].get('taskId'))
                           and q['assign'].get('mode') in ('push', 'opening') and not q['assign'].get('blocked')
                           and q['assign']['departAt'] <= arrive0 + .01],
                          key=lambda q: q['assign']['departAt'])
@@ -954,11 +984,15 @@ class Engine:
                     arrival = max(arrive0, future[after])
                     option = (0, arrival - arrive0, arrival)  # 等定时开岗
             if option is None:
-                chain = self._chain(L)
+                chain = [L['posts'][i]['occ'] for i in reversed(idx) if L['posts'][i].get('occ')] if modern else self._chain(L)
+                if self.d.get('taskWorkflow'):
+                    from app.rotation.workflow import continuous_minutes
+                    chain.sort(key=lambda pid: -continuous_minutes(self.P[pid], now))
                 j = k - len(vac)
                 if 0 <= j < len(chain):
                     c = self.P[chain[j]]
-                    start = c['lineStart'] if c.get('lineStart') is not None else now
+                    start = c.get('continuousStart') if self.d.get('taskWorkflow') else c.get('lineStart')
+                    start = now if start is None else start
                     standing = math.floor(arrive0 - start)
                     option = (1, -standing, arrive0)  # 推站得最久的
             if option is None:
@@ -986,6 +1020,8 @@ class Engine:
 
     def act_arrive(self, pid, now, actor, meal_choice=None):
         p = self.person(pid)
+        if self.d.get('taskWorkflow') and now < p['start']:
+            raise ActionError('班次尚未开始，不能提前开始餐休计时')
         early_op = p.get('role') == 'op' and p['state'] in ('op', 'notyet')
         if p['state'] not in ('walkback', 'pending') and not early_op:
             raise ActionError('%s 当前不是待到达状态，可能已经处理过' % p['name'])
@@ -1071,6 +1107,9 @@ class Engine:
 
     def act_depart(self, pid, now, actor):
         p = self.person(pid)
+        if self.d.get('taskWorkflow'):
+            from app.rotation.workflow import execute
+            return execute(self,p,now,actor)
         if p.get('entryHold'):
             raise ActionError('请先确认本人已到场，重新领取安排')
         if p['state'] != 'ready':
@@ -1145,7 +1184,7 @@ class Engine:
 
     def _close_post(self, L, i, now, actor, mode='direct'):
         x = L['posts'][i]
-        if x.get('hold'):
+        if (x.get('hold') or x.get('hold101')):
             raise ActionError('该岗位正在定岗，请先取消定岗')
         if mode not in ('direct', 'push'):
             raise ActionError('撤岗方式不正确')
@@ -1154,7 +1193,7 @@ class Engine:
         if mode == 'push' and x.get('occ'):
             # Validate the whole chain before changing any post (also used by previews).
             for target in L['posts'][i+1:]:
-                if not target.get('open') or target.get('hold'):
+                if not target.get('open') or (target.get('hold') or target.get('hold101')):
                     continue
                 if target.get('occ') and (self.P[target['occ']]['state'] == 'notyet') != prestart:
                     raise ActionError('预排人员与已上岗人员不能混合顺推')
@@ -1164,7 +1203,7 @@ class Engine:
             last_index = i
             for j in range(i+1, len(L['posts'])):
                 target = L['posts'][j]
-                if not target.get('open') or target.get('hold'):
+                if not target.get('open') or (target.get('hold') or target.get('hold101')):
                     continue
                 last_index = j
                 if target.get('occ'):
@@ -1241,7 +1280,7 @@ class Engine:
             if not (force and str(reason).strip() and failed):
                 raise ActionError('剩余餐休3分钟及以内或已待出发，原安排已固定，不能调配')
         target, i, slot=self.post(lid,i)
-        if slot.get('hold') or self.held(pid):
+        if (slot.get('hold') or slot.get('hold101')) or self.held(pid):
             raise ActionError('定岗人员不能调换岗位，请先取消定岗')
         if not target.get('active') or not slot.get('open'):
             raise ActionError('只能移动到启用线路的已开岗位')
@@ -1296,7 +1335,7 @@ class Engine:
             return
         if swap_mode not in (None,'posts','with_people'):
             raise ActionError('请选择只交换岗位或岗位和人员一起交换')
-        if any(x.get('hold') for x in L['posts'][min(i,target_i):max(i,target_i)+1]):
+        if any((x.get('hold') or x.get('hold101')) for x in L['posts'][min(i,target_i):max(i,target_i)+1]):
             raise ActionError('涉及定岗岗位，请先取消定岗')
         if swap_mode=='posts':
             left,right=L['posts'][i],L['posts'][target_i]
@@ -1330,7 +1369,7 @@ class Engine:
         R, target_i, right = self.post(target_lid, target_i)
         if mode not in ('posts', 'with_people'):
             raise ActionError('跨线交换请选择只交换岗位或岗位和人员一起交换')
-        if left.get('hold') or right.get('hold'):
+        if (left.get('hold') or left.get('hold101')) or (right.get('hold') or right.get('hold101')):
             raise ActionError('涉及定岗岗位，请先取消定岗')
         for line, index, incoming in ((L, i, right), (R, target_i, left)):
             if any(j != index and x['name'] == incoming['name'] for j, x in enumerate(line['posts'])):
@@ -1368,7 +1407,7 @@ class Engine:
 
     def act_line(self, lid, active, now, actor):
         L = self.line(lid)
-        if not active and any(x.get('hold') for x in L['posts']):
+        if not active and any((x.get('hold') or x.get('hold101')) for x in L['posts']):
             raise ActionError('本线还有定岗人员，请先取消定岗再停用')
         if active:
             L['active'] = True
@@ -1395,6 +1434,8 @@ class Engine:
 
     def act_away(self, pid, reason, now, actor):
         p = self.person(pid)
+        from app.rotation.workflow import finish_continuous
+        finish_continuous(p, now)
         if p['state'] == 'onpost':
             L, i = self.find_post(pid)
             self._leave_line(p, L, i, now)
@@ -1431,6 +1472,8 @@ class Engine:
 
     def act_leave(self, pid, reason, now, actor):
         p = self.person(pid)
+        from app.rotation.workflow import finish_continuous
+        finish_continuous(p, now)
         L, i = self.find_post(pid)
         if L is not None:
             self._leave_line(p, L, i, now)
@@ -1535,8 +1578,10 @@ class Engine:
         return all(p['state'] in ('done', 'excluded') for p in self.P.values())
 
     def end_day(self, now):
+        self.d['hold101Active']=False
         for L in self.d['lines']:
             for x in L['posts']:
+                x.pop('hold101',None)
                 hold = x.pop('hold', None)
                 if hold:
                     self.h.log('post_resume', 'system', hold['pid'], L['id'], x['name'],
@@ -1550,6 +1595,8 @@ class Engine:
                 if L is not None:
                     self._leave_line(p, L, i, now)
                     L['posts'][i]['occ'] = None
+            from app.rotation.workflow import finish_continuous
+            finish_continuous(p,now)
             p['assign'] = None
             p['state'] = 'done'
         self.d['status'] = 'ended'

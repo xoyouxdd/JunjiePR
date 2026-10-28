@@ -15,9 +15,9 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     const health=await context.request.get(base+'/health').then(r=>r.json());await context.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}});
     await page.goto(base+'/rotation-board');await page.locator('.rt-line').first().waitFor();
     assert.equal(await page.locator('[data-tab=settings]').count(),0);assert.equal(await page.locator('#rtClockBar').isVisible(),false);assert.equal(await page.locator('#rtTabs').isVisible(),false);
-    const buttons=page.locator('#rtApp button[data-pid]');assert(await buttons.count());assert(await buttons.evaluateAll(nodes=>nodes.every(n=>n.disabled)));
+    assert.equal(await page.locator('#rtApp button[data-wf-pid]').count(),0);assert.equal(await page.locator('[data-wf-101],[data-wf-rename]').count(),0);
     // The normal workspace inbox exposes only this employee's token-confirmed task.
-    await page.goto(base+'/?view=actionCenter');await page.locator('[data-formal-rotation-todo] .rt-line').waitFor({timeout:12000}).catch(async e=>{console.error(errors,await page.locator('body').innerText());throw e;});
+    await page.goto(base+'/?view=actionCenter');await page.locator('[data-formal-rotation-todo] .rt-task-comparison').waitFor({timeout:12000}).catch(async e=>{console.error(errors,await page.locator('body').innerText());throw e;});
     if(engine==='edge'){
       const cookie=(await context.cookies()).map(c=>c.name+'='+c.value).join('; ');
       const streams=await Promise.all(Array.from({length:15},()=>new Promise((resolve,reject)=>{const req=http.get(base+'/api/rotation-board/stream',{headers:{Cookie:cookie}},res=>{if(res.statusCode!==200){reject(new Error('Stream auth '+res.statusCode));return;}res.once('data',()=>resolve({req,res}));res.on('error',()=>{});});req.on('error',reject);req.setTimeout(12000,()=>{req.destroy();reject(new Error('Stream timeout'));});})));
@@ -43,8 +43,8 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     await context.request.post(base+'/api/logout');assert((await context.request.post(base+'/api/login',{data:{employee_no:'9710010',password:'formal-fixture-2026'}})).ok());
     await page.goto(base+'/rotation-board');await page.locator('.rt-line').first().waitFor();
     assert.equal(await page.locator('[data-tab=records]').count(),0);assert.equal(await page.locator('[data-tab=settings]').count(),0);
-    assert((await page.locator('#rtApp button[data-pid]:not([disabled])').count())>0);
-    await page.locator('#rtApp button[data-pid]').first().click();await page.locator('[role=dialog]').waitFor();assert.equal(await page.locator('[data-a=record]').count(),0);await page.locator('[data-close]').click();
+    assert((await page.locator('#rtApp button[data-wf-pid]:not([disabled])').count())>0);
+    await page.locator('#rtApp button[data-wf-pid]').first().click();await page.locator('[role=dialog]').waitFor();assert.equal(await page.locator('[data-a=record]').count(),0);await page.locator('[data-close]').click();
     await context.request.post(base+'/api/logout');assert((await context.request.post(base+'/api/login',{data:{employee_no:'9710020',password:'formal-fixture-2026'}})).ok());
     await page.goto(base+'/rotation-board');await page.locator('[data-tab=settings]').click();await page.locator('#settingsForm').waitFor();
     assert.equal(await page.locator('[data-reset]:visible').count(),0);assert.equal(await page.locator('#rtClockBar').isVisible(),false);

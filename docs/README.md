@@ -4,6 +4,9 @@
 
 | 文件 | 内容 |
 |---|---|
+| [rotation-workflow-20261028.md](rotation-workflow-20261028.md) | 轮岗独立任务、按线恢复、101及大屏权限 |
+| [workspace-compact-20261027.md](workspace-compact-20261027.md) | 紧凑记录与今日工作、交互趋势、原流程保护及验证 |
+| [third-party-ui.md](third-party-ui.md) | 本地按需界面依赖的来源与许可证 |
 | [video-learning.md](video-learning.md) | 视频学习、分片续传、压缩封面、共享品牌/员工号水印、联网缓存及验证边界 |
 | [mobile-filter-alignment-20261020.md](mobile-filter-alignment-20261020.md) | 四页手机筛选对齐、导出历史完整展示与三引擎验证 |
 | [mobile-upload-compatibility.md](mobile-upload-compatibility.md) | 手机浏览器图片上传共用链路、实收测试与真机验收边界 |

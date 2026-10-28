@@ -12,6 +12,7 @@ function screenView() {
   const day = RT.data.day;
   if (!day) return '<section class="panel rt-empty"><h2>今天的轮岗还没有开始</h2><p>主管发布后，这里会自动显示。</p></section>';
   if (day.status === 'ended') return '<section class="panel rt-empty"><h2>今天的轮岗已结束</h2></section>';
+  if(day.taskWorkflow)return workflowBoardView(nowMin(),false);
   const n = nowMin();
   const posted=new Set(day.lines.flatMap(line=>line.posts.map(post=>post.occ).filter(Boolean)));
   const ps = day.persons.filter(p=>!posted.has(p.pid));
@@ -54,7 +55,7 @@ function screenView() {
 }
 
 RT.render = () => {
-  if (!RT.data) return;
+  if (!RT.data||RT.editingPost) return;
   renderClock();
   const scroll = [...$app.querySelectorAll('.rt-lines,.rt-chips')].map(el => el.scrollTop);
   $app.innerHTML = screenView();

@@ -91,10 +91,35 @@ E_STATE = {'done': '下班', 'away': '暂离／出圈', 'walkback': '下线，�
 
 
 def plan(eng, p, now):
+    cache = getattr(eng, '_read_projection', None)
+    if cache is None:
+        return _build_plan(eng, p, now)
+    plans = cache.setdefault('plans', {})
+    key = (p['pid'], float(now))
+    if key not in plans:
+        plans[key] = _build_plan(eng, p, now)
+    return deepcopy(plans[key])
+
+
+def _build_plan(eng, p, now):
     group = members(eng, p)
     if len(group) < 2:
         return None
-    line = eng.line(p['assign']['line'])
+    cache = getattr(eng, '_read_projection', None)
+    key = (tuple(q['pid'] for q in group), float(now))
+    groups = cache.setdefault('groups', {}) if cache is not None else {}
+    if key not in groups:
+        groups[key] = _group_plan(eng, group, now)
+    result = deepcopy(groups[key])
+    try:
+        result['soloRoutes'] = simulate(eng, group, now, solo=p['pid'])
+    except E.ActionError as exc:
+        result['soloBlocked'] = str(exc)
+    return result
+
+
+def _group_plan(eng, group, now):
+    line = eng.line(group[0]['assign']['line'])
     context = {'epoch': eng.d.get('confirmationEpoch'), 'date': eng.d['date'],
                'closed': eng.d.get('closed'), 'settings': eng.S, 'line': line,
                'occupants': [{k: eng.P[x['occ']].get(k) for k in ('pid', 'state', 'end', 'absences', 'lineStart')}
@@ -119,10 +144,6 @@ def plan(eng, p, now):
     result.update(id=key, confirmed=len(votes))
     for member in result['members']:
         member['confirmed'] = member['pid'] in votes
-    try:
-        result['soloRoutes'] = simulate(eng, group, now, solo=p['pid'])
-    except E.ActionError as exc:
-        result['soloBlocked'] = str(exc)
     return result
 
 

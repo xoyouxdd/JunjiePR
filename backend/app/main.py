@@ -26,6 +26,7 @@ from app.video_worker import start_worker as start_video_worker, stop_worker as 
 from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 from app.runtime_environment import environment_kind, environment_label, validate_runtime_paths
 from app.recognition_timing import RecognitionTimingMiddleware
+from app.request_timing import RequestTimingMiddleware
 
 # Starlette 0.47+ streams file parts to a spooled temp file. The 1MB
 # max_part_size only caps non-file form fields; 100MB materials are files.
@@ -34,6 +35,7 @@ from app.recognition_timing import RecognitionTimingMiddleware
 
 app = FastAPI(title="FZ团队工作台", version=APP_VERSION)
 app.add_middleware(RecognitionTimingMiddleware)
+app.add_middleware(RequestTimingMiddleware)
 
 _STATIC_PAGE_CACHE: dict[str, tuple[float, bytes]] = {}
 
