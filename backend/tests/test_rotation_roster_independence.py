@@ -4,6 +4,7 @@ from test_rotation_temporary import (app,setup,ok,login,upload,SessionLocal,Empl
 from app.rotation.temporary import TemporaryMember,TemporarySession
 from app.rotation.participation import RosterIdentity,contexts
 import pytest
+from copy import deepcopy
 
 
 def ids():
@@ -45,6 +46,10 @@ def live(aid,no):
             p=state['persons'][no];p.update(state='ready',role='rotation',start=0,end=1440,readyAt=now-1,
                 readySince=now-1,breakKind='rest',absences=[],visited=['A1'],line=None,
                 assign={'line':'A1','mode':'push','departAt':now-1})
+            # Materialize the same issued task a real live board has before
+            # comparing a roster import; otherwise the background clock can
+            # legitimately add its taskId between the two snapshots.
+            S.advance(db,cfg,row,state,now)
             S.save_day(db,row,state)
 
 
@@ -194,7 +199,9 @@ def test_live_reimport_refreshes_only_identity_facts_and_keeps_old_events():
             db.info['rotation_formal']=True
             with S.transaction(db):
                 state=S.day_state(S.day_row(db,aid,date.today().isoformat()))
-                before={'person':state['persons'][no],'lines':state['lines']}
+                assert state['persons'][no]['assign']['taskId']
+                before=deepcopy({'person':state['persons'][no],'lines':state['lines'],
+                                 'tasks':state['rotationTasks']})
                 S.DbHooks(db,aid,date.today().isoformat()).log('before_identity_change','合成检查',no,None,None,{})
             a=db.query(UserAccount).join(Employee).filter(Employee.employee_no==no).one();a.enabled=False;db.commit()
         commit(manager,roster,confirm_exceptions='true')
@@ -203,6 +210,7 @@ def test_live_reimport_refreshes_only_identity_facts_and_keeps_old_events():
             with S.transaction(db):
                 state=S.day_state(S.day_row(db,aid,date.today().isoformat()))
                 assert state['persons'][no]==before['person'] and state['lines']==before['lines']
+                assert state['rotationTasks']==before['tasks']
                 S.DbHooks(db,aid,date.today().isoformat()).log('after_identity_change','合成检查',no,None,None,{})
             events=S.day_log(db,aid,date.today().isoformat())
             assert next(e for e in events if e['type']=='before_identity_change')['identity_labels']==[]

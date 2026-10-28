@@ -20,8 +20,9 @@ def reset_today():
         db.info['rotation_formal']=True
         row=db.query(F.RotationDay).filter_by(work_date=date.today().isoformat()).first()
         if row:
-            state=S.day_state(row);state['status']='draft'
-            with S.transaction(db):S.save_day(db,row,state)
+            # Recreate this disposable fixture rather than turning a running day
+            # back into a draft that is correctly locked after its first shift.
+            with S.transaction(db):db.delete(row)
     return seed_today()
 
 
