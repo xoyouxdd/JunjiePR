@@ -47,7 +47,7 @@ class AnnouncementInput(BaseModel):
     summary: str = Field(default="", max_length=500)
     body: str = Field(min_length=1, max_length=20000)
     category: Category
-    scope_kind: Literal["circle", "project"] = "circle"
+    scope_kind: Literal["circle", "project", "all_leads"] = "circle"
     attraction_ids: list[int] = Field(default_factory=list, max_length=20)
     project_id: int | None = None
     tiers: list[Tier] = Field(min_length=1, max_length=5)
@@ -230,6 +230,7 @@ def listing(view: Literal["pending", "history", "favorites", "manage", "training
     mine = {r.version_id: r for r in receipts}
     favorites = {r.announcement_id for r in db.query(AnnouncementFavorite).filter_by(employee_id=user.id)}
     items = []
+    visible_record_ids = {}
     for row in db.query(Announcement).order_by(Announcement.published_at.desc(), Announcement.id.desc()):
         versions = db.query(AnnouncementVersion).filter_by(announcement_id=row.id).order_by(AnnouncementVersion.number.desc()).all()
         current = next(v for v in versions if v.number == row.current_version)
@@ -258,14 +259,32 @@ def listing(view: Literal["pending", "history", "favorites", "manage", "training
             ids = domain.record_ids(db, user, row, current)
             if row.owner_id != user.id and not domain.admin(user) and ids == set():
                 continue
+            visible_record_ids[current.id] = ids
         if category and version.category != category:
             continue
         if q and q.casefold() not in (version.title+version.summary+version.body).casefold():
             continue
         items.append(domain.payload(db, user, row, version))
     total = len(items)
+    selected = items[(page-1)*20:page*20]
+    if view == 'manage' and selected:
+        versions = {item['version_id'] for item in selected if visible_record_ids.get(item['version_id']) != set()}
+        counts = {version_id: {'required': 0, 'completed': 0} for version_id in versions}
+        for version_id, employee_id, status, confirmed_at in db.query(
+                AnnouncementDelivery.version_id, AnnouncementDelivery.employee_id,
+                AnnouncementDelivery.status, AnnouncementDelivery.confirmed_at).filter(
+                    AnnouncementDelivery.version_id.in_(versions),
+                    AnnouncementDelivery.status.notin_(['suspended','exited'])):
+            allowed = visible_record_ids.get(version_id)
+            if allowed is not None and employee_id not in allowed:
+                continue
+            counts[version_id]['required'] += 1
+            counts[version_id]['completed'] += bool(confirmed_at)
+        for item in selected:
+            if item['version_id'] in counts:
+                item['management_counts'] = counts[item['version_id']]
     db.commit()
-    return {"items": items[(page-1)*20:page*20], "total": total, "page": page, "pages": max(1, (total+19)//20)}
+    return {"items": selected, "total": total, "page": page, "pages": max(1, (total+19)//20)}
 
 
 @router.post("")

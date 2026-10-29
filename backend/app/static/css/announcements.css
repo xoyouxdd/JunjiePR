@@ -81,3 +81,35 @@
 @media(max-width:760px) { .announcement-center .announcement-record-group .table-wrap::before { content:"左右滑动查看完整记录";display:block;position:sticky;left:0;width:fit-content;padding:10px 12px;color:#647286;font-size:11px; } }
 @media(max-width:760px) { .ann-empty { min-height:200px;padding:22px 12px; }.ann-empty-symbol { width:54px;height:54px;margin-bottom:13px;border-radius:17px; }.ann-empty-symbol .nav-icon { width:26px;height:26px; }.announcement-center .ann-state-action { margin-top:9px; } }
 @media(min-width:761px) and (max-width:999px) { .ann-feed-tools { display:block;margin-bottom:0; }.ann-filter-row { margin:7px 0 13px; }.announcement-center .ann-personal-tabs { grid-template-columns:repeat(4,minmax(0,1fr));padding:0 12px; } }
+
+/* Compact reading and management layouts; existing controls and permissions remain authoritative. */
+.announcement-center .ann-sidebar{display:none}
+.announcement-center[data-ann-current-view="pending"] .ann-center-header{background:#eaf2ff;border-radius:18px 18px 0 0;padding-top:24px;padding-bottom:20px}
+.announcement-center[data-ann-current-view="pending"] .ann-center-identity h2{font-size:23px}
+.announcement-center .ann-date-tile{display:none}
+.announcement-center:not([data-ann-current-view="manage"]) .announcement-list{gap:0}
+.announcement-center:not([data-ann-current-view="manage"]) .announcement-card{border:0;border-bottom:1px solid var(--ann-line);border-radius:0;box-shadow:none;padding:16px 0}
+.announcement-center:not([data-ann-current-view="manage"]) .announcement-card.has-update{border-left:0}
+.announcement-center:not([data-ann-current-view="manage"]) .announcement-card-main{position:relative;padding-left:50px}
+.announcement-center:not([data-ann-current-view="manage"]) .ann-date-tile{position:absolute;left:0;top:0;display:flex;flex-direction:column;align-items:center;justify-content:center;width:40px;height:48px;border-radius:8px;background:#edf4ff;color:#1464d4;line-height:1.2;font-variant-numeric:tabular-nums}
+.announcement-center .ann-date-tile strong{font-size:16px}.announcement-center .ann-date-tile small{font-size:11px}
+.announcement-center .announcement-card-main>p{-webkit-line-clamp:2}
+.announcement-center[data-ann-current-view="manage"] .announcement-list{gap:0}
+.announcement-center[data-ann-current-view="manage"] .ann-manage-row{border:0;border-bottom:1px solid var(--ann-line);border-radius:0;box-shadow:none;padding:14px 0}
+.announcement-center .ann-management-progress{display:flex;flex-direction:column;gap:3px;color:#173a67;font-variant-numeric:tabular-nums}
+.announcement-center .ann-management-progress small{color:#5b6f86;font-size:12px}
+@media(min-width:1000px){
+ .announcement-center:has(.ann-sidebar)>.ann-center-panel{display:grid;grid-template-columns:160px minmax(0,1fr)}
+ .announcement-center:has(.ann-sidebar) .ann-center-header{grid-column:1/-1}
+ .announcement-center:has(.ann-sidebar) .ann-personal-tabs,.announcement-center:has(.ann-sidebar) .ann-draft-bar,.announcement-center:has(.ann-sidebar) .ann-current-workspace,.announcement-center:has(.ann-sidebar) .announcement-content{grid-column:2;min-width:0}
+ .announcement-center .ann-sidebar{grid-column:1;grid-row:2 / span 5;display:flex;flex-direction:column;gap:3px;background:#f4f7fb;padding:18px 10px;color:#5b6f86}
+ .announcement-center .ann-sidebar strong{padding:8px 10px;font-size:13px}
+ .announcement-center .ann-sidebar button{width:100%;min-height:44px;text-align:left;color:#5b6f86;background:transparent;border:0;padding:8px 10px;font-size:13px}
+ .announcement-center .ann-sidebar button[aria-pressed=true]{color:#1464d4;background:#e3efff}
+ .announcement-center[data-ann-current-view="manage"] .ann-manage-row .announcement-card-main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(110px,.7fr) minmax(110px,.7fr);gap:3px 14px;align-items:center}
+ .announcement-center[data-ann-current-view="manage"] .ann-manage-row .ann-card-top{grid-column:1;grid-row:1}
+ .announcement-center[data-ann-current-view="manage"] .ann-manage-row h3{grid-column:1;grid-row:2}
+ .announcement-center[data-ann-current-view="manage"] .ann-manage-row .ann-card-scope{grid-column:1;grid-row:4}
+ .announcement-center[data-ann-current-view="manage"] .ann-management-progress{grid-column:2;grid-row:1/5}
+ .announcement-center[data-ann-current-view="manage"] .ann-manage-row .announcement-card-footer{grid-column:3;grid-row:1/5;max-width:none}
+}

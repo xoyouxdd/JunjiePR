@@ -7,6 +7,12 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.30.1", "date": "2026-10-30", "status": "candidate",
+        "items": [{"summary": "公告新增所有Lead发布范围",
+                   "detail": "具备有效景点圈发布权限且允许接收层级为Lead的GSM层级发布者，可选择所有Lead，覆盖各有效景点圈的Lead及TA Lead，无需逐圈选择；仅接收该层级，沿用板块授权、查收、签字、版本和交接规则。原按圈及项目发布范围不变；公告员工端突出待查收和紧凑阅读，管理端显示权限范围内的查收进度。",
+                   "audiences": ["all"]}],
+    },
+    {
         "version": "2026.10.29.1", "date": "2026-10-29", "status": "candidate",
         "items": [{"summary": "轮岗超时恢复与任务状态提示修复",
                    "detail": "任务超时后本人确认知晓立即恢复可分配状态，不新增餐休；原任务未转接时可重新承接。已派发任务在餐休及待出发期间显示允许时间和确认期限，仍不得提前上岗。空的加岗岗位区分准备加岗与匹配中，沿用原权限、确认凭据及计时规则。",

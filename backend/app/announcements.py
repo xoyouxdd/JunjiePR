@@ -61,14 +61,14 @@ def grant_config(db, employee_id):
     account = db.query(UserAccount).filter_by(employee_id=employee_id, enabled=True).first()
     today = date.today().isoformat()
     if not employee or not employee.is_active or not account or employee.hired_on and employee.hired_on > today or employee.terminated_on and employee.terminated_on <= today:
-        return {"circles": [], "tiers": [], "categories": [], "projects": []}
+        return {"circles": [], "tiers": [], "categories": [], "projects": [], "all_leads": False}
     codes = {r.code for r in employee_roles(db, employee_id)}
     circles = live_circles(db)
     rows = db.query(AnnouncementGrant).filter_by(employee_id=employee_id).all()
     circle = next((r for r in rows if r.scope_kind == "circle"), None)
     def active(r):
         return r.enabled and r.starts_on <= today and (not r.ends_on or r.ends_on >= today)
-    result = {"circles": [], "tiers": [], "categories": [], "projects": []}
+    result = {"circles": [], "tiers": [], "categories": [], "projects": [], "all_leads": False}
     if codes & {"GSM", "TA_GSM", "AM"}:
         if circle:
             if active(circle):
@@ -77,6 +77,7 @@ def grant_config(db, employee_id):
         else:
             default = list(circles) if codes & {"TA_GSM", "AM"} else ([employee.attraction_id] if employee.attraction_id in circles else [])
             result.update(circles=default, tiers=list(TIERS), categories=CATEGORIES)
+    result['all_leads']=bool(result['circles'] and 'lead' in result['tiers'])
     projects = {p.id: p for p in db.query(AnnouncementProject).filter_by(active=True)}
     for row in rows:
         if row.scope_kind == "project" and row.project_id in projects and active(row):
@@ -94,7 +95,13 @@ def require_publisher(db: Session = Depends(get_db), user: V2User = Depends(curr
 
 def validate_scope(db, employee_id, values):
     config = grant_config(db, employee_id)
-    if values["scope_kind"] == "circle":
+    if values['scope_kind']=='all_leads':
+        if not config['all_leads']:
+            raise HTTPException(403,'未获所有 Lead 公告发布权限')
+        if values['tiers']!=['lead'] or values['attraction_ids'] or values.get('project_id') is not None:
+            raise HTTPException(400,'所有 Lead 仅可选择 Lead／TA Lead，不能附带景点圈、项目或其他层级')
+        allowed_tiers,allowed_categories=['lead'],config['categories']
+    elif values["scope_kind"] == "circle":
         selected = set(values["attraction_ids"])
         if not selected or values.get("project_id") is not None:
             raise HTTPException(400, "请选择景点圈，圈公告不能同时选择项目")
@@ -144,15 +151,19 @@ def audience_context(db):
         if member.project_id in projects:
             memberships.setdefault(member.project_id, set()).add(member.employee_id)
     context = {}
+    circles=live_circles(db)
     for employee in employees:
         roles = ([bases[employee.id]] if bases.get(employee.id) else []) + duties.get(employee.id, [])
         context[employee.id] = {"employee": employee, "tiers": {ROLE_TIERS[r.code] for r in roles if r.code in ROLE_TIERS},
-                                "role_label": " / ".join(r.name for r in roles), "loa": employee.id in loa}
+                                "role_label": " / ".join(r.name for r in roles), "loa": employee.id in loa,
+                                "employee_circle":employee.attraction_id in circles}
     return context, memberships
 
 
 def intended(context, memberships, version):
     circles, tiers = set(unpack(version.attraction_ids_json)), set(unpack(version.tiers_json))
+    if version.scope_kind=='all_leads':
+        return {id for id,data in context.items() if 'lead' in data['tiers'] and data['employee_circle']}
     return {id for id, data in context.items() if data["tiers"] & tiers and (
         data["employee"].attraction_id in circles if version.scope_kind == "circle" else id in memberships.get(version.project_id, set()))}
 
@@ -235,7 +246,7 @@ def record_ids(db, user, announcement, version):
             return None
         # Suspending publication does not remove ordinary management access.
         managed = set(live_circles(db)) if user.has_role("TA_GSM", "AM") else ({user.employee.attraction_id} | set(config["circles"]))
-        ids = {d.employee_id for d in rows if d.attraction_id in managed} if version.scope_kind == "circle" else set()
+        ids = {d.employee_id for d in rows if d.attraction_id in managed} if version.scope_kind in ("circle","all_leads") else set()
         if ids:
             return ids
     if user.has_role("SUPERVISOR", "TA_SUPERVISOR"):
@@ -392,7 +403,7 @@ def handover_center(db, user):
             pending[h.announcement_id] = pending.get(h.announcement_id, 0) + 1
     return {"all_visible": admin(user), "groups": responsibilities.center_groups(db, user, all_rows), "items": [{"id": a.id, "title": v.title, "category": v.category,
         "version": a.current_version, "status": a.status, "scope_kind": v.scope_kind,
-        "scope_label": projects.get(v.project_id, "项目") if v.scope_kind == "project" else "、".join(circles.get(id, str(id)) for id in unpack(v.attraction_ids_json)),
+        "scope_label": '所有 Lead（含 TA Lead）' if v.scope_kind=='all_leads' else projects.get(v.project_id, "项目") if v.scope_kind == "project" else "、".join(circles.get(id, str(id)) for id in unpack(v.attraction_ids_json)),
         "owner": people[a.owner_id], "publisher": people[a.publisher_id], "pending": pending.get(a.id, 0),
         "can_handover": admin(user) or all(responsibilities.manages(db, user, other)
             for other, _ in responsibilities.current_rows(db, responsibilities.scope_key(v)))} for a, v in rows]}
@@ -411,7 +422,7 @@ def payload(db, user, announcement, version, detail=False):
     result = {"id": announcement.id, "version_id": version.id, "version": version.number, "current_version": announcement.current_version,
         "title": version.title, "summary": version.summary, "category": version.category,
         "scope_kind": version.scope_kind, "attraction_ids": unpack(version.attraction_ids_json), "project_id": version.project_id,
-        "scope_label": project.name if project else "、".join(circles.get(id, str(id)) for id in unpack(version.attraction_ids_json)),
+        "scope_label": '所有 Lead（含 TA Lead）' if version.scope_kind=='all_leads' else project.name if project else "、".join(circles.get(id, str(id)) for id in unpack(version.attraction_ids_json)),
         "tiers": unpack(version.tiers_json), "confirmation_level": version.confirmation_level,
         "effective_on": version.effective_on, "expires_on": version.expires_on, "due_on": receipt.due_on if receipt else version.due_on,
         "published_at": announcement.published_at, "updated_at": version.created_at, "owner_id": announcement.owner_id,

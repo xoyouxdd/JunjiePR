@@ -31,6 +31,7 @@ from app.v2_models import (Announcement, AnnouncementVersion, AnnouncementDelive
     GroupLeaderAssignment, GroupMembership, Role, StoredFile, UserAccount, WorkGroup)
 from app.v2_crypto import hash_password
 from app import announcements as domain
+from app.v2_models import EmployeeActingDuty
 
 
 def login(client, name="GSMTEST01"):
@@ -143,6 +144,60 @@ def test_circle_defaults_and_admin_grants_cannot_be_self_escalated(client):
     for number in ["TAGSMTEST01", "AMTEST01"]:
         login(client, number)
         assert len(ok(client.get("/api/announcements/options"))["publisher"]["circles"]) == 3
+
+
+def test_gsm_all_leads_delivers_across_circles_without_expanding_circle_publication(client):
+    login(client)
+    options=ok(client.get('/api/announcements/options'))
+    assert options['publisher']['all_leads'] and len(options['publisher']['circles'])==1
+    foreign=next(c['id'] for c in options['circles'] if c['id'] not in options['publisher']['circles'])
+    lead_id,lead_no=new_employee(foreign)
+    ta_id,_=new_employee(foreign)
+    with SessionLocal() as db:
+        db.query(EmployeeRoleAssignment).filter_by(employee_id=lead_id).one().role_id=db.query(Role).filter_by(code='SUPERVISOR').one().id
+        db.add(EmployeeActingDuty(employee_id=ta_id,role_id=db.query(Role).filter_by(code='TA_SUPERVISOR').one().id,starts_on='2020-01-01'))
+        db.commit()
+    values=form(client,scope_kind='all_leads',attraction_ids=[],tiers=['lead'])
+    announcement=ok(client.post('/api/announcements',json=values))
+    assert announcement['scope_label']=='所有 Lead（含 TA Lead）'
+    assert ok(client.post('/api/announcements',json=values))['id']==announcement['id']
+    managed=ok(client.get('/api/announcements',params={'view':'manage'}))['items']
+    listed=next(item for item in managed if item['id']==announcement['id'])
+    recorded=ok(client.get(f"/api/announcements/{announcement['id']}/records"))['counts']
+    assert listed['management_counts']=={'required':recorded['required'],'completed':recorded['completed']}
+    with SessionLocal() as db:
+        receivers={d.employee_id for d in db.query(AnnouncementDelivery).filter_by(version_id=announcement['version_id'])}
+        assert {lead_id,ta_id}<=receivers
+        non_leads={e.id for e in db.query(Employee).filter(Employee.employee_no.in_(['CMTEST01','TRTEST01','GSMTEST01','AMTEST01','HR01']))}
+        assert not receivers & non_leads
+    assert client.post('/api/announcements',json=form(client,attraction_ids=[c['id'] for c in options['circles']])).status_code==403
+    login(client,lead_no)
+    detail=ok(client.get(f"/api/announcements/{announcement['id']}"))
+    assert detail['receipt'] is not None and not detail['can_edit']
+    assert receipt(client,detail,action='confirm',acknowledged=True).status_code==200
+
+
+@pytest.mark.parametrize('changes',[
+    {'tiers':['frontline']},{'tiers':['lead','gsm']},{'attraction_ids':[1]},{'project_id':1},
+])
+def test_all_leads_rejects_mixed_audience_or_scope(client,changes):
+    login(client)
+    assert client.post('/api/announcements',json=form(client,**{'scope_kind':'all_leads','attraction_ids':[],'tiers':['lead'],**changes})).status_code==400
+
+
+def test_all_leads_respects_grant_pause_and_layer_limit(client):
+    cfg=config(client);gsm=employee(cfg,'GSMTEST01')
+    grant={'employee_id':gsm['id'],'attraction_ids':[gsm['attraction_id']],
+           'starts_on':date.today().isoformat(),'reason':'隔离测试授权限制','tiers':['frontline']}
+    ok(client.post('/api/announcements/admin/grants',json=grant))
+    login(client)
+    assert not ok(client.get('/api/announcements/options'))['publisher']['all_leads']
+    assert client.post('/api/announcements',json=form(client,scope_kind='all_leads',attraction_ids=[],tiers=['lead'])).status_code==403
+    login(client,'HR01')
+    ok(client.post('/api/announcements/admin/grants',json={**grant,'tiers':['lead'],'enabled':False}))
+    login(client)
+    assert not ok(client.get('/api/announcements/options'))['publisher']['all_leads']
+    assert client.post('/api/announcements',json=form(client,scope_kind='all_leads',attraction_ids=[],tiers=['lead'])).status_code==403
 
 
 @pytest.mark.parametrize("account", ["CMTEST01", "SUPTEST01", "TATEST01", "OMTEST01", "HR01"])
@@ -413,6 +468,8 @@ def test_record_scope_and_signature_privacy_are_enforced_server_side(client):
     login(client)
     scoped = ok(client.get(f"/api/announcements/{a['id']}/records"))
     assert scoped["scoped"] and scoped["items"] and all(r["attraction_id"] == own_circle for r in scoped["items"])
+    listed = next(item for item in ok(client.get("/api/announcements?view=manage"))["items"] if item["id"] == a["id"])
+    assert listed["management_counts"] == {key: scoped["counts"][key] for key in ("required", "completed")}
     assert client.get(signed["signature_url"]).status_code == 200
     login(client, "SUPTEST01")
     lead = ok(client.get(f"/api/announcements/{a['id']}/records"))
