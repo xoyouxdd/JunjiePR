@@ -123,7 +123,9 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   assert.equal(afterReceive.person.readyAt,beforeReceive.person.readyAt);
   assert.equal(afterReceive.person.task.deadlineAt,beforeReceive.person.task.deadlineAt);
   await receiverContext.close();
-  assert((await manager.request.post(base+'/__fixture/timeout',{data:{waiting:true}})).ok());
+  const waitingSetup=await manager.request.post(base+'/__fixture/timeout',{data:{waiting:true,materialize_before_timeout:true}});
+  assert(waitingSetup.ok(),await waitingSetup.text());
+  assert.equal((await waitingSetup.json()).materialized_before_reset,true);
   await screenPage.reload();await timedOut.waitFor();
   const waitingOwner=await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json());
   await timedOut.click();await screenPage.locator('[data-ok]').click();

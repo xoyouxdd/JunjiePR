@@ -29,11 +29,19 @@ def timeout_transfer(payload: dict | None = None):
         db.info['rotation_formal']=True
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
-            owner=state['persons']['9710000'];owner['readyAt']=now-4;owner['assign']['departAt']=now-4
-            receiver=state['persons']['9710010'];receiver.update(state='rest',readyAt=now+(10 if payload and payload.get('waiting') else 2),assign=None)
             eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
+            if payload and payload.get('materialize_before_timeout'):
+                W.plan(eng,now)  # Reproduce a background tick between fixture transactions.
+            materialized=bool((state['persons']['9710000'].get('assign') or {}).get('taskId'))
+            # A prior background tick may already have bound a fresh task. Its
+            # deadline is independent of assign.departAt, so rebuild both here.
+            state['rotationTasks']={}
+            owner=state['persons']['9710000'];owner['readyAt']=now-4;owner['assign']['departAt']=now-4
+            owner['assign'].pop('taskId',None)
+            receiver=state['persons']['9710010'];receiver.update(state='rest',readyAt=now+(10 if payload and payload.get('waiting') else 2),assign=None)
             W.plan(eng,now-4);W.tick(eng,now);S.save_day(db,row,state)
-    return {'ok':True}
+            assert owner.get('entryHold'), 'Timeout fixture must produce an expired owner task'
+    return {'ok':True,'materialized_before_reset':materialized}
 
 @app.post('/__fixture/room')
 def room(payload: dict):
