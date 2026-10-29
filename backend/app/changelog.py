@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.10.30.2", "date": "2026-10-30", "status": "candidate",
+     "items": [{"summary": "个人头像装扮更新", "detail": "扩充头像素材并完善个人头像装扮及偏好保存，沿用现有身份和访问权限。", "audiences": ["all"]}]},
     {
         "version": "2026.10.30.1", "date": "2026-10-30", "status": "candidate",
         "items": [{"summary": "公告新增所有Lead发布范围",

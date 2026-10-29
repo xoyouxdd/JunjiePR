@@ -81,6 +81,13 @@ class EmployeeAvatarPreference(Base):
     frame: Mapped[str] = mapped_column(String(40), default="plain")
 
 
+class EmployeeAvatarWardrobe(Base):
+    """Private favorites, recent choices and outfit presets."""
+    __tablename__ = "employee_avatar_wardrobes"
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), primary_key=True)
+    data: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+
+
 class EmployeeHonorStyle(Base):
     """Self-only presentation preference; never participates in scoring."""
 

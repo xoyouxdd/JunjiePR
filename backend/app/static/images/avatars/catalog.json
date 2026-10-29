@@ -1358,6 +1358,114 @@
       },
       "generator": "built-in image_gen",
       "prompt_subject": "Flash the sloth from Zootopia, recognizable slow smiling sloth face in shirt and tie, hands on a small steering wheel at the bottom of the portrait"
+    },
+    {
+      "key": "new-zoo-clawhauser",
+      "name": "豹警官·新造型",
+      "group": "疯狂动物城 · 手绘新造型",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "new-zoo-clawhauser-64.webp",
+          "bytes": 1598,
+          "sha256": "095d1c380f6d9fd352c0cefa11f3a49ae3ff83a49b97e92c375fdb8fb7515371"
+        },
+        "160": {
+          "file": "new-zoo-clawhauser-160.webp",
+          "bytes": 7334,
+          "sha256": "c9fde7674218ca8362a0a734fd78c35782d33a88e98c30ce905a4eba611ec64e"
+        }
+      }
+    },
+    {
+      "key": "new-zoo-flash",
+      "name": "闪电·新造型",
+      "group": "疯狂动物城 · 手绘新造型",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "new-zoo-flash-64.webp",
+          "bytes": 1392,
+          "sha256": "35ffd654dde490c7fc991d4ef420c60589e758fce998b6ef51fe16d25ad9141a"
+        },
+        "160": {
+          "file": "new-zoo-flash-160.webp",
+          "bytes": 7246,
+          "sha256": "fd42e0b172dd9bf50f572cb2ea35cb5aa5205078cf1fa9ac8755086f34f201db"
+        }
+      }
+    },
+    {
+      "key": "new-zoo-gazelle",
+      "name": "夏奇羊·新造型",
+      "group": "疯狂动物城 · 手绘新造型",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "new-zoo-gazelle-64.webp",
+          "bytes": 1546,
+          "sha256": "08ae8c164146952e07f9316cbe38f3973ea3d448a68a599535878144f33e2ffb"
+        },
+        "160": {
+          "file": "new-zoo-gazelle-160.webp",
+          "bytes": 7236,
+          "sha256": "c0384857415ce821e471d9a632eb4d1d37a80875a9ef92040f61912715d2eb20"
+        }
+      }
+    },
+    {
+      "key": "new-zoo-finnick",
+      "name": "芬尼克·新造型",
+      "group": "疯狂动物城 · 手绘新造型",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "new-zoo-finnick-64.webp",
+          "bytes": 1400,
+          "sha256": "244cd32f918db8d26cc84fd260e2ca846d45334b9138aca1230955a26d94ae6f"
+        },
+        "160": {
+          "file": "new-zoo-finnick-160.webp",
+          "bytes": 6826,
+          "sha256": "854b8f95c988b34633113e291ab247f2d28edf0191c116591eaa6f15daf239cd"
+        }
+      }
+    },
+    {
+      "key": "new-zoo-frufru",
+      "name": "露露·新造型",
+      "group": "疯狂动物城 · 手绘新造型",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "new-zoo-frufru-64.webp",
+          "bytes": 1538,
+          "sha256": "049a219300c2a3bc974b510af2f8fab87477a086c360adc77ba94b24772829e0"
+        },
+        "160": {
+          "file": "new-zoo-frufru-160.webp",
+          "bytes": 7836,
+          "sha256": "c85beee1233ac765877a95f7407b7531384c061e5b76741cdbb0ed22364b2355"
+        }
+      }
+    },
+    {
+      "key": "new-zoo-yax",
+      "name": "牦牛亚克斯·新造型",
+      "group": "疯狂动物城 · 手绘新造型",
+      "kind": "character-concept",
+      "images": {
+        "64": {
+          "file": "new-zoo-yax-64.webp",
+          "bytes": 1580,
+          "sha256": "16fbf74abe3d264bb772ee5031482081e3c26ec09ee501699c8b580c0a41869d"
+        },
+        "160": {
+          "file": "new-zoo-yax-160.webp",
+          "bytes": 8132,
+          "sha256": "15009b96f03db31b69e67957f071d1b6c8b60e56b52ad9dc206c9c28e73a0495"
+        }
+      }
     }
   ]
 }

@@ -120,3 +120,26 @@ def test_catalog_assets_are_local_small_and_complete():
             assert len(data) == meta['bytes'] < limit
             assert hashlib.sha256(data).hexdigest() == meta['sha256']
             assert data[:4] == b'RIFF' and data[8:12] == b'WEBP'
+
+
+def test_wardrobe_is_account_scoped_and_validated(system):
+    _, client, _, _, make, switch, _, _ = system
+    first, second = make('wardrobe-first'), make('wardrobe-second')
+    key = next(iter(avatar_catalog()))
+    switch(first)
+    data = {'favorites': [key], 'recent': [key], 'presets': [{'avatar_key': key, 'frame': 'thumb'}, None, None]}
+    assert client.put('/api/self-avatar-wardrobe', json=data).status_code == 200
+    assert client.get('/api/self-avatar-wardrobe').json() == data
+    assert client.put('/api/self-avatar', json={'avatar_key': key, 'frame': 'thumb'}).status_code == 200
+    assert client.put('/api/self-avatar-wardrobe', json={**data, 'favorites': ['invalid']}).status_code == 422
+    assert client.get('/api/self-avatar-wardrobe').json() == data
+    switch(second)
+    assert client.get('/api/self-avatar-wardrobe').json() == {'favorites': [], 'recent': [], 'presets': [None, None, None]}
+
+
+@pytest.mark.parametrize('role', ['HR_CIRCLE', 'HR_ADMIN'])
+def test_hr_cannot_access_wardrobe(system, role):
+    _, client, _, _, make, switch, _, _ = system
+    switch(make('wardrobe-hr-'+role, role=role), role)
+    assert client.get('/api/self-avatar-wardrobe').status_code == 403
+    assert client.put('/api/self-avatar-wardrobe', json={'favorites': [], 'recent': [], 'presets': [None, None, None]}).status_code == 403

@@ -27,7 +27,7 @@ from app.excel_presentation import finalize_statistics_workbook, save_export_wor
 from app.score_queries import employee_month_scores
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import get_db
-from app.v2_models import Attraction, AuditLog, Employee, EmployeeAvatarPreference, EmployeeHonorMemory, EmployeeHonorStyle, EmployeeMonthRankSnapshot
+from app.v2_models import Attraction, AuditLog, Employee, EmployeeAvatarPreference, EmployeeAvatarWardrobe, EmployeeHonorMemory, EmployeeHonorStyle, EmployeeMonthRankSnapshot
 from app.services.avatars import avatar_catalog, own_avatar
 from app.v2_watermark import watermark_workbook
 from app.services.attendance import ensure_month_attendance
@@ -49,9 +49,13 @@ class AvatarPreferenceUpdate(BaseModel):
     frame: str = "plain"
 
 
+AVATAR_FRAMES = (("plain", "简洁"), ("autumn", "秋日金"), ("ocean", "晴空蓝"),
+                 ("forest", "森林绿"), ("winter", "冬日冰蓝"), ("thumb", "点赞鼓励"),
+                 ("sun", "暖阳能量"), ("spark", "星芒闪耀"), ("neon", "霓虹光环"), ("cosmic", "星际流光"))
+
+
 def avatar_frame_choices(db, user):
-    choices = [{"key": key, "label": label} for key, label in
-               (("plain", "简洁"), ("autumn", "秋日金"), ("ocean", "晴空蓝"), ("forest", "森林绿"))]
+    choices = [{"key": key, "label": label} for key, label in AVATAR_FRAMES]
     if monthly_ranks_enabled() and user.base_role.code in SCORED_BASE_CODES:
         months = db.query(EmployeeMonthRankSnapshot.score_month).filter(
             EmployeeMonthRankSnapshot.employee_id == user.id,
@@ -86,7 +90,7 @@ def save_self_avatar(payload: AvatarPreferenceUpdate, response: Response,
         raise HTTPException(422, "请选择头像库中的有效头像")
     # Saving ordinary frames never loads monthly ranks. A medal frame validates
     # only its selected month; opening the wardrobe loads the bounded history.
-    frames = [{"key": key} for key in ("plain", "autumn", "ocean", "forest")]
+    frames = [{"key": key} for key, _ in AVATAR_FRAMES]
     match = re.fullmatch(r"medal:(\d{4}-(?:0[1-9]|1[0-2])):(0|10|20|30|40|50|60|70|80|90)", payload.frame)
     if match and monthly_ranks_enabled() and user.base_role.code in SCORED_BASE_CODES:
         month, tier = match.groups()
@@ -108,6 +112,58 @@ def save_self_avatar(payload: AvatarPreferenceUpdate, response: Response,
         db.rollback()
         raise HTTPException(409, "头像刚刚被其他页面更新，请重新打开后保存")
     return own_avatar(db, user.id)
+
+
+class AvatarOutfit(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    avatar_key: str
+    frame: str
+
+
+class AvatarWardrobeUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    favorites: list[str]
+    recent: list[str]
+    presets: list[AvatarOutfit | None]
+
+
+def _wardrobe_access(user):
+    if user.base_role.code in {"HR_CIRCLE", "HR_ADMIN"} or getattr(user, "rotation_temporary", False):
+        raise HTTPException(403, "该账号不支持员工头像装扮")
+
+
+@router.get("/self-avatar-wardrobe")
+def get_avatar_wardrobe(response: Response, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    _wardrobe_access(user)
+    response.headers.update({"Cache-Control": "private, no-store", "Vary": "Cookie"})
+    row = db.get(EmployeeAvatarWardrobe, user.id)
+    return json.loads(row.data) if row else {"favorites": [], "recent": [], "presets": [None, None, None]}
+
+
+@router.put("/self-avatar-wardrobe")
+def save_avatar_wardrobe(payload: AvatarWardrobeUpdate, response: Response,
+                         db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    _wardrobe_access(user)
+    response.headers.update({"Cache-Control": "private, no-store", "Vary": "Cookie"})
+    catalog = avatar_catalog()
+    if len(payload.favorites) > 100 or len(payload.recent) > 6 or len(payload.presets) != 3:
+        raise HTTPException(422, "头像收藏或搭配数量无效")
+    if any(k not in catalog for k in payload.favorites + payload.recent):
+        raise HTTPException(422, "请选择头像库中的有效头像")
+    allowed = {key for key, _ in AVATAR_FRAMES}
+    for outfit in payload.presets:
+        if outfit and (outfit.avatar_key not in catalog or (outfit.frame not in allowed and not re.fullmatch(r"medal:\d{4}-(?:0[1-9]|1[0-2]):(?:0|10|20|30|40|50|60|70|80|90)", outfit.frame))):
+            raise HTTPException(422, "搭配中的头像或边框无效")
+    data = payload.model_dump()
+    data["favorites"] = list(dict.fromkeys(data["favorites"]))
+    data["recent"] = list(dict.fromkeys(data["recent"]))
+    row = db.get(EmployeeAvatarWardrobe, user.id)
+    if row is None:
+        row = EmployeeAvatarWardrobe(employee_id=user.id)
+        db.add(row)
+    row.data = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    db.commit()
+    return data
 
 
 class HonorPreferenceUpdate(BaseModel):
