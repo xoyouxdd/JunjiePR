@@ -11,6 +11,37 @@ NODE = shutil.which("node")
 ROOT = Path(__file__).parents[1]
 
 
+@pytest.mark.skipif(not NODE, reason="Node is needed for the real JavaScript renderer")
+@pytest.mark.parametrize('state,expected',[
+    ('future','待加 10:00'),('matching','匹配中'),('preparing','准备加岗'),
+    ('occupied','worker'),('vacant','空岗'),('cancelled','未开'),
+])
+def test_opening_label_is_shared_by_board_and_screen(state,expected):
+    script=r"""
+const fs=require('fs'),vm=require('vm');
+const input=JSON.parse(fs.readFileSync(0,'utf8'));
+const ctx=vm.createContext({console,location:{pathname:'/rotation-board'},
+  sessionStorage:{getItem:()=>null},document:{getElementById:()=>null,addEventListener:()=>{}},input});
+vm.runInContext(fs.readFileSync(input.common,'utf8'),ctx);
+vm.runInContext(`
+const post={name:'new-post',key:'new-key',open:!['future','cancelled'].includes(input.state),
+  openAt:input.state==='vacant'?null:'10:00',opened:input.state!=='future',occ:input.state==='occupied'?'worker':null,
+  openingStatus:['matching','preparing'].includes(input.state)?input.state:null};
+const day={taskWorkflow:1,persons:[{pid:'worker',name:'worker',state:'onpost',flags:[],tags:[]}],lines:[]};
+RT.data={day};
+const line={id:'A1',active:true,posts:[post]};
+output=[lineCard(line,600,true),lineCard(line,600,false)];
+if(input.state==='future')output=[lineCard(line,599,true),lineCard(line,599,false)];
+`,ctx);
+process.stdout.write(JSON.stringify(ctx.output));
+"""
+    result=subprocess.run([NODE,'-e',script],input=json.dumps({'state':state,'common':str(ROOT/'app/static/js/rotation-common.js')}),encoding='utf-8',capture_output=True)
+    assert result.returncode==0,result.stderr
+    for markup in json.loads(result.stdout):
+        assert f'>{expected}</span>' in markup
+        if state in ('matching','preparing'):assert '>空岗</span>' not in markup
+
+
 @pytest.mark.skipif(not NODE, reason="Node is needed for the real JavaScript renderers")
 @pytest.mark.parametrize("kind,expected", [("推7点", "准备休息"), ("推下班", "准备下班"), ("推出圈", "准备出圈"), (None, None)])
 def test_pending_replacement_has_consistent_status_in_every_view(kind, expected):

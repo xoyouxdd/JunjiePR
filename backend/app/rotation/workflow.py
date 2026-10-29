@@ -161,6 +161,14 @@ def replan(eng, now, lines=None, reason='现场调整', affected=None):
     return changed
 
 
+def acknowledge_timeout(eng, p, now):
+    """Release the timeout hold without starting another rest/meal period."""
+    p.pop('entryHold', None)
+    p['taskTimeout'].update(acknowledged=True, acknowledgedAt=now)
+    p.update(state='ready', readyAt=now, readySince=now, breakKind='rest', assign=None)
+    p.pop('_taskRefresh', None)
+
+
 def tick(eng, now):
     changed = False
     closed=sorted([t for t in eng.d.get('rotationTasks',{}).values() if t['status'] not in ACTIVE],
@@ -185,7 +193,10 @@ def tick(eng, now):
         if task['status'] == 'waiting_transfer' and valid(eng, task):
             candidates = []
             for p in eng.P.values():
-                if p.get('entryHold') or (p.get('assign') or {}).get('taskId') or p['pid'] in task.get('previousOwners',[]) or p.get('state') not in ('ready','rest','meal') or p.get('role') not in ('rotation','op'):
+                if p.get('entryHold') or (p.get('assign') or {}).get('taskId') or p.get('state') not in ('ready','rest','meal') or p.get('role') not in ('rotation','op'):
+                    continue
+                acknowledgement=p.get('taskTimeout') or {}
+                if p['pid'] in task.get('previousOwners',[]) and not (acknowledgement.get('task')==task['id'] and acknowledgement.get('acknowledged')):
                     continue
                 at = max(now, p.get('readyAt') or now, task['template'].get('notBefore', 0))
                 if at > now+3+EPS or not eng.can_board(p, at, now):
@@ -195,6 +206,8 @@ def tick(eng, now):
                 at, _, _, p = min(candidates, key=lambda c:c[:3])
                 task.update(owner=p['pid'], allowedAt=at, deadlineAt=at+3,
                             status='assigned', revision=task['revision']+1)
+                if task.get('transferredFrom')==p['pid']:
+                    task.pop('transferredFrom',None)
                 task['moves'][0]['pid'] = p['pid']
                 bind(eng,p,task)
                 if task['template']['mode']=='push7':
@@ -203,7 +216,7 @@ def tick(eng, now):
                     if '推7点' not in p['flags']:p['flags'].append('推7点')
                 for pid in task.get('previousOwners', []):
                     if eng.P[pid].get('taskTimeout',{}).get('task') == task['id']:
-                        eng.P[pid]['taskTimeout']['transferredTo'] = p['pid']
+                        eng.P[pid]['taskTimeout']['transferredTo'] = p['pid'] if pid!=p['pid'] else None
                 eng.h.log('task_transfer','system',p['pid'],task['line'],None,
                           {'task':task['id'],'from':task.get('transferredFrom'),'allowedAt':at,'deadlineAt':at+3})
                 changed = True
@@ -239,6 +252,13 @@ def _build_batch(eng, line, people, at, now):
             if target not in available or final[target] is not None: target = None
         if target is None: continue
         path = [target] if a['mode']=='push7' else [i for i in available if i<=target]
+        if a['mode']=='opening':
+            # Adding a post must enter from the line's first eligible post.
+            # A pending route may reserve that prefix; wait instead of entering
+            # halfway down the line or directly at the new post.
+            path=[i for i,post in enumerate(line['posts']) if i<=target
+                  and available_at(post,at) and not held(post)]
+            if any(i not in available for i in path):continue
         target_pid = final[target]
         old = [final[i] for i in path if final[i] and final[i]!=target_pid]
         replacement = [p['pid']]+old

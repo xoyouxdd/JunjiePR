@@ -34,7 +34,7 @@ function personalTaskComparison(p){
 }
 
 function personalShift(p){
-  const part=value=>{const h=Math.floor(value/60)%24,m=Math.floor(value%60);return `${h%12||12}${m?String(m).padStart(2,'0'):''}`;};
+  const part=value=>{const h=Math.floor(value/60)%24,m=Math.floor(value%60);return `${h}${m?String(m).padStart(2,'0'):''}`;};
   return `${part(p.start)}-${part(p.end)}`;
 }
 function personalConfirmation(p,action,data,pending,result){
@@ -55,11 +55,11 @@ function personalConfirmation(p,action,data,pending,result){
     <h3>${room?'回休息室确认':'上岗前确认'}</h3>
     ${room?`<p class="rt-confirm-lead">实际到达休息室后，再确认。</p>${source?`<div class="rt-confirm-origin"><span>本次下岗</span><strong>${esc(source.line)} · ${esc(source.post)}</strong></div>`:''}
     ${ending?`<p class="rt-confirm-rule">${outcome}</p>`:arrived?`<div class="rt-confirm-result" role="status"><strong>${selected==='meal'?'吃饭':'休息'}已开始</strong><p>至 ${hm(p.readyAt)}，以系统显示的餐休倒计时为准。</p></div>`:`<fieldset class="rt-confirm-choices"><legend>本次安排<small>${p.mealOptions?.canChoose?'当前可选择休息或吃饭':'按当前餐休规则安排'}</small></legend>${choices}</fieldset><p class="rt-confirm-rule">从本次确认开始计时，<br>以系统显示的餐休倒计时为准。</p>`}`:
-    `<div class="rt-confirm-destination"><span>本次任务</span><strong>${destination}</strong><small>${t?'个人独立执行':''}</small></div>${t?`<div class="rt-confirm-times"><span>允许出发<strong>${hm(t.allowedAt)}</strong></span><span>确认截止<strong>${hm(t.deadlineAt)}</strong></span></div>`:''}${accepted?`<div class="rt-confirm-result" role="status"><strong>已确认上岗安排</strong><p>现在前往 ${destination}，按接替路线通知并接替。</p></div>`:''}`}
+    `<div class="rt-confirm-destination"><span>本次任务</span><strong>${destination}</strong><small>${t?'个人独立执行':''}</small></div>${t?`<div class="rt-confirm-times"><span>允许出发<strong>${hm(t.allowedAt)}</strong></span><span>确认截止<strong>${hm(t.deadlineAt)}</strong></span></div><p class="field-hint">本轮任务已派发。${data.clock.minute<t.allowedAt?`餐休剩 ${Math.max(0,Math.ceil((p.readyAt??data.clock.minute)-data.clock.minute))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(t.allowedAt-data.clock.minute))} 分钟；到时才可确认。`:'已到允许出发时间，请按任务前往。'}</p>${t.transferredFromName?`<p class="rt-transfer">任务转接自 ${esc(t.transferredFromName)}</p>`:''}`:''}${accepted?`<div class="rt-confirm-result" role="status"><strong>已确认上岗安排</strong><p>现在前往 ${destination}，按接替路线通知并接替。</p></div>`:''}`}
     ${arrived&&a?`<div class="rt-confirm-destination"><span>${p.assignmentLocked?'下一次上岗任务已派发':'下一次预计安排 · 正式派发前可能调整'}</span><strong>${destination}</strong><small>${hm(a.departAt)} 允许出发，餐休结束后才可确认。</small></div>`:''}
     ${p.postHold?`<p class="field-hint">持续定岗 · ${hm(p.postHold.since)}起 · ${esc(p.postHold.reason)}</p>`:''}
     ${!room&&!accepted?'<p class="rt-confirm-notice">看清任务后确认，前往指定岗位通知并接替。</p>':''}
-    ${pending?'<p role="status">上次提交结果待核对，可刷新或使用原步骤重试。</p><button type="button" class="primary" data-rotation-retry>重试本次确认</button>':action?`<button type="button" class="primary" data-rotation-task="${action}">${room?'确认已到休息室':'确认去上岗'}</button>`:`<button type="button" class="primary" disabled>${room?'已确认':'已确认上岗安排'}</button>`}
+    ${pending?'<p role="status">上次提交结果待核对，可刷新或使用原步骤重试。</p><button type="button" class="primary" data-rotation-retry>重试本次确认</button>':action?`<button type="button" class="primary" data-rotation-task="${action}" ${action==='depart'&&!p.canDepart?'disabled':''}>${room?'确认已到休息室':'确认去上岗'}</button>`:`<button type="button" class="primary" disabled>${room?'已确认':'已确认上岗安排'}</button>`}
     ${receipt}${accepted&&data.line?`<details class="rt-confirm-line"><summary>当前线路岗位详情</summary>${taskLine(data.line,p.pid)}</details>`:''}
   </section>`;
 }
@@ -102,7 +102,7 @@ function mountRotationTasks(host,request,onComplete){
       if(personalEmpty){personalEmpty.hidden=!!p;personalEmpty.textContent='当前没有已发布的本人轮岗安排，请等待主管更新班表。';}
       if(!p){host.innerHTML=scopeHtml;bindScope();return;}
       const g=p.entryGroup,voted=g?.members.find(m=>m.pid===p.pid)?.confirmed;
-      const a=p.assign,action=p.entryHold?'entry_return':(['walkback','pending'].includes(p.state)||(p.role==='op'&&['op','notyet'].includes(p.state)))?'arrive':p.state==='ready'&&p.canDepart&&!voted&&!g?.blocked?'depart':null;
+      const a=p.assign,action=p.entryHold?'entry_return':(['walkback','pending'].includes(p.state)||(p.role==='op'&&['op','notyet'].includes(p.state)))?'arrive':((p.task?.status==='assigned'&&['rest','meal','ready'].includes(p.state))||(p.state==='ready'&&p.canDepart))&&!voted&&!g?.blocked?'depart':null;
       const waiting=p.scheduledRestStart!==null&&p.scheduledRestStart!==undefined;
       const status=waiting?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:['rest','meal'].includes(p.state)?`${p.state==='meal'?'吃饭':'休息'}至 ${hm(p.readyAt)}`:p.state==='heading'?`前往 ${esc(a?.line||'')} 线，预计${hm(p.arriveAt)}到岗`:p.state==='onpost'?`已确认安排 · ${esc(p.line)}线 · ${esc(p.post)}`:p.state==='ready'&&!action?'等待上岗时间':action==='arrive'?'待确认休息／吃饭':p.state==='done'?'当日轮岗已结束':'请留意当日轮岗安排';
       const result=data.confirmations?.find(r=>!['reversed','superseded'].includes(r.status));
@@ -121,7 +121,7 @@ function mountRotationTasks(host,request,onComplete){
         else panel.insertAdjacentHTML('beforeend',html);
       }
       if(g){panel.insertAdjacentHTML('beforeend',entryCard(p));if(p.canDepart&&!g.soloBlocked)panel.insertAdjacentHTML('beforeend','<button type="button" class="secondary" data-entry-single>同行人未到场，调整为单人上岗</button>');}
-      if(p.entryHold)panel.insertAdjacentHTML('afterbegin',`<p role="status">${p.taskTimeout?esc(p.taskTimeout.line)+' · '+esc(p.taskTimeout.entryPost)+'任务超时，'+(p.taskTimeout.transferredToName?'已转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'正在等待转接')+'；确认知晓后重新领取。':'本次同行任务已调整，请本人到场后确认，重新领取上岗安排。'}</p>`);
+      if(p.entryHold)panel.insertAdjacentHTML('afterbegin',`<p role="status">${p.taskTimeout?esc(p.taskTimeout.line)+' · '+esc(p.taskTimeout.entryPost)+'任务超时，'+(p.taskTimeout.transferredToName?'已转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'正在等待转接')+'；确认后立即分配，不再增加休息。原任务未转接时可接回。':'本次同行任务已调整，请本人到场后确认，重新领取上岗安排。'}</p>`);
       if(p.upcomingShift)panel.insertAdjacentHTML('afterbegin',`<p>即将上班 · ${hm(p.start)}–${hm(p.end)}${p.previewAssign?` · 预计进入 ${esc(p.previewAssign.line)}线 · ${esc(p.previewAssign.entryPost)}（上岗时再次核对）`:''}</p>${p.previewAssign?.group?`<ul>${entryRoutes(p.previewAssign.group.routes)}</ul>`:''}`);
       if(action==='entry_return')host.querySelector('[data-rotation-task]').textContent=p.taskTimeout?'确认知晓，重新领取':'本人已到场，重新领取安排';
       if(g&&action==='depart')host.querySelector('[data-rotation-task]').textContent='确认上岗安排';
@@ -134,7 +134,7 @@ function mountRotationTasks(host,request,onComplete){
       }
       if(result?.status==='waiting'){const hint=host.querySelector('.field-hint');if(hint)hint.textContent='已接受安排，请先等待同行人确认齐再一起出发；尚未更新岗位。';}
       if(result?.status==='superseded'){const hint=host.querySelector('.field-hint');if(hint)hint.textContent='此前同行安排已调整，旧确认不再执行，请查看最新任务。';}
-      if(result?.action==='entry_return'){const hint=host.querySelector('.field-hint');if(hint)hint.textContent='已确认本人到场，已重新领取最新安排。';}
+      if(result?.action==='entry_return'){const hint=host.querySelector('.field-hint');if(hint)hint.textContent=p.taskTimeout?'已恢复可分配状态，立即匹配任务，不新增休息时间。':'已确认本人到场，已重新领取最新安排。';}
       host.querySelector('[data-entry-single]')?.addEventListener('click',()=>submit('depart',false,true));
       if(g?.members.length>2&&p.canDepart){
         const single=host.querySelector('[data-entry-single]');if(single)single.textContent='其他同行人均未到场，改为单人';
@@ -164,6 +164,7 @@ function mountRotationTasks(host,request,onComplete){
   }
   async function submit(action,retry=false,single=false){
     if(busy||host.dataset.scopeLoading||!data?.person)return;
+    if(!retry&&action==='depart'&&!data.person.canDepart){toast('餐休未结束或尚未到允许出发时间',true);return;}
     busy=true;
     const p=data.person,meal=host.querySelector('[name=formalRotationMeal]:checked')?.value||'rest';
     let completed=false;
@@ -173,7 +174,7 @@ function mountRotationTasks(host,request,onComplete){
       const a=p.assign;
       if(single&&!await confirmScope('确认其他同行人未到场',`请确认 ${p.entryGroup.members.filter(m=>m.pid!==p.pid).map(m=>esc(m.name)).join('、')} 暂未到场。单人安排将优先接替下班／出圈任务：<ul>${entryRoutes(p.entryGroup?.soloRoutes)}</ul>请核对以上新路径。同行人已确认安排时不能使用此模式。`))return;
       if(action==='entry_adjust'){if(!await confirmScope('重试同行组合调整','沿用上次提交的组合预览；仅调整任务，剩余人员仍需重新确认上岗。'))return;}
-      else if(action==='entry_return'){if(!await confirmScope('确认本人已到场','重新领取最新安排，本次操作不会直接上岗。'))return;}
+      else if(action==='entry_return'){if(!await confirmScope('确认本人已到场',p.taskTimeout?'确认后立即恢复可分配状态，不新增休息时间。原任务尚未转接时可重新承接；已经转给他人的任务保持不变。':'重新领取最新安排，本次操作不会直接上岗。'))return;}
       else if(p.entryGroup&&action==='depart'){if(!single&&!await confirmScope('确认上岗安排',`${entryCard(p)}确认后请在出发前等待同行人，全员确认后一起前往，现场无需再次操作手机。`))return;}
       else
       if(!await confirmScope(action==='depart'?'确认去上岗':'确认已到休息室',action==='depart'?`进入 ${esc(a?.line||'')}线 · ${esc(a?.entryPost||'入口岗位')}。${a?.targetName?'按原推岗规则替换 '+esc(a.targetName)+'。':''}<ul>${entryRoutes(p.departureRoutes)}</ul>确认表示接受安排并前往执行。下线人员回休息室后确认休息／吃饭。`:`请确认本人已到达休息室。${p.arrivalOutcome==='done'?'本次确认后结束当日轮岗。':p.arrivalOutcome==='away'?'本次确认后按原安排转为圈外状态。':p.mealOptions?.forced?'本次安排吃饭。':meal==='meal'?'本次选择吃饭。':'本次选择休息。'}`))return;

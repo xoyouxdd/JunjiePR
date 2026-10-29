@@ -19,6 +19,22 @@ def assignment_window(payload: dict):
 def pool():
     return {'checked_out':engine.pool.checkedout()}
 
+@app.post('/__fixture/timeout')
+def timeout_transfer(payload: dict | None = None):
+    from app.v2_database import SessionLocal
+    from app.rotation import service as S, workflow as W
+    from datetime import date
+    aid=seed_cohort()
+    with SessionLocal() as db:
+        db.info['rotation_formal']=True
+        with S.transaction(db):
+            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
+            owner=state['persons']['9710000'];owner['readyAt']=now-4;owner['assign']['departAt']=now-4
+            receiver=state['persons']['9710010'];receiver.update(state='rest',readyAt=now+(10 if payload and payload.get('waiting') else 2),assign=None)
+            eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
+            W.plan(eng,now-4);W.tick(eng,now);S.save_day(db,row,state)
+    return {'ok':True}
+
 @app.post('/__fixture/room')
 def room(payload: dict):
     from app.v2_database import SessionLocal

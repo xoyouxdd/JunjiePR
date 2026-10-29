@@ -608,6 +608,14 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
                 step = ('arrive', '可确认去休息', '到休息室后确认，按实际确认时间开始休息。')
         elif st == "pending":
             step = ("arrive", "请确认已到休息室", "OP 阶段结束，在个人待办或大屏确认后转入休息区开始轮岗。")
+        elif a and a.get('taskId') and st in ('rest','meal','ready') and not p.get('entryHold'):
+            task=eng.d.get('rotationTasks',{}).get(a['taskId'])
+            if task and task.get('status')=='assigned':
+                source=eng.P.get(task.get('transferredFrom'),{}).get('name')
+                body=f"{fmt(task['allowedAt'])} 允许出发，{fmt(task['deadlineAt'])} 前确认。"
+                if now<task['allowedAt']:body+='剩余餐休继续计时，未到允许出发时间不能确认上岗。'
+                if source:body+='任务转接自 '+source+'。'
+                step=('depart',f"待出发 · {a['line']} 线" if now<task['allowedAt'] else f"现在出发去 {a['line']} 线",body)
         elif st in ("rest", "meal"):
             word = "吃饭" if st == "meal" else "饭后剩余休息时间" if p.get("breakKind") == "meal_rest" else "休息"
             body = "正常轮岗须等倒计时结束；现场强制安排须填写原因并预览确认。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
@@ -619,7 +627,7 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
                     timeout=p['taskTimeout'];receiver=eng.P.get(timeout.get('transferredTo'),{}).get('name')
                     from app.rotation.workflow import locate
                     _,_,post=locate(eng,timeout.get('entryKey'))
-                    step=('entry_return', f"{timeout['line']} · {post['name'] if post else '原上岗'}任务超时", ('已转由 '+receiver+' 执行。' if receiver else '等待下一位可分配人员承接。')+'本人确认知晓后再安排新任务。')
+                    step=('entry_return', f"{timeout['line']} · {post['name'] if post else '原上岗'}任务超时", ('已转由 '+receiver+' 执行。' if receiver else '等待下一位可分配人员承接。')+'本人确认后立即恢复可分配状态，不新增休息；原任务未转接时可重新承接。')
             elif a and now >= max(a["departAt"] - (0 if a.get('taskId') else early), a.get("notBefore", 0)):
                 step = ("depart", f"现在出发去 {a['line']} 线", _go_text(eng, a) + "。在个人待办或休息室大屏确认「去轮岗」。")
             elif a:
@@ -839,6 +847,23 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
     return result
 
 
+def opening_status(eng: E.Engine, line: dict, index: int) -> str | None:
+    post=line['posts'][index]
+    if not line.get('active') or not post.get('open') or post.get('occ') or not post.get('openRequest'):
+        return None
+    for p in eng.P.values():
+        a=p.get('assign') or {}
+        if p.get('entryHold') or p.get('state') not in ('rest','meal','ready','heading') or a.get('blocked') or a.get('line')!=line['id']:
+            continue
+        if a.get('taskId'):
+            task=eng.d.get('rotationTasks',{}).get(a['taskId']) or {}
+            if task.get('status')=='assigned' and task.get('owner')==p['pid'] and post.get('key') and any(m.get('to')==post['key'] for m in task.get('moves',[])):
+                return 'preparing'
+        elif a.get('mode')=='opening' and (a.get('openingKey')==post.get('key') if a.get('openingKey') else a.get('post')==index):
+            return 'preparing'
+    return 'matching'
+
+
 def lines_view(eng: E.Engine) -> list[dict]:
     return [{
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
@@ -848,7 +873,8 @@ def lines_view(eng: E.Engine) -> list[dict]:
                    "hold101":bool(x.get('hold101')),"hold101Role":x.get('hold101Role'),
                    "manualHold":x.get('hold'),
                    "continuousStart":eng.P.get(x.get('occ'),{}).get('continuousStart'),
-                   "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for x in L["posts"]],
+                   "openingStatus":opening_status(eng,L,i),
+                   "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for i,x in enumerate(L["posts"])],
     } for L in eng.d["lines"]]
 
 
@@ -1175,9 +1201,10 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             own_member=actor.kind=='member' and actor.member_employee_no==pid
             if actor.kind!='screen' and not own_member and (not getattr(actor, 'formal', False) or not actor.entered_by or actor.entered_by.employee_no != pid):
                 raise ActionError('请本人确认已到场')
-            p.pop('entryHold')
-            if p.get('taskTimeout'):
-                p['taskTimeout']['acknowledged']=True
+            if W.enabled(eng) and p.get('taskTimeout'):
+                W.acknowledge_timeout(eng,p,now)
+            else:
+                p.pop('entryHold')
             eng.h.log('entry_return', actor, pid, None, None, {})
         elif act == 'entry_adjust':
             if W.enabled(eng):

@@ -7,6 +7,12 @@ from app.version import APP_VERSION
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
     {
+        "version": "2026.10.29.1", "date": "2026-10-29", "status": "candidate",
+        "items": [{"summary": "轮岗超时恢复与任务状态提示修复",
+                   "detail": "任务超时后本人确认知晓立即恢复可分配状态，不新增餐休；原任务未转接时可重新承接。已派发任务在餐休及待出发期间显示允许时间和确认期限，仍不得提前上岗。空的加岗岗位区分准备加岗与匹配中，沿用原权限、确认凭据及计时规则。",
+                   "audiences": ["all"]}],
+    },
+    {
         "version": "2026.10.28.5", "date": "2026-10-28", "status": "candidate",
         "items": [{"summary": "轮岗派发时间与班表交互完善",
                    "detail": "同轮按最晚允许出发时间提前三分钟统一派发，不缩短任何人的餐休；预排与实时看板共用线路、岗位和人员分区渲染，人员和岗位通过拖拽交换，岗位支持双击改名。首班开始后每日班表固定，未启用的今日预排仍可发布；修正重复读取班表，手机回休息室与上岗前确认完整接入新版界面，展示下岗来源、餐休选择、任务时间、接替路线和前后对比；确认安排后提示前往执行。",

@@ -51,12 +51,119 @@ def test_whole_round_is_issued_three_minutes_before_latest_ready_without_shorten
     for i in range(3):eng.act_depart('new'+str(i),541,'screen')
 
 
+@pytest.mark.parametrize('break_state',['rest','meal'])
+def test_published_task_is_a_departure_notice_while_actual_break_continues(break_state):
+    from app.rotation.service import desired_notices
+    eng,_=fixture(1);p=eng.P['new0'];p['state']=break_state
+    assert not W.plan(eng,536)
+    assert desired_notices(eng,536)[(p['pid'],'step')][0]=='rest'
+    W.plan(eng,537)
+    kind,title,body=desired_notices(eng,537)[(p['pid'],'step')]
+    assert kind=='depart' and '待出发' in title
+    assert '剩余餐休继续计时' in body
+    assert p['state']==break_state and p['readyAt']==540
+    with pytest.raises(ActionError):eng.act_depart(p['pid'],539.9,'screen')
+
+
 def test_one_person_relief_stops_at_longest_middle_post():
     eng,_=fixture(1);eng.P['old1']['continuousStart']=400
     W.plan(eng,540);eng.act_depart('new0',540,'screen')
     assert occupants(eng,'A')==['new0','old0','old2','old3','old4']
     assert eng.P['old1']['state']=='walkback'
     assert eng.P['old1']['lastDeparture']=={'line':'A','post':eng.d['lines'][0]['posts'][1]['name']}
+
+
+def opening_fixture(count=1):
+    eng,hooks=fixture(count)
+    post=eng.line('A')['posts'][4];post.update(occ=None,since=None,openRequest=True)
+    eng.P['old4'].update(state='away',line=None,lineStart=None,assign=None)
+    eng.P['new0']['assign'].update(mode='opening',post=4,openingKey=post['key'])
+    return eng,hooks
+
+
+def test_opening_display_tracks_match_task_timeout_and_actual_execution():
+    from app.rotation.service import lines_view
+    eng,_=opening_fixture();p=eng.P['new0'];planned=deepcopy(p['assign']);p['assign']=None
+    status=lambda:lines_view(eng)[0]['posts'][4]['openingStatus']
+    assert status()=='matching'
+    p['assign']=planned
+    assert status()=='preparing'  # Matched before the formal task is issued.
+    W.plan(eng,540)
+    assert status()=='preparing'
+    # The newcomer enters the first post; the new post is filled by the chain.
+    assert W.task_for(eng,p)['moves'][0]['to']!=eng.line('A')['posts'][4]['key']
+    W.tick(eng,544)
+    assert status()=='matching'
+    W.acknowledge_timeout(eng,p,544);W.tick(eng,544)
+    assert status()=='preparing'
+    eng.act_depart(p['pid'],544,'screen')
+    assert status() is None
+    assert lines_view(eng)[0]['posts'][4]['occ']=='old3'
+
+
+def test_cancelled_or_future_opening_does_not_display_as_waiting_to_fill():
+    from app.rotation.service import opening_status
+    eng,_=opening_fixture();line=eng.line('A');post=line['posts'][4]
+    post['open']=False
+    assert opening_status(eng,line,4) is None
+    post.update(open=True,openRequest=False)
+    assert opening_status(eng,line,4) is None
+
+
+def test_opening_starts_at_first_post_and_fills_added_post_without_rest_relief():
+    eng,_=opening_fixture();W.plan(eng,540)
+    task=W.task_for(eng,eng.P['new0'])
+    assert [m['pid'] for m in task['moves']]==['new0','old0','old1','old2','old3']
+    assert all(m['to'] is not None for m in task['moves'])
+    eng.act_depart('new0',540,'screen')
+    assert occupants(eng,'A')==['new0','old0','old1','old2','old3']
+    assert all(eng.P[pid]['state']=='onpost' for pid in occupants(eng,'A'))
+
+
+def test_opening_skips_101_posts_but_preserves_occupants_and_continuous_time():
+    eng,_=opening_fixture();line=eng.line('A')
+    for post in line['posts'][:2]:post['hold101']={'since':539,'pid':post['occ']}
+    starts={pid:eng.P[pid]['continuousStart'] for pid in ('old0','old1','old2','old3')}
+    W.plan(eng,540);task=W.task_for(eng,eng.P['new0'])
+    assert task['moves'][0]['to']==line['posts'][2]['key']
+    eng.act_depart('new0',540,'screen')
+    assert occupants(eng,'A')==['old0','old1','new0','old2','old3']
+    assert all(eng.P[pid]['continuousStart']==start for pid,start in starts.items())
+
+
+def test_opening_waits_for_same_round_downshift_instead_of_entering_mid_line():
+    eng,_=opening_fixture(2)
+    eng.P['new1']['assign'].update(mode='chain',target='old0',why='推下班')
+    eng.P['new1']['assign']['departAt']=540;eng.P['new1']['readyAt']=540
+    opening=deepcopy(eng.P['new0']['assign'])
+    W.plan(eng,540)
+    assert W.task_for(eng,eng.P['new0']) is None
+    assert W.task_for(eng,eng.P['new1']) is not None
+    eng.act_depart('new1',540,'screen')
+    eng.P['new0']['assign']=opening;W.plan(eng,540)
+    assert W.task_for(eng,eng.P['new0'])['moves'][0]['to']==eng.line('A')['posts'][0]['key']
+    eng.act_depart('new0',540,'screen')
+    assert occupants(eng,'A')==['new0','new1','old1','old2','old3']
+
+
+def test_opening_waits_for_an_issued_prefix_route():
+    eng,_=fixture(2)
+    eng.P['new1'].update(assign=None,state='rest',readyAt=545)
+    W.plan(eng,540);first=deepcopy(W.task_for(eng,eng.P['new0']))
+    line=eng.line('A');line['posts'][4].update(occ=None,since=None,openRequest=True)
+    eng.P['old4'].update(state='away',line=None,lineStart=None,assign=None)
+    eng.P['new1'].update(state='ready',readyAt=540,assign={'line':'A','mode':'opening','post':4,
+        'openingKey':line['posts'][4]['key'],'departAt':540})
+    W.plan(eng,540)
+    assert W.task_for(eng,eng.P['new1']) is None
+    assert W.task_for(eng,eng.P['new0'])==first
+    eng.act_depart('new0',540,'screen')
+    eng.P['new1']['assign']={'line':'A','mode':'opening','post':4,
+        'openingKey':line['posts'][4]['key'],'departAt':540}
+    W.plan(eng,540)
+    assert W.task_for(eng,eng.P['new1'])['moves'][0]['to']==line['posts'][0]['key']
+    eng.act_depart('new1',540,'screen')
+    assert occupants(eng,'A')==['new1','new0','old0','old1','old3']
 
 
 def test_mixed_downshift_uses_prefix_then_remaining_ordinary_rotation():
@@ -87,6 +194,35 @@ def test_timeout_transfers_only_pending_route_with_fresh_deadline():
     with pytest.raises(ActionError):eng.act_depart('new0',545,'screen')
     eng.P['new1']['state']='ready';eng.act_depart('new1',545,'screen')
     assert original['status']=='executed'
+
+
+def test_timeout_acknowledgement_can_reclaim_waiting_task_without_another_break():
+    eng,_=fixture(1);p=eng.P['new0'];W.plan(eng,540)
+    original=W.task_for(eng,p);W.tick(eng,544)
+    assert original['status']=='waiting_transfer' and original['owner'] is None
+    W.tick(eng,545)
+    assert original['owner'] is None  # The former owner must acknowledge first.
+    p.update(ate=True,breakStart=500)
+    W.acknowledge_timeout(eng,p,545);eng.tick(545)
+    assert p['state']=='ready' and p['readyAt']==545
+    assert p['ate'] and p['breakStart']==500
+    assert W.task_for(eng,p)['id']==original['id']
+    assert original['owner']==p['pid'] and original['allowedAt']==545 and original['deadlineAt']==548
+    assert not original.get('transferredFrom') and p['taskTimeout']['transferredTo'] is None
+    eng.act_depart(p['pid'],545,'screen')
+    assert original['status']=='executed'
+
+
+def test_timeout_acknowledgement_does_not_steal_transferred_task_and_gets_new_task():
+    eng,_=fixture(2);p=eng.P['new0'];eng.P['new1'].update(assign=None,state='rest',readyAt=545)
+    W.plan(eng,540);W.tick(eng,543.1)
+    transferred=deepcopy(W.task_for(eng,eng.P['new1']))
+    p.update(state='rest',readyAt=560)
+    W.acknowledge_timeout(eng,p,544);eng.tick(544)
+    assert p['state']=='ready' and p['readyAt']==544 and not p.get('entryHold')
+    assert W.task_for(eng,p) and W.task_for(eng,p)['id']!=transferred['id']
+    assert W.task_for(eng,p)['allowedAt']==544
+    assert W.task_for(eng,eng.P['new1'])==transferred
 
 
 def test_onpost_shift_end_waits_for_actual_replacement():

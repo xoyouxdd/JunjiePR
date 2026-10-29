@@ -583,6 +583,45 @@ def test_formal_issued_task_is_locked_but_closed_line_refreshes_destination():
         assert ok(cm.get('/api/rotation-board/me'))['person']['state']=='rest'
 
 
+@pytest.mark.parametrize('transferred',[False,True])
+def test_timeout_screen_ack_is_immediately_ready_and_reclaims_only_unowned_task(monkeypatch,transferred):
+    from app.rotation import workflow as W
+    aid=seed_cohort()
+    with SessionLocal() as db:
+        db.info['rotation_formal']=True
+        with S.transaction(db):
+            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
+            p=state['persons']['9710000'];p['readyAt']=now-4;p['assign']['departAt']=now-4
+            state['persons']['9710010'].update(state='rest',readyAt=now+(2 if transferred else 10),assign=None)
+            eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
+            W.plan(eng,now-4);original=W.task_for(eng,p);old_id=original['id'];W.tick(eng,now)
+            assert original['status']==('assigned' if transferred else 'waiting_transfer')
+            S.save_day(db,row,state)
+    monkeypatch.setattr(S,'clock_now',lambda cfg:(date.today().isoformat(),now))
+    with TestClient(app) as screen,TestClient(app) as cm,TestClient(app) as receiver:
+        ok(screen.post('/api/login',json={'employee_no':'6666666','password':'1243'}))
+        login(cm,'9710000');login(receiver,'9710010')
+        before=ok(cm.get('/api/rotation-board/me'))['person'];assert before['entryHold']
+        before_receiver=ok(receiver.get('/api/rotation-board/me'))['person']
+        body={'action':'entry_return','pid':'9710000','confirmation_token':before['confirmationTokens']['entry_return']}
+        ok(screen.post('/api/rotation/screen/act',json=body))
+        after=ok(cm.get('/api/rotation-board/me'))['person']
+        assert not after['entryHold'] and after['state']=='ready' and after['readyAt']==now
+        assert after['canDepart'] and after['task']['allowedAt']==now and after['task']['deadlineAt']==now+3
+        assert (after['task']['id']!=old_id) is transferred
+        if transferred:
+            peer=ok(receiver.get('/api/rotation-board/me'))['person']
+            assert peer['task']==before_receiver['task']
+            assert peer['confirmationTokens']==before_receiver['confirmationTokens']
+        else:
+            assert after['task']['transferredFromName'] is None
+        assert ok(screen.post('/api/rotation/screen/act',json=body))['duplicate']
+        again=ok(cm.get('/api/rotation-board/me'))['person']
+        assert again['task']==after['task'] and again['readyAt']==now
+        ok(cm.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':again['confirmationTokens']['depart']}))
+        assert ok(cm.get('/api/rotation-board/me'))['person']['state']=='onpost'
+
+
 def test_screen_666_uses_formal_board_and_has_only_rotation_confirmation_permission():
     seed_cohort()
     with TestClient(app) as screen,TestClient(app) as cm:

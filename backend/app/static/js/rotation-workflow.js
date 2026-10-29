@@ -1,7 +1,7 @@
 'use strict';
 // Shared real-data presentation; screen devices never receive management controls.
 function shortRotationShift(p){
-  const part=value=>{const h=Math.floor(value/60)%24,m=Math.floor(value%60);return `${h%12||12}${m?pad2(m):''}`;};
+  const part=value=>{const h=Math.floor(value/60)%24,m=Math.floor(value%60);return `${h}${m?pad2(m):''}`;};
   return `${part(p.start)}-${part(p.end)}`;
 }
 function rotationName(p){return `<span class="rt-name-row"><strong>${esc(p.name)}</strong><small>${shortRotationShift(p)}</small></span>`;}
@@ -43,12 +43,12 @@ function workflowPools(n,ops,view={}){
     html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),chip,'rt-others');
     return html;
   }
-  html+=section('待出发',ps.filter(p=>!p.entryHold&&poolState(p,n)==='ready'),p=>card(p,p.assign?'depart':null,`${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}<span class="rt-task-summary">${workflowTaskSummary(p)}</span><span class="rt-sub">${p.task?`${hm(p.task.allowedAt)} 可出发 · ${hm(p.task.deadlineAt)} 前确认`:p.assign?hm(p.assign.departAt)+' 出发':'等待安排'}</span>${p.task?.transferredFromName?`<span class="rt-transfer">转接自 ${esc(p.task.transferredFromName)}</span>`:''}`,'wait'),'rt-ready');
+  html+=section('待出发',ps.filter(p=>!p.entryHold&&poolState(p,n)==='ready'),p=>card(p,p.assign?'depart':null,`${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}<span class="rt-task-summary">${workflowTaskSummary(p)}</span><span class="rt-sub">${p.task?`${hm(p.task.allowedAt)} 可出发 · ${hm(p.task.deadlineAt)} 前确认`:p.assign?hm(p.assign.departAt)+' 出发':'等待安排'}</span>${p.task&&n<p.task.allowedAt?`<span class="rt-sub">餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(p.task.allowedAt-n))} 分钟</span>`:''}${p.task?.transferredFromName?`<span class="rt-transfer">任务转接自 ${esc(p.task.transferredFromName)}</span>`:''}`,'wait'),'rt-ready');
   html+=section('待确定休息',ps.filter(p=>p.state==='walkback'||p.state==='pending'||opWaiting(p)),p=>card(p,'arrive',`<span class="rt-sub">${opWaiting(p)?'OP · 待确认休息':p.after==='done'?'轮岗结束，回休息室确认':'已下线，到休息室后确认'}</span>`),'rt-arrivals');
-  html+=section('吃饭区',ps.filter(p=>p.state==='meal'),p=>card(p,null,`<span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟</span>${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}`,'meal'),'rt-meals');
-  html+=section('休息区',ps.filter(p=>poolState(p,n)==='rest'),p=>card(p,null,`<span class="rt-sub">${waitingInitialRest(p)?'预排休息 · '+hm(p.start)+' 开始计时':'至 '+hm(restUntil(p))+' · 剩 '+Math.max(0,Math.ceil(restUntil(p)-n))+' 分钟'}</span>${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}`,'rest'),'rt-resting');
+  html+=section('吃饭区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='meal'),p=>card(p,null,`<span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟</span>${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}`,'meal'),'rt-meals');
+  html+=section('休息区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='rest'),p=>card(p,null,`<span class="rt-sub">${waitingInitialRest(p)?'预排休息 · '+hm(p.start)+' 开始计时':'至 '+hm(restUntil(p))+' · 剩 '+Math.max(0,Math.ceil(restUntil(p)-n))+' 分钟'}</span>${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}`,'rest'),'rt-resting');
   html+=section('圈外人员',ps.filter(outsideKind),p=>card(p,null,`<span class="rt-sub">${esc(p.leaveReason||p.away?.reason||outsideKind(p))}</span>`,'dim'),'rt-outside');
-  html+=section('任务超时 · 待本人确认',ps.filter(p=>p.entryHold),p=>card(p,'entry_return',`<span class="rt-sub">${esc(p.taskTimeout?.line||'')} · ${esc(p.taskTimeout?.entryPost||'原上岗')} 任务超时</span><span class="rt-task-summary">${p.taskTimeout?.transferredToName?'已转 '+esc(p.taskTimeout.transferredToName):'等待转接'}</span><span class="rt-sub">确认知晓后重新领取</span>`,'late'),'rt-timeout');
+  html+=section('任务超时 · 待本人确认',ps.filter(p=>p.entryHold),p=>card(p,'entry_return',`<span class="rt-sub">${esc(p.taskTimeout?.line||'')} · ${esc(p.taskTimeout?.entryPost||'原上岗')} 任务超时</span><span class="rt-task-summary">${p.taskTimeout?.transferredToName?'已转 '+esc(p.taskTimeout.transferredToName):'等待转接'}</span><span class="rt-sub">确认后立即分配，不新增休息</span>`,'late'),'rt-timeout');
   html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),p=>card(p,null,`<span class="rt-sub">${esc(p.state==='notyet'?'班次未开始':STATE_NAME[p.state]||'')}</span>`,'dim'),'rt-others');
   return html;
 }

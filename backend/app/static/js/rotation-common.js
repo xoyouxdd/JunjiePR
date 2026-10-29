@@ -67,6 +67,8 @@ function departureTimeReady(p,n){
 
 // 基础休息结束后，等待定时开岗的人员仍显示在休息区。
 function poolState(p, n) {
+  // A published task changes the display area, never the person's break state.
+  if (!p.entryHold && p.task?.status === 'assigned' && ['rest','meal','ready'].includes(p.state)) return 'ready';
   if (waitingInitialRest(p)) return 'rest';
   if (p.state === 'ready' && ((p.readyAt ?? n) > n + 0.01 || (p.assign && !departureTimeReady(p, n)))) return 'rest';
   return p.state;
@@ -321,7 +323,7 @@ function confirmRotation(p, action, path, wholeGroup=false) {
   const token = p.confirmationTokens?.[wholeGroup?'group_depart':action];
   if (!token) { toast('任务已变化，请等待最新画面', true); scheduleLoad(); return; }
   if (action === 'depart' && !(wholeGroup&&p.entryGroup?groupCanDepart(p.entryGroup,nowMin()):canDepartNow(p, nowMin()))) { toast('休息未结束或还没到出发时间', true); return; }
-  let text = action === 'depart' ? assignmentDescription(p.assign) : action==='entry_return'?`原任务已${p.taskTimeout?.transferredToName?'转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'进入待转接'}，确认知晓后重新领取安排。`:'请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
+  let text = action === 'depart' ? assignmentDescription(p.assign) : action==='entry_return'?`原任务已${p.taskTimeout?.transferredToName?'转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'进入待转接'}；确认后立即恢复可分配状态，不新增休息时间。原任务尚未转接时，可重新承接。`:'请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
   if(action==='depart'&&p.entryGroup){
     if(!wholeGroup&&RT.me?.employee_no&&RT.me.employee_no!==p.pid){toast('协同上岗请本人在待办确认',true);return;}
     text=wholeGroup?`<p>确认以下人员整组上岗：</p><p>${p.entryGroup.members.map(m=>`${esc(m.name)} · ${esc(m.task||'上岗')} → ${esc(p.entryGroup.line)}线 · ${esc(m.entryPost||'待核实')}`).join('<br>')}</p>`:text+`<p>同组 ${p.entryGroup.members.map(m=>esc(m.name)).join('、')}；${p.entryGroup.confirmed}/${p.entryGroup.members.length}人确认。出发前全员确认后一起前往，现场无需再次操作手机。</p>`;
@@ -462,6 +464,7 @@ function lineCard(L, n, ops, view = {}) {
     }
     if (!L.active) { cls += ' closed'; who = '待命'; }
     else if (!x.open) { cls += ' closed'; who = x.openAt && !x.opened ? `${esc(x.openAt)} 开` : '未开'; }
+    else if (!x.occ && x.openingStatus) { cls += ' pending-add'; who = x.openingStatus==='preparing'?'准备加岗':'匹配中'; }
     else if (!x.occ) { cls += ' vacant'; who = '空岗'; }
     else {
       const p = lookup(x.occ);

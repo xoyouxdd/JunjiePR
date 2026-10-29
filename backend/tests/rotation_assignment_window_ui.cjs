@@ -17,15 +17,19 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   let data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(!data.person.assignmentLocked&&!data.person.canDepart);
   await reset(3);await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/本轮任务已派发/).waitFor();
   data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(data.person.assignmentLocked&&!data.person.canDepart);
+  assert(await personal.locator('[data-rotation-task=depart]').isDisabled());
+  assert.equal(data.person.state,'rest');
   assert.equal((await op.request.post(base+'/api/rotation-board/act',{data:{action:'reassign',pid:'9710000',line:'B1'}})).status(),400);
   assert((await op.request.post(base+'/api/rotation-board/act',{data:{action:'reassign',pid:'9710010',line:'A1'}})).ok());
   await board.goto(base+'/rotation-board');await board.locator('[data-drag-pid="9710000"]').waitFor();
+  assert.equal(await board.locator('.rt-ready [data-drag-pid="9710000"]').count(),1);
+  assert.equal(await board.locator('.rt-resting [data-drag-pid="9710000"],.rt-meals [data-drag-pid="9710000"]').count(),0);
   assert.match(await board.locator('[data-drag-pid="9710000"]').innerText(),/剩 3 分钟/);assert.match(await board.locator('[data-drag-pid="9710000"]').innerText(),/A1/);
   for(const width of [320,390,430,768,1440]){await board.setViewportSize({width,height:900});assert.equal(await board.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' preview overflow '+width);}
-  const shots=process.env.ROTATION_WINDOW_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await board.setViewportSize({width:390,height:844});await board.evaluate(()=>{RT.dragging=true;document.querySelector('.rt-resting .rt-chip').scrollIntoView({block:'center'});});try{await board.screenshot({path:path.join(shots,engine+'-route-preview.png')});}finally{await board.evaluate(()=>{RT.dragging=false;});}await personal.screenshot({path:path.join(shots,engine+'-fixed-personal.png'),fullPage:true});}
+  const shots=process.env.ROTATION_WINDOW_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await board.setViewportSize({width:390,height:844});await board.evaluate(()=>{RT.dragging=true;document.querySelector('.rt-ready .rt-chip').scrollIntoView({block:'center'});});try{await board.screenshot({path:path.join(shots,engine+'-route-preview.png')});}finally{await board.evaluate(()=>{RT.dragging=false;});}await personal.screenshot({path:path.join(shots,engine+'-fixed-personal.png'),fullPage:true});}
   assert((await op.request.post(base+'/api/rotation-board/act',{data:{action:'line',line:'A1',active:false}})).ok());
-  await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/安排：B1线/).waitFor();
-  assert.equal(await personal.locator('[data-rotation-task=depart]').count(),0);
+  await personal.reload();await personal.locator('[data-formal-rotation-todo]').locator('.rt-confirm-destination').filter({hasText:'B1'}).waitFor();
+  assert(await personal.locator('[data-rotation-task=depart]').isDisabled());
   data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert.equal(data.person.assign.line,'B1');assert(!data.person.assign.blocked);assert(!data.person.canDepart);
   await reset(0);data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(data.person.canDepart,JSON.stringify(data.person));await personal.reload();await personal.locator('[data-rotation-task=depart]').waitFor();
   await personal.locator('[data-rotation-task=depart]').click();await personal.locator('[data-modal-confirm]').click();
