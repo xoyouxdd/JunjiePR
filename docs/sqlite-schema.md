@@ -1259,3 +1259,14 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 - `formal_rotation_roster_identities`：上传ID与员工号构成主键，姓名及metadata_json保存导入当时的员工ID、来源圈、跨圈标记、临时标记与具体账号异常原因。按天优先于按周，同类最新名单生效；没有修改原班表表结构。
 - 草稿状态的`rosterIdentities`冻结本次运行身份；事件detail_json的`rotation_identity`固化事件事实。新接口返回identity_labels用于后台记录显示。未知临时操作actor_type=temporary，异常正式人员使用实际员工ID及employee类型，仍不获得正式功能权限。
 - 新表启动时由metadata建表，现有数据库不删除、不重写员工或历史轮岗数据。正式账号接管继续以同一员工号继承轮岗记录。
+# 学习分享表
+
+`learning_models.py` 通过启动时的幂等建表注册五张表，主键均为 `id`：
+
+- `learning_shares`：圈、负责人及原发布人外键，标题、正文、附件JSON、版本、状态与时间。
+- `learning_revisions`：分享与编辑人外键，提交时公开版本、候选内容、修改说明及审核人外键和时间。
+- `learning_reactions`：分享与员工外键，点赞及星标布尔值；分享和员工组合唯一。
+- `learning_access`：员工、目标圈、申请时本圈外键，申请原因、状态、代次、审批人及7天有效截止时间；员工与目标圈组合唯一。
+- `learning_assets`：上传员工与圈外键，原文件名、唯一存储键、格式及时间；文件保存在私有学习材料目录。
+
+授权与修改发布规则见 `learning-shares.md`。现有员工、绩效及公告签收表不改动。

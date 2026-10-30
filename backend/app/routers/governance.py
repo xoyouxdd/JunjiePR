@@ -159,6 +159,10 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
         if actionable_count:items.append(action_center_item('rotation_step','本人轮岗待确认',actionable_count,'rotationTest','warning','确认待上岗或待休息（吃饭），同步对应景点圈轮岗看板。'))
 
     from app.announcements import summary as announcement_summary
+    from app.learning import approval_rows
+    learning_pending = len(approval_rows(db, user))
+    if learning_pending:
+        items.append(action_center_item('learning_access', '跨圈学习查看申请', learning_pending, 'learningShares', 'warning', '人工确认本组人员多资质情况，批准后开放对应景点圈7天查看权限。'))
     announcement_counts = announcement_summary(db, user)
     if announcement_counts["pending"]:
         items.append(action_center_item("announcement_receipt", "公告待查收", announcement_counts["pending"], "announcements", "warning", "查看适用公告并完成确认。"))

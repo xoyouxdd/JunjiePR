@@ -33,6 +33,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 | [docs/self-recognition-batch.md](docs/self-recognition-batch.md) | 本人认可多条登记与共用照片 |
 | [docs/recognition-upload-timing.md](docs/recognition-upload-timing.md) | 认可提交分段耗时诊断与后台上传讨论 |
 | [docs/announcements.md](docs/announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
+| [docs/learning-shares.md](docs/learning-shares.md) | 学习分享、共同修改、跨圈七天审批与阅读水印 |
 | [docs/announcement-image-generation.md](docs/announcement-image-generation.md) | 公告模板制图、照片上传和素材访问 |
 | [docs/getting-started.md](docs/getting-started.md) | 本地运行、测试、数据目录 |
 | [docs/local-hardening-20261016.md](docs/local-hardening-20261016.md) | 路径隔离、提交校验及完整角色测试夹具（未上线） |

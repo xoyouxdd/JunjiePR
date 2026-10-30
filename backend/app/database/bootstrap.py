@@ -28,6 +28,7 @@ def _init_db_unlocked() -> None:
     ensure_directories()
     from app import v2_models  # noqa: F401
     from app import video_models  # noqa: F401
+    from app import learning_models  # noqa: F401
     from app.rotation import models as rotation_models  # noqa: F401
     from app.rotation import namespace as rotation_namespace  # noqa: F401
     from app.rotation import temporary as rotation_temporary  # noqa: F401

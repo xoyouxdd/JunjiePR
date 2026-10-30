@@ -34,6 +34,7 @@ BROWSER_TESTS.add("rotation_workflow_ui.cjs")
 BROWSER_TESTS.add("avatar_ui.cjs")
 BROWSER_TESTS.add("avatar_integration_ui.cjs")
 BROWSER_TESTS.add("announcement_all_leads_ui.cjs")
+BROWSER_TESTS.add("learning_shares_ui.cjs")
 ESM_VM_TESTS = {"view_lifecycle.cjs"}
 
 

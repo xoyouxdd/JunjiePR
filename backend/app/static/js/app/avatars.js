@@ -31,6 +31,7 @@ function profilePortrait(me,key=me.avatar_key,frame=me.avatar_frame){
 function mountAvatarWardrobe(host,{isCurrent=()=>true}={}){
   let disposed=false,catalog=null,preferences=null,draft='',draftFrame='plain',group='',page=0,busy=false,token=0;
   let wardrobe={favorites:[],recent:[],presets:[null,null,null]},filter='all',activePreset=0,frameOpen=false,presetOpen=false,themeOpen=false,wardrobeQueue=Promise.resolve();
+  let activePane='avatars';
   const owner=state.me.id,valid=()=>!disposed&&host.isConnected&&isCurrent()&&state.me.id===owner;
   host.innerHTML=`<div class="employee-avatar-profile"><div data-avatar-profile>${profilePortrait(state.me)}</div><div><strong>${esc(state.me.name)}</strong><p class="field-hint">个人形象 · 由你选择</p></div><button type="button" class="secondary" data-avatar-open aria-expanded="false">装扮头像</button></div><section class="avatar-wardrobe" aria-label="头像与边框" hidden></section>`;
   const editor=host.querySelector('.avatar-wardrobe'),open=host.querySelector('[data-avatar-open]');
@@ -43,6 +44,11 @@ function mountAvatarWardrobe(host,{isCurrent=()=>true}={}){
     const items=filter==='favorites'?catalog.avatars.filter(a=>wardrobe.favorites.includes(a.key)):filter==='recent'?wardrobe.recent.map(k=>catalog.avatars.find(a=>a.key===k)).filter(Boolean):group==='全部头像'?catalog.avatars:catalog.avatars.filter(a=>a.group===group),pages=Math.max(1,Math.ceil(items.length/8));page=Math.min(page,pages-1);
     const chosen=catalog.avatars.find(a=>a.key===draft);
     const frameLabel=preferences.frames.find(f=>f.key===draftFrame)?.label||'简洁';
+    const presetName=i=>wardrobe.presets[i]?.name||['日常','森林','冬日'][i];
+    const calendar=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Shanghai',year:'numeric',month:'numeric',day:'numeric'}).formatToParts(new Date()).map(p=>[p.type,p.value]));
+    const week=Math.floor((Date.UTC(Number(calendar.year),Number(calendar.month)-1,Number(calendar.day))-Date.UTC(1970,0,5))/604800000);
+    const inspirations=[{key:'base-01-02',frame:'autumn',name:'暖暖营业中'},{key:'character-white-rabbit',frame:'winter',name:'森林里的清晨'},{key:'base-01-01',frame:'thumb',name:'给自己点个赞'},{key:'character-owl',frame:'cosmic',name:'星光小伙伴'}];
+    const weekly=inspirations[(week%inspirations.length+inspirations.length)%inspirations.length];
     editor.innerHTML=`<div class="avatar-wardrobe-heading"><h3>选择你的形象</h3><button type="button" class="secondary" data-avatar-cancel>取消</button></div>
       <details class="avatar-compact" data-presets ${presetOpen?'open':''}><summary>我的三套搭配 <span>按需展开</span></summary><div class="avatar-preset-list">${wardrobe.presets.map((p,i)=>`<button type="button" class="secondary" data-preset="${i}" aria-pressed="${i===activePreset}">${['日常','森林','冬日'][i]} · ${esc(catalog.avatars.find(a=>a.key===p?.avatar_key)?.name||'空搭配')}</button>`).join('')}</div><button type="button" class="secondary" data-preset-store>将当前预览存入选中搭配</button></details>
       <details class="avatar-compact" data-themes ${themeOpen?'open':''}><summary>主题套装 <span>展开选择</span></summary><div class="avatar-preset-list"><button type="button" class="secondary" data-theme="daily">动物城日常</button><button type="button" class="secondary" data-theme="winter">冬日森林</button></div></details>
@@ -51,12 +57,30 @@ function mountAvatarWardrobe(host,{isCurrent=()=>true}={}){
       <p class="field-hint">${esc(filter==='favorites'?'我的收藏':filter==='recent'?'最近保存':group)} · ${items.length}款</p><div class="avatar-picker-grid">${items.slice(page*8,page*8+8).map(a=>`<div class="avatar-tile"><button type="button" class="avatar-picker-item" data-avatar-choice="${esc(a.key)}" aria-pressed="${draft===a.key}"><img src="${esc(thumb(a.key,160))}" width="160" height="160" alt="" loading="lazy" decoding="async"><span>${esc(a.name)}</span></button><button type="button" class="avatar-favorite" data-favorite="${esc(a.key)}" aria-label="${wardrobe.favorites.includes(a.key)?'取消收藏':'收藏'}${esc(a.name)}" aria-pressed="${wardrobe.favorites.includes(a.key)}">${wardrobe.favorites.includes(a.key)?'★':'☆'}</button></div>`).join('')}</div>${items.length?'':'<p class="field-hint">暂无头像，选择其他分类试试。</p>'}<div class="avatar-picker-pages"><button type="button" class="secondary" data-avatar-prev ${page===0?'disabled':''}>上一页</button><span>${page+1} / ${pages}</span><button type="button" class="secondary" data-avatar-next ${page===pages-1?'disabled':''}>下一页</button></div><div class="avatar-draft">${profilePortrait(state.me,draft,draftFrame)}<span>${esc(chosen?.name||'姓名首字')} · ${esc(frameLabel)} · 预览</span></div>
       <details class="avatar-compact" data-frames ${frameOpen?'open':''}><summary>选择边框 <span>${esc(frameLabel)} · 展开更换</span></summary><div class="avatar-frame-options" aria-label="选择边框">${preferences.frames.map(f=>`<button type="button" class="secondary avatar-frame-option" data-avatar-frame="${esc(f.key)}" aria-pressed="${draftFrame===f.key}">${profilePortrait(state.me,draft,f.key)}<span>${esc(f.label)}</span></button>`).join('')}</div></details>
       <p class="field-hint">历史月度边框仅在个人页面装扮中展示，不代表当前段位或绩效。组员列表和组织树只显示头像。</p><div class="actions"><button type="button" class="secondary" data-avatar-clear>使用姓名首字</button><button type="button" class="primary" data-avatar-save>保存装扮</button></div><p data-avatar-feedback role="status" aria-live="polite"></p>`;
-    editor.querySelector('[data-presets]').ontoggle=e=>{presetOpen=e.target.open;};editor.querySelector('[data-themes]').ontoggle=e=>{themeOpen=e.target.open;};editor.querySelector('[data-frames]').ontoggle=e=>{frameOpen=e.target.open;};
+    const panes=document.createElement('div');panes.className='avatar-pane-stack';
+    const tabBar=document.createElement('div');tabBar.className='avatar-editor-tabs';tabBar.setAttribute('role','tablist');tabBar.setAttribute('aria-label','装扮分类');
+    const labels={avatars:'头像',frames:'边框',outfits:'搭配'};
+    for(const [key,label] of Object.entries(labels)){
+      const button=document.createElement('button');button.type='button';button.className='secondary';button.dataset.avatarTab=key;button.id=`avatar-tab-${owner}-${key}`;button.setAttribute('role','tab');button.setAttribute('aria-selected',String(activePane===key));button.setAttribute('aria-controls',`avatar-pane-${owner}-${key}`);button.tabIndex=activePane===key?0:-1;button.textContent=label;tabBar.append(button);
+      const pane=document.createElement('div');pane.id=`avatar-pane-${owner}-${key}`;pane.dataset.avatarPane=key;pane.setAttribute('role','tabpanel');pane.setAttribute('aria-labelledby',button.id);pane.hidden=activePane!==key;panes.append(pane);
+    }
+    const avatarPane=panes.querySelector('[data-avatar-pane=avatars]');let node=editor.querySelector('.avatar-filters');while(node&&!(node.nodeType===1&&node.classList.contains('avatar-draft'))){const next=node.nextSibling;avatarPane.append(node);node=next;}
+    for(const selector of ['[data-presets]','[data-themes]']){const detail=editor.querySelector(selector);detail.open=true;panes.querySelector('[data-avatar-pane=outfits]').append(detail);}
+    const frames=editor.querySelector('[data-frames]');frames.open=true;panes.querySelector('[data-avatar-pane=frames]').append(frames);
+    editor.querySelector('.avatar-wardrobe-heading').after(tabBar,panes);
+    const outfits=panes.querySelector('[data-avatar-pane=outfits]');
+    const inspiration=document.createElement('section');inspiration.className='avatar-compact avatar-weekly';inspiration.innerHTML=`<h4>本周穿搭灵感</h4><div class="avatar-weekly-preview">${profilePortrait(state.me,weekly.key,weekly.frame)}<div><strong>${esc(weekly.name)}</strong><p class="field-hint">${esc(catalog.avatars.find(a=>a.key===weekly.key)?.name||'')} ＋ ${esc(preferences.frames.find(f=>f.key===weekly.frame)?.label||'')}</p></div></div><button type="button" class="secondary" data-weekly-try>试穿这套</button><p class="field-hint">每周更新推荐，自由选择，保存后生效。</p>`;outfits.prepend(inspiration);
+    editor.querySelectorAll('[data-preset]').forEach(b=>{const i=Number(b.dataset.preset);b.textContent=presetName(i)+' · '+(catalog.avatars.find(a=>a.key===wardrobe.presets[i]?.avatar_key)?.name||'空搭配');});
+    const rename=document.createElement('div');rename.className='avatar-preset-rename';rename.innerHTML=`<label>搭配名称<input data-preset-name maxlength="12" value="${esc(presetName(activePreset))}" aria-label="搭配名称"></label><button type="button" class="secondary" data-preset-rename>保存名称</button><p class="field-hint">最多12个字，仅自己可见。</p>`;editor.querySelector('[data-preset-store]').after(rename);
+    const switchPane=key=>{activePane=key;tabBar.querySelectorAll('button').forEach(b=>{const selected=b.dataset.avatarTab===key;b.setAttribute('aria-selected',String(selected));b.tabIndex=selected?0:-1;});panes.querySelectorAll('[data-avatar-pane]').forEach(p=>p.hidden=p.dataset.avatarPane!==key);};
+    tabBar.querySelectorAll('button').forEach(b=>{b.onclick=()=>switchPane(b.dataset.avatarTab);b.onkeydown=e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const keys=Object.keys(labels),index=keys.indexOf(activePane),key=e.key==='Home'?keys[0]:e.key==='End'?keys[2]:keys[(index+(e.key==='ArrowRight'?1:2))%3];switchPane(key);tabBar.querySelector(`[data-avatar-tab=${key}]`).focus();};});
     editor.querySelector('[data-avatar-group-select]').onchange=event=>{group=event.target.value;page=0;paint();editor.querySelector('[data-avatar-group-select]').focus({preventScroll:true});};
     editor.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;page=0;paint();});
     editor.querySelectorAll('[data-favorite]').forEach(b=>b.onclick=()=>{const key=b.dataset.favorite;wardrobe.favorites=wardrobe.favorites.includes(key)?wardrobe.favorites.filter(k=>k!==key):[...wardrobe.favorites,key];paint();persistWardrobe();});
     editor.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{activePreset=Number(b.dataset.preset);const p=wardrobe.presets[activePreset];if(p&&preferences.frames.some(f=>f.key===p.frame)){draft=p.avatar_key;draftFrame=p.frame;}paint();});
-    editor.querySelector('[data-preset-store]').onclick=()=>{if(!draft){editor.querySelector('[data-avatar-feedback]').textContent='请先选择头像';return;}wardrobe.presets[activePreset]={avatar_key:draft,frame:draftFrame};paint();persistWardrobe();};
+    editor.querySelector('[data-preset-store]').onclick=()=>{if(!draft){editor.querySelector('[data-avatar-feedback]').textContent='请先选择头像';return;}wardrobe.presets[activePreset]={avatar_key:draft,frame:draftFrame,name:presetName(activePreset)};paint();persistWardrobe('搭配已保存');};
+    editor.querySelector('[data-weekly-try]').onclick=()=>{draft=weekly.key;draftFrame=weekly.frame;paint();editor.querySelector('[data-avatar-feedback]').textContent='已试穿本周搭配，保存装扮后生效。';};
+    editor.querySelector('[data-preset-rename]').onclick=()=>{const name=editor.querySelector('[data-preset-name]').value.trim();if(!name||Array.from(name).length>12){editor.querySelector('[data-avatar-feedback]').textContent='请填写1至12个字的搭配名称';return;}const pair=wardrobe.presets[activePreset]||(draft?{avatar_key:draft,frame:draftFrame}:null);if(!pair){editor.querySelector('[data-avatar-feedback]').textContent='请先选择头像并保存搭配';return;}wardrobe.presets[activePreset]={...pair,name};paint();persistWardrobe('搭配名称已保存');};
     editor.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{const winter=b.dataset.theme==='winter';draft=winter?'character-white-rabbit':'base-01-02';draftFrame=winter?'winter':'autumn';group=catalog.avatars.find(a=>a.key===draft)?.group||'全部头像';filter='all';page=0;paint();});
     editor.querySelector('[data-avatar-random]').onclick=()=>{const pool=items.filter(a=>a.key!==draft);if(pool.length){draft=pool[Math.floor(Math.random()*pool.length)].key;paint();}};
     editor.querySelectorAll('[data-avatar-choice]').forEach(b=>b.onclick=()=>{draft=b.dataset.avatarChoice;paint();});
@@ -67,9 +91,9 @@ function mountAvatarWardrobe(host,{isCurrent=()=>true}={}){
     editor.querySelector('[data-avatar-next]').onclick=()=>{page++;paint();};
     editor.querySelector('[data-avatar-save]').onclick=save;
   }
-  function persistWardrobe(){
+  function persistWardrobe(message=''){
     const snapshot=JSON.parse(JSON.stringify(wardrobe));
-    wardrobeQueue=wardrobeQueue.catch(()=>{}).then(()=>{if(valid())return api('/api/self-avatar-wardrobe',json('PUT',snapshot));}).catch(()=>{const feedback=editor.querySelector('[data-avatar-feedback]');if(valid()&&feedback)feedback.textContent='收藏或搭配保存失败，请重试。';throw new Error('wardrobe save failed');});
+    wardrobeQueue=wardrobeQueue.catch(()=>{}).then(()=>{if(valid())return api('/api/self-avatar-wardrobe',json('PUT',snapshot));}).then(()=>{const feedback=editor.querySelector('[data-avatar-feedback]');if(message&&valid()&&feedback)feedback.textContent=message;}).catch(()=>{const feedback=editor.querySelector('[data-avatar-feedback]');if(valid()&&feedback)feedback.textContent='收藏或搭配保存失败，请重试。';throw new Error('wardrobe save failed');});
     wardrobeQueue.catch(()=>{});
   }
   async function save(){
@@ -92,7 +116,7 @@ function mountAvatarWardrobe(host,{isCurrent=()=>true}={}){
       const results=await Promise.all([catalog?Promise.resolve(catalog):api(assetRoot+'catalog.json'),api('/api/self-avatar'),api('/api/self-avatar-wardrobe')]);
       if(!valid()||current!==token)return;
       [catalog,preferences,wardrobe]=results;Object.assign(state.me,{avatar_key:preferences.avatar_key,avatar_frame:preferences.avatar_frame});host.querySelector('[data-avatar-profile]').innerHTML=profilePortrait(state.me);draft=preferences.avatar_key||'';draftFrame=preferences.frames.some(f=>f.key===preferences.avatar_frame)?preferences.avatar_frame:'plain';
-      group=catalog.avatars.find(a=>a.key===draft)?.group||catalog.avatars[0].group;page=0;paint();
+      group=catalog.avatars.find(a=>a.key===draft)?.group||catalog.avatars[0].group;page=0;activePane='avatars';paint();
     }catch(error){if(valid()&&current===token){editor.innerHTML=`<p class="error" role="alert">${esc(error.message)}</p><button type="button" class="secondary" data-avatar-retry>重试</button><button type="button" class="secondary" data-avatar-cancel>取消</button>`;editor.querySelector('[data-avatar-retry]').onclick=()=>{editor.hidden=true;load();};editor.querySelector('[data-avatar-cancel]').onclick=close;}}
     finally{if(valid())open.disabled=false;}
   }

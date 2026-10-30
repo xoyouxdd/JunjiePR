@@ -127,9 +127,12 @@ def test_wardrobe_is_account_scoped_and_validated(system):
     first, second = make('wardrobe-first'), make('wardrobe-second')
     key = next(iter(avatar_catalog()))
     switch(first)
-    data = {'favorites': [key], 'recent': [key], 'presets': [{'avatar_key': key, 'frame': 'thumb'}, None, None]}
+    data = {'favorites': [key], 'recent': [key], 'presets': [{'avatar_key': key, 'frame': 'thumb', 'name': '今日营业'}, None, None]}
     assert client.put('/api/self-avatar-wardrobe', json=data).status_code == 200
     assert client.get('/api/self-avatar-wardrobe').json() == data
+    for name in [' ' * 3, '长' * 13]:
+        invalid = {**data, 'presets': [{'avatar_key': key, 'frame': 'thumb', 'name': name}, None, None]}
+        assert client.put('/api/self-avatar-wardrobe', json=invalid).status_code == 422
     assert client.put('/api/self-avatar', json={'avatar_key': key, 'frame': 'thumb'}).status_code == 200
     assert client.put('/api/self-avatar-wardrobe', json={**data, 'favorites': ['invalid']}).status_code == 422
     assert client.get('/api/self-avatar-wardrobe').json() == data

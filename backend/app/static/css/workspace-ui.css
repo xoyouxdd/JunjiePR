@@ -361,3 +361,18 @@
 .video-player-wrap:fullscreen {display:flex;align-items:center;justify-content:center;background:#071421;width:100%;height:100%;}
 #app .video-player-wrap:fullscreen video {width:100%;height:100%;max-height:100%;object-fit:contain;}
 .video-player-wrap video::-webkit-media-controls-fullscreen-button {display:none;}
+/* Optional, compact daily greeting: no background activity. */
+#app[data-workspace-ui] .daily-wish{border:1px solid #e0eae4;border-radius:12px;background:#f8fbf9;overflow:hidden}
+#app[data-workspace-ui] .daily-wish summary{display:flex;align-items:center;gap:9px;min-height:48px;padding:10px 15px;cursor:pointer;list-style:none;color:#4e785f;font-size:14px}
+#app[data-workspace-ui] .daily-wish summary::-webkit-details-marker{display:none}
+#app[data-workspace-ui] .daily-wish summary:after{content:'展开 +';margin-left:auto;font-size:12px;color:#748e7e}
+#app[data-workspace-ui] .daily-wish[open] summary:after{content:'收起 −'}
+#app[data-workspace-ui] .daily-wish summary small{color:#81988a;font-size:12px}
+#app[data-workspace-ui] .daily-wish-body{padding:0 15px 15px;max-width:480px}
+#app[data-workspace-ui] .daily-wish-hint,#app[data-workspace-ui] .daily-wish-note{font-size:12px;color:#778f80;margin:0 0 9px}
+#app[data-workspace-ui] .daily-wish-note{margin:9px 0 0}
+#app[data-workspace-ui] .daily-wish-card{position:relative;display:grid;place-items:center;min-height:126px;padding:20px;border:1px solid #f0e4cd;border-radius:12px;background:#fffaf0;text-align:center}
+#app[data-workspace-ui] .daily-wish-card p{margin:0;color:#6d5943;font-size:14px}
+#app[data-workspace-ui] .daily-wish-card canvas{position:absolute;inset:0;width:100%;height:100%;border-radius:11px;touch-action:none}
+#app[data-workspace-ui] .daily-wish-actions{display:flex;gap:8px;margin-top:10px}
+#app[data-workspace-ui] .daily-wish-actions button{min-height:38px;padding:6px 12px;font-size:12px}

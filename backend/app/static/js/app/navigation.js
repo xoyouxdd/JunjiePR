@@ -41,6 +41,7 @@ function menuItems() {
   items.splice(Math.min(items.length,1),0,['announcements','公告中心']);
   items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);
   items.push(['videoLearning','视频学习']);
+  if(!state.me.rotation_temporary)items.push(['learningShares','学习分享']);
   return items;
 }
 
@@ -120,6 +121,7 @@ function navIcon(id){
     actionCenter:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8M8 14h5"/>',
     announcements:'<path d="M4 10v5h4l9 4V6L8 10H4zM8 15l2 5M20 9v7"/>',
     videoLearning:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/>',
+    learningShares:'<path d="M12 5v16M12 5C8 2 4 3 3 4v15c3-2 6-1 9 2 3-3 6-4 9-2V4c-3-2-6-1-9 1Z"/>',
     register:'<circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/>',
     review:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12.5 10.5 15l5.5-6"/>',
     supervisorReview:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 12.5 10.5 15l5.5-6"/>',

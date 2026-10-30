@@ -27,6 +27,7 @@ import { installFormProtection } from './app/submission.js';
 import { renderStatistics, renderStatisticsDetail, statisticsDetailContext } from './app/statistics.js';
 import { toast } from './app/toast.js';
 import { renderVideoLearning } from './app/video-learning.js';
+import { renderLearningShares } from './app/learning-shares.js';
 
 configureViews({
   home: renderHome,
@@ -59,6 +60,7 @@ configureViews({
   rotationTest: renderRotationTest,
   announcements: renderAnnouncements,
   videoLearning: renderVideoLearning,
+  learningShares: renderLearningShares,
 });
 
 installSecurityEvents();

@@ -28,6 +28,7 @@
 | [self-recognition-batch.md](self-recognition-batch.md) | 本人认可多条登记与共用照片 |
 | [recognition-upload-timing.md](recognition-upload-timing.md) | 认可提交分段诊断、日志字段及后台上传讨论边界 |
 | [announcements.md](announcements.md) | 业务公告发布、培训码签字、补收、授权、跟进导出和响应式布局 |
+| [learning-shares.md](learning-shares.md) | 学习分享、共同修改、跨圈七天审批与阅读水印 |
 | [announcement-image-generation.md](announcement-image-generation.md) | 公告模板制图、个人待用素材、图片上传和访问权限 |
 | [getting-started.md](getting-started.md) | 本地运行和测试 |
 | [local-hardening-20261016.md](local-hardening-20261016.md) | 路径隔离、提交校验及完整角色测试夹具（未上线） |

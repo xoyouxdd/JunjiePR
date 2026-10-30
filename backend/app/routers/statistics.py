@@ -9,7 +9,7 @@ from io import BytesIO
 from time import monotonic
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from sqlalchemy.exc import IntegrityError
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -118,6 +118,7 @@ class AvatarOutfit(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     avatar_key: str
     frame: str
+    name: str = Field(default="", max_length=12)
 
 
 class AvatarWardrobeUpdate(BaseModel):
@@ -152,6 +153,10 @@ def save_avatar_wardrobe(payload: AvatarWardrobeUpdate, response: Response,
         raise HTTPException(422, "请选择头像库中的有效头像")
     allowed = {key for key, _ in AVATAR_FRAMES}
     for outfit in payload.presets:
+        if outfit and outfit.name:
+            outfit.name = outfit.name.strip()
+            if not outfit.name:
+                raise HTTPException(422, "搭配名称不能为空")
         if outfit and (outfit.avatar_key not in catalog or (outfit.frame not in allowed and not re.fullmatch(r"medal:\d{4}-(?:0[1-9]|1[0-2]):(?:0|10|20|30|40|50|60|70|80|90)", outfit.frame))):
             raise HTTPException(422, "搭配中的头像或边框无效")
     data = payload.model_dump()

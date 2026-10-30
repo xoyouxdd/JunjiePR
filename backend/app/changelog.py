@@ -6,6 +6,10 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.10.30.3", "date": "2026-10-30", "status": "candidate",
+     "items": [{"summary": "新增学习分享区", "detail": "按景点圈浏览学习攻略；TR直接发布，同圈TR及主管以上可提交修改，由原发布或交接后的负责TR确认。支持点赞星标、管理下架与交接。跨圈材料由本组组长人工确认多资质后开放7天，仅审批申请进入组长待办；正文和附件阅读框叠加查阅人身份水印。", "audiences": ["all"]},
+               {"summary": "今日小祝福", "detail": "今日工作增加默认收起的祝福刮卡，支持直接查看和换一句；100条独立祝福与2000种组合在当前设备本地抽取，记住当天内容并避开近期90条，与积分考核无关。", "audiences": ["all"]},
+               {"summary": "头像搭配与每周灵感", "detail": "个人装扮完善搭配命名与分区展示，新增每周搭配灵感，按需预览和保存。", "audiences": ["all"]}]},
     {"version": "2026.10.30.2", "date": "2026-10-30", "status": "candidate",
      "items": [{"summary": "个人头像装扮更新", "detail": "扩充头像素材并完善个人头像装扮及偏好保存，沿用现有身份和访问权限。", "audiences": ["all"]}]},
     {
