@@ -23,6 +23,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
    await page.locator('[data-ok]').click();assert(await page.locator('[data-timeout-notified]').isVisible());
    await page.locator('[data-timeout-notified]').check();await page.locator('[data-ok]').click();
    await page.waitForFunction(()=>RT.data.day.timeoutCases.length===0);
+   await page.locator('.rt-timeout-banner').waitFor({state:'detached'});
    assert.equal(await page.locator('.rt-timeout-banner').count(),0);
    const state=await page.evaluate(()=>{const p=RT.data.day.persons.find(p=>p.pid==='9710000'),next=RT.data.day.persons.find(p=>p.pid==='9710010');return {onpost:p.state==='onpost',next:next.task,hold:p.entryHold};});
    assert.equal(state.onpost,executed);assert(state.next&&state.next.deadlineAt===state.next.allowedAt+3);if(!executed)assert(state.hold);

@@ -592,9 +592,12 @@ def test_timeout_screen_ack_is_immediately_ready_and_reclaims_only_unowned_task(
         db.info['rotation_formal']=True
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
-            p=state['persons']['9710000'];p['readyAt']=now-4;p['assign']['departAt']=now-4
-            state['persons']['9710010'].update(state='rest',readyAt=now+(2 if transferred else 10),assign=None)
             eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
+            W.plan(eng,now)  # Reproduce a task materialized before fixture setup.
+            p=state['persons']['9710000'];assert (p.get('assign') or {}).get('taskId')
+            state['rotationTasks']={};p['assign'].pop('taskId',None)
+            p['readyAt']=now-4;p['assign']['departAt']=now-4
+            state['persons']['9710010'].update(state='rest',readyAt=now+(2 if transferred else 10),assign=None)
             W.plan(eng,now-4);original=W.task_for(eng,p);old_id=original['id'];W.tick(eng,now)
             assert original['status']==('assigned' if transferred else 'waiting_transfer')
             S.save_day(db,row,state)
