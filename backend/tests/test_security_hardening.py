@@ -324,7 +324,7 @@ def test_versions_come_from_a_single_source() -> None:
         # missing, unversioned, stale, extra or duplicate references must fail.
         for page, entrypoint, extra_styles in (
             (login_page, "login.js", []),
-            (app_page, "app.js", ["static/css/workspace-ui.css", "static/css/announcements.css", "static/css/workbench.css", "static/css/avatars.css"]),
+            (app_page, "app.js", ["static/css/workspace-ui.css", "static/css/announcements.css", "static/css/workbench.css", "static/css/avatars.css", "static/css/learning-shares.css"]),
         ):
             resources = re.findall(r'(?:src|href)="(static/[^\"]+)"', page)
             expected_resources = [
@@ -346,7 +346,7 @@ def test_versions_come_from_a_single_source() -> None:
         reachable = {"./" + path.relative_to(app_root).as_posix() for path in frontend_sources() if path != STATIC_ROOT.resolve() / "js" / "app.js"}
         assert set(imports) == reachable
         assert all(target == f"{specifier}?v={STATIC_CACHE_VERSION}" for specifier, target in imports.items())
-        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 9 + len(imports)
+        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 10 + len(imports)
         assert f'static/css/style.css?v={STATIC_CACHE_VERSION}' in app_page
         assert f'src="static/js/app.js?v={STATIC_CACHE_VERSION}"' in app_page
         assert 'type="module"' in app_page
