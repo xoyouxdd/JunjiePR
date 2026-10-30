@@ -75,6 +75,7 @@ def resources(task):
 
 
 def valid(eng, task):
+    if task.get('status')=='exception_hold':return False
     owner=eng.P.get(task.get('owner'))
     if task.get('status')=='assigned' and (not owner or owner.get('state') not in ('ready','rest','meal') or owner.get('entryHold')):
         return False
@@ -170,8 +171,10 @@ def acknowledge_timeout(eng, p, now):
 
 
 def tick(eng, now):
-    changed = False
-    closed=sorted([t for t in eng.d.get('rotationTasks',{}).values() if t['status'] not in ACTIVE],
+    from app.rotation import timeout_cases as C
+    changed = C.discover(eng,now)
+    protected=C.protected_tasks(eng)
+    closed=sorted([t for t in eng.d.get('rotationTasks',{}).values() if t['status'] not in ACTIVE|{'exception_hold'} and t['id'] not in protected],
                   key=lambda t:t.get('executedAt',t.get('allowedAt',0)),reverse=True)
     for task in closed[100:]:
         eng.d['rotationTasks'].pop(task['id'],None)
@@ -182,6 +185,7 @@ def tick(eng, now):
                 p['assign'] = None
                 p['entryHold'] = {'reason':'任务超时，请确认知晓后重新领取', 'at':now, 'task':task['id']}
                 p['taskTimeout'] = {'task':task['id'], 'line':task['line'], 'at':now,
+                                    'originalTask':deepcopy(task),
                                     'entryKey':task['moves'][0]['to'],'mode':task['template']['mode'],
                                     'transferredTo':None, 'acknowledged':False}
                 task.setdefault('previousOwners', []).append(p['pid'])
@@ -220,6 +224,7 @@ def tick(eng, now):
                 eng.h.log('task_transfer','system',p['pid'],task['line'],None,
                           {'task':task['id'],'from':task.get('transferredFrom'),'allowedAt':at,'deadlineAt':at+3})
                 changed = True
+    changed=C.fill(eng,now) or changed
     return replan(eng, now) or changed
 
 
@@ -235,7 +240,8 @@ def _build_batch(eng, line, people, at, now):
     """Produce a full mapping, then split it into disjoint paths from newcomers."""
     from app.rotation.engine import ActionError
     tasks = eng.d['rotationTasks']
-    reserved = {key for t in tasks.values() if t['status'] in ACTIVE for key in t['expected']}
+    from app.rotation import timeout_cases as C
+    reserved = {key for t in tasks.values() if t['status'] in ACTIVE|{'exception_hold'} for key in t['expected']} | C.reserved(eng)
     indices = [i for i,post in enumerate(line['posts']) if available_at(post,at)
                and not held(post) and post['key'] not in reserved]
     initial = {i:line['posts'][i].get('occ') for i in indices}
@@ -305,10 +311,12 @@ def _build_batch(eng, line, people, at, now):
 
 
 def plan(eng, now):
-    changed=False
+    from app.rotation import timeout_cases as C
+    changed=C.discover(eng,now)
+    changed=C.fill(eng,now) or changed
     for line in eng.d['lines']:
         if not line.get('active'): continue
-        candidates=[p for p in eng.P.values() if p.get('assign') and not p['assign'].get('taskId')
+        candidates=[p for p in eng.P.values() if p.get('assign') and not p['assign'].get('taskId') and not p['assign'].get('queueId')
                     and p['assign']['line']==line['id'] and not p.get('entryHold')
                     and p.get('state') in ('rest','meal','ready')]
         candidates.sort(key=lambda p:(max(p['assign']['departAt'],p.get('readyAt') or now,p['assign'].get('notBefore',0)),p['pid']))
@@ -323,6 +331,11 @@ def plan(eng, now):
             for p in cohort:
                 candidates.remove(p)
                 if not (p.get('assign') or {}).get('taskId'):
+                    blocked_by_task=any(t['status'] in ACTIVE|{'exception_hold'} and t['line']==line['id'] for t in eng.d['rotationTasks'].values())
+                    possible=C.nominal(eng,p,now) if blocked_by_task else None
+                    if possible and any(t['status'] in ACTIVE|{'exception_hold'} and t['line']==line['id']
+                                        and resources(t)&resources(possible) for t in eng.d['rotationTasks'].values()):
+                        eng.d.setdefault('timeoutBlockedNeeds',{})[p['pid']]={'template':deepcopy(possible['template']),'at':now}
                     p['assign']=None
                     p.pop('_taskRefresh',None)
     return changed

@@ -135,6 +135,7 @@ def action_center_recognition_details(db: Session, rows: list[RecognitionRecord]
 def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     """A read-only queue built from existing workflow records and role scopes."""
     items: list[dict] = []
+    rotation_timeout_cases = []
     # Count only materialized formal steps; this read does not advance the engine.
     from app.routers.rotation_board import can_enter as rotation_allowed
     from app.rotation.namespace import FORMAL_TABLES
@@ -148,15 +149,24 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
         for aid in sorted(aids):
             row = db.query(FORMAL_TABLES.RotationDay).filter_by(attraction_id=aid,work_date=current.date().isoformat()).first()
             if row and row.status=='live':
-                person=json.loads(row.state_json).get('persons',{}).get(user.employee.employee_no)
+                rotation_state=json.loads(row.state_json)
+                person=rotation_state.get('persons',{}).get(user.employee.employee_no)
+                from app.routers.rotation_board import capabilities as rotation_capabilities
+                if aid==user.employee.attraction_id and rotation_capabilities(user)['can_operate']:
+                    rotation_timeout_cases.extend({'id':c['id'],'line':c['line'],'status':c['status'],'handler':c.get('handler')}
+                        for c in rotation_state.get('timeoutCases',{}).values() if c['status'] in {'open','handling'})
                 now_min=current.hour*60+current.minute+current.second/60
                 if person:
                     assignment=person.get('assign') or {}
                     config=db.query(FORMAL_TABLES.RotationConfig).filter_by(attraction_id=aid).first()
                     early=json.loads(config.settings_json or '{}').get('departEarly',1) if config else 1
                     actionable=person.get('state') in ('walkback','pending') or bool(person.get('entryHold') and person.get('state') in ('ready','rest')) or (person.get('state')=='ready' and assignment and now_min>=max(person.get('readyAt') or now_min,assignment.get('notBefore',0),assignment.get('departAt',1440)-early))
+                    paused=bool(assignment.get('queueId')) or any(c['status'] in {'open','handling'} and user.employee.employee_no in c['people'] for c in rotation_state.get('timeoutCases',{}).values())
+                    if paused and person.get('state') in ('ready','rest','meal'):actionable=False
                     if actionable:actionable_count+=1
         if actionable_count:items.append(action_center_item('rotation_step','本人轮岗待确认',actionable_count,'rotationTest','warning','确认待上岗或待休息（吃饭），同步对应景点圈轮岗看板。'))
+    if rotation_timeout_cases:
+        items.append(action_center_item('rotation_timeout_related','同线关联任务待核实',len(rotation_timeout_cases),'rotationTest','critical','超时导致同线关联任务暂停，请核实执行情况并恢复相关任务。'))
 
     from app.announcements import summary as announcement_summary
     from app.learning import approval_rows
@@ -262,7 +272,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     order = {"critical": 0, "warning": 1, "info": 2}
     items.sort(key=lambda row: (order.get(row["severity"], 9), row["title"]))
     return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month,
-            "announcement_counts": announcement_counts}
+            "announcement_counts": announcement_counts,"rotation_timeout_cases":rotation_timeout_cases}
 
 
 @router.post("/admin/backup-health/dismiss")

@@ -4,8 +4,9 @@ from io import BytesIO
 import json
 from pathlib import Path
 from uuid import uuid4
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -13,17 +14,20 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app import learning as domain
-from app.learning_models import LearningShare as Share, LearningRevision as Revision, LearningReaction as Reaction, LearningAccess as Access, LearningAsset as Asset
+from app.learning_models import LearningShare as Share, LearningRevision as Revision, LearningReaction as Reaction, LearningAccess as Access, LearningAsset as Asset, LearningDraft as Draft, LearningFeedback as Feedback
 from app.v2_auth import current_user, V2User
 from app.v2_database import get_db, FILE_DIR
 from app.v2_models import Employee
 from app.v2_services import write_audit
 
 router = APIRouter(prefix='/learning', tags=['learning'])
+CATEGORIES = ('未分类', '开场准备', '岗位操作', '异常处理', '经验技巧')
+Category = Literal['未分类', '开场准备', '岗位操作', '异常处理', '经验技巧']
 
 
-def member(user=Depends(current_user)):
+def member(response: Response, user=Depends(current_user)):
     domain.eligible(user)
+    response.headers.update({'Cache-Control':'private, no-store','Vary':'Cookie'})
     return user
 
 
@@ -33,6 +37,7 @@ class Content(BaseModel):
     assets: list[int] = Field(default_factory=list, max_length=8)
     summary: str = Field(default='', max_length=500)
     expected_version: int = Field(default=1, ge=1)
+    category: Category | None = None
 
 
 class Decision(BaseModel):
@@ -96,13 +101,14 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(member)):
         'access_status':grants[c.id].status if c.id in grants and grants[c.id].home_circle_id==user.employee.attraction_id else None,
         'expires_at':grants[c.id].expires_at if c.id in grants and grants[c.id].home_circle_id == user.employee.attraction_id else None} for c in domain.circles(db)],
         'can_publish':user.has_role('TR') and user.employee.attraction_id in {c.id for c in domain.circles(db)},
+        'can_draft':domain.editing(user,user.employee.attraction_id), 'categories':CATEGORIES,
         'pending_revisions':pending,'approvals':len(domain.approval_rows(db,user)),
         'leader':{'id':leader.id,'name':leader.name} if leader else None,
         'viewer':{'name':user.name,'employee_no':user.employee.employee_no}}
 
 
 @router.get('')
-def listing(circle_id: int, view: str = 'circle', page: int = Query(1, ge=1), db: Session = Depends(get_db), user: V2User = Depends(member)):
+def listing(circle_id: int, view: str = 'circle', page: int = Query(1, ge=1), keyword: str = Query('', max_length=100), category: Category | None = None, db: Session = Depends(get_db), user: V2User = Depends(member)):
     circle_or_fail(db,circle_id)
     q = db.query(Share).filter_by(circle_id=circle_id, status='published')
     if view == 'star':
@@ -111,6 +117,8 @@ def listing(circle_id: int, view: str = 'circle', page: int = Query(1, ge=1), db
         q=q.filter(Share.owner_id==user.id)
     elif view != 'circle':
         raise HTTPException(400,'栏目不正确')
+    if keyword.strip():q=q.filter(Share.title.contains(keyword.strip(),autoescape=True))
+    if category:q=q.filter(Share.category==category)
     total=q.count()
     rows=q.order_by(Share.updated_at.desc(),Share.id.desc()).offset((page-1)*20).limit(20).all()
     ids=[r.id for r in rows]
@@ -119,7 +127,7 @@ def listing(circle_id: int, view: str = 'circle', page: int = Query(1, ge=1), db
     reactions={r.share_id:r for r in db.query(Reaction).filter(Reaction.share_id.in_(ids),Reaction.employee_id==user.id)}
     pending=dict(db.query(Revision.share_id,func.count(Revision.id)).filter(Revision.share_id.in_(ids),Revision.status=='pending').group_by(Revision.share_id).all())
     allowed=domain.readable(db,user,circle_id)
-    return {'items':[{'id':r.id,'title':r.title,'version':r.version,'owner_id':r.owner_id,'owner':owners.get(r.owner_id,''),
+    return {'items':[{'id':r.id,'title':r.title,'category':r.category,'version':r.version,'owner_id':r.owner_id,'owner':owners.get(r.owner_id,''),
         'updated_at':r.updated_at,'locked':not allowed,'likes':counts.get(r.id,0),
         'liked':bool(reactions.get(r.id) and reactions[r.id].liked),'starred':bool(reactions.get(r.id) and reactions[r.id].starred),
         'pending_revisions':pending.get(r.id,0) if r.owner_id==user.id else 0} for r in rows],
@@ -128,16 +136,21 @@ def listing(circle_id: int, view: str = 'circle', page: int = Query(1, ge=1), db
 
 @router.post('')
 def publish(data: Content, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    result = create_share(db,user,data)
+    db.commit()
+    return result
+
+
+def create_share(db, user, data):
     circle_or_fail(db,user.employee.attraction_id)
     if not user.has_role('TR'):
         raise HTTPException(403,'仅本圈TR可以直接发布攻略')
     content_valid(db,user,data)
-    row=Share(circle_id=user.employee.attraction_id,owner_id=user.id,publisher_id=user.id,title=data.title.strip(),body=data.body,assets=json.dumps(data.assets))
+    row=Share(circle_id=user.employee.attraction_id,owner_id=user.id,publisher_id=user.id,title=data.title.strip(),body=data.body,category=data.category or '未分类',assets=json.dumps(data.assets))
     db.add(row);db.flush()
     db.add(Revision(share_id=row.id,editor_id=user.id,base_version=1,title=row.title,body=row.body,assets=row.assets,
-        summary='首次发布',status='published',reviewed_by=user.id,reviewed_at=datetime.now()))
+        category=row.category,summary='首次发布',status='published',reviewed_by=user.id,reviewed_at=datetime.now()))
     write_audit(db,user.employee,'发布学习攻略','learning_share',row.id,after={'title':row.title,'circle_id':row.circle_id})
-    db.commit()
     return {'id':row.id,'version':row.version}
 
 
@@ -237,6 +250,119 @@ async def upload(file: UploadFile = File(...), circle_id: int = Form(...), db: S
     return {'id':row.id,'filename':row.filename,'media_type':media}
 
 
+class DraftInput(BaseModel):
+    title: str = Field(default='', max_length=100)
+    body: str = Field(default='', max_length=20000)
+    assets: list[int] = Field(default_factory=list, max_length=8)
+    category: Category = '未分类'
+    summary: str = Field(default='', max_length=500)
+    share_id: int | None = Field(default=None,ge=1)
+    base_version: int = Field(default=1, ge=1)
+    expected_version: int = Field(default=1, ge=1)
+
+
+class DraftVersion(BaseModel):
+    expected_version: int = Field(ge=1)
+
+
+def draft_owned(db, user, id):
+    row=db.get(Draft,id)
+    if not row or row.employee_id!=user.id:raise HTTPException(404,'草稿不存在')
+    if not domain.editing(user,row.circle_id) or (not row.share_id and row.circle_id!=user.employee.attraction_id):
+        raise HTTPException(403,'岗位或景点圈已变化，不能继续编辑此草稿')
+    if row.share_id:
+        share=db.get(Share,row.share_id);domain.require_read(db,user,share)
+        if share.circle_id!=row.circle_id:raise HTTPException(403,'文档所属景点圈已变化')
+    return row
+
+
+def draft_payload(db,row):
+    assets=db.query(Asset).filter(Asset.id.in_(json.loads(row.assets))).all()
+    return {'id':row.id,'title':row.title,'body':row.body,'category':row.category,'summary':row.summary,
+            'share_id':row.share_id,'base_version':row.base_version,'version':row.version,'updated_at':row.updated_at,
+            'assets':[{'id':a.id,'filename':a.filename,'media_type':a.media_type} for a in assets]}
+
+
+@router.get('/drafts')
+def draft_list(page: int = Query(1,ge=1), keyword: str = Query('',max_length=100), category: Category | None = None, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    if not domain.editing(user,user.employee.attraction_id):raise HTTPException(403,'没有草稿编辑权限')
+    allowed={c.id for c in domain.circles(db) if domain.editing(user,c.id)}
+    q=db.query(Draft).filter(Draft.employee_id==user.id,Draft.circle_id.in_(allowed))
+    if keyword.strip():q=q.filter(Draft.title.contains(keyword.strip(),autoescape=True))
+    if category:q=q.filter_by(category=category)
+    total=q.count()
+    rows=q.order_by(Draft.updated_at.desc(),Draft.id.desc()).offset((page-1)*20).limit(20).all()
+    return {'items':[{'id':r.id,'title':r.title,'category':r.category,'version':r.version,'updated_at':r.updated_at} for r in rows],
+            'page':page,'pages':max(1,(total+19)//20),'total':total}
+
+
+def validate_draft(db,user,data):
+    circle_or_fail(db,user.employee.attraction_id)
+    share=db.get(Share,data.share_id) if data.share_id else None
+    if data.share_id:
+        domain.require_read(db,user,share)
+    elif not user.has_role('TR'):raise HTTPException(403,'仅本圈TR可起草新攻略')
+    circle_id=share.circle_id if share else user.employee.attraction_id
+    if not domain.editing(user,circle_id):raise HTTPException(403,'没有草稿编辑权限')
+    assets_valid(db,user,data.assets,share)
+    return circle_id
+
+
+@router.post('/drafts')
+def create_draft(data: DraftInput, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    circle_id=validate_draft(db,user,data)
+    row=Draft(employee_id=user.id,circle_id=circle_id,share_id=data.share_id,base_version=data.base_version,
+              title=data.title,body=data.body,category=data.category,summary=data.summary,assets=json.dumps(data.assets))
+    db.add(row);db.flush()
+    write_audit(db,user.employee,'保存知识库草稿','learning_draft',row.id)
+    db.commit();return draft_payload(db,row)
+
+
+@router.get('/drafts/{id}')
+def draft_detail(id:int, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    return draft_payload(db,draft_owned(db,user,id))
+
+
+@router.put('/drafts/{id}')
+def update_draft(id:int,data: DraftInput, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    row=draft_owned(db,user,id)
+    if (data.share_id,data.base_version)!=(row.share_id,row.base_version):raise HTTPException(409,'草稿来源已变化，请重新打开')
+    validate_draft(db,user,data)
+    count=db.query(Draft).filter_by(id=id,employee_id=user.id,version=data.expected_version).update(
+        {'title':data.title,'body':data.body,'category':data.category,'summary':data.summary,'assets':json.dumps(data.assets),
+         'version':Draft.version+1,'updated_at':datetime.now()},synchronize_session=False)
+    if not count:raise HTTPException(409,'草稿已在其他页面更新，请重新打开后核对')
+    db.commit();db.expire_all();return draft_payload(db,db.get(Draft,id))
+
+
+@router.delete('/drafts/{id}')
+def delete_draft(id:int,data: DraftVersion, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    draft_owned(db,user,id)
+    if not db.query(Draft).filter_by(id=id,employee_id=user.id,version=data.expected_version).delete(synchronize_session=False):raise HTTPException(409,'草稿已变化，请刷新')
+    db.commit();return {'ok':True}
+
+
+@router.post('/drafts/{id}/publish')
+def publish_draft(id:int,data: DraftVersion, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    row=draft_owned(db,user,id)
+    if row.version!=data.expected_version:raise HTTPException(409,'草稿已变化，请重新预览')
+    if not row.title.strip():raise HTTPException(400,'请填写标题')
+    content=Content(title=row.title,body=row.body,assets=json.loads(row.assets),summary=row.summary,category=row.category,expected_version=row.base_version)
+    # Claim the draft in the same transaction as publication, preventing duplicate publication.
+    if not db.query(Draft).filter_by(id=id,employee_id=user.id,version=data.expected_version).delete(synchronize_session=False):raise HTTPException(409,'草稿已经被处理')
+    result=create_revision(db,user,row.share_id,content) if row.share_id else create_share(db,user,content)
+    db.commit();return result
+
+
+@router.get('/assets/{asset_id}')
+def private_asset(asset_id:int, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    a=db.get(Asset,asset_id)
+    if not a or a.owner_id!=user.id or not domain.editing(user,a.circle_id):raise HTTPException(403,'没有草稿附件查看权限')
+    path=(FILE_DIR/a.key).resolve()
+    if FILE_DIR.resolve() not in path.parents or not path.is_file():raise HTTPException(404,'附件不存在')
+    return FileResponse(path,media_type=a.media_type,headers={'Cache-Control':'private, no-store','Content-Disposition':'inline','X-Content-Type-Options':'nosniff'})
+
+
 @router.get('/{id}')
 def detail(id: int, db: Session = Depends(get_db), user: V2User = Depends(member)):
     row=db.get(Share,id);domain.require_read(db,user,row)
@@ -244,7 +370,7 @@ def detail(id: int, db: Session = Depends(get_db), user: V2User = Depends(member
     assets=db.query(Asset).filter(Asset.id.in_(json.loads(row.assets))).all()
     reaction=db.query(Reaction).filter_by(share_id=id,employee_id=user.id).first()
     grant=db.query(Access).filter_by(employee_id=user.id,circle_id=row.circle_id,status='approved').first()
-    return {'id':row.id,'title':row.title,'body':row.body,'circle_id':row.circle_id,'version':row.version,
+    return {'id':row.id,'title':row.title,'body':row.body,'category':row.category,'circle_id':row.circle_id,'version':row.version,
         'owner':owner.name,'owner_id':row.owner_id,'publisher_id':row.publisher_id,'updated_at':row.updated_at,
         'assets':[{'id':a.id,'filename':a.filename,'media_type':a.media_type} for a in assets],
         'can_edit':domain.editing(user,row.circle_id),'can_manage':domain.management(user,row.circle_id),
@@ -277,6 +403,11 @@ def reaction(id: int, data: ReactionInput, db: Session = Depends(get_db), user: 
 
 @router.post('/{id}/revisions')
 def edit(id: int, data: Content, db: Session = Depends(get_db), user: V2User = Depends(member)):
+    result=create_revision(db,user,id,data)
+    db.commit();return result
+
+
+def create_revision(db,user,id,data):
     row=db.get(Share,id);domain.require_read(db,user,row)
     if not domain.editing(user,row.circle_id):raise HTTPException(403,'仅本圈TR及主管以上可参与修改')
     if not data.summary.strip():raise HTTPException(400,'请填写修改说明')
@@ -284,12 +415,12 @@ def edit(id: int, data: Content, db: Session = Depends(get_db), user: V2User = D
     if row.version!=data.expected_version:raise HTTPException(409,'公开版本已更新，请重新打开文档')
     direct=domain.owner_can_publish(db,user,row)
     revision=Revision(share_id=id,editor_id=user.id,base_version=row.version,title=data.title.strip(),body=data.body,
-        assets=json.dumps(data.assets),summary=data.summary,status='published' if direct else 'pending',
+        assets=json.dumps(data.assets),category=data.category or row.category,summary=data.summary,status='published' if direct else 'pending',
         reviewed_by=user.id if direct else None,reviewed_at=datetime.now() if direct else None)
     db.add(revision)
-    if direct:claim(db,row,data.expected_version,title=revision.title,body=revision.body,assets=revision.assets)
+    if direct:claim(db,row,data.expected_version,title=revision.title,body=revision.body,assets=revision.assets,category=revision.category)
     write_audit(db,user.employee,'修改学习攻略','learning_share',id,after={'direct':direct,'summary':data.summary})
-    db.commit()
+    db.flush()
     return {'id':revision.id,'status':revision.status}
 
 
@@ -301,7 +432,7 @@ def revisions(id: int, db: Session = Depends(get_db), user: V2User = Depends(mem
     if row.owner_id!=user.id and not domain.management(user,row.circle_id):q=q.filter_by(editor_id=user.id)
     rows=q.order_by(Revision.created_at.desc()).limit(50).all()
     names={e.id:e.name for e in db.query(Employee).filter(Employee.id.in_({r.editor_id for r in rows}))}
-    return {'items':[{'id':r.id,'editor':names[r.editor_id],'base_version':r.base_version,'title':r.title,'body':r.body,
+    return {'items':[{'id':r.id,'editor':names[r.editor_id],'base_version':r.base_version,'title':r.title,'body':r.body,'category':r.category,
         'assets':[{'id':a.id,'filename':a.filename,'media_type':a.media_type} for a in db.query(Asset).filter(Asset.id.in_(json.loads(r.assets)))],
         'summary':r.summary,'status':r.status,'reason':r.reason,'created_at':r.created_at} for r in rows]}
 
@@ -332,7 +463,7 @@ def review(id: int, revision_id: int, data: Decision, db: Session = Depends(get_
     count=db.query(Revision).filter_by(id=r.id,status='pending').update({'status':'published' if data.action=='approve' else 'returned',
         'reason':data.reason,'reviewed_by':user.id,'reviewed_at':datetime.now()},synchronize_session=False)
     if not count:raise HTTPException(409,'修改稿已被处理')
-    if data.action=='approve':claim(db,row,data.expected_version,title=r.title,body=r.body,assets=r.assets)
+    if data.action=='approve':claim(db,row,data.expected_version,title=r.title,body=r.body,assets=r.assets,category=r.category)
     write_audit(db,user.employee,'审核学习攻略修改','learning_share',id,after={'revision_id':r.id,'action':data.action,'reason':data.reason})
     db.commit()
     return {'ok':True}
@@ -357,4 +488,54 @@ def transfer(id: int, data: TransferInput, db: Session = Depends(get_db), user: 
     count=db.query(Share).filter_by(id=id,owner_id=row.owner_id,version=data.expected_version,status='published').update({'owner_id':data.employee_id},synchronize_session=False)
     if not count:raise HTTPException(409,'文档已变化，请刷新')
     write_audit(db,user.employee,'交接学习攻略','learning_share',id,after={'owner_id':data.employee_id,'reason':data.reason})
+    db.commit();return {'ok':True}
+
+
+class FeedbackInput(BaseModel):
+    kind: Literal['内容有误','需要补充','附件问题']
+    content: str = Field(min_length=1,max_length=500)
+    expected_version: int = Field(ge=1)
+
+
+class FeedbackDecision(BaseModel):
+    response: str = Field(min_length=1,max_length=500)
+    expected_version: int = Field(ge=1)
+
+
+def feedback_manager(user,share):
+    return domain.owner_can_publish(None,user,share) or domain.management(user,share.circle_id)
+
+
+@router.get('/{id}/feedback')
+def feedback_list(id:int,page:int=Query(1,ge=1),db:Session=Depends(get_db),user:V2User=Depends(member)):
+    share=db.get(Share,id);domain.require_read(db,user,share)
+    manage=feedback_manager(user,share)
+    q=db.query(Feedback).filter_by(share_id=id)
+    if not manage:q=q.filter_by(employee_id=user.id)
+    total=q.count();rows=q.order_by(Feedback.created_at.desc(),Feedback.id.desc()).offset((page-1)*20).limit(20).all()
+    names={e.id:e.name for e in db.query(Employee).filter(Employee.id.in_({r.employee_id for r in rows}))}
+    return {'items':[{'id':r.id,'author':names.get(r.employee_id,''),'kind':r.kind,'content':r.content,'share_version':r.share_version,
+                      'status':r.status,'response':r.response,'created_at':r.created_at,'handled_at':r.handled_at,'version':r.version} for r in rows],
+            'can_manage':manage,'page':page,'pages':max(1,(total+19)//20)}
+
+
+@router.post('/{id}/feedback')
+def submit_feedback(id:int,data:FeedbackInput,db:Session=Depends(get_db),user:V2User=Depends(member)):
+    share=db.get(Share,id);domain.require_read(db,user,share)
+    if not data.content.strip():raise HTTPException(400,'请填写具体问题')
+    if data.expected_version!=share.version:raise HTTPException(409,'资料版本已更新，请重新查看后反馈')
+    row=Feedback(share_id=id,employee_id=user.id,share_version=share.version,kind=data.kind,content=data.content.strip())
+    db.add(row);db.flush();write_audit(db,user.employee,'提交知识库反馈','learning_feedback',row.id,after={'share_id':id,'kind':data.kind})
+    db.commit();return {'id':row.id,'status':row.status}
+
+
+@router.post('/{id}/feedback/{feedback_id}/resolve')
+def resolve_feedback(id:int,feedback_id:int,data:FeedbackDecision,db:Session=Depends(get_db),user:V2User=Depends(member)):
+    share=db.get(Share,id);domain.require_read(db,user,share)
+    if not feedback_manager(user,share):raise HTTPException(403,'仅作者或本圈负责人员可处理反馈')
+    if not data.response.strip():raise HTTPException(400,'请填写处理说明')
+    count=db.query(Feedback).filter_by(id=feedback_id,share_id=id,status='pending',version=data.expected_version).update(
+        {'status':'resolved','response':data.response.strip(),'handled_by':user.id,'handled_at':datetime.now(),'version':Feedback.version+1},synchronize_session=False)
+    if not count:raise HTTPException(409,'反馈已处理或已变化，请刷新')
+    write_audit(db,user.employee,'处理知识库反馈','learning_feedback',feedback_id,after={'share_id':id,'response':data.response.strip()})
     db.commit();return {'ok':True}

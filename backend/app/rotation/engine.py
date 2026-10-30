@@ -715,6 +715,7 @@ class Engine:
         return p.get('readyAt') or now
 
     def assignment_locked(self, p, now):
+        if (p.get('assign') or {}).get('queueId'):return True
         if (p.get('assign') or {}).get('taskId'):
             return True
         if self.d.get('taskWorkflow'):
@@ -735,6 +736,7 @@ class Engine:
         a = p.get('assign')
         if not a:
             return None
+        if a.get('queueId'):return '前序待确认，暂不计超时'
         if a.get('taskId'):
             from app.rotation.workflow import task_for, valid
             task = task_for(self, p)
@@ -768,6 +770,8 @@ class Engine:
             a = q.get('assign')
             if not a or q['state'] == 'heading':
                 continue
+            if a.get('queueId'):
+                continue  # Recovery queue owns this pending demand, not the ordinary stale-assignment path.
             issue = self.assignment_issue(q)
             if issue and self.assignment_locked(q, now):
                 message = issue + '，安排已固定，请联系主管核对'
@@ -959,7 +963,7 @@ class Engine:
         best = None
         modern=bool(self.d.get('taskWorkflow'))
         reserved={key for task in self.d.get('rotationTasks',{}).values()
-                  if task.get('status') in ('assigned','waiting_transfer') for key in task['expected']} if modern else set()
+                  if task.get('status') in ('assigned','waiting_transfer','exception_hold') for key in task['expected']} if modern else set()
         for order, L in enumerate(self.d['lines']):
             if not L.get('active'):
                 continue

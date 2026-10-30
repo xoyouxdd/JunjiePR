@@ -137,6 +137,14 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   assert(restoredOwner.person.canDepart);
   assert.equal(restoredOwner.person.task.allowedAt,restoredOwner.clock.minute);
   assert.equal(restoredOwner.person.task.deadlineAt,restoredOwner.clock.minute+3);
+  // Management identities use the same visible card on the shared board.
+  // This used to fail with the obsolete "本人确认已到场" restriction.
+  assert((await manager.request.post(base+'/__fixture/timeout',{data:{waiting:true,materialize_before_timeout:true}})).ok());
+  await board.reload();
+  const boardTimeout=board.locator('.rt-timeout [data-wf-pid="9710000"]');await boardTimeout.waitFor();
+  await boardTimeout.click();await board.locator('[data-ok]').click();
+  await board.waitForFunction(()=>!RT.data.day.persons.find(p=>p.pid==='9710000').entryHold);
+  assert(await board.evaluate(()=>{const p=RT.data.day.persons.find(p=>p.pid==='9710000');return p.canDepart&&p.readyAt===RT.data.clock.minute&&p.task.deadlineAt===RT.data.clock.minute+3;}));
   assert.deepEqual(errors,[]);console.log(engine+': shared screen, isolated permissions, inline rename, personal routes, undo, room/rest/meal confirmations, timed-out screen acknowledgement, receiver placement and 5 widths passed');
   await browser.close();browser=null;
  }

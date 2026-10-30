@@ -1,8 +1,17 @@
 'use strict';
 // Shared real-data presentation; screen devices never receive management controls.
+const workflowExpandedShifts = new Set();
+function workflowShiftGroups(list,chip,day,view){
+  const groups=new Map();
+  for(const p of list){const key=JSON.stringify([p.start,p.end]);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);}
+  return `<div class="rt-shift-groups">${[...groups.values()].sort((a,b)=>a[0].start-b[0].start||a[0].end-b[0].end).map(people=>{
+    const p=people[0],key=JSON.stringify([RT.data.attraction_name||'',day.date,view.daily?'daily':'live',p.start,p.end]);
+    return `<details class="rt-shift-group" data-workflow-shift="${esc(key)}" ${workflowExpandedShifts.has(key)?'open':''}><summary><span>${hm(p.start)}–${hm(p.end)}</span><span class="rt-shift-count">${people.length} 人</span></summary><div class="rt-chips">${people.map(chip).join('')}</div></details>`;
+  }).join('')}</div>`;
+}
 function shortRotationShift(p){
-  const part=value=>{const h=Math.floor(value/60)%24,m=Math.floor(value%60);return `${h}${m?pad2(m):''}`;};
-  return `${part(p.start)}-${part(p.end)}`;
+  const part=value=>{const h=Math.floor(value/60)%24,m=Math.floor(value%60);return `${pad2(h)}:${pad2(m)}`;};
+  return part(p.end);
 }
 function rotationName(p){return `<span class="rt-name-row"><strong>${esc(p.name)}</strong><small>${shortRotationShift(p)}</small></span>`;}
 function workflowTaskSummary(p){
@@ -18,8 +27,8 @@ function workflowComparison(p){
   return `<section class="rt-task-comparison"><h4>执行本任务前后</h4><div class="rt-task-columns"><div><p>执行前 · 当前站位</p>${table(t.beforePosts,false)}</div><div><p>执行后 · 预计站位</p>${table(t.afterPosts,true)}</div></div><small>蓝色仅标出本任务变化，不代表其他任务已经执行。</small></section>`;
 }
 function workflowPools(n,ops,view={}){
-  const day=view.day||RT.data.day,posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean))),ps=day.persons.filter(p=>!posted.has(p.pid)),seen=new Set();
-  const section=(title,list,chip,cls='')=>{list.forEach(p=>seen.add(p.pid));return `<section class="rt-sect ${cls}${list.length?'':' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(chip).join(''):'暂无'}</div></section>`;};
+  const day=view.day||RT.data.day,posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean))),allPeople=day.persons.filter(p=>!posted.has(p.pid)),ps=allPeople.filter(p=>view.daily||!p.timeoutCase&&!p.timeoutPending),seen=new Set();
+  const section=(title,list,chip,cls='')=>{list.forEach(p=>seen.add(p.pid));const contents=cls==='rt-others'&&list.length?workflowShiftGroups(list,chip,day,view):`<div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(chip).join(''):'暂无'}</div>`;return `<section class="rt-sect ${cls}${list.length?'':' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2>${contents}</section>`;};
   const drag=p=>ops&&['rest','meal','ready','notyet'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:'';
   const card=(p,action,body,cls='')=>{
     if(view.daily){
@@ -31,6 +40,7 @@ function workflowPools(n,ops,view={}){
     return `<${tag}${action?' type="button"':''} class="rt-chip ${cls}"${action?` data-wf-pid="${esc(p.pid)}" data-wf-action="${action}" ${can&&!confirmationBlocked()?'':'aria-disabled="true"'}`:''}${drag(p)}>${rotationName(p)}${body}${badges(p)}</${tag}>`;
   };
   let html='';
+  if(!view.daily){const paused=allPeople.filter(p=>p.timeoutCase||p.timeoutPending);if(paused.length)html+=section('关联任务待处理',paused,p=>card(p,null,`<span class="rt-go">${esc(p.timeoutCase?.line||p.timeoutPending?.line||'')} · ${p.timeoutCase?'待负责人核实':'等待前序完成'}</span><span class="rt-sub">旧详情暂停执行 · 暂不计确认超时</span>`,'late'),'rt-related-paused');}
   if(view.daily){
     const initial=p=>p.role==='rotation'&&p.state==='notyet'&&[420,435].includes(p.start);
     const pending=p=>['walkback','pending','op'].includes(p.state)||p.role==='op'&&p.state==='notyet';
@@ -58,7 +68,28 @@ function workflowBoardContent(day,n,ops,view={}){
 }
 function workflowBoardView(n,ops){
   const d=RT.data.day,pre=d.persons.length&&n<Math.min(...d.persons.map(p=>p.start));
-  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools"><button type="button" class="secondary ${d.hold101Active?'rt-101-on':''}" data-wf-101>${d.hold101Active?'取消 101 定岗':'101 定岗'}</button><button type="button" class="secondary" data-wf-undo>返回上一步</button></div>`:''}</div>${pre?'<p class="field-hint">只保存预排，不提前计时。岗位名双击修改，人员及岗位通过拖拽交换。</p>':''}${workflowBoardContent(d,n,ops)}</section>`;
+  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools"><button type="button" class="secondary ${d.hold101Active?'rt-101-on':''}" data-wf-101>${d.hold101Active?'取消 101 定岗':'101 定岗'}</button><button type="button" class="secondary" data-wf-undo>返回上一步</button></div>`:''}</div>${pre?'<p class="field-hint">只保存预排，不提前计时。岗位名双击修改，人员及岗位通过拖拽交换。</p>':''}${workflowTimeoutBanner(d,ops)}${workflowBoardContent(d,n,ops)}</section>`;
+}
+const workflowTimeoutSeen=new Set();
+function workflowTimeoutBanner(day,ops){
+  const cases=day.timeoutCases||[];
+  if(ops&&cases.length&&!RT.modalOpen&&!RT.submitting&&!RT.editingPost){const c=cases.find(c=>{const key='fz.rotation.timeout.notice:'+c.id;try{return !workflowTimeoutSeen.has(key)&&!sessionStorage.getItem(key);}catch(_){return !workflowTimeoutSeen.has(key);}});if(c)setTimeout(()=>{if(RT.modalOpen||!RT.data.day?.timeoutCases?.some(x=>x.id===c.id))return;const key='fz.rotation.timeout.notice:'+c.id;workflowTimeoutSeen.add(key);try{sessionStorage.setItem(key,'1');}catch(_){}confirmBox('强提醒 · '+c.line+'站位待核实','<p>超时影响同线关联任务，相关任务已暂停。请核实执行情况，补记完成或顺接任务。</p><p>关闭提醒后仍保留在看板及待办中，不会每分钟重复弹出。</p>','立即处理',()=>{setTimeout(()=>workflowHandleTimeout(c.id),0);return true;});},0);}
+  return cases.map(c=>`<section class="rt-timeout-banner" role="status"><div><strong>${esc(c.line)} · 关联任务待核实</strong><p>${c.people.length} 人受影响 · ${c.handler?'处理中：'+esc(c.handler):'等待负责人接手'}</p></div>${ops?`<button type="button" class="primary" data-wf-timeout="${esc(c.id)}">${c.handler&&c.handler!==me?.name?'接替处理':'立即处理'}</button>`:''}</section>`).join('')+(day.timeoutWaitingMatch||[]).map(d=>`<p class="rt-timeout-waiting">${esc(d.line)} · 顺接后的需求等待匹配</p>`).join('');
+}
+async function workflowHandleTimeout(id,takeover=false,reason=''){
+  const c=RT.data.day?.timeoutCases?.find(c=>c.id===id);if(!c){toast('异常已变化，请刷新',true);return;}
+  if(c.handler&&c.handler!==me?.name&&!takeover){formBox('接替异常处理',`<p>当前处理人：${esc(c.handler)}。请先联系对方。</p><label>交接原因<input name="reason" required maxlength="500"></label>`,values=>{setTimeout(()=>workflowHandleTimeout(id,true,values.reason),0);return true;});return;}
+  try{await rtPost('/api/rotation/act',{action:'timeout_claim',case_id:id,takeover,reason});await RT.load();}catch(error){toast(error.message,true);return;}
+  const current=RT.data.day?.timeoutCases?.find(c=>c.id===id);if(!current)return;
+  const people=RT.data.day.persons;
+  openModal(`<h3>${esc(current.line)} · 核实关联任务</h3><p class="field-hint">已接手。只纠正受影响任务，其他异常按原规则执行。</p><form data-timeout-form class="form-stack">${current.roots.map(r=>`<fieldset data-timeout-root="${esc(r.pid)}"><legend>${esc(r.name)} · ${hm(r.allowedAt)} 允许出发</legend><label>实际情况<select name="result"><option value="absent">未执行，顺接任务</option><option value="executed">已执行，代确认完成</option></select></label><label>实际执行时间（无法确认可留空）<input name="actualAt" type="time"></label><label>已执行但现已离岗时的当前去向<select name="offpost"><option value="">仍在现场岗位</option value="walkback">已下岗，待回休息室确认</option><option value="done">已下班</option><option value="away">已出圈</option></select></label><label class="checkbox-row"><input type="checkbox" name="returned">未执行人员现已返回，可以立即分配</label></fieldset>`).join('')}<p class="field-hint">逐岗核对现场当前人员。参考填入不是实际确认；后续已执行的结果应保留。</p><div class="rt-timeout-positions">${current.posts.map(post=>`<label>${esc(post.name)}<select data-timeout-position="${esc(post.key)}" ${post.hold?'disabled':''}><option value="">空岗</option>${people.map(p=>`<option value="${esc(p.pid)}" ${p.pid===post.pid?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label>`).join('')}</div><p class="field-hint">点击预览表示已核实以上站位。已执行时间不确定时标记待核实，从核实时间继续计时，不编造实际时间。</p><div class="modal-actions"><button type="button" class="secondary" data-close>暂不处理</button><button type="submit" class="primary">核对并预览恢复</button></div></form>`,modal=>{
+    modal.querySelectorAll('[data-timeout-root]').forEach(field=>{field.querySelector('[name=result]').onchange=()=>{const r=current.roots.find(r=>r.pid===field.dataset.timeoutRoot);const proposed=field.querySelector('[name=result]').value==='executed'?r.suggestedPositions:Object.fromEntries(current.posts.map(p=>[p.key,p.pid]));if(proposed&&current.roots.length===1)modal.querySelectorAll('[data-timeout-position]').forEach(select=>select.value=proposed[select.dataset.timeoutPosition]||'');};});
+    modal.querySelector('form').onsubmit=async event=>{event.preventDefault();const button=event.target.querySelector('[type=submit]');button.disabled=true;try{const decisions={};modal.querySelectorAll('[data-timeout-root]').forEach(field=>{const raw=field.querySelector('[name=actualAt]').value;decisions[field.dataset.timeoutRoot]={result:field.querySelector('[name=result]').value,actualAt:raw?Number(raw.slice(0,2))*60+Number(raw.slice(3)):null,offpost:field.querySelector('[name=offpost]').value,returned:field.querySelector('[name=returned]').checked};});const positions=Object.fromEntries([...modal.querySelectorAll('[data-timeout-position]')].map(select=>[select.dataset.timeoutPosition,select.value||null]));const preview=await rtPost('/api/rotation/timeout/preview',{case_id:id,decisions,positions,positions_verified:true});workflowTimeoutPreview(preview);}catch(error){toast(error.message,true);button.disabled=false;}};
+  });
+}
+function workflowTimeoutPreview(preview){
+  const line=lines=>lines.filter(l=>l.id===preview.line).map(l=>`<div class="rt-task-line"><header>${esc(l.id)}</header>${l.posts.map(p=>`<div class="rt-task-slot"><span>${esc(p.name)}</span><strong>${esc(p.occName||'空岗')}</strong></div>`).join('')}</div>`).join('');
+  confirmBox('核对纠正与任务顺接',`<div class="rt-task-columns"><div><p>原记录</p>${line(preview.before_lines)}</div><div><p>核实后</p>${line(preview.after_lines)}</div></div><h4>更新的任务</h4>${preview.updates.map(u=>u.waiting?`<p>${esc(u.name)}：等待前序完成后刷新路线，暂不计超时。</p>`:`<p><strong>${esc(u.name)}</strong>：${esc(u.task.line)} · ${esc(u.task.entryPost)}，${hm(u.task.allowedAt)} 可出发，${hm(u.task.deadlineAt)} 前确认。</p><ul>${u.task.routes.map(r=>`<li>${esc(r.name)} → ${esc(r.to)}</li>`).join('')}</ul>`).join('')}${preview.waitingMatch?`<p>${preview.waitingMatch} 项末端需求暂无人承接，保留等待匹配。</p>`:''}<label class="checkbox-row"><input type="checkbox" data-timeout-notified>已通知可能在途人员及相关岗位，按更新后的任务执行</label><p class="field-hint">全部同步成功才关闭异常；重复提交不重复推岗。</p>`,'确认纠正并恢复',async()=>{if(!document.querySelector('[data-timeout-notified]')?.checked){toast('请先核实并通知相关人员',true);return false;}const done=await act('/api/rotation/act',{...preview.request,notified:true},'异常已处理，关联任务已更新');if(!done)toast('请重新打开处理页面并预览最新安排',true);return done;});
 }
 function workflowUndo(){
   const lines=RT.data.day.lines;
@@ -75,8 +106,13 @@ function workflowUndo(){
 }
 document.addEventListener('DOMContentLoaded',()=>{
   const host=document.getElementById('rtApp');if(!host)return;
+  host.addEventListener('toggle',event=>{
+    const group=event.target;if(!group.matches?.('[data-workflow-shift]')||!group.isConnected)return;
+    if(group.open)workflowExpandedShifts.add(group.dataset.workflowShift);else workflowExpandedShifts.delete(group.dataset.workflowShift);
+  },true);
   host.addEventListener('click',event=>{if(event.target.closest('[data-wf-rename],.rt-inline-post-name'))event.stopImmediatePropagation();},true);
   host.addEventListener('click',event=>{
+    const timeout=event.target.closest('[data-wf-timeout]');if(timeout){void workflowHandleTimeout(timeout.dataset.wfTimeout);return;}
     const hold=event.target.closest('[data-wf-101]');
     if(hold){void act('/api/rotation/act',{action:'hold101',on:!RT.data.day.hold101Active},'101状态已同步').then(done=>{
       if(!done)return;

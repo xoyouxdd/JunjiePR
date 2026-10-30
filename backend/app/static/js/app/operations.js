@@ -5,7 +5,7 @@ import { beginViewRequest, render, registerPageCleanup } from './context.js';
 import { mountExportTasks } from './export-tasks.js';
 import { confirmModal } from './dialogs.js';
 import { esc } from './format.js';
-import { menuItems, navIcon, refreshActionBadge, renderTabs, setActionBadge } from './navigation.js';
+import { menuItems, navIcon, refreshActionBadge, renderTabs, setActionBadge, notifyRotationTimeoutCases } from './navigation.js';
 import { workItemDetailsHtml } from './records.js';
 import { bindUpgradeReviewActions, upgradeReviewCards } from './reviews.js';
 import { app, state } from './state.js';
@@ -34,6 +34,7 @@ async function renderActionCenter(){
   if(!request.isCurrent())return;
   const items=data.items||[],upgradeItems=upgradeData.items||[],total=Number(data.total||0)+upgradeItems.length;
   setActionBadge(total);
+  notifyRotationTimeoutCases(data.rotation_timeout_cases||[]);
   if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
   const severityOrder={critical:0,warning:1,info:2};
   const visibleItems=items.filter(item=>item.type!=='rotation_step').sort((a,b)=>(severityOrder[a.severity]??3)-(severityOrder[b.severity]??3));

@@ -4,8 +4,12 @@ import json
 
 
 def snapshot(state):
+    cases=state.get('timeoutCases',{})
     return deepcopy({'persons':state['persons'],'lines':state['lines'],
-                     'hold101Active':state.get('hold101Active',False),'closed':state.get('closed',False)})
+                     'hold101Active':state.get('hold101Active',False),'closed':state.get('closed',False),
+                     'timeoutCases':cases,'timeoutDemands':state.get('timeoutDemands',[]),
+                     'caseTasks':{id:t for id,t in state.get('rotationTasks',{}).items()
+                                  if t.get('recoveryCase') in cases or any(id in c['tasks'] for c in cases.values())}})
 
 
 def _posts(state):
@@ -24,12 +28,17 @@ def record(db, eng, before, action, actor, now):
     # Keep that person's original state even when scheduling itself didn't move them.
     pids=people
     lines={values[key]['line'] for values in (left,right) for key in keys if key in values}
+    related_cases={id:c for id,c in before.get('timeoutCases',{}).items() if c['line'] in lines}
+    for c in related_cases.values():pids.update(c['people'])
     payload={'action':action,'lines':sorted(lines),'minute':now,
              'resources':sorted({'post:'+key for key in keys}|{'person:'+pid for pid in people}),
              'beforePeople':{pid:before['persons'].get(pid) for pid in pids},
              'beforePosts':{key:left.get(key) for key in keys},
              'beforeLines':{l['id']:{k:v for k,v in l.items() if k!='posts'} for l in before['lines'] if l['id'] in lines},
              'before101':before.get('hold101Active',False),'beforeClosed':before.get('closed',False)}
+    if related_cases or any(c['line'] in lines for c in after.get('timeoutCases',{}).values()):
+        payload.update(beforeCases=related_cases,beforeDemands=[d for d in before.get('timeoutDemands',[]) if d['line'] in lines],
+                       beforeCaseTasks={id:t for id,t in before.get('caseTasks',{}).items() if t['line'] in lines})
     model=tables_for(db).RotationEvent
     db.add(model(attraction_id=eng.h.attraction_id,work_date=eng.h.day,minute=now,
                  event_type='workflow_checkpoint',actor_type='system',actor_name=getattr(actor,'name',str(actor)),
@@ -56,6 +65,7 @@ def plan(db, eng, line):
 
 def apply(eng, undo, now):
     from app.rotation import workflow as W
+    case_patches=[]
     for _,entry in reversed(undo['entries']):
         for pid,person in entry['beforePeople'].items():
             if person is not None:eng.P[pid]=deepcopy(person)
@@ -68,6 +78,7 @@ def apply(eng, undo, now):
             eng.line(item['line'])['posts'].insert(item['index'],deepcopy(item['post']))
         if entry['action'] in ('hold101','resume101'):eng.d['hold101Active']=entry['before101']
         if entry['action']=='set_close':eng.d['closed']=entry['beforeClosed']
+        if 'beforeCases' in entry:case_patches.append(entry)
     affected={v.split(':',1)[1] for v in undo['resources'] if v.startswith('person:')}
     for task in eng.d.get('rotationTasks',{}).values():
         if W.resources(task).intersection(undo['resources']) and (
@@ -81,6 +92,14 @@ def apply(eng, undo, now):
     for receipt in eng.d.get('confirmations',{}).values():
         if receipt.get('pid') in affected and receipt.get('minute',-1)>=undo['minute']:
             receipt['status']='reversed'
+    for entry in case_patches:
+        lines=set(entry['lines'])
+        eng.d['timeoutCases']={id:c for id,c in eng.d.get('timeoutCases',{}).items() if c['line'] not in lines}
+        eng.d['timeoutCases'].update(deepcopy(entry['beforeCases']))
+        eng.d['timeoutDemands']=[d for d in eng.d.get('timeoutDemands',[]) if d['line'] not in lines]+deepcopy(entry['beforeDemands'])
+        eng.d['rotationTasks'].update(deepcopy(entry['beforeCaseTasks']))
+        for task in entry['beforeCaseTasks'].values():
+            if task['status']=='exception_hold' and task.get('owner') in eng.P:W.bind(eng,eng.P[task['owner']],eng.d['rotationTasks'][task['id']])
     eng.d.setdefault('reversedCheckpoints',[]).extend(rid for rid,_ in undo['entries'])
     return affected
 

@@ -122,5 +122,11 @@ def display():
             eng,_=S.engine_for(db,S.load_config(db,aid),row,state);eng.tick(now);S.save_day(db,row,state)
     return {'ok':True}
 
+@app.post('/__fixture/related-timeout')
+def related_timeout():
+    from test_rotation_timeout_cases_api import setup_case
+    setup_case()
+    return {'ok':True}
+
 import uvicorn
 uvicorn.run(app,host='127.0.0.1',port=int(sys.argv[1]),log_level='warning')

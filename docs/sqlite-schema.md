@@ -1261,6 +1261,8 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 - 新表启动时由metadata建表，现有数据库不删除、不重写员工或历史轮岗数据。正式账号接管继续以同一员工号继承轮岗记录。
 # 学习分享表
 
+2026-10-31：`learning_shares` 和 `learning_revisions` 增加 `category` 字段，旧表通过幂等迁移补列，默认“未分类”。新增 `learning_drafts` 保存员工、圈、可选分享外键、公开基准版本、草稿内容及保存版本；新增 `learning_feedback` 保存分享、提交员工、对应公开版本、反馈类型与内容、处理状态、回复、处理人外键和版本。两张新表均以 `id` 为主键，启动时幂等建表；原有数据不删除。
+
 `learning_models.py` 通过启动时的幂等建表注册五张表，主键均为 `id`：
 
 - `learning_shares`：圈、负责人及原发布人外键，标题、正文、附件JSON、版本、状态与时间。

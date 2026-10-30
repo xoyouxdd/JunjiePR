@@ -52,6 +52,7 @@ EXPECTED_STEPS = (
     ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
     ("2026-10-employee-employment-history", "ensure_employee_employment_history"),
     ("2026-10-employee-type-internship", "ensure_employee_type_columns"),
+    ("2026-10-learning-library-categories", "ensure_learning_categories"),
 )
 
 

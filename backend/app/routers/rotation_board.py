@@ -193,6 +193,11 @@ def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(
     return call(S.do_live_action, db, user.employee.attraction_id, actor(user), payload)
 
 
+@router.post('/timeout/preview')
+def timeout_preview(payload: dict,db: Session=Depends(formal_db),user: V2User=Depends(operator)):
+    return call(S.timeout_case_preview,db,user.employee.attraction_id,actor(user),payload)
+
+
 @router.post('/me/entry-preview')
 def entry_preview(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     from app.rotation.cooperation import adjustment

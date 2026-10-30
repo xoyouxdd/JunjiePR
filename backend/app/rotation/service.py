@@ -595,7 +595,12 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
     for p in eng.P.values():
         no, st, a = p["pid"], p.get("state"), p.get("assign")
         step = None
-        if st == "walkback":
+        from app.rotation import timeout_cases as C
+        if C.for_person(eng,no):
+            step=('rest','同线关联任务待核实','旧任务暂停，等待负责人核实执行情况；核实等待不计个人超时。')
+        elif C.queue_view(eng,p):
+            step=('rest','等待前序任务完成','顺接任务已排队；前序完成后刷新路线并重新起算确认期限。')
+        elif st == "walkback":
             if p.get("after") == "done":
                 step = ("arrive", "请确认已到休息室", "在个人待办或大屏确认，今天轮岗即将结束，确认后即可下班。")
             elif p.get("after") == "closing":
@@ -805,8 +810,10 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
     timeout=None
     if p.get('taskTimeout'):
         _,_,timeout_post=W.locate(eng,p['taskTimeout'].get('entryKey'))
-        timeout={**p['taskTimeout'],'entryPost':timeout_post['name'] if timeout_post else '原上岗',
+        timeout={**{k:v for k,v in p['taskTimeout'].items() if k!='originalTask'},'entryPost':timeout_post['name'] if timeout_post else '原上岗',
                  'transferredToName':eng.P.get(p['taskTimeout'].get('transferredTo'),{}).get('name')}
+    from app.rotation import timeout_cases as C
+    case=C.for_person(eng,p['pid'])
     result = {
         "pid": p["pid"], "name": p["name"], "state": p.get("state"), "role": p.get("role"),
         "label": p.get("label", ""), "note": p.get("note", ""), "start": p["start"], "end": p["end"],
@@ -830,6 +837,8 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "preparing": preparing,
         "continuousStart":p.get('continuousStart'),"continuousMinutes":W.continuous_minutes(p,now),
         "task":task,"taskTimeout":timeout,
+        "timeoutCase":{'id':case['id'],'line':case['line'],'status':case['status']} if case else None,
+        "timeoutPending":C.queue_view(eng,p),"timingUnverified":bool(p.get('timingUnverified')),
         "waitingReplacement":p.get('state')=='onpost' and now>=p['end'],
         "scheduledRestStart": p['start'] if p.get('state') == 'notyet' and eng.opening_rest_candidate(p) else None,
         "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
@@ -888,8 +897,11 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
     eng, _ = engine_for(db, cfg, row, state)
     eng._read_projection = projection
     taken = eng.targeted() if state.get("status") == "live" else {}
+    from app.rotation import timeout_cases as C
     result = {
         "date": state["date"], "status": state["status"],
+        "timeoutCases":C.view(eng),
+        "timeoutWaitingMatch":[{'line':d['line'],'mode':d['template']['mode']} for d in state.get('timeoutDemands',[]) if not d.get('owner')],
         "lines": lines_view(eng),
         "persons": [person_view(eng, p, now, taken) for p in state["persons"].values()],
         "off": state.get("off", []),
@@ -1060,6 +1072,7 @@ LIVE_ACTIONS = {
     "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order", "post_hold",
 }
 LIVE_ACTIONS.update({'rename_post','hold101','restore_line'})
+LIVE_ACTIONS.update({'timeout_claim','timeout_resolve'})
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
 
 
@@ -1098,7 +1111,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         raise ActionError("不支持的操作")
     if act=='move' and body.get('force') is True and not body.get('expected_snapshot'):
         raise ActionError('强制安排必须先预览影响并确认')
-    if act not in {"post", "post_order", "line", "set_close",'rename_post','hold101','restore_line'}:
+    if act not in {"post", "post_order", "line", "set_close",'rename_post','hold101','restore_line','timeout_claim','timeout_resolve'}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
             raise ActionError("工号必须是字符串")
@@ -1147,7 +1160,18 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         entry_result = None
         if act.startswith("fix_") and not reason:
             raise ActionError("更正需要填写原因")
-        if act == 'rename_post':
+        if act in {'timeout_claim','timeout_resolve'}:
+            from app.rotation import timeout_cases as C
+            if actor.kind not in {'supervisor','manager'}:raise ActionError('仅有现场处理权限的TR、主管或经理可以处理')
+            _require(body,'case_id')
+            if act=='timeout_claim':C.claim(eng,body['case_id'],actor,now,body.get('takeover',False),str(body.get('reason',''))[:500])
+            else:
+                if C.get(eng,body['case_id'])['status'] in C.OPEN:
+                    if body.get('case_snapshot')!=C.fingerprint(eng,body['case_id']):raise ConfirmationConflict('站位、任务或处理人已变化，请重新预览')
+                    trial=C.clone(eng);C.resolve(trial,body['case_id'],body,actor,now)
+                    if body.get('expected_recovery')!=C.plan_signature(trial,body['case_id']):raise ConfirmationConflict('承接人员或恢复路线已变化，请重新预览')
+                entry_result=C.resolve(eng,body['case_id'],body,actor,now)
+        elif act == 'rename_post':
             _require(body,'post_key','name')
             line,_,post=W.locate(eng,body['post_key'])
             if not post:raise ActionError('岗位已变化，请刷新')
@@ -1196,10 +1220,16 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
                 eng.act_depart(pid, now, actor)
         elif act == 'entry_return':
             p = eng.P[pid]
+            from app.rotation import timeout_cases as C
+            if C.for_person(eng,pid):raise ActionError('此超时影响同线关联任务，请先由负责人核实执行情况')
             if not p.get('entryHold') or p['state'] not in ('ready', 'rest'):
                 raise ActionError('当前没有待恢复的上岗安排')
             own_member=actor.kind=='member' and actor.member_employee_no==pid
-            if actor.kind!='screen' and not own_member and (not getattr(actor, 'formal', False) or not actor.entered_by or actor.entered_by.employee_no != pid):
+            # A person may acknowledge their timeout on either the dedicated
+            # screen or an authorized operator's board, using the current card.
+            board_timeout = (actor.kind in {'supervisor', 'manager'} and token is not None
+                             and W.enabled(eng) and bool(p.get('taskTimeout')))
+            if actor.kind!='screen' and not board_timeout and not own_member and (not getattr(actor, 'formal', False) or not actor.entered_by or actor.entered_by.employee_no != pid):
                 raise ActionError('请本人确认已到场')
             if W.enabled(eng) and p.get('taskTimeout'):
                 W.acknowledge_timeout(eng,p,now)
@@ -1306,7 +1336,32 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         sync_notices(db, attraction_id, state, eng, now)
         save_day(db, row, state)
         if act=='hold101':return {'ok':True,'recent':state.get('hold101Recent',[])}
+        if act=='timeout_resolve':return {'ok':True,**entry_result}
         return {"ok": True, "duplicate": False, "result": result} if token is not None else None
+
+
+@transactional
+def timeout_case_preview(db,attraction_id,actor,body):
+    from app.rotation import timeout_cases as C
+    from app.rotation import workflow as W
+    cfg=load_config(db,attraction_id);day,now=clock_now(cfg);row=day_row(db,attraction_id,day)
+    if not row or row.status!='live':raise ActionError('今天的轮岗尚未运行')
+    state=day_state(row);advance(db,cfg,row,state,now);eng,_=engine_for(db,cfg,row,state)
+    expected=C.fingerprint(eng,body.get('case_id'));trial=C.clone(eng)
+    data={**body,'action':'timeout_resolve','case_snapshot':expected}
+    C.resolve(trial,body.get('case_id'),data,actor,now,preview=True)
+    data['expected_recovery']=C.plan_signature(trial,body['case_id'])
+    updates=[]
+    for p in trial.P.values():
+        task=W.task_for(trial,p)
+        queue=C.queue_view(trial,p)
+        if task and task.get('recoveryCase')==body['case_id']:
+            updates.append({'pid':p['pid'],'name':p['name'],'task':W.task_view(trial,p)})
+        elif queue and any(d['id']==queue['id'] and d['case']==body['case_id'] for d in trial.d.get('timeoutDemands',[])):
+            updates.append({'pid':p['pid'],'name':p['name'],'waiting':True,'line':queue['line']})
+    return {'case_snapshot':expected,'line':C.get(eng,body['case_id'])['line'],
+            'before_lines':lines_view(eng),'after_lines':lines_view(trial),'updates':updates,
+            'waitingMatch':C.get(trial,body['case_id']).get('waitingMatch',0),'request':data}
 
 
 def remember_initial_draft(state: dict, cfg: RotationConfig) -> None:

@@ -4,6 +4,13 @@ from __future__ import annotations
 from sqlalchemy import text
 
 
+def ensure_learning_categories(db) -> None:
+    for table in ('learning_shares', 'learning_revisions'):
+        columns = {row[1] for row in db.execute(text(f'PRAGMA table_info({table})'))}
+        if columns and 'category' not in columns:
+            db.execute(text(f"ALTER TABLE {table} ADD COLUMN category VARCHAR(30) NOT NULL DEFAULT '未分类'"))
+
+
 def ensure_employee_type_columns(db) -> None:
     columns = {row[1] for row in db.execute(text('PRAGMA table_info(employees)'))}
     for name, sql_type in (('employee_type', 'VARCHAR(80)'), ('internship_ends_on', 'VARCHAR(10)')):

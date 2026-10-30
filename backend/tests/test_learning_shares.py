@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.v2_database import SessionLocal, FILE_DIR
 from app.v2_models import Employee, Role, EmployeeRoleAssignment, GroupMembership
-from app.learning_models import LearningShare, LearningRevision, LearningAccess, LearningReaction, LearningAsset
+from app.learning_models import LearningShare, LearningRevision, LearningAccess, LearningReaction, LearningAsset, LearningDraft, LearningFeedback
 
 
 def login(c, no='TRTEST01'):
@@ -33,7 +33,7 @@ def ok(r):
 def client():
     with TestClient(app) as c:
         with SessionLocal() as db:
-            for model in [LearningRevision,LearningReaction,LearningAccess,LearningAsset,LearningShare]:db.query(model).delete()
+            for model in [LearningFeedback,LearningDraft,LearningRevision,LearningReaction,LearningAccess,LearningAsset,LearningShare]:db.query(model).delete()
             people={e.id:(e.attraction_id,e.is_active) for e in db.query(Employee)}
             db.commit()
         login(c)
@@ -68,6 +68,111 @@ def pdf():
 def upload(c,raw=None):
     aid=next(x['id'] for x in options(c)['circles'] if x['own'])
     return ok(c.post('/api/learning/assets',data={'circle_id':aid},files={'file':('guide.pdf',raw or pdf(),'application/pdf')}))
+
+
+def test_search_categories_and_literal_keywords(client):
+    c=client;create(c,title='开场100%检查',category='开场准备');create(c,title='异常交接',category='异常处理')
+    own=next(x['id'] for x in options(c)['circles'] if x['own'])
+    rows=ok(c.get('/api/learning',params={'circle_id':own,'keyword':'%','category':'开场准备'}))['items']
+    assert len(rows)==1 and rows[0]['category']=='开场准备'
+    assert not ok(c.get('/api/learning',params={'circle_id':own,'keyword':'异常','category':'开场准备'}))['items']
+    assert c.post('/api/learning',json={'title':'bad','body':'bad','category':'unknown'}).status_code==422
+
+
+def test_private_drafts_stale_writes_publish_once_and_legacy_category(client):
+    c=client;asset=upload(c)
+    payload={'title':'私有草稿','body':'待发布内容','assets':[asset['id']],'category':'岗位操作'}
+    d=ok(c.post('/api/learning/drafts',json=payload));id=d['id']
+    assert ok(c.get('/api/learning/drafts'))['total']==1
+    own=next(x['id'] for x in options(c)['circles'] if x['own'])
+    assert not ok(c.get('/api/learning',params={'circle_id':own}))['items']
+    login(c,'GSMTEST01')
+    assert c.get(f'/api/learning/drafts/{id}').status_code==404
+    assert c.get(f'/api/learning/assets/{asset["id"]}').status_code==403
+    assert not ok(c.get('/api/learning/drafts'))['items']
+    login(c)
+    assert c.get(f'/api/learning/assets/{asset["id"]}').headers['cache-control']=='private, no-store'
+    assert c.get(f'/api/learning/drafts/{id}').headers['cache-control']=='private, no-store'
+    d=ok(c.put(f'/api/learning/drafts/{id}',json={**payload,'expected_version':1}))
+    assert d['version']==2
+    assert c.put(f'/api/learning/drafts/{id}',json={**payload,'expected_version':1}).status_code==409
+    assert c.post(f'/api/learning/drafts/{id}/publish',json={'expected_version':1}).status_code==409
+    published=ok(c.post(f'/api/learning/drafts/{id}/publish',json={'expected_version':2}))
+    assert c.post(f'/api/learning/drafts/{id}/publish',json={'expected_version':2}).status_code==404
+    assert ok(c.get('/api/learning',params={'circle_id':own}))['total']==1
+    assert ok(c.get(f'/api/learning/{published["id"]}'))['category']=='岗位操作'
+
+
+def test_revision_draft_preserves_approval_and_failed_publish_keeps_draft(client):
+    c=client;s=create(c,category='开场准备');login(c,'GSMTEST01')
+    payload={'title':'修改草稿','body':'主管修改','share_id':s['id'],'base_version':1,'category':'异常处理','summary':'核对分类'}
+    d=ok(c.post('/api/learning/drafts',json=payload))
+    result=ok(c.post(f'/api/learning/drafts/{d["id"]}/publish',json={'expected_version':1}))
+    assert result['status']=='pending'
+    assert ok(c.get(f'/api/learning/{s["id"]}'))['category']=='开场准备'
+    stale=ok(c.post('/api/learning/drafts',json=payload))
+    login(c)
+    ok(c.post(f'/api/learning/{s["id"]}/revisions/{result["id"]}/decision',json={'action':'approve','expected_version':1}))
+    assert ok(c.get(f'/api/learning/{s["id"]}'))['category']=='异常处理'
+    login(c,'GSMTEST01')
+    assert c.post(f'/api/learning/drafts/{stale["id"]}/publish',json={'expected_version':1}).status_code==409
+    assert c.get(f'/api/learning/drafts/{stale["id"]}').status_code==200
+
+
+def test_draft_revalidates_identity_and_incomplete_content(client):
+    c=client;d=ok(c.post('/api/learning/drafts',json={'title':'只有标题'}))
+    assert c.post(f'/api/learning/drafts/{d["id"]}/publish',json={'expected_version':1}).status_code==400
+    assert c.get(f'/api/learning/drafts/{d["id"]}').status_code==200
+    with SessionLocal() as db:
+        tr=db.query(Employee).filter_by(employee_no='TRTEST01').one();tr.attraction_id=other_circle(c);db.commit()
+    assert c.get(f'/api/learning/drafts/{d["id"]}').status_code==403
+    login(c,'CMTEST02')
+    assert c.post('/api/learning/drafts',json={'title':'无权限'}).status_code==403
+
+
+def test_feedback_visibility_resolution_and_version_checks(client):
+    c=client;s=create(c);id=s['id'];login(c,'CMTEST02')
+    f=ok(c.post(f'/api/learning/{id}/feedback',json={'kind':'需要补充','content':'请补充第二步','expected_version':1}))
+    assert len(ok(c.get(f'/api/learning/{id}/feedback'))['items'])==1
+    assert c.post(f'/api/learning/{id}/feedback',json={'kind':'内容有误','content':' ','expected_version':1}).status_code==400
+    assert c.post(f'/api/learning/{id}/feedback/{f["id"]}/resolve',json={'response':'处理','expected_version':1}).status_code==403
+    login(c,'CMTEST01')
+    assert not ok(c.get(f'/api/learning/{id}/feedback'))['items']
+    login(c)
+    rows=ok(c.get(f'/api/learning/{id}/feedback'));assert rows['can_manage'] and len(rows['items'])==1
+    ok(c.post(f'/api/learning/{id}/feedback/{f["id"]}/resolve',json={'response':'已补充并核对','expected_version':1}))
+    assert c.post(f'/api/learning/{id}/feedback/{f["id"]}/resolve',json={'response':'重复','expected_version':1}).status_code==409
+    login(c,'CMTEST02')
+    assert ok(c.get(f'/api/learning/{id}/feedback'))['items'][0]['response']=='已补充并核对'
+    move_share(id,other_circle(c))
+    assert c.get(f'/api/learning/{id}/feedback').status_code==403
+    assert c.post(f'/api/learning/{id}/feedback',json={'kind':'内容有误','content':'无权限','expected_version':1}).status_code==403
+
+
+def test_learning_category_upgrade_preserves_legacy_rows():
+    from sqlalchemy import create_engine,text
+    from sqlalchemy.orm import Session
+    from app.database.migrations.schema import ensure_learning_categories
+    engine=create_engine('sqlite://')
+    with Session(engine) as db:
+        for table in ('learning_shares','learning_revisions'):
+            db.execute(text(f'CREATE TABLE {table} (id INTEGER PRIMARY KEY, body TEXT)'))
+            db.execute(text(f"INSERT INTO {table}(body) VALUES ('原内容')"))
+        ensure_learning_categories(db);ensure_learning_categories(db)
+        for table in ('learning_shares','learning_revisions'):
+            assert db.execute(text(f'SELECT body,category FROM {table}')).one()==('原内容','未分类')
+
+
+def test_cross_circle_manager_can_draft_existing_material_without_publishing_privilege(client):
+    c=client;s=create(c);target=other_circle(c);move_share(s['id'],target)
+    login(c,'AMTEST01')
+    d=ok(c.post('/api/learning/drafts',json={'title':'跨圈核对','body':'核对后的内容','summary':'补充步骤',
+                                          'share_id':s['id'],'base_version':1,'category':'岗位操作'}))
+    assert any(r['id']==d['id'] for r in ok(c.get('/api/learning/drafts'))['items'])
+    assert c.get(f'/api/learning/drafts/{d["id"]}').status_code==200
+    result=ok(c.post(f'/api/learning/drafts/{d["id"]}/publish',json={'expected_version':1}))
+    assert result['status']=='pending'
+    assert ok(c.get(f'/api/learning/{s["id"]}'))['body']=='旧公开内容'
 
 
 def test_publish_scope_locked_metadata_and_no_todo_pollution(client):

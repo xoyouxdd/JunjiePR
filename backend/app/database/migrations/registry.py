@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database.migrations.schema import (
     ensure_month_rank_comment_column,
+    ensure_learning_categories,
     ensure_month_rank_rule_columns,
     ensure_recognition_shared_evidence,
     ensure_void_audit_columns,
@@ -74,6 +75,7 @@ MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-09-sick-leave-index-repair', ensure_sick_leave_record_indexes),
     ('2026-10-employee-employment-history', ensure_employee_employment_history),
     ('2026-10-employee-type-internship', ensure_employee_type_columns),
+    ('2026-10-learning-library-categories', ensure_learning_categories),
 )
 SCHEMA_MIGRATION_STEPS = [(key, runner.__name__) for key, runner in MIGRATION_RUNNERS]
 

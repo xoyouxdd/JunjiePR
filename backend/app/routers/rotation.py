@@ -292,6 +292,12 @@ def rotation_draft(payload: dict, db: Session = Depends(get_db), actor: Rotation
 
 # ---------------------------------------------------------------- 名单、记录、配置
 
+@router.post('/timeout/preview')
+def timeout_preview(payload: dict,db: Session=Depends(get_db),actor: RotationActor=Depends(require_manager)):
+    try:return service.timeout_case_preview(db,rotation_attraction_id(db),actor,payload)
+    except service.ActionError as exc:raise _action_error(exc) from exc
+
+
 @router.post('/undo/preview')
 def rotation_undo_preview(payload:dict,db:Session=Depends(get_db),actor:RotationActor=Depends(require_manager)):
     from app.rotation.history import preview

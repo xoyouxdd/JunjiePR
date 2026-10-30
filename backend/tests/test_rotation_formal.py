@@ -584,7 +584,8 @@ def test_formal_issued_task_is_locked_but_closed_line_refreshes_destination():
 
 
 @pytest.mark.parametrize('transferred',[False,True])
-def test_timeout_screen_ack_is_immediately_ready_and_reclaims_only_unowned_task(monkeypatch,transferred):
+@pytest.mark.parametrize('board_account',[None,'9710010','9710020'])
+def test_timeout_screen_ack_is_immediately_ready_and_reclaims_only_unowned_task(monkeypatch,transferred,board_account):
     from app.rotation import workflow as W
     aid=seed_cohort()
     with SessionLocal() as db:
@@ -599,12 +600,21 @@ def test_timeout_screen_ack_is_immediately_ready_and_reclaims_only_unowned_task(
             S.save_day(db,row,state)
     monkeypatch.setattr(S,'clock_now',lambda cfg:(date.today().isoformat(),now))
     with TestClient(app) as screen,TestClient(app) as cm,TestClient(app) as receiver:
-        ok(screen.post('/api/login',json={'employee_no':'6666666','password':'1243'}))
+        if board_account:
+            login(screen,board_account)
+            endpoint='/api/rotation-board/act'
+        else:
+            ok(screen.post('/api/login',json={'employee_no':'6666666','password':'1243'}))
+            endpoint='/api/rotation/screen/act'
         login(cm,'9710000');login(receiver,'9710010')
         before=ok(cm.get('/api/rotation-board/me'))['person'];assert before['entryHold']
         before_receiver=ok(receiver.get('/api/rotation-board/me'))['person']
         body={'action':'entry_return','pid':'9710000','confirmation_token':before['confirmationTokens']['entry_return']}
-        ok(screen.post('/api/rotation/screen/act',json=body))
+        assert cm.post('/api/rotation-board/me/act',json={**body,'pid':'9710010'}).status_code==403
+        if board_account:
+            assert screen.post(endpoint,json={**body,'confirmation_token':None}).status_code==400
+            assert screen.post(endpoint,json={**body,'confirmation_token':'0'*64}).status_code==409
+        ok(screen.post(endpoint,json=body))
         after=ok(cm.get('/api/rotation-board/me'))['person']
         assert not after['entryHold'] and after['state']=='ready' and after['readyAt']==now
         assert after['canDepart'] and after['task']['allowedAt']==now and after['task']['deadlineAt']==now+3
@@ -615,7 +625,7 @@ def test_timeout_screen_ack_is_immediately_ready_and_reclaims_only_unowned_task(
             assert peer['confirmationTokens']==before_receiver['confirmationTokens']
         else:
             assert after['task']['transferredFromName'] is None
-        assert ok(screen.post('/api/rotation/screen/act',json=body))['duplicate']
+        assert ok(screen.post(endpoint,json=body))['duplicate']
         again=ok(cm.get('/api/rotation-board/me'))['person']
         assert again['task']==after['task'] and again['readyAt']==now
         ok(cm.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':again['confirmationTokens']['depart']}))

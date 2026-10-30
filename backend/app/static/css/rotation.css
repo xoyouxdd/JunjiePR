@@ -395,6 +395,19 @@ button.rt-chip { cursor: pointer; }
 
 .rt-personal-identity{display:flex;align-items:center;gap:10px;margin:8px 0}.rt-personal-identity span{font-size:12px;color:var(--text-secondary)}
 .rotation-page .rt-workflow-board .rt-daily-slot button{min-height:44px}
+.rt-shift-groups{display:grid;gap:6px;min-width:0}
+.rt-shift-group{min-width:0;border-top:1px solid var(--line)}
+.rt-shift-group>summary{min-height:44px;padding:10px 4px;color:var(--text);cursor:pointer;overflow-wrap:anywhere}
+.rt-shift-group>summary>span{margin-left:6px}
+.rt-shift-group .rt-shift-count{font-size:12px;color:var(--text-secondary)}
+.rotation-page .rt-others .rt-shift-group>.rt-chips,.rotation-screen .rt-others .rt-shift-group>.rt-chips{max-height:none;overflow:visible;align-content:start;grid-auto-rows:auto}
+.rotation-page .rt-workflow-board .rt-others .rt-shift-group>.rt-chips:not(.empty){max-height:none;overflow:visible}
+.rt-shift-group[open]>.rt-chips{padding-bottom:8px}
+.rt-timeout-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0;padding:12px 14px;border:1px solid #e2b9b7;border-left:4px solid #b93e38;border-radius:8px;background:#fff4f2;color:#842d29}
+.rt-timeout-banner p{font-size:12px;margin:5px 0}.rt-timeout-banner button{flex-shrink:0;min-height:44px}
+.rt-timeout-positions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.rt-timeout-positions label{min-width:0}.rt-timeout-positions select{width:100%;min-height:44px;font-size:16px}
+.rt-timeout-waiting{padding:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;font-size:12px}
+@media(max-width:460px){.rt-timeout-banner{align-items:flex-start;flex-wrap:wrap}.rt-timeout-positions{grid-template-columns:1fr}}
 .rt-personal-task{max-width:460px;margin-left:auto;margin-right:auto}.rt-personal-task .rt-confirm-reminder{border-left:3px solid var(--primary);background:var(--info-bg);padding:8px 10px;font-size:13px}.rt-personal-task>button.primary{width:100%;min-height:44px}
 
 /* Real mobile confirmation screens, matching the approved compact previews. */

@@ -6,6 +6,9 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.10.31.1", "date": "2026-10-31", "status": "candidate",
+     "items": [{"summary": "轮岗关联超时核实与班次展示优化", "detail": "超时影响同线关联任务时暂停相关任务，支持接手、核实实际执行情况及预览恢复；保留普通超时流程。其他人员按完整班次折叠并保留展开状态，姓名旁显示下班时间。", "audiences": ["all"]},
+               {"summary": "学习分享搜索、草稿与反馈", "detail": "学习材料增加分类与搜索，支持保存私人草稿、版本校验后发布及提交问题反馈；负责人处理反馈，继续沿用原有圈权限与修改确认规则。", "audiences": ["all"]}]},
     {"version": "2026.10.30.3", "date": "2026-10-30", "status": "candidate",
      "items": [{"summary": "新增学习分享区", "detail": "按景点圈浏览学习攻略；TR直接发布，同圈TR及主管以上可提交修改，由原发布或交接后的负责TR确认。支持点赞星标、管理下架与交接。跨圈材料由本组组长人工确认多资质后开放7天，仅审批申请进入组长待办；正文和附件阅读框叠加查阅人身份水印。", "audiences": ["all"]},
                {"summary": "今日小祝福", "detail": "今日工作增加默认收起的祝福刮卡，支持直接查看和换一句；100条独立祝福与2000种组合在当前设备本地抽取，记住当天内容并避开近期90条，与积分考核无关。", "audiences": ["all"]},
