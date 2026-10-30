@@ -207,10 +207,12 @@ def test_index_repair_precedes_appended_employment_history_step() -> None:
     # Preserve the repair's stable key and position; new unrelated migrations
     # append after it rather than deleting, moving or rerunning old steps.
     employee_type = ('2026-10-employee-type-internship', 'ensure_employee_type_columns')
-    assert SCHEMA_MIGRATION_STEPS[-3:] == [repair, employment, employee_type]
+    learning_categories = ('2026-10-learning-library-categories', 'ensure_learning_categories')
+    assert SCHEMA_MIGRATION_STEPS[-4:] == [repair, employment, employee_type, learning_categories]
     assert SCHEMA_MIGRATION_STEPS.count(repair) == 1
     assert SCHEMA_MIGRATION_STEPS.count(employment) == 1
     assert SCHEMA_MIGRATION_STEPS.count(employee_type) == 1
+    assert SCHEMA_MIGRATION_STEPS.count(learning_categories) == 1
 
 
 def test_fresh_database_has_all_model_and_composite_indexes(tmp_path: Path) -> None:
