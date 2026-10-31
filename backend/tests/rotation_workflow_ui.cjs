@@ -46,6 +46,9 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
    await board.locator('[data-drag-pid="9710020"]').dragTo(board.locator('[data-post="B1#0"]'));
    await board.locator('.rt-edit-preview').waitFor();await board.locator('[data-ok]').click();
    await screenPage.waitForFunction(()=>RT.data.day.lines.find(l=>l.id==='B1')?.posts[0].occ==='9710020');
+   // The screen can receive the mutation before this page finishes RT.load()
+   // and closes its confirmation overlay. Start the next drag only afterward.
+   await board.waitForFunction(()=>!RT.modalOpen&&RT.data.day.lines.find(l=>l.id==='B1')?.posts[0].occ==='9710020');
    const key=await board.locator('[data-post="B1#0"] [data-drag-post]').getAttribute('data-wf-rename');
    await board.locator('[data-post="B1#0"] [data-drag-post]').dragTo(board.locator('[data-post="A1#1"]'));
    await board.locator('.rt-edit-preview').waitFor();await board.locator('[data-ok]').click();
@@ -122,6 +125,10 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   assert.equal(afterReceive.person.task.id,beforeReceive.person.task.id);
   assert.equal(afterReceive.person.readyAt,beforeReceive.person.readyAt);
   assert.equal(afterReceive.person.task.deadlineAt,beforeReceive.person.task.deadlineAt);
+  // Stop the polling document before disposing its context. WebKit can report
+  // an access-control pageerror when context teardown aborts an in-flight fetch.
+  await receiverPhone.goto('about:blank');
+  await receiverPhone.waitForLoadState('networkidle');
   await receiverContext.close();
   const waitingSetup=await manager.request.post(base+'/__fixture/timeout',{data:{waiting:true,materialize_before_timeout:true}});
   assert(waitingSetup.ok(),await waitingSetup.text());
