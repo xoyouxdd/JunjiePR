@@ -5,12 +5,78 @@ from test_rotation_flow import app,login,enter,ok,clock,roster_file,LINES,DAY
 from app.v2_database import SessionLocal
 from app.rotation.models import RotationAssistGrant,RotationAdjustSession
 from app.rotation.adjustment import qualified,grant_code
-from app.v2_models import Employee
+from app.v2_models import Employee, UserAccount, Role, EmployeeRoleAssignment
+from app.v2_crypto import hash_password
 from test_rotation_engine import live_day,person,two_lines,hm,seat
 import pytest
 
 def controller(client):
     login(client,'GSMTEST01');enter(client,'7777777')
+
+
+def numeric_staff(number, code='SUPERVISOR', circle=None):
+    with SessionLocal() as db:
+        own=db.query(Employee).filter_by(employee_no='SUPTEST01').one().attraction_id
+        e=Employee(employee_no=number,name='合成别名'+number,attraction_id=circle or own,
+                   is_active=True,hired_on='2020-01-01')
+        db.add(e);db.flush()
+        role=db.query(Role).filter_by(code=code).one()
+        db.add(EmployeeRoleAssignment(employee_id=e.id,role_id=role.id,starts_on='2020-01-01',status='active'))
+        db.add(UserAccount(employee_id=e.id,login_account=number,password_hash=hash_password('alias-fixture'),
+                           enabled=True,must_change_password=False,credential_initialized=True))
+        db.commit();return e.id
+
+
+def test_numeric_manager_aliases_share_identity_lock_and_disabled_status():
+    with TestClient(app) as screen:
+        login(screen,'GSMTEST01');enter(screen,'6666666')
+        eid=numeric_staff('9871401')
+        for no in ['9871401','09871401']:
+            ok(screen.post('/api/rotation/adjust/login',json={'account':no,'mode':'manager','credential':'alias-fixture'}))
+            status=ok(screen.get('/api/rotation/adjust/status'))
+            assert status['employee_no']=='9871401' and not status['temporary']
+            ok(screen.post('/api/rotation/adjust/logout'))
+        for i in range(5):
+            assert screen.post('/api/rotation/adjust/login',json={'account':'09871401' if i%2 else '9871401','credential':'wrong'}).status_code==401
+        for no in ['9871401','09871401']:
+            assert screen.post('/api/rotation/adjust/login',json={'account':no,'credential':'alias-fixture'}).status_code==423
+        with SessionLocal() as db:
+            a=db.query(UserAccount).filter_by(employee_id=eid).one();a.locked_until=None;a.enabled=False;db.commit()
+        assert screen.post('/api/rotation/adjust/login',json={'account':'09871401','credential':'alias-fixture'}).status_code==401
+
+
+@pytest.mark.parametrize('ending',['revoked','expired'])
+def test_numeric_tr_alias_keeps_grant_scope_and_lifetime(ending):
+    no='9871402' if ending=='revoked' else '9871403'
+    with TestClient(app) as manager,TestClient(app) as screen:
+        controller(manager);eid=numeric_staff(no,'TR')
+        grant=ok(manager.post('/api/rotation/adjust/grants',json={'minutes':10,'employee_ids':[eid]}))['items'][0]
+        with SessionLocal() as db:code=grant_code(db.get(RotationAssistGrant,grant['id']))
+        login(screen,'GSMTEST01');enter(screen,'6666666')
+        for number in [no,'0'+no]:
+            result=ok(screen.post('/api/rotation/adjust/login',json={'account':number,'mode':'tr','credential':code}))
+            assert result['temporary'] and not result['can_authorize']
+            assert ok(screen.get('/api/rotation/adjust/status'))['employee_no']==no
+            assert screen.post('/api/rotation/adjust/grants',json={'minutes':10,'all':True}).status_code==403
+            ok(screen.post('/api/rotation/adjust/logout'))
+        if ending=='revoked':ok(manager.post(f"/api/rotation/adjust/grants/{grant['id']}/revoke",json={}))
+        else:
+            with SessionLocal() as db:db.get(RotationAssistGrant,grant['id']).expires_at=datetime.now()-timedelta(seconds=1);db.commit()
+        assert screen.post('/api/rotation/adjust/login',json={'account':'0'+no,'mode':'tr','credential':code}).status_code==401
+
+
+def test_numeric_alias_does_not_grant_frontline_management_or_choose_ambiguous_account():
+    with TestClient(app) as screen:
+        login(screen,'GSMTEST01');enter(screen,'6666666')
+        frontline=numeric_staff('9871404','CM')
+        assert screen.post('/api/rotation/adjust/login',json={'account':'09871404','credential':'alias-fixture'}).status_code==401
+        manager=numeric_staff('9871405');other=numeric_staff('9871406')
+        with SessionLocal() as db:
+            db.query(UserAccount).filter_by(employee_id=other).one().login_account='09871405';db.commit()
+            before=db.query(RotationAdjustSession).filter_by(employee_id=manager).count()
+        for no in ['9871405','09871405']:
+            assert screen.post('/api/rotation/adjust/login',json={'account':no,'credential':'alias-fixture'}).status_code==401
+        with SessionLocal() as db:assert db.query(RotationAdjustSession).filter_by(employee_id=manager).count()==before
 
 def prepare(client):
     controller(client);ok(client.put('/api/rotation/config',json={'lines':LINES,'settings':{}}))

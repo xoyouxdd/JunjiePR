@@ -1,5 +1,6 @@
 """Monthly sick-leave import from the HR transaction workbook."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -381,7 +382,7 @@ def single_sick_leave_targets(
     db: Session = Depends(get_db), user: V2User = Depends(require_permissions("SICK_LEAVE_IMPORT")),
 ):
     """The backup entrance permits lookup of every active employee, across roles/circles."""
-    keyword = keyword.strip()
+    keyword = employee_number(keyword)
     limit = max(1, min(limit, 50))
     if not keyword:
         return {"items": [], "total": 0, "limit": limit}

@@ -57,6 +57,24 @@
 #app[data-workspace-ui] .table-wrap { max-width: 100%; min-width: 0; border-color: var(--workspace-border); border-radius: 11px; overscroll-behavior-inline: contain; }
 #app[data-workspace-ui] .table-wrap :is(th,td) { line-height: 1.55; }
 #app[data-workspace-ui] .table-wrap thead th { color: var(--text-secondary); font-weight: 600; }
+/* Stable audit columns keep timestamps aligned while the other fields scroll. */
+.audit-log-table { table-layout: fixed; min-width: 820px; }
+.audit-log-time-col { width: 112px; }
+.audit-log-operator-col { width: 100px; }
+.audit-log-action-col { width: 168px; }
+.audit-log-entity-col { width: 180px; }
+.audit-log-reason-col { width: 260px; }
+.audit-log-table :is(th,td) { overflow-wrap: anywhere; }
+.audit-log-table :is(th,td):first-child { white-space: normal; }
+.audit-log-table .audit-log-date,
+.audit-log-table .audit-log-clock { display: block; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.audit-log-table .audit-log-clock { color: var(--text-secondary); font-size: .92em; }
+.audit-log-toggle { display: block; margin-top: 4px; text-align: left; min-height: 44px; }
+.audit-log-batch-note { display: block; margin-top: 4px; color: var(--text-secondary); font-size: 12px; }
+.audit-log-batch-row { background: var(--info-bg-soft); }
+.audit-log-table > tbody > .audit-log-detail-row > td { position: static; padding: 0; box-shadow: none; }
+.audit-log-detail-row[hidden] { display: none; }
+.audit-log-detail-table { background: var(--surface-soft); }
 #app[data-workspace-ui] :is(.score-positive,.score-negative,.member-score-item strong,.operations-metrics strong,td) { font-variant-numeric: tabular-nums; }
 #app[data-workspace-ui] .work-card { border-color: var(--workspace-border); border-radius: 12px; padding: 16px; }
 #app[data-workspace-ui] .work-card-head { align-items: flex-start; gap: 8px; }

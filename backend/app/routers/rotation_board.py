@@ -1,4 +1,5 @@
 """Formal rotation: authenticated employee identity, scoped data, real clock only."""
+from app.employee_numbers import employee_number
 import asyncio
 from datetime import datetime
 from io import BytesIO
@@ -160,7 +161,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
     from app.rotation.participation import personal_scope
     if payload.get('group_confirm'):
         raise HTTPException(403,'个人待办只能确认本人到位，不能整组代确认')
-    if payload.get('pid',user.employee.employee_no) != user.employee.employee_no:
+    if employee_number(payload.get('pid',user.employee.employee_no)) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
     if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust'): raise HTTPException(403, '只可确认本人轮岗待办')
     if not payload.get('confirmation_token'): raise HTTPException(400, '请刷新待办后重新确认')
@@ -310,6 +311,7 @@ async def upload(file: UploadFile = File(...), scope: str = Form('week'), date: 
         skip=json.loads(skip_employee_nos)
         if not isinstance(skip,list) or any(not isinstance(no,str) for no in skip):raise ValueError()
     except (ValueError,TypeError):raise HTTPException(400,'跳过人员列表无效')
+    skip=[employee_number(no) for no in skip]
     from starlette.concurrency import run_in_threadpool
     return await run_in_threadpool(_save_uploaded_roster, parsed, scope, date, preview, expected_digest, file.filename, db, user, confirm_exceptions, skip)
 
@@ -377,7 +379,7 @@ def log(date: str, db: Session = Depends(formal_db), user: V2User = Depends(mana
 
 @router.get('/person')
 def person(employee_no: str,date: str,db: Session = Depends(formal_db),user: V2User = Depends(manager)):
-    return S.person_record(db,user.employee.attraction_id,employee_no,parse_iso_date(date).isoformat())
+    return S.person_record(db,user.employee.attraction_id,employee_number(employee_no),parse_iso_date(date).isoformat())
 
 
 @router.get('/stream')

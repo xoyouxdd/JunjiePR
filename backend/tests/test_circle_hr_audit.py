@@ -111,3 +111,38 @@ def test_frontline_has_no_audit_endpoint_access():
     with TestClient(app) as c:
         login(c,'CMTEST01')
         assert c.get('/api/admin/logs').status_code==403
+
+
+def test_import_summary_keys_preserve_identity_batch_and_payload_privacy():
+    import json
+    from app.services.audit import audit_summary
+    def row(ident=1, operator=7, payload=None, **extra):
+        return AuditLog(id=ident,operator_id=operator,operator_name='同名操作人',action='Excel更新员工',
+            entity_type='employee',entity_id=str(ident),created_at=datetime(2026,10,28,15,13,35),
+            after_json=payload,**extra)
+    first=audit_summary(row(payload=json.dumps({'_import_batch_id':'a'*32,'secret':'private'})))
+    same=audit_summary(row(2,payload=json.dumps({'_import_batch_id':'a'*32})))
+    other=audit_summary(row(3,payload=json.dumps({'_import_batch_id':'b'*32})))
+    assert first['batch_key']==same['batch_key']!=other['batch_key']
+    assert first['batch_exact'] and 'private' not in json.dumps(first)
+    legacy=audit_summary(row(payload='{broken'))
+    assert not legacy['batch_exact']
+    assert legacy['batch_key']==audit_summary(row(2))['batch_key']
+    assert legacy['batch_key']!=audit_summary(row(3,operator=8))['batch_key']
+    assert 'batch_key' not in audit_summary(row(operator=None))
+
+
+def test_batch_metadata_is_added_only_after_circle_visibility_filter():
+    import json
+    data=ROWS['HR-HEAT']
+    with SessionLocal() as db:
+        for target in ['CM','GSM']:
+            db.add(AuditLog(operator_id=data['people']['SUPERVISOR'],operator_name='合成主管',
+                action='Excel更新员工',entity_type='employee',entity_id=str(data['people'][target]),
+                attraction_id=data['circle'],after_json=json.dumps({'_import_batch_id':'c'*32,'secret':target})))
+        db.commit()
+    with TestClient(app) as c:
+        login(c,'HR-HEAT')
+        rows=[r for r in c.get('/api/admin/logs').json() if r['action']=='Excel更新员工']
+        assert len(rows)==1 and rows[0]['entity']==f"employee:{data['people']['CM']}"
+        assert rows[0]['batch_exact'] and 'after_json' not in rows[0] and 'secret' not in rows[0]

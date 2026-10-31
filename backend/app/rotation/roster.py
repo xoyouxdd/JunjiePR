@@ -4,6 +4,7 @@ import re
 import zipfile
 import datetime as dt
 import xml.etree.ElementTree as ET
+from app.employee_numbers import employee_number_cell
 
 NS = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
@@ -174,14 +175,18 @@ def parse_roster(path_or_file):
                 if m:
                     d = (first + dt.timedelta(days=k)).isoformat()
                     hours.setdefault(d, {'open': '%s:%s' % m.group(1, 2), 'close': '%s:%s' % m.group(3, 4)})
-    people, days = {}, {}
+    people, days, source_numbers = {}, {}, {}
     for r in rows[hdr_i + 1:]:
         if not r or len(r) <= col['ID']:
             continue
         name, pid = r[col['Name']], r[col['ID']]
         if not name or pid is None:
             continue
-        pid = str(int(pid)) if isinstance(pid, float) else str(pid).strip()
+        source_number = str(int(pid)) if isinstance(pid, float) and pid.is_integer() else str(pid).strip()
+        pid = employee_number_cell(pid)
+        if pid in source_numbers and source_numbers[pid] != source_number:
+            raise ValueError('班表员工号重复（七位与前导0写法混用）：%s' % pid)
+        source_numbers[pid] = source_number
         people[pid] = {
             'pid': pid,
             'name': str(name).strip(),
@@ -221,7 +226,7 @@ def parse_template(sheets):
             H = [None if x is None else str(x).strip() for x in (r or [])]
             if all(h in H for h in TEMPLATE_HEADERS[:4]):
                 col = {h: H.index(h) for h in TEMPLATE_HEADERS if h in H}
-                people, days = {}, {}
+                people, days, source_numbers = {}, {}, {}
                 for r2 in rows[hdr_i + 1:]:
                     if not r2:
                         continue
@@ -229,12 +234,17 @@ def parse_template(sheets):
                     pid, name = get('工号'), get('姓名')
                     if pid is None or not name:
                         continue
-                    pid = str(int(pid)) if isinstance(pid, float) else str(pid).strip()
+                    source_number = str(int(pid)) if isinstance(pid, float) and pid.is_integer() else str(pid).strip()
+                    pid = employee_number_cell(pid)
                     d = _template_date(get('日期'))
                     cell = str(get('班次') or '').strip()
                     note = str(get('备注') or '').strip()
                     if note:
                         cell = (cell + '\n' + note).strip()
+                    key = (d, pid)
+                    if key in source_numbers and source_numbers[key] != source_number:
+                        raise ValueError('同日员工号重复（七位与前导0写法混用）：%s' % pid)
+                    source_numbers[key] = source_number
                     people[pid] = {'pid': pid, 'name': str(name).strip(), 'type': '', 'mark': ''}
                     days.setdefault(d, {})[pid] = cell
                 if not days:

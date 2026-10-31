@@ -1,5 +1,6 @@
 """轮岗接口：测试入口、模拟账号、看板、大屏、个人页、名单、记录、配置与实时同步。"""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 import asyncio
 from datetime import datetime
@@ -58,7 +59,7 @@ def rotation_access(db: Session = Depends(get_db), user: V2User = Depends(curren
 @router.post("/enter")
 def rotation_enter(payload: dict, request: Request, response: Response, db: Session = Depends(get_db), user: V2User = Depends(require_entry)):
     """测试入口里输入模拟账号：专用账号，或模拟名单中某个 CM/TR 的工号。不需要密码。"""
-    login_name = str(payload.get("account") or "").strip()
+    login_name = employee_number(payload.get("account"))
     if not login_name:
         raise HTTPException(400, "请输入模拟账号")
     if login_name == 'self':
@@ -240,7 +241,7 @@ def rotation_member_act(payload: dict, db: Session = Depends(get_db), actor: Rot
         raise HTTPException(400, "操作类型必须是字符串")
     if payload.get("action") not in service.SCREEN_ACTIONS:
         raise HTTPException(403, "个人待办只能确认到达休息室和去轮岗")
-    if payload.get("pid", actor.member_employee_no) != actor.member_employee_no:
+    if employee_number(payload.get("pid", actor.member_employee_no)) != actor.member_employee_no:
         raise HTTPException(403, "只能确认自己的轮岗待办")
     if not payload.get("confirmation_token"):
         raise HTTPException(400, "请刷新后重新确认")
@@ -348,7 +349,7 @@ def rotation_log(date: str, db: Session = Depends(get_db), actor: RotationActor 
 
 @router.get("/person")
 def rotation_person(employee_no: str, date: str, db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
-    return service.person_record(db, rotation_attraction_id(db), employee_no.strip(), parse_iso_date(date).isoformat())
+    return service.person_record(db, rotation_attraction_id(db), employee_number(employee_no), parse_iso_date(date).isoformat())
 
 
 @router.get("/config")

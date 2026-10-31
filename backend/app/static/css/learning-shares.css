@@ -2,21 +2,23 @@
 .learning-search{display:flex;align-items:center;gap:8px;margin:14px 0}.learning-search label{flex:1;min-width:0;margin:0}.learning-search input{width:100%;min-width:0}.learning-search button{flex-shrink:0;width:auto}.learning-categories{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.learning-categories button{width:auto;min-height:38px;font-size:13px}.learning-categories button[aria-pressed=true]{background:#2164ad;color:#fff;border-color:#2164ad}.learning-drafts{border:1px solid #dce5ef;background:#f6f9fd;border-radius:9px;padding:14px;margin:16px 0}.learning-preview-tag{display:inline-block;padding:5px 10px;background:#edf4ff;color:#2164ad;border-radius:6px}.learning-staged-asset{display:flex;align-items:center;gap:10px;flex-wrap:wrap;overflow-wrap:anywhere}.learning-feedback{border-top:1px solid #dce5ef;padding-top:16px;margin-top:20px}.learning-feedback summary{cursor:pointer;color:#2164ad;min-height:44px}.learning-feedback-row{padding:16px 0;border-top:1px solid #dce5ef;overflow-wrap:anywhere}.learning-feedback-row label{display:grid;gap:6px;margin:12px 0}.learning-feedback-row textarea{width:100%;box-sizing:border-box}.learning-feedback-response{background:#eff5fb;padding:12px;border-radius:7px}.learning-library [hidden]{display:none!important}
 .learning-library h2{font-size:24px;margin:8px 0}.learning-library h3{font-size:17px;margin:8px 0}
 .learning-library p{line-height:1.7}.learning-library small,.learning-library footer{font-size:12px;color:#657c93}
-.learning-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:22px}.learning-heading p{margin:4px 0;color:#718399}
+.learning-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:22px}.learning-heading>div{min-width:0}.learning-heading>button{width:auto;flex-shrink:0}.learning-heading p{margin:4px 0;color:#718399}
 .learning-circles{display:flex;gap:18px;border-bottom:1px solid #dce5ef}
 .learning-circles button{flex:1;min-height:46px;padding:10px 0;border:0;border-radius:0;background:transparent;color:#657c93;white-space:nowrap}
 .learning-circles button[aria-pressed=true]{border-bottom:2px solid #1465d5;color:#1465d5}
 .learning-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0 16px;font-size:12px;color:#657c93}.learning-tools>span{margin-right:auto}
-.learning-tools button{border:0;background:transparent;padding:6px 0;color:#426485;min-height:44px}
+.learning-tools button{width:auto;border:0;background:transparent;padding:6px 0;color:#426485;min-height:44px}
 .learning-access{display:flex;align-items:center;gap:12px;padding:14px;background:#eff4fb;border-radius:8px;color:#426485;font-size:13px;margin-bottom:12px}
-.learning-access>div{flex:1}.learning-access small{display:block;margin-top:5px}
-.learning-access button{flex-shrink:0}
+.learning-access>div{flex:1;min-width:0;overflow-wrap:anywhere}.learning-access small{display:block;margin-top:5px}
+.learning-access button{width:auto;flex:0 0 auto;min-height:44px;white-space:nowrap}
+@media(max-width:600px){.learning-access{flex-direction:column;align-items:stretch}.learning-access button{align-self:flex-start}}
 .learning-row{display:flex;gap:14px;border-bottom:1px solid #e5ebf3;padding:20px 0}.learning-row>div{min-width:0;flex:1}
 .learning-document{background:#edf4ff;color:#1465d5;padding:12px;border-radius:9px;align-self:flex-start}
 .learning-document svg{display:block;width:20px;height:22px}
 .learning-row h3 button{background:transparent;border:0;padding:0;min-height:44px;text-align:left;font:inherit;color:#15385e;overflow-wrap:anywhere}
 .learning-row p{font-size:12px;color:#718399;margin:5px 0}.learning-row footer{overflow-wrap:anywhere}
 .learning-pagination{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:20px}
+.learning-pagination button{width:auto;flex:0 0 auto}.learning-pagination>span{white-space:nowrap}
 .learning-detail-heading{margin:20px 0}.learning-detail-heading p{font-size:12px;color:#657c93}.learning-confidential{font-size:12px;color:#657c93}
 .learning-reading{position:relative;isolation:isolate;border:1px solid #e5ebf3;border-radius:9px;overflow:hidden;background:#fcfdff;margin:14px 0}
 .learning-reading-content{padding:20px;min-height:180px;overflow-wrap:anywhere;line-height:1.9}

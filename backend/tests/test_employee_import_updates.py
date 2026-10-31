@@ -64,6 +64,25 @@ def test_equal_file_is_automatically_unchanged_without_selection():
     assert field_values(eid)==(name,'Comp28',None)
 
 
+def test_successive_imports_keep_every_audit_and_use_distinct_batch_ids():
+    ids=[seed(no,circle_id('矮人迷宫')) for no in ['9861190','9861191']]
+    with TestClient(app) as c:
+        login(c,'HR-DWARF')
+        for kind in ['Comp40','Comp36']:
+            files=book([[str(9861190+i),field_values(eid)[0],'CM','矮人迷宫',kind,''] for i,eid in enumerate(ids)])
+            choices=[{'row':2,'action':'update'},{'row':3,'action':'update'}]
+            batch=preview(c,files,choices)
+            assert commit(c,files,batch,choices).status_code==200
+    with SessionLocal() as db:
+        records=db.query(AuditLog).filter(AuditLog.action=='Excel更新员工',AuditLog.entity_id.in_([str(i) for i in ids])).order_by(AuditLog.id).all()
+        assert len(records)==4
+        payloads=[json.loads(r.after_json) for r in records]
+        batches=[p['_import_batch_id'] for p in payloads]
+        assert batches[0]==batches[1] and batches[2]==batches[3] and batches[0]!=batches[2]
+        assert all(r.before_json and r.reason for r in records)
+        assert [p['employee_type'] for p in payloads]==['Comp40','Comp40','Comp36','Comp36']
+
+
 def test_type_change_away_from_intern_clears_old_date_without_enabling_account():
     no='9861020';eid=seed(no,circle_id('矮人迷宫'));before=snapshot(eid)
     with SessionLocal() as db:

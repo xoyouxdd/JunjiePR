@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.10.31.2", "date": "2026-10-31", "status": "candidate",
+     "items": [{"summary": "员工号输入兼容与界面优化", "detail": "员工号支持7位号码前加一个0输入，登录、导入、搜索和轮岗入口统一兼容；新建档案及导出沿用7位号码，关联冲突时拒绝模糊匹配。审计日志支持Excel更新批次折叠并保留逐条明细，完善岗位知识库和手机布局。", "audiences": ["all"]}]},
     {"version": "2026.10.31.1", "date": "2026-10-31", "status": "candidate",
      "items": [{"summary": "轮岗关联超时核实与班次展示优化", "detail": "超时影响同线关联任务时暂停相关任务，支持接手、核实实际执行情况及预览恢复；保留普通超时流程。其他人员按完整班次折叠并保留展开状态，姓名旁显示下班时间。", "audiences": ["all"]},
                {"summary": "学习分享搜索、草稿与反馈", "detail": "学习材料增加分类与搜索，支持保存私人草稿、版本校验后发布及提交问题反馈；负责人处理反馈，继续沿用原有圈权限与修改确认规则。", "audiences": ["all"]}]},

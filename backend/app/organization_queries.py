@@ -1,5 +1,6 @@
 """Batched directory, group labels and employee search queries."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 from app.access_policy import REGULAR_ACCOUNT_ROLE_CODES
 from app.role_constants import SCORED_BASE_CODES
@@ -68,7 +69,7 @@ def search_employee_targets(
         raise ValueError("unsupported target role codes")
     role_filter = ", ".join(f"'{code}'" for code in role_codes)
     today_value = date.today().isoformat()
-    normalized = str(keyword or "").strip()
+    normalized = employee_number(keyword)
     escaped = normalized.replace("!", "!!").replace("%", "!%").replace("_", "!_")
     params = {
         "today": today_value,

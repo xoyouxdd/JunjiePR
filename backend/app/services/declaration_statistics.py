@@ -1,5 +1,6 @@
 """Read-only declaration statistics shared by API exports and HR reports."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 import re
 from collections import Counter, defaultdict
@@ -50,7 +51,7 @@ def declaration_payload(
         query = query.filter(DeductionRecord.deduction_level_id == level_id)
     if type_id is not None:
         query = query.filter(DeductionRecord.deduction_type_id == type_id)
-    needle = keyword.strip().casefold()
+    needle = employee_number(keyword).casefold()
     selected = query.order_by(DeductionRecord.occurred_on.desc(), DeductionRecord.id.desc()).all()
     approved_seconds = {
         second_id for (second_id,) in db.query(DeductionUpgradeRequest.second_deduction_id)

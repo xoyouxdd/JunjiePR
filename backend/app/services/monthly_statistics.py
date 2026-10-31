@@ -1,5 +1,6 @@
 """Monthly scoring, historical population selection and organization hierarchy."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 from calendar import monthrange
 from datetime import date
@@ -348,7 +349,7 @@ def statistics_payload(
             func.coalesce(EmployeeMonthOrganizationSnapshot.attraction_id, Employee.attraction_id) == attraction_id
         )
     if keyword:
-        keyword_value = f"%{keyword.strip()}%"
+        keyword_value = f"%{employee_number(keyword)}%"
         candidate_query = candidate_query.filter(or_(Employee.employee_no.like(keyword_value), Employee.name.like(keyword_value)))
     candidate_rows = candidate_query.all()
     if candidate_rows:
@@ -467,7 +468,7 @@ def statistics_payload(
             for employee in db.query(Employee).filter(Employee.id.in_(record_employee_ids)).all()
         } if record_employee_ids else {}
         historical_roles = base_roles_at(db, record_employee_ids, month_end) if record_employee_ids else {}
-        keyword_value = (keyword or "").strip().casefold()
+        keyword_value = employee_number(keyword).casefold()
 
         def record_is_visible(row) -> bool:
             employee = employees.get(int(row.employee_id))

@@ -1102,6 +1102,9 @@ def action_time(value) -> int:
 
 @transactional
 def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict | None:
+    from app.employee_numbers import employee_number
+    if isinstance(body.get('pid'), str):
+        body = {**body, 'pid': employee_number(body['pid'])}
     RotationRosterEntry = tables_for(db).RotationRosterEntry
     RUNTIME = runtime_for(db)
     from app.rotation.adjustment import revalidate_actor
@@ -1373,6 +1376,9 @@ def remember_initial_draft(state: dict, cfg: RotationConfig) -> None:
 
 @transactional
 def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
+    from app.employee_numbers import employee_number
+    if isinstance(body.get('pid'), str):
+        body = {**body, 'pid': employee_number(body['pid'])}
     RotationDay = tables_for(db).RotationDay
     RotationDuty = tables_for(db).RotationDuty
     RotationEvent = tables_for(db).RotationEvent

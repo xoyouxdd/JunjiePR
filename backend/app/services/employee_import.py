@@ -2,6 +2,7 @@
 import hashlib
 import json
 from io import BytesIO
+from app.employee_numbers import employee_number_cell, employee_number_aliases
 
 from fastapi import HTTPException
 from openpyxl import load_workbook
@@ -63,19 +64,24 @@ def preflight(db, user, content, allowed_circles, allowed_roles, decisions=None)
             values=list(values)+[None]*max(0,len(header)-len(values))
             raw={name:values[i] for name,i in positions.items()}
             if not any(v is not None and str(v).strip() for v in raw.values()): continue
-            no=str(raw['员工号'] or '').strip();name=str(raw['姓名'] or '').strip()
+            no=employee_number_cell(raw['员工号']);name=str(raw['姓名'] or '').strip()
             role=ROLE_MAP.get(str(raw['角色代码'] or '').strip().upper())
             circle=circles.get(str(raw['景点圈'] or '').strip())
             prefix=f'第{rownum}行：'
-            if len(no)!=7 or not no.isascii() or not no.isdigit(): errors.append(prefix+'员工号必须为7位纯数字');continue
+            if len(no)!=7 or not no.isascii() or not no.isdigit(): errors.append(prefix+'员工号必须为7位纯数字，可在前面加一个0');continue
             if no in seen: errors.append(prefix+f'文件内部员工号{no}重复，请先修正');continue
             seen.add(no)
             if not name or len(name)>100: errors.append(prefix+'姓名必填，且不能超过100个字符');continue
             if not role or role not in roles: errors.append(prefix+'角色仅支持CM、TR、Lead、GSM、AM、OM；TA职务请在页面设置');continue
             if not circle:
                 errors.append(prefix+'请选择有效景点圈');continue
-            old=db.query(Employee).filter_by(employee_no=no).first()
-            account=db.query(UserAccount).filter_by(login_account=no).first()
+            aliases=employee_number_aliases(no)
+            employees=db.query(Employee).filter(Employee.employee_no.in_(aliases)).limit(2).all()
+            accounts=db.query(UserAccount).filter(UserAccount.login_account.in_(aliases)).limit(2).all()
+            if len(employees)>1 or len(accounts)>1:
+                errors.append(prefix+'员工号存在关联冲突，请先核对账号档案');continue
+            old=employees[0] if employees else None
+            account=accounts[0] if accounts else None
             if old or account:
                 duplicate_rows.add(rownum)
                 choice=choices.get(rownum, {'row':rownum,'action':'skip'})

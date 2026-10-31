@@ -1,5 +1,6 @@
 """PR performance and recognition-issuer rankings, independent of HTTP routes."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 from datetime import date
 from math import ceil
@@ -160,7 +161,7 @@ def gsm_recognizer_ranking_payload(db: Session, start_value: str, end_value: str
         role.code: role.name
         for role in db.query(Role).filter(Role.code.in_({item["role_code"] for item in aggregate.values()})).all()
     } if aggregate else {}
-    value = keyword.strip().lower()
+    value = employee_number(keyword).lower()
     rows=[]
     for employee in employee_rows:
         if value and value not in employee.name.lower() and value not in employee.employee_no.lower():
@@ -220,7 +221,7 @@ def pr_ranking_payload(
             raise HTTPException(400, "请选择有效的员工景点圈")
     if category == "gsm_leader":
         return gsm_recognizer_ranking_payload(db, start_value, end_value, subtype_id, keyword, page, page_size, attraction)
-    keyword_value = keyword.strip().lower()
+    keyword_value = employee_number(keyword).lower()
     end_iso = end.isoformat()
     # Score rankings rank one population: CM/TR, or supervisors (主管绩效排行).
     role_codes = LEADER_CODES if category == "leader" else ({"SUPERVISOR"} if population == "supervisor" else FRONTLINE_CODES)

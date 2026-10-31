@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from io import BytesIO
 import json
+from uuid import uuid4
+from app.employee_numbers import employee_number, employee_number_aliases
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -119,7 +121,7 @@ def employee_targets(
     if usage == "poc":
         if user.role.code not in {"TA_GSM", "GSM", "AM", "OM"}:
             raise HTTPException(403, "仅TA GSM、GSM、AM、OM可以查询POC被认可员工")
-        value = like_escaped_pattern(keyword)
+        value = like_escaped_pattern(employee_number(keyword))
         query = db.query(Employee).join(UserAccount, UserAccount.employee_id == Employee.id).filter(
             Employee.is_active.is_(True), UserAccount.enabled.is_(True),
             or_(Employee.name.like(value, escape="\\"), Employee.employee_no.like(value, escape="\\")),
@@ -141,7 +143,7 @@ def employee_targets(
             raise HTTPException(403, "仅TA GSM、GSM、AM、OM、景点圈HR可以登记LOA")
         if not keyword.strip():
             return {"items": [], "total": 0, "limit": max(1, min(limit, 50)), "search_scope": "全部在职员工（请输入姓名或员工号）"}
-        value = like_escaped_pattern(keyword)
+        value = like_escaped_pattern(employee_number(keyword))
         query = db.query(Employee).filter(
             Employee.is_active.is_(True),
             or_(Employee.name.like(value, escape="\\"), Employee.employee_no.like(value, escape="\\")),
@@ -387,12 +389,13 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), p
                 password_hash=hash_password(default_initial_password(employee.employee_no)),enabled=True,
                 must_change_password=True,credential_initialized=True))
             synchronize_gsm_management_scope(db,employee,row['role_code'])
+        import_batch_id = uuid4().hex
         for row in batch['updates']:
             employee=db.get(Employee,row['employee_id'])
             for key,value in row['after'].items():
                 setattr(employee,key,value)
             write_audit(db,user.employee,'Excel更新员工','employee',employee.id,
-                        before=row['before'],after=row['after'],
+                        before=row['before'],after={**row['after'], '_import_batch_id': import_batch_id},
                         reason=f"Excel导入第{row['row']}行：明确选择覆盖；角色与景点圈不变",ip_address=client_ip(request))
         db.flush()
         for row in batch['rows']:
@@ -401,7 +404,7 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), p
         for row in batch['updates']:
             expire_accounts(db,row['employee_id'])
         write_audit(db,user.employee,'Excel导入员工','employee_import',after={'created':len(batch['rows']),
-            'updated':len(batch['updates']),'renamed':batch['would_rename'],'skipped':batch['would_skip'],'unchanged':batch['unchanged'],'expired':len(batch['expired']),'filename':workbook.filename},ip_address=client_ip(request))
+            'updated':len(batch['updates']),'renamed':batch['would_rename'],'skipped':batch['would_skip'],'unchanged':batch['unchanged'],'expired':len(batch['expired']),'filename':workbook.filename,'_import_batch_id':import_batch_id},ip_address=client_ip(request))
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -430,16 +433,17 @@ def create_employee(payload: dict, request: Request, db: Session = Depends(get_d
 def _create_employee(payload: dict, request: Request, db: Session, user: V2User):
     from app.services.employee_types import normalize as normalize_type, expire_accounts
     employee_type, internship_ends_on = normalize_type(payload.get('employee_type'), payload.get('internship_ends_on'))
-    employee_no = str(payload.get("employee_no") or "").strip()
+    employee_no = employee_number(payload.get("employee_no"))
     name = str(payload.get("name") or "").strip()
     role = db.query(Role).filter(Role.code == str(payload.get("role_code") or "")).first()
     if not employee_no or not name or not role:
         raise HTTPException(400, "员工号、姓名和角色必填")
-    if len(employee_no) != 7 or not employee_no.isdigit():
+    if len(employee_no) != 7 or not employee_no.isascii() or not employee_no.isdigit():
         raise HTTPException(400, "员工号必须为7位纯数字")
     ensure_hr_role_allowed(user, role.code)
-    existing = db.query(Employee).filter(Employee.employee_no == employee_no).first()
-    if db.query(UserAccount).filter(UserAccount.login_account == employee_no).first() or (existing and not existing.account_deleted_at):
+    aliases = employee_number_aliases(employee_no)
+    existing = db.query(Employee).filter(Employee.employee_no.in_(aliases)).first()
+    if db.query(UserAccount).filter(UserAccount.login_account.in_(aliases)).first() or (existing and not existing.account_deleted_at):
         raise HTTPException(400, "该员工号已存在，不能重复创建账号")
     attraction_id = employee_circle_id(db, payload.get("attraction_id"))
     ensure_scoped_hr_attraction(db, user, attraction_id)
@@ -537,7 +541,7 @@ def employee_number_targets(
     """Search current or historic employee numbers without exposing HR accounts."""
     if user.role.code not in {SCOPED_HR_ROLE_CODE, "SYSTEM_ADMIN"}:
         raise HTTPException(403, "仅景点圈HR和最高管理员可以变更员工号")
-    normalized = str(keyword or "").strip()
+    normalized = employee_number(keyword)
     if not normalized:
         return {"items": [], "total": 0}
     escaped = normalized.replace("!", "!!").replace("%", "!%").replace("_", "!_")
@@ -597,10 +601,10 @@ def change_employee_number(
     if not employee:
         raise HTTPException(404, "员工不存在")
     role = ensure_employee_number_change_target(db, user, employee)
-    new_employee_no = str(payload.get("new_employee_no") or "").strip()
+    new_employee_no = employee_number(payload.get("new_employee_no"))
     reason = str(payload.get("reason") or "").strip()
     reset_password = bool(payload.get("reset_password"))
-    if len(new_employee_no) != 7 or not new_employee_no.isdigit():
+    if len(new_employee_no) != 7 or not new_employee_no.isascii() or not new_employee_no.isdigit():
         raise HTTPException(400, "新员工号必须为7位纯数字")
     if not reason:
         raise HTTPException(400, "请填写员工号变更原因")
@@ -609,9 +613,9 @@ def change_employee_number(
     old_employee_no = employee.employee_no
     if new_employee_no == old_employee_no:
         return {"ok": True, "unchanged": True, "employee_id": employee.id, "employee_no": employee.employee_no}
-    collision = db.query(Employee).filter(Employee.employee_no == new_employee_no, Employee.id != employee.id).first()
+    collision = db.query(Employee).filter(Employee.employee_no.in_(employee_number_aliases(new_employee_no)), Employee.id != employee.id).first()
     account = db.query(UserAccount).filter(UserAccount.employee_id == employee.id).first()
-    login_collision = db.query(UserAccount).filter(UserAccount.login_account == new_employee_no).first()
+    login_collision = db.query(UserAccount).filter(UserAccount.login_account.in_(employee_number_aliases(new_employee_no))).first()
     if collision or (login_collision and (not account or login_collision.id != account.id)):
         raise HTTPException(400, "新员工号已存在，不能合并或重复创建账号")
     if not account:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,27 @@ from app.v2_models import (
 
 
 AUDIT_EMPLOYEE_ENTITY_TYPES = {"employee", "employee_group", "employee_loa", "employee_login_archive", "employee_number_change"}
+
+
+def audit_summary(row: AuditLog) -> dict:
+    """Only decorate rows already filtered by the caller's visibility rules."""
+    stamp = row.created_at.strftime("%Y-%m-%d %H:%M:%S")
+    result = {"id": row.id, "time": stamp, "operator": row.operator_name or "系统",
+              "action": row.action, "entity": f"{row.entity_type}:{row.entity_id or ''}",
+              "reason": row.reason or ""}
+    if row.action != 'Excel更新员工' or row.entity_type != 'employee' or row.operator_id is None:
+        return result
+    try:
+        payload = json.loads(row.after_json or '{}')
+        batch = payload.get('_import_batch_id') if isinstance(payload, dict) else None
+    except (ValueError, TypeError):
+        batch = None
+    exact = isinstance(batch, str) and len(batch) == 32 and all(c in '0123456789abcdef' for c in batch)
+    # Legacy records lack a batch ID. They can only be presented as adjacent,
+    # same-second updates, never as a proven complete import transaction.
+    key = ['batch', row.operator_id, batch] if exact else ['legacy', row.operator_id, stamp, row.ip_address]
+    result.update(batch_key=hashlib.sha256(json.dumps(key).encode()).hexdigest(), batch_exact=exact)
+    return result
 
 
 def audit_attraction_id(db: Session, entity_type: str, entity_id) -> int | None:

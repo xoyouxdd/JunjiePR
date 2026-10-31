@@ -1,5 +1,6 @@
 """Login account, password and account-name endpoints."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -149,7 +150,7 @@ def reset_employee_password(
         if not employee:
             raise HTTPException(400, "员工不存在")
     else:
-        employee_no = str(payload.get("employee_no") or "").strip()
+        employee_no = employee_number(payload.get("employee_no"))
         name = str(payload.get("name") or "").strip()
         if not employee_no or not name:
             raise HTTPException(400, "请选择员工")
@@ -214,7 +215,7 @@ def reset_password_targets(
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("PASSWORD_RESET")),
 ):
-    value = str(keyword or "").strip()
+    value = employee_number(keyword)
     if not value:
         return {"items": [], "total": 0}
     pattern = like_escaped_pattern(value)
@@ -253,7 +254,7 @@ def account_name_targets(
     """Return only accounts whose current display name this HR user may correct."""
     if user.role.code not in {SCOPED_HR_ROLE_CODE, "SYSTEM_ADMIN"}:
         raise HTTPException(403, "仅景点圈HR和最高管理员可以修改账号中文姓名")
-    normalized = str(keyword or "").strip()
+    normalized = employee_number(keyword)
     if not normalized:
         return {"items": [], "total": 0}
     escaped = normalized.replace("!", "!!").replace("%", "!%").replace("_", "!_")

@@ -13,12 +13,54 @@ from app.v2_models import (
     SickLeaveRecord, StoredFile,
 )
 from app.services.performance_details import (
-    load_monthly_records, member_score_summary_payload,
+    load_monthly_records, member_records_payload, member_score_summary_payload,
     statistics_details_payload,
 )
 
 
 MONTH = "2026-09"
+
+
+@pytest.mark.parametrize('record_type', ['recognition', 'deduction', 'sick_leave', 'all'])
+def test_member_record_number_alias_returns_identical_complete_records(db, record_type):
+    seven = member_records_payload(db, [1, 2, 3], MONTH, '1000001', record_type=record_type)
+    eight = member_records_payload(db, [1, 2, 3], MONTH, '01000001', record_type=record_type)
+    assert len(seven) == (3 if record_type == 'all' else 1)
+    assert eight == seven
+    assert member_records_payload(db, [1, 2, 3], MONTH, '测试员工1', record_type=record_type) == seven
+
+
+@pytest.mark.parametrize('record_type', ['recognition', 'deduction', 'sick_leave', 'all'])
+def test_member_record_alias_preserves_scope_month_and_literal_search(db, record_type):
+    assert member_records_payload(db, [2, 3], MONTH, '01000001', record_type=record_type) == []
+    assert member_records_payload(db, [], MONTH, '01000001', record_type=record_type) == []
+    assert member_records_payload(db, [1], '2026-08', '01000001', record_type=record_type) == []
+    for keyword in ['测试员工%', '测试员工_', '001000001', '11000001']:
+        assert member_records_payload(db, [1], MONTH, keyword, record_type=record_type) == []
+    assert len(member_records_payload(db, [1], MONTH, record_type=record_type)) == (3 if record_type == 'all' else 1)
+
+
+@pytest.mark.parametrize('record_type,status,other', [
+    ('recognition', 'confirmed', 'pending'),
+    ('deduction', 'active', 'void'),
+    ('sick_leave', 'active', 'void'),
+])
+def test_member_record_alias_preserves_status_filter(db, record_type, status, other):
+    seven = member_records_payload(db, [1, 2], MONTH, '1000001', status=status, record_type=record_type)
+    assert len(seven) == 1
+    assert member_records_payload(db, [1, 2], MONTH, '01000001', status=status, record_type=record_type) == seven
+    assert member_records_payload(db, [1, 2], MONTH, '01000001', status=other, record_type=record_type) == []
+
+
+@pytest.mark.parametrize('record_type', ['recognition', 'deduction', 'sick_leave', 'all'])
+def test_member_record_alias_keeps_zero_in_the_original_seven_digit_number(db, record_type):
+    db.get(Employee, 1).employee_no = '0123456'
+    db.query(RecognitionRecord).filter_by(employee_id=1).one().employee_no = '0123456'
+    db.query(DeductionRecord).filter_by(employee_id=1).one().employee_no = '0123456'
+    db.commit()
+    seven = member_records_payload(db, [1], MONTH, '0123456', record_type=record_type)
+    assert len(seven) == (3 if record_type == 'all' else 1)
+    assert member_records_payload(db, [1], MONTH, '00123456', record_type=record_type) == seven
 
 
 @pytest.fixture

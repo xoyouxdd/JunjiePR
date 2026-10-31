@@ -1,5 +1,6 @@
 """Recognition entry and review endpoints."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -849,7 +850,7 @@ def my_entries(
         if month and not (start_date or end_date):
             query = query.filter(RecognitionRecord.recognition_month == month)
         if keyword:
-            value = like_escaped_pattern(keyword)
+            value = like_escaped_pattern(employee_number(keyword))
             query = query.filter(or_(RecognitionRecord.employee_name.like(value, escape="\\"), RecognitionRecord.employee_no.like(value, escape="\\")))
         if status in RECOGNITION_FILTER_STATUSES:
             query = query.filter(RecognitionRecord.status == status)
@@ -879,7 +880,7 @@ def my_entries(
         if month and not (start_date or end_date):
             query = query.filter(DeductionRecord.deduction_month == month)
         if keyword:
-            value = like_escaped_pattern(keyword)
+            value = like_escaped_pattern(employee_number(keyword))
             query = query.filter(or_(DeductionRecord.employee_name.like(value, escape="\\"), DeductionRecord.employee_no.like(value, escape="\\")))
         if status in DEDUCTION_FILTER_STATUSES:
             query = query.filter(DeductionRecord.status == status)
@@ -903,7 +904,7 @@ def my_entries(
         if month and not (start_date or end_date):
             query = query.filter(SickLeaveRecord.attendance_month == month)
         if keyword:
-            value = like_escaped_pattern(keyword)
+            value = like_escaped_pattern(employee_number(keyword))
             query = query.join(Employee, Employee.id == SickLeaveRecord.employee_id).filter(or_(Employee.name.like(value, escape="\\"), Employee.employee_no.like(value, escape="\\")))
         if status in ATTENDANCE_FILTER_STATUSES:
             query = query.filter(SickLeaveRecord.status == status)
@@ -919,7 +920,7 @@ def my_entries(
         if month and not (start_date or end_date):
             query = query.filter(DeductionFollowUp.occurred_on.like(f"{month}%"))
         if keyword:
-            value = f"%{keyword.strip()}%"
+            value = f"%{employee_number(keyword)}%"
             query = query.filter(or_(DeductionFollowUp.employee_name.like(value), DeductionFollowUp.employee_no.like(value)))
         if status in {"pending", "issued"}:
             query = query.filter(DeductionFollowUp.status == status)

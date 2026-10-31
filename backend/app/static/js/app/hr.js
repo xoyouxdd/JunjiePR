@@ -102,7 +102,32 @@ async function renderLogs(){
   const request=beginViewRequest();const rows=await api('/api/admin/logs');if(!request.isCurrent())return;
   const scoped=state.me.role_code==='HR_CIRCLE';
   const scope=scoped?'仅显示本景点圈CM／TR、主管及TA主管的操作摘要；不显示GSM、TA GSM及以上人员的操作或人员记录。':'显示当前权限范围内的操作摘要。';
-  request.write(`<section class="panel"><h2>审计日志</h2><p class="field-hint">${scope}</p>${rows.length?`<div class="table-wrap sticky-col"><table><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>对象</th><th>原因</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.time)}</td><td>${esc(r.operator)}</td><td>${esc(r.action)}</td><td>${esc(r.entity)}</td><td>${esc(r.reason)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">当前范围内暂无审计记录</div>'}</section>`);
+  const timestamp=value=>{
+    const match=String(value??'').match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/);
+    return match?`<span class="audit-log-date">${esc(match[1])}</span> <span class="audit-log-clock">${esc(match[2])}</span>`:esc(value);
+  };
+  const columns='<colgroup><col class="audit-log-time-col"><col class="audit-log-operator-col"><col class="audit-log-action-col"><col class="audit-log-entity-col"><col class="audit-log-reason-col"></colgroup>';
+  const header='<thead><tr><th scope="col">时间</th><th scope="col">操作人</th><th scope="col">动作</th><th scope="col">对象</th><th scope="col">原因</th></tr></thead>';
+  const record=r=>`<tr><td>${timestamp(r.time)}</td><td>${esc(r.operator)}</td><td>${esc(r.action)}</td><td>${esc(r.entity)}</td><td>${esc(r.reason)}</td></tr>`;
+  const groups=[],exactGroups=new Map();
+  rows.forEach(row=>{
+    const previous=groups[groups.length-1];
+    if(row.action!=='Excel更新员工'||!row.batch_key){groups.push({rows:[row]});return;}
+    let group=row.batch_exact?exactGroups.get(row.batch_key):previous?.key===row.batch_key?previous:null;
+    if(!group){group={key:row.batch_key,exact:row.batch_exact,rows:[]};groups.push(group);if(row.batch_exact)exactGroups.set(row.batch_key,group);}
+    group.rows.push(row);
+  });
+  const content=groups.map((group,index)=>{
+    if(!group.key||group.rows.length<2)return record(group.rows[0]);
+    const first=group.rows[0],count=group.rows.length,people=new Set(group.rows.map(r=>r.entity)).size,id=`audit-batch-${index}`;
+    return `<tr class="audit-log-batch-row"><td>${timestamp(first.time)}</td><td>${esc(first.operator)}</td><td><strong>Excel批量更新</strong><button type="button" class="link-button audit-log-toggle" data-audit-batch="${id}" aria-controls="${id}" aria-expanded="false">展开明细（${count}条）</button></td><td>${people}名员工<span class="audit-log-batch-note">当前列表</span></td><td>${group.exact?'同一导入批次':'历史记录：相邻同秒更新合并展示'}<span class="audit-log-batch-note">原始日志逐条保留</span></td></tr><tr id="${id}" class="audit-log-detail-row" hidden><td colspan="5"><table class="audit-log-table audit-log-detail-table" aria-label="Excel更新明细">${columns}${header}<tbody>${group.rows.map(record).join('')}</tbody></table></td></tr>`;
+  }).join('');
+  if(!request.write(`<section class="panel audit-log-panel"><h2>审计日志</h2><p class="field-hint">${scope}</p>${rows.length?`<p class="field-hint">批量更新默认收起；人数及条数仅统计当前已加载的日志。</p><div class="table-wrap sticky-col"><table class="audit-log-table">${columns}${header}<tbody>${content}</tbody></table></div>`:'<div class="empty">当前范围内暂无审计记录</div>'}</section>`))return;
+  app.querySelectorAll('[data-audit-batch]').forEach(button=>button.onclick=()=>{
+    const detail=document.getElementById(button.dataset.auditBatch),open=button.getAttribute('aria-expanded')!=='true';
+    detail.hidden=!open;button.setAttribute('aria-expanded',String(open));
+    button.textContent=`${open?'收起':'展开'}明细（${detail.querySelectorAll('tbody > tr').length}条）`;
+  });
 }
 
 export { renderCircleTransfers, renderHrGroups, renderHrScores, renderLogs, renderMonthClose };

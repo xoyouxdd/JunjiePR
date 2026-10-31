@@ -15,6 +15,7 @@ function portalPath(path) {
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 
 const pad2 = value => String(value).padStart(2,'0');
+const employeeNumber = value => String(value??'').trim().replace(/^0([0-9]{7})$/,'$1');
 
 const today = () => {const value=new Date();return `${value.getFullYear()}-${pad2(value.getMonth()+1)}-${pad2(value.getDate())}`;};
 
@@ -47,4 +48,4 @@ function fmtDeduction(value){return Number(value||0)===0?'0.00':`-${fmt(value)}`
 
 function actingNoteMarkup(row){return row.acting_note?`<small class="field-hint acting-note">${esc(row.acting_note)}</small>`:'';}
 
-export { actingNoteMarkup, circleTheme, esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, monthNow, monthStart, pad2, portalPath, prefersReducedMotion, recognitionScoreNote, recognitionScoreText, today };
+export { actingNoteMarkup, circleTheme, employeeNumber, esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, monthNow, monthStart, pad2, portalPath, prefersReducedMotion, recognitionScoreNote, recognitionScoreText, today };

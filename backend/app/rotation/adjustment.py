@@ -11,6 +11,7 @@ from app.v2_models import Employee, UserAccount, EmployeeLOAPeriod
 from app.v2_crypto import new_session_token, token_hash, verify_password
 from app.v2_services import base_role_at, duties_at, managed_attraction_ids, write_audit
 from app.security import request_is_https
+from app.employee_numbers import employee_number_aliases
 
 COOKIE = "rc_rotation_adjust"
 MANAGERS = {"TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM"}
@@ -80,8 +81,9 @@ def start_staff(db, request, response, employee, grant=None):
     return {'ok':True,'name':employee.name,'temporary':bool(grant),'expires_at':expiry.isoformat(),'can_authorize':not bool(grant)}
 
 def login_staff(db,request,response,body):
-    login=str(body.get('account') or '').strip();credential=str(body.get('credential') or '')
-    account=db.query(UserAccount).join(Employee,Employee.id==UserAccount.employee_id).filter(or_(UserAccount.login_account==login,Employee.employee_no==login)).first()
+    logins=employee_number_aliases(body.get('account'));credential=str(body.get('credential') or '')
+    accounts=db.query(UserAccount).join(Employee,Employee.id==UserAccount.employee_id).filter(or_(UserAccount.login_account.in_(logins),Employee.employee_no.in_(logins))).limit(2).all()
+    account=accounts[0] if len(accounts)==1 else None
     if not account or not account.enabled:
         raise HTTPException(401,'账号或凭据不正确')
     if account.locked_until and account.locked_until>datetime.now():

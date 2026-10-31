@@ -11,6 +11,9 @@ def fingerprint(state):
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
 def apply(eng, body, now, actor):
+    from app.employee_numbers import employee_number
+    if isinstance(body.get('pid'), str):
+        body = {**body, 'pid': employee_number(body['pid'])}
     from app.rotation.service import action_boolean,action_time,_require
     act=body['action'];_require(body,'line','i')
     before={p.get('key'):(line['id'],i,deepcopy(p)) for line in eng.d['lines'] for i,p in enumerate(line['posts'])}

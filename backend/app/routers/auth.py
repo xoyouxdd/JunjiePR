@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from app.employee_numbers import employee_number, employee_number_aliases
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -74,14 +75,18 @@ def user_payload(db: Session, user: V2User) -> dict:
 
 @router.post("/login")
 def login(payload: dict, request: Request, response: Response, db: Session = Depends(get_db)):
-    login_name = str(payload.get("employee_no") or "").strip()
+    login_name = employee_number(payload.get("employee_no"))
     password = str(payload.get("password") or "")
-    account = (
+    candidates = employee_number_aliases(login_name)
+    accounts = (
         db.query(UserAccount)
         .join(Employee, Employee.id == UserAccount.employee_id)
-        .filter(or_(UserAccount.login_account == login_name, Employee.employee_no == login_name))
-        .first()
+        .filter(or_(UserAccount.login_account.in_(candidates), Employee.employee_no.in_(candidates)))
+        .limit(2).all()
     )
+    if len(accounts) > 1:
+        raise HTTPException(401, "账号或密码/PIN不正确")
+    account = accounts[0] if accounts else None
     if not account:
         rotation_account = find_rotation_account(db, login_name)
         if rotation_account:

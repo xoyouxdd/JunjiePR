@@ -96,7 +96,5 @@ def admin_logs(limit: int = Query(300, ge=1, le=1000), db: Session = Depends(get
         raise HTTPException(403, "没有查看审计日志的权限")
     if "SYSTEM_ADMIN" in user.permissions or user.has_role("HR_ADMIN"):
         rows = query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(limit).all()
-    return [
-        {"id": row.id, "time": row.created_at.strftime("%Y-%m-%d %H:%M:%S"), "operator": row.operator_name or "系统", "action": row.action, "entity": f"{row.entity_type}:{row.entity_id or ''}", "reason": row.reason or ""}
-        for row in rows
-    ]
+    from app.services.audit import audit_summary
+    return [audit_summary(row) for row in rows]

@@ -58,6 +58,20 @@ def register_temp(c,no='9730100',name='合成临时成员',day=None):
     result=ok(upload(c,rows,expected_digest=batch['digest']))
     return result
 
+
+def test_leading_zero_roster_and_login_reuse_the_same_temporary_identity():
+    with TestClient(app) as manager:
+        ok(login(manager,'09730020'))
+        register_temp(manager,no='09730199',name='合成前导零成员')
+        with SessionLocal() as db:
+            assert db.query(T).filter_by(employee_no='9730199').count()==1
+            assert not db.query(T).filter_by(employee_no='09730199').first()
+    for no in ['9730199','09730199']:
+        with TestClient(app) as c:
+            ok(login(c,no,'0199'))
+            me=ok(c.get('/api/me'));assert me['employee_no']=='9730199' and me['rotation_temporary']
+            assert c.get('/api/options').status_code==403
+
 def test_preflight_and_atomic_creation_reuse_do_not_create_employees():
     with TestClient(app) as manager:
         ok(login(manager))

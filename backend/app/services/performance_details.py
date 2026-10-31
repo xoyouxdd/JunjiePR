@@ -1,5 +1,6 @@
 """Batch employee records and assemble the shared member/statistics details."""
 from __future__ import annotations
+from app.employee_numbers import employee_number
 
 from calendar import monthrange
 from collections.abc import Callable
@@ -41,7 +42,7 @@ def member_records_payload(
         if month:
             query = query.filter(RecognitionRecord.recognition_month == month)
         if keyword:
-            value = like_escaped_pattern(keyword)
+            value = like_escaped_pattern(employee_number(keyword))
             query = query.filter(or_(RecognitionRecord.employee_name.like(value, escape="\\"), RecognitionRecord.employee_no.like(value, escape="\\")))
         if status in RECOGNITION_FILTER_STATUSES:
             query = query.filter(RecognitionRecord.status == status)
@@ -53,7 +54,7 @@ def member_records_payload(
         if month:
             query = query.filter(DeductionRecord.deduction_month == month)
         if keyword:
-            value = like_escaped_pattern(keyword)
+            value = like_escaped_pattern(employee_number(keyword))
             query = query.filter(or_(DeductionRecord.employee_name.like(value, escape="\\"), DeductionRecord.employee_no.like(value, escape="\\")))
         if status in DEDUCTION_FILTER_STATUSES:
             query = query.filter(DeductionRecord.status == status)
@@ -65,7 +66,7 @@ def member_records_payload(
         if month:
             query = query.filter(SickLeaveRecord.attendance_month == month)
         if keyword:
-            value = like_escaped_pattern(keyword)
+            value = like_escaped_pattern(employee_number(keyword))
             query = query.join(Employee, Employee.id == SickLeaveRecord.employee_id).filter(or_(Employee.name.like(value, escape="\\"), Employee.employee_no.like(value, escape="\\")))
         if status in ATTENDANCE_FILTER_STATUSES:
             query = query.filter(SickLeaveRecord.status == status)
@@ -343,8 +344,8 @@ def member_score_summary_payload(
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, "月份格式应为YYYY-MM") from exc
     query = db.query(Employee).filter(Employee.id.in_(member_ids) if member_ids else Employee.id == -1)
-    if keyword and keyword.strip():
-        value = f"%{keyword.strip()}%"
+    if keyword and employee_number(keyword):
+        value = f"%{employee_number(keyword)}%"
         query = query.filter(or_(Employee.name.like(value), Employee.employee_no.like(value)))
     employees = query.order_by(Employee.name, Employee.employee_no).all()
     selected_ids = [employee.id for employee in employees]

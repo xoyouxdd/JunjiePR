@@ -1,6 +1,6 @@
 // Enhance only the already-authorized, already-paginated recognition results.
 import { attachmentControl, bindFilePreviews } from './files.js';
-import { esc, recognitionScoreNote, recognitionScoreText } from './format.js';
+import { employeeNumber, esc, recognitionScoreNote, recognitionScoreText } from './format.js';
 import { sameDayDuplicateBadge, statusBadge } from './records.js';
 import { loadUiLibrary } from './ui-libraries.js';
 
@@ -37,7 +37,7 @@ function mountRecognitionGrid(panel,rows,onActions){
         if(disposed||serial!==sequence||!currentHost.isConnected)return;
         panel.classList.add('has-recognition-grid');
         const search=currentHost.querySelector('[data-grid-search]'),pending=currentHost.querySelector('[data-grid-pending]');
-        const filter=()=>{const query=search.value.trim().toLocaleLowerCase(),onlyPending=pending.getAttribute('aria-pressed')==='true',matches=row=>(!onlyPending||row.status==='pending')&&[row.employee_name,row.employee_no,row.recognition_type,row.recognizer_name].some(value=>String(value||'').toLocaleLowerCase().includes(query));table.setFilter(matches);currentHost.querySelector('[data-grid-count]').textContent=`本页显示 ${rows.filter(matches).length} / ${rows.length} 条`;};
+        const filter=()=>{const query=employeeNumber(search.value).toLocaleLowerCase(),onlyPending=pending.getAttribute('aria-pressed')==='true',matches=row=>(!onlyPending||row.status==='pending')&&[row.employee_name,row.employee_no,row.recognition_type,row.recognizer_name].some(value=>String(value||'').toLocaleLowerCase().includes(query));table.setFilter(matches);currentHost.querySelector('[data-grid-count]').textContent=`本页显示 ${rows.filter(matches).length} / ${rows.length} 条`;};
         search.oninput=filter;pending.onclick=()=>{pending.setAttribute('aria-pressed',String(pending.getAttribute('aria-pressed')!=='true'));filter();};
         currentHost.querySelector('[data-grid-reset]').onclick=()=>{search.value='';pending.setAttribute('aria-pressed','false');table.clearSort();filter();};
         filter();onActions();
