@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.01.1", "date": "2026-11-01", "status": "candidate",
+     "items": [{"summary": "认可资格、PR排名与外观更新", "detail": "员工管理支持按日期授予CM/TR临时主管认可资格，保留本人身份与原权限；景点圈HR可查询导出本圈限定人群的PR排名。知识库完善主管跨圈阅读及权限校验。个人设置增加本机外观主题与页眉插画，祝福卡融入页眉并完善页面切换清理。", "audiences": ["all"]}]},
     {"version": "2026.10.31.2", "date": "2026-10-31", "status": "candidate",
      "items": [{"summary": "员工号输入兼容与界面优化", "detail": "员工号支持7位号码前加一个0输入，登录、导入、搜索和轮岗入口统一兼容；新建档案及导出沿用7位号码，关联冲突时拒绝模糊匹配。审计日志支持Excel更新批次折叠并保留逐条明细，完善岗位知识库和手机布局。", "audiences": ["all"]}]},
     {"version": "2026.10.31.1", "date": "2026-10-31", "status": "candidate",

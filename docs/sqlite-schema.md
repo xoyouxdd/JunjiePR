@@ -1,5 +1,7 @@
 # SQLite 表、键、索引
 
+`temporary_recognition_qualifications`：主键id，员工外键employee_id与日期qualified_on组合唯一；保存status、reason、操作人外键updated_by及updated_at。独立于角色/代理职务表，按认可日期核验资格；通过启动建表流程新增，不修改旧表列。规则见 `temporary-recognizers.md`。
+
 对照本地候选程序 `2026.10.19.1`。权威定义在代码里，本文件只记录现在落地的结构：
 
 - 表与字段：`backend/app/v2_models.py`；轮岗模块的表在 `backend/app/rotation/models.py`；视频学习在 `backend/app/video_models.py`

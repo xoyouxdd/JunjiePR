@@ -23,7 +23,7 @@ from app.score_policy import loa_month_exclusion
 from app.v2_models import (
     Attraction, DeductionRecord, Employee, EmployeeActingDuty,
     EmployeeRoleAssignment, Permission, RecognitionRecord, RecognitionScoreRule,
-    Role, RolePermission,
+    Role, RolePermission, TemporaryRecognitionQualification,
 )
 
 
@@ -283,6 +283,16 @@ def active_frontline_employees(db: Session) -> list[Employee]:
     return [employee for employee in rows if (role := base_role_at(db, employee.id)) and role.code in FRONTLINE_CODES]
 
 
+TEMPORARY_RECOGNIZER_LABEL = "临时主管认可资格"
+
+
+def temporary_recognizer_ids(db: Session, on_date: str) -> set[int]:
+    return {row[0] for row in db.query(TemporaryRecognitionQualification.employee_id).filter(
+        TemporaryRecognitionQualification.qualified_on == on_date,
+        TemporaryRecognitionQualification.status == "active",
+    ).all()}
+
+
 def recognizer_role_for_date(db: Session, employee_id: int, on_date: str | date | None = None) -> Role | None:
     """Apply the recognition policy start to the employee's current eligible role."""
     eligibility_date = on_date.isoformat() if isinstance(on_date, date) else str(on_date or date.today().isoformat())
@@ -292,6 +302,8 @@ def recognizer_role_for_date(db: Session, employee_id: int, on_date: str | date 
     # role for a future date, whose role is not known yet).
     role_date = min(eligibility_date, date.today().isoformat())
     role_on_date = role_at(db, employee_id, role_date) or earliest_roles(db, [employee_id]).get(employee_id)
+    if role_on_date and role_on_date.code in FRONTLINE_CODES and employee_id in temporary_recognizer_ids(db, eligibility_date):
+        return db.query(Role).filter_by(code="TA_SUPERVISOR").one()
     return role_on_date if role_on_date and role_on_date.code in RECOGNIZER_CODES else None
 
 
@@ -335,6 +347,8 @@ def recognizer_options(db: Session, attraction_id: int, on_date: str | date | No
     roles = roles_at(db, [employee.id for employee in employees], role_date)
     missing = [employee_id for employee_id, role in roles.items() if role is None]
     roles.update(earliest_roles(db, missing))
+    temporary_ids = temporary_recognizer_ids(db, eligibility_date)
+    temporary_role = db.query(Role).filter_by(code="TA_SUPERVISOR").one() if temporary_ids else None
     circles = {
         circle.id: circle
         for circle in db.query(Attraction).filter(Attraction.employee_circle.is_(True), Attraction.active.is_(True)).all()
@@ -365,6 +379,10 @@ def recognizer_options(db: Session, attraction_id: int, on_date: str | date | No
     result = []
     for employee in employees:
         role = roles.get(employee.id)
+        identity_role_code = role.code if role else None
+        temporary = bool(role and role.code in FRONTLINE_CODES and employee.id in temporary_ids)
+        if temporary:
+            role = temporary_role
         if not role or role.code not in RECOGNIZER_CODES:
             continue
         if role.code in LEADER_CODES:
@@ -386,7 +404,9 @@ def recognizer_options(db: Session, attraction_id: int, on_date: str | date | No
                 "employee_no": employee.employee_no,
                 "name": employee.name,
                 "role_code": role.code,
-                "role_name": role.name,
+                "identity_role_code": identity_role_code,
+                "role_name": TEMPORARY_RECOGNIZER_LABEL if temporary else role.name,
+                "temporary_qualification": temporary,
                 "score": float(score_for(role.id)),
                 "supervisor_score": float(recipient_recognition_score(score_for(role.id), role.code, "SUPERVISOR")),
                 "group_key": group_key,

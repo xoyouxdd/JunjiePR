@@ -194,6 +194,21 @@ class EmployeeActingDuty(Base):
     role = relationship("Role", foreign_keys=[role_id])
 
 
+class TemporaryRecognitionQualification(Base):
+    """Date-only recognition eligibility; never an identity or permission grant."""
+
+    __tablename__ = "temporary_recognition_qualifications"
+    __table_args__ = (UniqueConstraint("employee_id", "qualified_on", name="uq_temporary_recognizer_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
+    qualified_on: Mapped[str] = mapped_column(String(10), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    reason: Mapped[str] = mapped_column(Text)
+    updated_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class UserAccount(Base):
     __tablename__ = "user_accounts"
 

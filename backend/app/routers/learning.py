@@ -98,8 +98,8 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(member)):
     return {'circles':[{'id':c.id,'name':c.name,'readable':domain.readable(db,user,c.id),
         'own':c.id==user.employee.attraction_id,'can_edit':domain.editing(user,c.id),
         'can_manage':domain.management(user,c.id),
-        'access_status':grants[c.id].status if c.id in grants and grants[c.id].home_circle_id==user.employee.attraction_id else None,
-        'expires_at':grants[c.id].expires_at if c.id in grants and grants[c.id].home_circle_id == user.employee.attraction_id else None} for c in domain.circles(db)],
+        'access_status':grants[c.id].status if not domain.direct_read(user,c.id) and c.id in grants and grants[c.id].home_circle_id==user.employee.attraction_id else None,
+        'expires_at':grants[c.id].expires_at if not domain.direct_read(user,c.id) and c.id in grants and grants[c.id].home_circle_id == user.employee.attraction_id else None} for c in domain.circles(db)],
         'can_publish':user.has_role('TR') and user.employee.attraction_id in {c.id for c in domain.circles(db)},
         'can_draft':domain.editing(user,user.employee.attraction_id), 'categories':CATEGORIES,
         'pending_revisions':pending,'approvals':len(domain.approval_rows(db,user)),
@@ -268,7 +268,7 @@ class DraftVersion(BaseModel):
 def draft_owned(db, user, id):
     row=db.get(Draft,id)
     if not row or row.employee_id!=user.id:raise HTTPException(404,'草稿不存在')
-    if not domain.editing(user,row.circle_id) or (not row.share_id and row.circle_id!=user.employee.attraction_id):
+    if not domain.valid_circle(db,row.circle_id) or not domain.editing(user,row.circle_id) or (not row.share_id and row.circle_id!=user.employee.attraction_id):
         raise HTTPException(403,'岗位或景点圈已变化，不能继续编辑此草稿')
     if row.share_id:
         share=db.get(Share,row.share_id);domain.require_read(db,user,share)
@@ -357,7 +357,7 @@ def publish_draft(id:int,data: DraftVersion, db: Session = Depends(get_db), user
 @router.get('/assets/{asset_id}')
 def private_asset(asset_id:int, db: Session = Depends(get_db), user: V2User = Depends(member)):
     a=db.get(Asset,asset_id)
-    if not a or a.owner_id!=user.id or not domain.editing(user,a.circle_id):raise HTTPException(403,'没有草稿附件查看权限')
+    if not a or a.owner_id!=user.id or not domain.valid_circle(db,a.circle_id) or not domain.editing(user,a.circle_id):raise HTTPException(403,'没有草稿附件查看权限')
     path=(FILE_DIR/a.key).resolve()
     if FILE_DIR.resolve() not in path.parents or not path.is_file():raise HTTPException(404,'附件不存在')
     return FileResponse(path,media_type=a.media_type,headers={'Cache-Control':'private, no-store','Content-Disposition':'inline','X-Content-Type-Options':'nosniff'})
@@ -378,7 +378,7 @@ def detail(id: int, db: Session = Depends(get_db), user: V2User = Depends(member
         'liked':bool(reaction and reaction.liked),'starred':bool(reaction and reaction.starred),
         'likes':db.query(Reaction).filter_by(share_id=id,liked=True).count(),
         'viewer':{'name':user.name,'employee_no':user.employee.employee_no},
-        'expires_at':grant.expires_at if grant and row.circle_id!=user.employee.attraction_id and not domain.management(user,row.circle_id) else None}
+        'expires_at':grant.expires_at if grant and not domain.direct_read(user,row.circle_id) else None}
 
 
 @router.get('/{id}/assets/{asset_id}')

@@ -31,6 +31,53 @@ def login(client: TestClient, account: str, password: str = "1234") -> None:
     assert response.status_code == 200, response.text
 
 
+def test_admin_corrects_only_standalone_open_record_level() -> None:
+    from app.v2_models import MonthClosure
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
+            levels = {x.code: x.id for x in db.query(DeductionLevel).all()}
+            file = StoredFile(storage_key="test/level.pdf", original_filename="level.pdf", extension=".pdf", mime_type="application/pdf", file_size=1, sha256="1"*64, uploaded_by=employee.id, status="active")
+            db.add(file); db.flush()
+            row = DeductionRecord(employee_id=employee.id, employee_no=employee.employee_no, employee_name=employee.name,
+                employee_role_snapshot="CM", attraction_id_snapshot=employee.attraction_id,
+                deduction_type_id=db.query(DeductionType).first().id, deduction_type_name="测试",
+                deduction_level_id=levels['STATEMENT'], deduction_level_name="声明", points=Decimal('1'),
+                occurred_on="2025-02-10", deduction_month="2025-02", description="原始内容", document_file_id=file.id,
+                submitter_id=employee.id, submitter_name="原登记人", submitter_role_snapshot="CM", permission_scope_snapshot="test", status="active", material_status="ready")
+            db.add(row); db.commit(); rid=row.id; circle=employee.attraction_id; fid=file.id
+        url=f'/api/deductions/{rid}/level'
+        body={'level_id':levels['MEMO'],'expected_level_id':levels['STATEMENT'],'reason':'更正登记级别'}
+        for account in ('GSMTEST01','SUPTEST01','CMTEST01'):
+            login(client,account)
+            assert client.patch(url,json=body).status_code==403
+        login(client,'HR01','HR123')
+        assert client.patch(url,json={**body,'reason':''}).status_code==400
+        assert client.patch(url,json={**body,'level_id':999999}).status_code==400
+        assert client.patch(url,json=body).status_code==200
+        with SessionLocal() as db:
+            assert db.get(DeductionRecord,rid).points==Decimal('3')
+        assert client.patch(url,json=body).status_code==409
+        for code, previous in [('WARNING_1','MEMO'),('WARNING_2','WARNING_1'),('STATEMENT','WARNING_2')]:
+            assert client.patch(url,json={**body,'level_id':levels[code],'expected_level_id':levels[previous]}).status_code==200
+            with SessionLocal() as db:
+                assert db.get(DeductionRecord,rid).points==db.get(DeductionLevel,levels[code]).points
+        with SessionLocal() as db:
+            row=db.get(DeductionRecord,rid)
+            assert row.points==Decimal('1') and row.status=='active'
+            assert row.description=='原始内容' and row.document_file_id==fid and row.submitter_name=='原登记人'
+            assert db.query(AuditLog).filter_by(action='修改处分级别',entity_id=str(rid)).count()==4
+            row.upgrade_role='source_first';db.commit()
+        assert client.patch(url,json=body).status_code==400
+        with SessionLocal() as db:
+            row=db.get(DeductionRecord,rid);row.upgrade_role=None;row.status='void';db.commit()
+        assert client.patch(url,json=body).status_code==400
+        with SessionLocal() as db:
+            row=db.get(DeductionRecord,rid);row.status='active'
+            db.add(MonthClosure(closure_month='2025-02',attraction_id=circle,status='closed',closed_by=row.employee_id));db.commit()
+        assert client.patch(url,json=body).status_code==423
+
+
 def test_role_matrix_and_cross_circle_read_export() -> None:
     allowed = {"TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "HR_ADMIN", "HR_CIRCLE", "SYSTEM_ADMIN"}
     for code, permissions in ROLE_PERMISSION_CODES.items():

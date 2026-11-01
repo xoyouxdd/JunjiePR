@@ -17,7 +17,7 @@ from app.role_constants import FRONTLINE_CODES, GSM_CODES, LEADER_CODES
 from app.score_policy import loa_month_exclusion
 from app.v2_models import Attraction, AttendanceMonthlyScore, DeductionRecord, DeductionType, Employee, GroupMembership, RecognitionRecord, RecognitionType, Role, SickLeaveRecord
 from app.services.attendance import ensure_month_attendance
-from app.services.identity import acting_period_notes, base_roles_at, identity_labels, role_at, roles_at
+from app.services.identity import acting_period_notes, base_roles_at, identity_labels, role_at, roles_at, TEMPORARY_RECOGNIZER_LABEL
 
 if TYPE_CHECKING:
     from app.v2_auth import V2User
@@ -175,6 +175,23 @@ def gsm_recognizer_ranking_payload(db: Session, start_value: str, end_value: str
 
 
 
+def pr_ranking_scope(db: Session, user: V2User, attraction_id: int | None, population: str = "frontline", category: str = "overall") -> int | None:
+    """Authorize before cache lookup; every ranking and export shares this scope."""
+    if user.role.code not in GSM_CODES | {"AM", "OM", "HR_CIRCLE"}:
+        raise HTTPException(403, "仅TA GSM、GSM、AM、OM和景点圈HR可以查看PR排名数据")
+    if user.role.code == "HR_CIRCLE":
+        own_id = user.employee.attraction_id
+        circle = db.get(Attraction, own_id) if own_id is not None else None
+        if not circle or not circle.active or not circle.employee_circle:
+            raise HTTPException(403, "景点圈HR未配置有效的所属景点圈")
+        if attraction_id is not None and attraction_id != own_id:
+            raise HTTPException(403, "景点圈HR仅可查询和导出所属景点圈的PR排名")
+        if population != "frontline" or category not in {"overall", "recognition", "deduction", "absence", "leader", "gsm_leader"}:
+            raise HTTPException(403, "景点圈HR仅可查询和导出本圈CM/TR绩效及发放统计，不开放主管个人绩效排名")
+        return own_id
+    return attraction_id
+
+
 def pr_ranking_payload(
     db: Session,
     user: V2User,
@@ -189,8 +206,7 @@ def pr_ranking_payload(
     attraction_id: int | None = None,
     population: str = "frontline",
 ) -> dict:
-    if user.role.code not in GSM_CODES | {"AM", "OM"}:
-        raise HTTPException(403, "仅TA GSM、GSM、AM和OM可以查看PR排名数据")
+    attraction_id = pr_ranking_scope(db, user, attraction_id, population, category)
     if population not in {"frontline", "supervisor"}:
         raise HTTPException(400, "排名人群无效")
     start = parse_iso_date(start_value, "开始日期")
@@ -334,7 +350,9 @@ def pr_ranking_payload(
             # it. A leader's own self-submitted record is not an issued recognition,
             # and a former TA主管 keeps the records issued during the duty.
             participants: set[int] = set()
-            if acted_as_leader(row.recognizer_employee_id, row.recognizer_role_code_snapshot, row.recognition_date):
+            # Qualification-only issuers are not leaders, including older local
+            # rows that stored the TA score-policy code as their identity.
+            if row.recognizer_role_snapshot != TEMPORARY_RECOGNIZER_LABEL and acted_as_leader(row.recognizer_employee_id, row.recognizer_role_code_snapshot, row.recognition_date):
                 participants.add(row.recognizer_employee_id)
             if row.source != "self" and acted_as_leader(row.operator_employee_id, row.operator_role_code_snapshot, row.recognition_date):
                 participants.add(row.operator_employee_id)

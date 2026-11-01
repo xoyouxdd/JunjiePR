@@ -2,8 +2,9 @@
 import { api, json } from './api.js';
 import { esc, portalPath } from './format.js';
 import { state } from './state.js';
-import { registerPageCleanup } from './context.js';
+import { registerPageCleanup, unregisterPageCleanup } from './context.js';
 import { bindDialogLayer } from './dialogs.js';
+import { mountAppearance } from './appearance.js';
 
 const assetRoot='/static/images/avatars/';
 const validKey=key=>/^[a-z0-9][a-z0-9-]{0,79}$/.test(key||'');
@@ -127,14 +128,16 @@ function showAvatarSettings({onSaved}={}){
   if(document.querySelector('[data-avatar-dialog]'))return;
   const originalFocus=document.activeElement;
   const overlay=document.createElement('div');overlay.className='modal-overlay';
-  overlay.innerHTML='<section class="modal-card avatar-settings-dialog member-home-panel" data-avatar-dialog role="dialog" aria-modal="true" aria-labelledby="avatarSettingsTitle"><div class="avatar-wardrobe-heading"><h2 id="avatarSettingsTitle">头像装扮</h2><button type="button" class="secondary" data-avatar-dialog-close>关闭</button></div><div data-avatar-settings-host></div></section>';
+  overlay.innerHTML='<section class="modal-card avatar-settings-dialog member-home-panel" data-avatar-dialog role="dialog" aria-modal="true" aria-labelledby="avatarSettingsTitle"><div class="avatar-wardrobe-heading"><h2 id="avatarSettingsTitle">个人外观</h2><button type="button" class="secondary" data-avatar-dialog-close>关闭</button></div><div data-appearance-host></div><div data-avatar-settings-host></div></section>';
   document.body.append(overlay);
   const owner=state.me.id,host=overlay.querySelector('[data-avatar-settings-host]');
+  const disposeAppearance=mountAppearance(overlay.querySelector('[data-appearance-host]'));
   const dispose=mountAvatarWardrobe(host,{isCurrent:()=>overlay.isConnected&&state.me.id===owner});
   const saved=event=>{if(event.detail?.owner===owner)onSaved?.();};window.addEventListener('app:avatar-changed',saved);
-  const layer=bindDialogLayer(overlay,{initialFocus:overlay.querySelector('[data-avatar-dialog-close]'),onClose:()=>{dispose();window.removeEventListener('app:avatar-changed',saved);if(!originalFocus?.isConnected)document.querySelector('#userBadge [data-avatar-settings]')?.focus({preventScroll:true});}});
+  let pageCleanup;
+  const layer=bindDialogLayer(overlay,{initialFocus:overlay.querySelector('[data-avatar-dialog-close]'),onClose:()=>{disposeAppearance();dispose();unregisterPageCleanup(pageCleanup);window.removeEventListener('app:avatar-changed',saved);if(!originalFocus?.isConnected)document.getElementById('appearanceBtn')?.focus({preventScroll:true});}});
   overlay.querySelector('[data-avatar-dialog-close]').onclick=()=>layer.close();
-  overlay.onclick=event=>{if(event.target===overlay)layer.close();};registerPageCleanup(()=>layer.close());
-  host.querySelector('[data-avatar-open]').click();
+  overlay.onclick=event=>{if(event.target===overlay)layer.close();};pageCleanup=registerPageCleanup(()=>layer.close());
+  // Keep the wardrobe lazy: choosing a page skin does not fetch avatar catalogs/preferences.
 }
 export { avatarMarkup, bindDirectoryAvatars, mountAvatarWardrobe, showAvatarSettings };

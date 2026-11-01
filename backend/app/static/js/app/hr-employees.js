@@ -283,11 +283,55 @@ async function chooseEmployeeImport(batch,formData,isCurrent){
   return {reviewed,decisions};
 }
 
+function temporaryRecognizerPanel(){
+  return `<details class="panel account-status-panel hr-tool-panel" id="temporaryRecognizerPanel"><summary><span><strong>临时主管认可资格</strong><small>本月日期多选，仅赋予认可计分资格，不改变本职、权限或小组</small></span><span class="badge">展开</span></summary><div class="account-status-content" data-temporary-recognizer-content><p>展开后加载本月资格。</p></div></details>`;
+}
+
+function bindTemporaryRecognizers(){
+  const panel=document.getElementById('temporaryRecognizerPanel'),content=panel.querySelector('[data-temporary-recognizer-content]');
+  const context=captureViewContext();let loaded=false,loading=false;
+  const load=async()=>{
+    if(loading)return;loading=true;
+    try{
+      const data=await api('/api/hr/temporary-recognizers');if(!context.isCurrent())return;
+      const circles=[...new Map(data.employees.map(e=>[e.attraction_id,e.attraction_name])).entries()];
+      content.innerHTML=`<p>按认可发生日期核验，分值沿用TA主管配置；本人仍为CM/TR，不授予代录、扣分、复核或带组权限。可补录本月资格，不自动重算已有认可；已有认可引用的日期不能直接取消。</p><form data-temporary-form><div class="hr-filter"><label>景点圈<select name="circle"><option value="">全部景点圈</option>${circles.map(([id,name])=>`<option value="${id??''}">${esc(name)}</option>`).join('')}</select></label><label>搜索员工<input name="keyword" placeholder="姓名或员工号"></label><label>员工<select name="employee" required><option value="">请选择员工</option></select></label></div><fieldset class="temporary-recognizer-days"><legend>${esc(data.month)} · 选择资格日期（可多选）</legend><div class="temporary-recognizer-calendar" data-temporary-days></div></fieldset><p class="field-hint" data-temporary-summary>请选择员工和日期</p><label>调整原因<textarea name="reason" maxlength="500" required placeholder="如：临时主管认可安排"></textarea></label><div class="actions"><button class="primary" type="submit">确认保存</button></div></form><h3>本月资格记录</h3><div class="temporary-recognizer-records">${data.employees.filter(e=>e.records.length).map(e=>`<div class="notice"><strong>${esc(e.name)} · ${esc(e.employee_no)}</strong><p>${esc(e.attraction_name)} · 有效日期：${e.dates.length?esc(e.dates.map(d=>d.slice(5)).join('、')):'无'}</p><button type="button" class="secondary" data-adjust-temporary="${e.id}">调整日期</button><details><summary>查看记录及原因</summary>${e.records.map(r=>`<p>${esc(r.date)} · ${r.status==='active'?'有效':'已取消'} · ${esc(r.reason)}</p>`).join('')}</details></div>`).join('')||'<p class="empty">本月暂无临时主管认可资格</p>'}</div>`;
+      const form=content.querySelector('form'),employee=form.elements.employee,calendar=form.querySelector('[data-temporary-days]'),summary=form.querySelector('[data-temporary-summary]');
+      const selected=()=>data.employees.find(e=>String(e.id)===employee.value);
+      const syncSummary=()=>{const dates=[...calendar.querySelectorAll('input:checked')].map(el=>el.value);summary.textContent=`已选${dates.length}天${dates.length?'：'+dates.map(d=>d.slice(5)).join('、'):''}`;};
+      const drawDays=()=>{
+        const person=selected(),[year,month]=data.month.split('-').map(Number),count=new Date(year,month,0).getDate(),offset=(new Date(year,month-1,1).getDay()+6)%7;
+        calendar.innerHTML=['一','二','三','四','五','六','日'].map(d=>`<span class="temporary-weekday">${d}</span>`).join('')+Array.from({length:offset},()=>'<span aria-hidden="true"></span>').join('')+Array.from({length:count},(_,i)=>{const day=`${data.month}-${String(i+1).padStart(2,'0')}`,checked=person?.dates.includes(day);return `<label><input type="checkbox" value="${day}" aria-label="${day}" ${checked?'checked':''} ${!person||(!person.eligible&&!checked)?'disabled':''}><span>${i+1}</span></label>`;}).join('');
+        form.elements.reason.value='';syncSummary();form.querySelector('[type=submit]').disabled=!person;
+      };
+      const filter=()=>{const prior=employee.value,keyword=form.elements.keyword.value.trim().toLowerCase();employee.innerHTML='<option value="">请选择员工</option>'+data.employees.filter(e=>(!form.elements.circle.value||String(e.attraction_id)===form.elements.circle.value)&&`${e.name} ${e.employee_no}`.toLowerCase().includes(keyword)).map(e=>`<option value="${e.id}">${esc(e.name)} · ${esc(e.employee_no)}${e.eligible?'':'（仅可核对已有资格）'}</option>`).join('');employee.value=prior;drawDays();};
+      employee.onchange=drawDays;form.elements.circle.onchange=filter;form.elements.keyword.oninput=filter;calendar.onchange=syncSummary;filter();
+      content.querySelectorAll('[data-adjust-temporary]').forEach(button=>button.onclick=()=>{form.elements.circle.value='';form.elements.keyword.value='';filter();employee.value=button.dataset.adjustTemporary;drawDays();form.scrollIntoView({block:'start',behavior:'auto'});});
+      form.onsubmit=async event=>{
+        event.preventDefault();const person=selected(),button=form.querySelector('[type=submit]');if(!person||button.disabled)return;
+        const dates=[...calendar.querySelectorAll('input:checked')].map(el=>el.value),reason=form.elements.reason.value.trim();
+        if(!reason){toast('请填写调整原因',true);return;}
+        button.disabled=true;
+        try{
+          if(!await confirmModal('确认临时主管认可资格',`<p>${esc(person.name)} · ${esc(person.employee_no)}</p><p>${dates.length?esc(dates.join('、')):'取消本月全部资格日期'}</p><p>合计${dates.length}天，仅赋予认可计分资格。</p>`,'确认保存')||!context.isCurrent())return;
+          await api('/api/hr/temporary-recognizers/'+person.id,json('PUT',{dates,reason,expected_revision:person.revision}));
+          toast('临时主管认可资格已保存');loaded=false;
+        }catch(error){toast(error.message,true);}
+        finally{button.disabled=false;}
+        loading=false;if(context.isCurrent())await load();
+      };
+      loaded=true;
+    }catch(error){if(context.isCurrent()){content.innerHTML='<p>资格加载失败，请收起后重新展开。</p>';toast(error.message,true);}}
+    finally{loading=false;}
+  };
+  panel.addEventListener('toggle',()=>{if(panel.open&&!loaded)load();});
+}
+
 async function renderHrEmployees(){
   const request=beginViewRequest();
   const organization=await api('/api/hr/organization');
   if(!request.isCurrent())return;
-  app.innerHTML=`<div class="section-gap"><details class="panel account-status-panel hr-tool-panel"><summary><span><strong>Excel 导入</strong><small>下载模板，勾选或批量处理已有员工</small></span><span class="badge">展开</span></summary><div class="account-status-content"><p>请先下载V3六列模板。员工号为7位纯数字，前面可加一个0；密码自动使用后四位，首次登录需修改；默认在职、账号启用，已过期Intern创建为停用。角色支持CM、TR、Lead、GSM、AM、OM（沿用HR可管理范围）；TA职务在页面设置。Type与实习结束日期选填，日期仅用于Intern。已有本圈工号和姓名一致的员工可覆盖为文件中的Type和实习结束日期，空白也会覆盖清空；内容一致无需处理。姓名不一致只能跳过，请到系统员工管理中核对修改。跨圈员工仅显示基础信息并跳过，调圈请使用跨圈调动。日期支持Excel日期及12/4/2026 到期等格式，年在后的斜杠日期按月/日/年解析。</p><form id="importEmployees" enctype="multipart/form-data"><div class="actions native-file-actions"><label class="secondary native-file-trigger" for="importEmployeesWorkbook">选择文件</label><a class="secondary download-link" href="${portalPath('/api/hr/import-template')}">下载导入模板</a><button type="submit" class="primary">导入员工</button></div><input id="importEmployeesWorkbook" class="native-file-input" name="workbook" type="file" accept=".xlsx" required><span class="field-hint" data-import-filename>请选择 Excel 文件（.xlsx）</span></form></div></details><details class="panel account-status-panel hr-tool-panel hr-create-panel"><summary><span class="hr-create-heading"><strong>新建员工账号</strong><small>填写员工基础信息，创建后可在下方员工管理中分配小组</small></span><span class="badge">展开</span></summary><div class="account-status-content"><form id="newEmployee" class="hr-filter"><label class="hr-create-employee-no">员工号<input name="employee_no" inputmode="numeric" pattern="0?[0-9]{7}" minlength="7" maxlength="8" required placeholder="7位员工号，可前加0"><span class="field-hint">7位数字，前面可加一个0；已删除的同一人员可用原工号重新注册，在用账号不能重复创建。</span></label><label class="hr-create-name">姓名<input name="name" required placeholder="请输入员工姓名"></label><label class="hr-create-role">角色<select name="role_code">${opt(state.options.roles,'code',x=>x.name)}</select></label><label class="hr-create-attraction">景点圈<select name="attraction_id"><option value="">无</option>${opt(state.options.employee_circles||state.options.attractions)}</select></label>${hrTypeFields()}<label class="hr-create-password">初始密码<input name="password" placeholder="留空使用员工号后4位"><span class="field-hint">首次登录后必须立即修改密码。</span></label><div class="actions hr-create-actions"><button type="submit" class="primary">创建账号</button></div></form></div></details>${employeeNumberChangePanel()}<section class="panel"><h2>员工管理</h2><p>改人在这里：本职与代理职务、景点圈、所属小组、人员状态和账号。组员行可直接选择所属小组，其他修改请点“编辑”。小组的主管和代理主管请到<button type="button" class="link-button" data-goto-groups>小组管理</button>设置。</p>${hrOrganizationMarkup(organization)}</section>${accountStatusPanel()}</div>`;
+  app.innerHTML=`<div class="section-gap"><details class="panel account-status-panel hr-tool-panel"><summary><span><strong>Excel 导入</strong><small>下载模板，勾选或批量处理已有员工</small></span><span class="badge">展开</span></summary><div class="account-status-content"><p>请先下载V3六列模板。员工号为7位纯数字，前面可加一个0；密码自动使用后四位，首次登录需修改；默认在职、账号启用，已过期Intern创建为停用。角色支持CM、TR、Lead、GSM、AM、OM（沿用HR可管理范围）；TA职务在页面设置。Type与实习结束日期选填，日期仅用于Intern。已有本圈工号和姓名一致的员工可覆盖为文件中的Type和实习结束日期，空白也会覆盖清空；内容一致无需处理。姓名不一致只能跳过，请到系统员工管理中核对修改。跨圈员工仅显示基础信息并跳过，调圈请使用跨圈调动。日期支持Excel日期及12/4/2026 到期等格式，年在后的斜杠日期按月/日/年解析。</p><form id="importEmployees" enctype="multipart/form-data"><div class="actions native-file-actions"><label class="secondary native-file-trigger" for="importEmployeesWorkbook">选择文件</label><a class="secondary download-link" href="${portalPath('/api/hr/import-template')}">下载导入模板</a><button type="submit" class="primary">导入员工</button></div><input id="importEmployeesWorkbook" class="native-file-input" name="workbook" type="file" accept=".xlsx" required><span class="field-hint" data-import-filename>请选择 Excel 文件（.xlsx）</span></form></div></details><details class="panel account-status-panel hr-tool-panel hr-create-panel"><summary><span class="hr-create-heading"><strong>新建员工账号</strong><small>填写员工基础信息，创建后可在下方员工管理中分配小组</small></span><span class="badge">展开</span></summary><div class="account-status-content"><form id="newEmployee" class="hr-filter"><label class="hr-create-employee-no">员工号<input name="employee_no" inputmode="numeric" pattern="0?[0-9]{7}" minlength="7" maxlength="8" required placeholder="7位员工号，可前加0"><span class="field-hint">7位数字，前面可加一个0；已删除的同一人员可用原工号重新注册，在用账号不能重复创建。</span></label><label class="hr-create-name">姓名<input name="name" required placeholder="请输入员工姓名"></label><label class="hr-create-role">角色<select name="role_code">${opt(state.options.roles,'code',x=>x.name)}</select></label><label class="hr-create-attraction">景点圈<select name="attraction_id"><option value="">无</option>${opt(state.options.employee_circles||state.options.attractions)}</select></label>${hrTypeFields()}<label class="hr-create-password">初始密码<input name="password" placeholder="留空使用员工号后4位"><span class="field-hint">首次登录后必须立即修改密码。</span></label><div class="actions hr-create-actions"><button type="submit" class="primary">创建账号</button></div></form></div></details>${employeeNumberChangePanel()}${temporaryRecognizerPanel()}<section class="panel"><h2>员工管理</h2><p>改人在这里：本职与代理职务、景点圈、所属小组、人员状态和账号。组员行可直接选择所属小组，其他修改请点“编辑”。小组的主管和代理主管请到<button type="button" class="link-button" data-goto-groups>小组管理</button>设置。</p>${hrOrganizationMarkup(organization)}</section>${accountStatusPanel()}</div>`;
   const importForm=document.getElementById('importEmployees'),workbookInput=importForm.querySelector('[name=workbook]'),fileHint=importForm.querySelector('[data-import-filename]');
   workbookInput.onchange=()=>{fileHint.textContent=workbookInput.files[0]?workbookInput.files[0].name:'请选择 Excel 文件（.xlsx）';};
   importForm.onsubmit=async event=>{
@@ -312,6 +356,7 @@ async function renderHrEmployees(){
   bindHrOrganization(organization);
   bindAccountStatusPanel();
   bindEmployeeNumberChange();
+  bindTemporaryRecognizers();
 }
 
 export { hrGroupShortName, hrTag, renderHrEmployees };

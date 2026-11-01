@@ -37,7 +37,7 @@ from app.services.monthly_ranks import member_month_rank
 from app.services.honors import honor_records, self_honors
 from app.services.monthly_statistics import dashboard_payload, statistics_hierarchy, statistics_payload
 from app.services.performance_details import member_records_payload, member_score_detail_payload, member_score_summary_payload, statistics_details_payload
-from app.services.performance_rankings import gsm_recognizer_ranking_payload, pr_ranking_payload, ranking_employees, ranking_group_labels
+from app.services.performance_rankings import gsm_recognizer_ranking_payload, pr_ranking_payload, pr_ranking_scope, ranking_employees, ranking_group_labels
 from app.services.statistics_trends import TREND_DEFAULT_MONTHS, TREND_MAX_MONTHS, TREND_SCORE_FIELDS, statistics_trend_payload as _statistics_trend_payload, trend_month_keys
 
 router = APIRouter()
@@ -299,9 +299,10 @@ def pr_rankings(
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
+    attraction_id = pr_ranking_scope(db, user, attraction_id, population, category)
     page = max(1, page)
     page_size = min(max(10, page_size), 100)
-    cache_key = (user.id, start_date, end_date, category, subtype_id, sort_by, keyword.strip(), page, page_size, attraction_id, population)
+    cache_key = (user.id, tuple(sorted(user.role_codes)), start_date, end_date, category, subtype_id, sort_by, keyword.strip(), page, page_size, attraction_id, population)
     with _pr_ranking_cache_lock:
         now = monotonic()
         cached = _pr_ranking_response_cache.get(cache_key)
@@ -330,7 +331,7 @@ def export_pr_rankings(
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
-    if user.role.code not in {"GSM", "AM", "OM"}:
+    if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
         raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
     data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id, population)
     if data["total"] > len(data["rows"]):
@@ -342,7 +343,7 @@ def export_pr_rankings(
     output = BytesIO()
     save_export_workbook(wb, output)
     output.seek(0)
-    write_audit(db, user.employee, "导出PR排名", "pr_ranking_export", category, after={"start_date": start_date, "end_date": end_date, "subtype_id": subtype_id, "sort_by": sort_by, "keyword": keyword, "row_count": len(data["rows"])})
+    write_audit(db, user.employee, "导出PR排名", "pr_ranking_export", category, after={"start_date": start_date, "end_date": end_date, "subtype_id": subtype_id, "sort_by": sort_by, "keyword": keyword, "row_count": len(data["rows"]), "attraction_id": data.get("attraction_id", attraction_id), "population": population})
     db.commit()
     ascii_filename = f"pr_rankings_{category}_{start_date}_{end_date}.xlsx"
     display_filename = f"PR排名_{category}_{start_date}_{end_date}.xlsx"

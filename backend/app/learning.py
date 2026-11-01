@@ -28,8 +28,22 @@ def editing(user, circle_id):
     return management(user, circle_id) or (user.has_role('TR') and user.employee.attraction_id == circle_id)
 
 
+def direct_read(user, circle_id):
+    """Permanent read scope is independent of publication/management scope."""
+    return (user.has_role('SUPERVISOR', 'GSM', 'AM', 'OM', 'SYSTEM_ADMIN')
+            or management(user, circle_id) or user.employee.attraction_id == circle_id)
+
+
+def valid_circle(db, circle_id):
+    """Shared by published reading and private draft/attachment access."""
+    circle = db.get(Attraction, circle_id)
+    return bool(circle and circle.active and circle.employee_circle)
+
+
 def readable(db, user, circle_id):
-    if management(user, circle_id) or user.employee.attraction_id == circle_id:
+    if not valid_circle(db, circle_id):
+        return False
+    if direct_read(user, circle_id):
         return True
     return bool(db.query(LearningAccess.id).filter_by(employee_id=user.id, circle_id=circle_id,
         home_circle_id=user.employee.attraction_id, status='approved').filter(LearningAccess.expires_at > datetime.now()).first())

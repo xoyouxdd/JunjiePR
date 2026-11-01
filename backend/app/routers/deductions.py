@@ -825,6 +825,51 @@ async def retry_deduction_material(
     return {"ok": True, "record": deduction_payload(row)}
 
 
+@router.patch("/deductions/{record_id}/level")
+def correct_deduction_level(record_id: int, payload: dict, request: Request,
+                            db: Session = Depends(get_db),
+                            user: V2User = Depends(require_permissions("SYSTEM_ADMIN"))):
+    """Correct a standalone record without replaying entry/upgrade workflows."""
+    db.execute(text("BEGIN IMMEDIATE"))
+    row = db.get(DeductionRecord, record_id)
+    if not row:
+        raise HTTPException(404, "扣分记录不存在")
+    if row.status not in {"active", "pending_material", "material_failed"}:
+        raise HTTPException(400, "当前记录状态不可修改级别")
+    linked = db.query(DeductionUpgradeRequest.id).filter(or_(
+        DeductionUpgradeRequest.first_deduction_id == row.id,
+        DeductionUpgradeRequest.second_deduction_id == row.id,
+        DeductionUpgradeRequest.result_deduction_id == row.id,
+    )).first()
+    if row.upgrade_request_id or row.upgrade_role or linked:
+        raise HTTPException(400, "升级工单关联记录请通过原升级流程处理")
+    employee = db.get(Employee, row.employee_id)
+    ensure_month_open(db, row.deduction_month,
+                      row.attraction_id_snapshot or (employee.attraction_id if employee else None), "修改处分级别")
+    level_id, expected = payload.get("level_id"), payload.get("expected_level_id")
+    if type(level_id) is not int or type(expected) is not int:
+        raise HTTPException(400, "请选择有效处分级别并刷新原记录")
+    if row.deduction_level_id != expected:
+        raise HTTPException(409, "处分级别已变化，请刷新后核对")
+    level = db.get(DeductionLevel, level_id)
+    allowed = {"STATEMENT", "MEMO", "WARNING_1", "WARNING_2"}
+    original = db.get(DeductionLevel, row.deduction_level_id)
+    if not level or level.code not in allowed or not original or original.code not in allowed:
+        raise HTTPException(400, "处分级别无效")
+    reason = str(payload.get("reason") or "").strip()
+    if not reason or len(reason) > 500:
+        raise HTTPException(400, "请填写500字以内的修改原因")
+    if row.deduction_level_id == level.id:
+        return {"ok": True}
+    before = deduction_payload(row)
+    row.deduction_level_id, row.deduction_level_name, row.points = level.id, level.name, level.points
+    write_audit(db, user.employee, "修改处分级别", "deduction", row.id,
+                before=before, after=deduction_payload(row), reason=reason, ip_address=client_ip(request))
+    db.commit()
+    invalidate_data_caches()
+    return {"ok": True}
+
+
 @router.post("/deductions/{record_id}/void")
 def void_deduction(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     row = db.get(DeductionRecord, record_id)

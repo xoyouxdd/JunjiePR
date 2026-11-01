@@ -67,6 +67,11 @@ function trendResultsHtml(rawData,mode='total'){
 function mountTrendChart(host,rawData,mode='total'){
   const average=mode==='average',data=trendDisplayData(rawData,mode);
   let disposed=false,chart=null,observer=null;
+  const syncSkin=()=>{
+    if(disposed||!chart||!host.isConnected)return;
+    const css=getComputedStyle(host),color=name=>css.getPropertyValue(name).trim();
+    chart.setOption({color:[color('--primary'),...(data.by_attraction||[]).map(circle=>color(({heat:'--circle-heat',dwarf:'--circle-dwarf',bear:'--circle-bear'})[circleTheme(circle.attraction_name)]||'--muted'))],legend:{textStyle:{color:color('--text-secondary')}},xAxis:{axisLabel:{color:color('--text-secondary')},axisLine:{lineStyle:{color:color('--line')}}},yAxis:{nameTextStyle:{color:color('--text-secondary')},axisLabel:{color:color('--text-secondary')},splitLine:{lineStyle:{color:color('--line')}}}});
+  };
   host.querySelectorAll('[data-trend-color]').forEach(mark=>{mark.style.backgroundColor=mark.dataset.trendColor;});
   void loadUiLibrary('chart').then(Charts=>{
     if(!Charts||disposed||!host.isConnected)return;
@@ -79,10 +84,11 @@ function mountTrendChart(host,rawData,mode='total'){
       chart=Charts.init(target,null,{renderer:'canvas'});
       chart.setOption({animation:false,color:lines.map(line=>line.color),textStyle:{fontFamily:'system-ui, Microsoft YaHei, sans-serif'},tooltip:{trigger:'axis',renderMode:'richText',confine:true,valueFormatter:displayScore},legend:{bottom:0,type:'scroll',textStyle:{color:color('--text-secondary')}},grid:{left:60,right:18,top:30,bottom:65},xAxis:{type:'category',data:data.months,axisLabel:{color:color('--text-secondary')},axisLine:{lineStyle:{color:color('--line')}}},yAxis:{type:'value',name:average?'分/人':'分',nameTextStyle:{color:color('--text-secondary')},axisLabel:{color:color('--text-secondary')},splitLine:{lineStyle:{color:color('--line')}}},series:lines.map((line,index)=>({name:line.name,type:'line',data:line.points,connectNulls:false,symbol:['circle','rect','triangle','diamond'][index%4],symbolSize:6,lineStyle:{width:index?1.8:2.5},emphasis:{focus:'series'}}))});
       fallback.hidden=true;
+      syncSkin();window.addEventListener('app:skin-changed',syncSkin);
       observer=new ResizeObserver(()=>{if(target.isConnected)chart?.resize();});observer.observe(target);
     }catch(_error){chart?.dispose();chart=null;target.hidden=true;fallback.hidden=false;}
   });
-  return ()=>{disposed=true;observer?.disconnect();chart?.dispose();chart=null;};
+  return ()=>{disposed=true;window.removeEventListener('app:skin-changed',syncSkin);observer?.disconnect();chart?.dispose();chart=null;};
 }
 
 export { TREND_SPANS, mountTrendChart, trendResultsHtml };

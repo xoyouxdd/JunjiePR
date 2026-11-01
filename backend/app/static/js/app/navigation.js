@@ -7,9 +7,10 @@ import { bindDialogLayer, leaveLayer, confirmModal } from './dialogs.js';
 import { esc } from './format.js';
 import { app, has, state, tabs } from './state.js';
 import { avatarMarkup, showAvatarSettings } from './avatars.js';
+import { showAppearanceSettings } from './appearance.js';
 
 const avatarAllowed=()=>!['HR_CIRCLE','HR_ADMIN'].includes(state.me?.base_role_code||state.me?.role_code)&&!state.me?.rotation_temporary;
-const openAvatarSettings=()=>showAvatarSettings({onSaved:renderUserBadge});
+const openAvatarSettings=()=>{document.getElementById('appearanceBtn')?.focus({preventScroll:true});showAvatarSettings({onSaved:renderUserBadge});};
 
 // 本职计分（CM/TR代理TA主管、主管含代理TA GSM）但菜单按管理角色显示时，补上本人成绩入口。
 function isActingFrontline(){return ['CM','TR','SUPERVISOR'].includes(state.me?.base_role_code)&&!['CM','TR'].includes(state.me?.role_code);}
@@ -21,7 +22,7 @@ function menuItems() {
   else if (['TA_GSM','GSM'].includes(r)) {items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看'],['prRankings','PR排名数据'],['register','绩效登记'],['entries','我的登记记录']);}
   else if (['AM','OM'].includes(r)) {items.push(['statistics','景点数据与导出'],['prRankings','PR排名数据'],['register','POC特别贡献']);}
   else if (r==='SYSTEM_ADMIN') items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);
-  else if (r==='HR_CIRCLE') {items.push(['hrEmployees','员工管理'],['monthClose','月结'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
+  else if (r==='HR_CIRCLE') {items.push(['hrEmployees','员工管理'],['monthClose','月结'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置'],['prRankings','PR排名数据']);}
   else if (r==='HR_ADMIN') {items.push(['hrEmployees','员工管理'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
   else if (has('DATA_VIEW')) items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
@@ -86,21 +87,24 @@ function renderUserBadge(){
   const badge=document.getElementById('userBadge');
   if(!badge) return;
   const p=userIdentityParts();
-  // 手机上只显示「姓名 · 景点圈」（无景点圈时显示角色），完整身份在「更多」里查看。
-  // 徽章是 flex 容器，分段首尾的普通空格会被吞掉，分隔符两侧用不换行空格。
-  const sep=' · ';
-  badge.innerHTML=`<span class="badge-part">${esc(p.name)}</span><span class="badge-part${p.circle?' badge-part-optional':''}">${sep}${esc(p.role)}</span>${p.circle?`<span class="badge-part">${sep}${esc(p.circle)}</span>`:''}${p.members?`<span class="badge-part badge-part-optional">${sep}${esc(p.members)}</span>`:''}`;
-  badge.title=[p.name,p.role,p.circle,p.members].filter(Boolean).join(' · ');
-  if(avatarAllowed()){
-    badge.insertAdjacentHTML('afterbegin',`<button type="button" class="nav-avatar-button" data-avatar-settings aria-label="装扮头像">${avatarMarkup(state.me.avatar_key,p.name)||`<span aria-hidden="true">${esc((p.name||'我').slice(0,1))}</span>`}</button>`);
-    badge.querySelector('[data-avatar-settings]').onclick=openAvatarSettings;
+  badge.innerHTML=`<span class="identity-portrait" aria-hidden="true">${avatarMarkup(state.me.avatar_key,p.name)||`<span>${esc((p.name||'我').slice(0,1))}</span>`}</span><span class="identity-copy"><span class="identity-name">${esc(p.name)}<small class="identity-employee-no">工号 ${esc(p.employeeNo)}</small></span><span class="identity-meta">${esc(p.role)}${p.circle?' · '+esc(p.circle):''}${p.members?' · '+esc(p.members):''}</span></span>`;
+  badge.title=[p.name,p.employeeNo,p.role,p.circle,p.members].filter(Boolean).join(' · ');
+  Object.assign(badge.dataset,{employeeName:p.name,employeeNo:p.employeeNo,roleLabel:p.role||'',circleLabel:p.circle});
+  const appearance=document.getElementById('appearanceBtn');
+  if(appearance){
+    appearance.hidden=!!state.me.rotation_temporary;
+    delete appearance.dataset.avatarSettings;delete appearance.dataset.appearanceSettings;
+    appearance.setAttribute('aria-label','个人外观');
+    if(avatarAllowed()){appearance.dataset.avatarSettings='';appearance.onclick=openAvatarSettings;}
+    else{appearance.dataset.appearanceSettings='';appearance.onclick=showAppearanceSettings;}
   }
+  const logoutButton=document.getElementById('logoutBtn');if(logoutButton)logoutButton.hidden=!state.me.rotation_temporary;
 }
 
 function mobileIdentityCard(){
   const p=userIdentityParts();
   const rows=[['姓名',p.name],['工号',p.employeeNo],['角色',p.role],['景点圈',p.circle],['组员',p.members]].filter(([,v])=>v);
-  return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${avatarAllowed()?'<button type="button" class="secondary" data-avatar-settings>装扮头像</button>':''}</section>`;
+  return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${avatarAllowed()?'<button type="button" class="secondary" data-avatar-settings>个人外观与头像</button>':'<button type="button" class="secondary" data-appearance-settings>个人外观</button>'}</section>`;
 }
 
 const NAV_FOOTER_IDS=['password'];
@@ -293,6 +297,7 @@ function renderTabs() {
   tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawerLayer=null;leaveLayer(drawer,()=>{drawer.hidden=true;});}});});
   tabs.querySelector('[data-close-more]')?.addEventListener('click',closeDrawer);
   tabs.querySelector('[data-avatar-settings]')?.addEventListener('click',()=>{closeDrawer();openAvatarSettings();});
+  tabs.querySelector('[data-appearance-settings]')?.addEventListener('click',()=>{closeDrawer();showAppearanceSettings();});
   tabs.querySelector('[data-mobile-logout]')?.addEventListener('click',logout);
 }
 

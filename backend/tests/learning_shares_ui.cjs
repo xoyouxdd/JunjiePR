@@ -14,6 +14,21 @@ try{
   await login('TRTEST01');await page.locator('[data-learning-new]').click();await page.locator('[name=title]').fill('浏览器攻略 '+engine);await page.locator('[name=body]').fill('岗位学习内容与交接信息。');await page.locator('[name=category]').selectOption('开场准备');await page.locator('[data-learning-upload]').setInputFiles(path.join(work,'sample.png'));await page.locator('[data-learning-assets]').getByText('sample.png',{exact:false}).waitFor();await page.locator('[data-learning-save-draft]').click();await page.getByText('草稿已保存',{exact:false}).waitFor();await page.locator('[data-learning-back]').click();await page.locator('[data-view=mine]').click();await page.locator('[data-draft-open]').first().click();assert.equal(await page.locator('[name=title]').inputValue(),'浏览器攻略 '+engine);await page.locator('.learning-form [type=submit]').click();await page.locator('[data-preview-confirm]').click();await page.locator('.learning-circles').waitFor();assert.equal(await page.locator('#tabs [data-tab=learningShares]').first().innerText(),'岗位知识库');await page.locator('[data-category=异常处理]').click();await page.locator('[data-category=异常处理][aria-pressed=true]').waitFor();assert.equal(await page.locator('[data-learning-open]').count(),0);await page.locator('[data-category=开场准备]').click();await page.locator('[data-category=开场准备][aria-pressed=true]').waitFor();await page.locator('[data-learning-search] [name=keyword]').fill('浏览器攻略');await page.locator('[data-learning-search] [type=submit]').click();await page.getByRole('button',{name:'浏览器攻略 '+engine,exact:true}).click();try{await page.locator('[data-learning-asset]').waitFor();}catch(e){const dir=path.resolve(root,'../output/knowledge-library-review');fs.mkdirSync(dir,{recursive:true});await page.screenshot({path:path.join(dir,engine+'-asset-failure.png'),fullPage:true});console.error(await page.locator('#app').innerText());throw e;}await page.locator('[data-learning-asset]').click();await page.locator('.learning-image').waitFor();assert(await page.locator('.learning-image').evaluate(i=>i.complete&&i.naturalWidth===160));await page.locator('[data-like]').click();await page.getByRole('button',{name:'已点赞 1',exact:true}).waitFor();await page.locator('[data-star]').click();await page.getByRole('button',{name:'★ 已星标',exact:true}).waitFor();assert((await page.locator('.learning-watermarks').innerText()).includes('TRTEST01'));
   await page.locator('[data-learning-edit]').click();await page.locator('[name=body]').fill('原发布TR更新的内容');await page.locator('[name=summary]').fill('补充');await page.locator('.learning-form [type=submit]').click();await page.locator('[data-preview-confirm]').click();await page.locator('.learning-circles').waitFor();
   for(const width of [320,390,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'overflow '+width);}
+  // Formal managers can read all circles directly, without gaining cross-circle edit controls.
+  for(const account of ['SUPTEST01','GSMTEST01']){
+    await login(account);
+    const circles=(await(await context.request.get(base+'/api/learning/options')).json()).circles;
+    assert(circles.length===3&&circles.every(c=>c.readable&&!c.expires_at));
+    const cross=circles.find(c=>!c.own);
+    await page.locator('[data-circle="'+cross.id+'"]').click();
+    await page.getByRole('button',{name:'跨圈学习材料',exact:true}).waitFor();
+    assert.equal(await page.locator('[data-learning-apply]').count(),0);
+    await page.getByRole('button',{name:'跨圈学习材料',exact:true}).click();
+    assert.equal(await page.locator('[data-learning-edit]').count(),0);
+    assert.equal(await page.locator('[data-learning-withdraw]').count(),0);
+    await page.locator('[data-learning-asset]').click();
+    await page.locator('[data-pdf-rendered=true]').waitFor();
+  }
   // Another authorized manager submits a revision; only owner publishes.
   const own=(await(await context.request.get(base+'/api/learning/options')).json()).circles.find(c=>c.own).id;
   const shares=await(await context.request.get(base+'/api/learning?circle_id='+own)).json();const share=shares.items.find(a=>a.title==='浏览器攻略 '+engine);

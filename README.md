@@ -10,6 +10,8 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/temporary-recognizers.md](docs/temporary-recognizers.md) | 按日期授权临时主管认可资格、计分与身份边界 |
+| [docs/hr-pr-rankings.md](docs/hr-pr-rankings.md) | 景点圈HR的PR排名与导出范围 |
 | [docs/rotation-workflow-20261028.md](docs/rotation-workflow-20261028.md) | 轮岗独立任务、超时转接、101与大屏正式联动 |
 | [docs/workspace-compact-20261027.md](docs/workspace-compact-20261027.md) | 紧凑认可记录、今日工作、交互趋势及按需组件边界 |
 | [docs/third-party-ui.md](docs/third-party-ui.md) | 本地按需界面组件的来源与许可证 |

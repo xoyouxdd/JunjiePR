@@ -16,6 +16,7 @@ from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionMonthlyQuota, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
 from app.recognition_encouragement import encouragement_options
 from app.recognition_timing import identify, stage
+from app.services.identity import TEMPORARY_RECOGNIZER_LABEL, temporary_recognizer_ids
 from app.v2_services import ACTING_TA_GSM_RECOGNIZER_CODES, FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, SENIOR_RECOGNIZER_CODES, base_role_at, scoring_category, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
 from app.routers._shared import (
     ATTENDANCE_FILTER_STATUSES,
@@ -213,7 +214,8 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         recognizer_role = recognizer_role_for_date(db, recognizer.id, recognition_date) if recognizer else None
         if not recognizer or not employed_on(recognizer, min(recognition_date, date.today().isoformat())) or not recognizer_role or recognizer_role.code not in RECOGNIZER_CODES:
             raise HTTPException(400, "请选择有效认可人")
-        allowed_ids = {row["id"] for row in recognizer_options(db, target_circle.id, recognition_date)}
+        recognizer_choices = {row["id"]: row for row in recognizer_options(db, target_circle.id, recognition_date)}
+        allowed_ids = set(recognizer_choices)
         if recognizer.id not in allowed_ids:
             raise HTTPException(400, "认可人必须是TALEAD/LEAD或TAGSM及以上的非HR在职人员")
         if recognizer.id == target.id:
@@ -224,7 +226,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
             if recognizer_role.code not in allowed_codes:
                 raise HTTPException(400, "代理TA GSM期间的认可人必须是GSM、AM或OM" if target_duty_code == "TA_GSM" else "主管的认可人必须是TA GSM、GSM、AM或OM")
         recognizer_name = recognizer.name
-        recognizer_role_name = recognizer_role.name
+        recognizer_role_name = recognizer_choices[recognizer.id]["role_name"]
         fraction = recognition_score_for_role(db, recognizer_role.id, recognition_date, target_role.code)
     if not is_self and not special_rule and target_duty_code == "TA_SUPERVISOR" and user.role.code in LEADER_CODES:
         raise HTTPException(403, "该员工认可日期处于代理TA主管期间，主管和TA主管不能为其代录加分")
@@ -298,14 +300,16 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         recognizer_employee_id=recognizer.id,
         recognizer_name=recognizer_name,
         recognizer_role_snapshot=recognizer_role_name,
-        recognizer_role_code_snapshot=recognizer_role.code if recognizer_role else None,
+        recognizer_role_code_snapshot=(recognizer_choices[recognizer.id]["identity_role_code"]
+            if recognizer_role_name == TEMPORARY_RECOGNIZER_LABEL else recognizer_role.code if recognizer_role else None),
         operator_employee_id=user.id,
         operator_name=user.name,
         operator_role_snapshot=user.role.name,
         operator_role_code_snapshot=user.role.code,
         operator_base_role_code_snapshot=user.base_role.code,
         recognizer_base_role_code_snapshot=(
-            (base_role_at(db, recognizer.id, recognition_date) or recognizer_role).code if recognizer_role else None
+            recognizer_choices[recognizer.id]["identity_role_code"] if recognizer_role_name == TEMPORARY_RECOGNIZER_LABEL
+            else (base_role_at(db, recognizer.id, recognition_date) or recognizer_role).code if recognizer_role else None
         ),
         employee_acting_duty_code=target_duty_code,
         source="self" if is_self else "manager",
@@ -318,6 +322,9 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     try:
         db.add(row)
         db.flush()
+        # The write lock acquired by flush serializes this check with qualification cancellation.
+        if recognizer_role_name == TEMPORARY_RECOGNIZER_LABEL and recognizer.id not in temporary_recognizer_ids(db, recognition_date):
+            raise HTTPException(409, "临时主管认可资格已变更，请刷新后重新选择认可人")
         if row.status == "confirmed":
             apply_monthly_category_cap(db, row, recognition_type)
             db.flush()

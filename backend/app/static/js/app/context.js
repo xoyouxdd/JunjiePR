@@ -33,6 +33,7 @@ const activePageCleanups=new Set();
 function pageTimeout(callback,delay){const timer=setTimeout(()=>{activePageTimers.delete(timer);callback();},delay);activePageTimers.add(timer);return timer;}
 
 function registerPageCleanup(callback){activePageCleanups.add(callback);return callback;}
+function unregisterPageCleanup(callback){activePageCleanups.delete(callback);}
 
 function clearPageResources(){activePageTimers.forEach(clearTimeout);activePageTimers.clear();activePageCleanups.forEach(callback=>{try{callback();}catch(_){}});activePageCleanups.clear();}
 
@@ -61,4 +62,4 @@ let registeredViews=Object.freeze({});
 function configureViews(views){registeredViews=Object.freeze({...views});}
 function getViewSignal(){return renderAbortController?.signal;}
 
-export { beginViewRequest, captureViewContext, clearPageResources, configureViews, getViewSignal, pageTimeout, registerPageCleanup, render };
+export { beginViewRequest, captureViewContext, clearPageResources, configureViews, getViewSignal, pageTimeout, registerPageCleanup, unregisterPageCleanup, render };

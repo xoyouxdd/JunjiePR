@@ -1,8 +1,8 @@
 import { queueExport } from './export-tasks.js';
 // Declaration statistics and record detail presentation.
-import { api } from './api.js';
+import { api, json } from './api.js';
 import { beginViewRequest } from './context.js';
-import { confirmModal } from './dialogs.js';
+import { confirmModal, formModal } from './dialogs.js';
 import { bindFilePreviews } from './files.js';
 import { esc, monthNow, portalPath } from './format.js';
 import { app, has } from './state.js';
@@ -13,10 +13,10 @@ function declarationLevelTone(code){if(Object.prototype.hasOwnProperty.call(decl
 
 function declarationStatusBadge(value){const tone=value==='已生效'?'ok':value==='已作废'?'danger':'warn';return `<span class="badge status-chip ${tone}">${esc(value)}</span>`;}
 
-function declarationRecordDetails(rows){
+function declarationRecordDetails(rows,levels=[]){
   if(!rows.length)return '<div class="empty">当前范围没有符合条件的记录</div>';
   const material=row=>row.document_url?`<button type="button" class="secondary declaration-material" data-file-preview="${esc(row.document_url)}" data-file-kind="pdf" data-file-title="${esc(row.employee_name)}的处分材料">查看材料</button> <a class="secondary declaration-material" href="${esc(portalPath(row.document_url))}" download>下载材料</a>`:'<span class="field-hint">暂无可查看材料</span>';
-  const level=row=>`<span class="badge declaration-level tone-${declarationLevelTone(row.level_code)}">${esc(row.level_name)}</span>`;
+  const level=row=>has('SYSTEM_ADMIN')&&['active','pending_material','material_failed'].includes(row.raw_status)&&!row.upgrade_request_id&&['无','可升级','审核不通过'].includes(row.upgrade_status)?`<select class="declaration-level-select" aria-label="修改${esc(row.employee_name)}的处分等级" data-correct-level="${row.id}" data-original-level="${row.level_id}">${levels.filter(x=>Object.hasOwn(declarationLevelTones,x.code)).map(x=>`<option value="${x.id}" ${x.id===row.level_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:`<span class="badge declaration-level tone-${declarationLevelTone(row.level_code)}">${esc(row.level_name)}</span>`;
   return `<div class="table-wrap declaration-desktop"><table><thead><tr><th>员工 / 工号</th><th>原景点圈</th><th>事件日期</th><th>处分类型 / 等级</th><th>内容</th><th>登记人 / 时间</th><th>材料状态</th><th>审核或升级状态</th><th>业务状态</th><th>材料</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.employee_name)}</strong><br><small>${esc(row.employee_no)}</small></td><td>${esc(row.attraction_name)}</td><td>${esc(row.occurred_on)}</td><td>${esc(row.type_name)}<br>${level(row)}</td><td>${esc(row.description)}</td><td>${esc(row.submitter_name)}<br><small>${esc(row.submitted_at)}</small></td><td>${esc(row.material_status)}</td><td>${esc(row.upgrade_status)}</td><td>${declarationStatusBadge(row.business_status)}</td><td>${material(row)}</td></tr>`).join('')}</tbody></table></div><div class="declaration-mobile">${rows.map(row=>`<article class="declaration-record"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong>${declarationStatusBadge(row.business_status)}</div><p>${esc(row.attraction_name)} · ${esc(row.occurred_on)}</p><div class="record-line"><span>${esc(row.type_name)}</span>${level(row)}</div><p>${esc(row.description)}</p><small>登记：${esc(row.submitter_name)} · ${esc(row.submitted_at)}</small><small>材料：${esc(row.material_status)} · 审核/升级：${esc(row.upgrade_status)}</small>${material(row)}</article>`).join('')}</div>`;
 }
 
@@ -41,8 +41,21 @@ async function renderDeclarationStatistics(){
       return `<section class="declaration-circle"><button type="button" class="declaration-circle-toggle" data-declaration-circle="${esc(key)}" aria-expanded="false"><strong>${esc(circle.attraction_name)}</strong><span>${circle.record_count} 条 · ${circle.employee_count} 人</span><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-circle-detail="${esc(key)}" hidden></div><div class="declaration-levels">${circle.levels.map(level=>`<div class="declaration-level-item"><button type="button" class="declaration-level-toggle tone-${declarationLevelTone(level.code)}" data-declaration-level="${esc(key)}:${level.id}" aria-expanded="false"><span>${esc(level.name)}</span><strong>${level.count} 条</strong><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-level-detail="${esc(key)}:${level.id}" hidden></div></div>`).join('')}</div></section>`;
     }).join('')||'<div class="empty">当前筛选范围暂无声明登记记录</div>';
     host.innerHTML=`<section class="panel"><h2>月度汇总</h2><p class="statistics-scope">${esc(data.month)} · ${data.total_records} 条记录；点击景点圈或处分等级可展开明细，再次点击收起。</p>${cards}${statuses}<div class="declaration-circle-list">${circles}</div></section>`;
-    host.querySelectorAll('[data-declaration-circle]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationCircle,detail=host.querySelector(`[data-declaration-circle-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;detail.innerHTML=open?declarationRecordDetails(data.records.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===key)):'';button.setAttribute('aria-expanded',String(open));if(open)bindFilePreviews(detail);});
-    host.querySelectorAll('[data-declaration-level]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationLevel,[circleId,levelId]=key.split(':'),detail=host.querySelector(`[data-declaration-level-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;detail.innerHTML=open?declarationRecordDetails(data.records.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===circleId&&String(row.level_id)===levelId)):'';button.setAttribute('aria-expanded',String(open));if(open)bindFilePreviews(detail);});
+    host.querySelectorAll('[data-declaration-circle]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationCircle,detail=host.querySelector(`[data-declaration-circle-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;detail.innerHTML=open?declarationRecordDetails(data.records.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===key),data.levels):'';button.setAttribute('aria-expanded',String(open));if(open){bindFilePreviews(detail);bindLevelCorrections(detail,data);}});
+    host.querySelectorAll('[data-declaration-level]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationLevel,[circleId,levelId]=key.split(':'),detail=host.querySelector(`[data-declaration-level-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;detail.innerHTML=open?declarationRecordDetails(data.records.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===circleId&&String(row.level_id)===levelId),data.levels):'';button.setAttribute('aria-expanded',String(open));if(open){bindFilePreviews(detail);bindLevelCorrections(detail,data);}});
+  };
+  const bindLevelCorrections=(detail,data)=>{
+    detail.querySelectorAll('[data-correct-level]').forEach(select=>select.onchange=async()=>{
+      const row=data.records.find(x=>x.id===Number(select.dataset.correctLevel)),levelId=Number(select.value);
+      select.value=String(row.level_id);
+      if(levelId===row.level_id)return;
+      const target=data.levels.find(x=>x.id===levelId);
+      const saved=await formModal('修改处分级别',`<p>${esc(row.employee_name)} · ${esc(row.employee_no)} · ${esc(row.occurred_on)}</p><p>${esc(row.level_name)} → ${esc(target.name)}</p><p>该记录的扣分同步按新级别更新，原登记内容与材料保留。</p>`, '<label>修改原因<textarea name="reason" maxlength="500" required></textarea></label>','确认修改',{onSubmit:async f=>{
+        const reason=f.elements.reason.value.trim();if(!reason)throw new Error('请填写修改原因');
+        await api('/api/deductions/'+row.id+'/level',json('PATCH',{level_id:levelId,expected_level_id:row.level_id,reason}));
+      }});
+      if(saved&&request.isCurrent())await load();
+    });
   };
   const params=()=>new URLSearchParams([...new FormData(form)].filter(([,value])=>value));
   const load=async()=>{const id=++sequence,button=form.querySelector('button[type="submit"]');button.disabled=true;host.innerHTML='<section class="panel"><div class="empty">正在加载统计数据…</div></section>';try{const data=await api('/api/declaration-statistics?'+params());if(id===sequence&&app.contains(form))show(data);}catch(error){if(id===sequence&&app.contains(form))host.innerHTML=`<section class="panel"><div class="error">${esc(error.message)}</div></section>`;}finally{if(id===sequence)button.disabled=false;}};

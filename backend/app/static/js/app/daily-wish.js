@@ -119,17 +119,60 @@ function dayKey(){const d=new Date();return `${d.getFullYear()}-${d.getMonth()+1
 function read(key){try{return JSON.parse(localStorage.getItem(key))||{};}catch(_){return {};}}
 function save(key,value){try{localStorage.setItem(key,JSON.stringify(value));}catch(_){}}
 function choose(history){const recent=new Set(history.slice(-90)),preferOriginal=Math.random()<0.5;let candidates=[];for(let i=preferOriginal?combinedTotal:0;i<(preferOriginal?total:combinedTotal);i++)if(!recent.has(i))candidates.push(i);if(!candidates.length)for(let i=0;i<total;i++)if(!recent.has(i))candidates.push(i);return candidates[Math.floor(Math.random()*candidates.length)];}
-function mountDailyWish(host,userId){
-  const key=`fz-daily-wish-v1-${userId}`,stored=read(key);let history=Array.isArray(stored.history)?stored.history.filter(n=>Number.isInteger(n)&&n>=0&&n<total).slice(-90):[];
-  let id=stored.day===dayKey()&&Number.isInteger(stored.id)&&stored.id>=0&&stored.id<total?stored.id:choose(history);
-  const remember=()=>{history=history.filter(n=>n!==id);history.push(id);history=history.slice(-90);save(key,{day:dayKey(),id,history});};remember();
-  host.innerHTML='<details class="daily-wish"><summary><span aria-hidden="true">✦</span><strong>今日小祝福</strong><small>给自己一点温柔</small></summary><div class="daily-wish-body"><p class="daily-wish-hint">轻轻刮开，看看今天的祝福</p><div class="daily-wish-card"><p data-wish-text></p><canvas data-wish-scratch aria-hidden="true"></canvas></div><div class="daily-wish-actions"><button type="button" class="secondary" data-wish-reveal>直接查看</button><button type="button" class="secondary" data-wish-next>换一句</button></div><p class="daily-wish-note">祝福仅供放松，与积分和考核无关。</p></div></details>';
-  const text=host.querySelector('[data-wish-text]'),canvas=host.querySelector('canvas'),ctx=canvas.getContext('2d');let revealed=false,drawing=false,last=null,initialized=false;
-  function draw(){initialized=true;text.textContent=id<combinedTotal?openings[Math.floor(id/endings.length)]+endings[id%endings.length]:originalWishes[id-combinedTotal];revealed=false;const rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;canvas.width=Math.round(rect.width*ratio);canvas.height=Math.round(rect.height*ratio);ctx.setTransform(ratio,0,0,ratio,0,0);ctx.globalCompositeOperation='source-over';ctx.fillStyle='#dcece2';ctx.fillRect(0,0,rect.width,rect.height);ctx.fillStyle='#527861';ctx.font='14px sans-serif';ctx.textAlign='center';ctx.fillText('✦ 轻轻刮开 ✦',rect.width/2,rect.height/2+5);}
-  function reveal(){revealed=true;ctx.clearRect(0,0,canvas.width,canvas.height);}
-  function scratch(e){if(!drawing||revealed)return;const r=canvas.getBoundingClientRect(),point={x:e.clientX-r.left,y:e.clientY-r.top};ctx.globalCompositeOperation='destination-out';ctx.lineWidth=38;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo((last||point).x,(last||point).y);ctx.lineTo(point.x,point.y);ctx.stroke();last=point;}
-  canvas.addEventListener('pointerdown',e=>{drawing=true;last=null;canvas.setPointerCapture(e.pointerId);scratch(e);});canvas.addEventListener('pointermove',scratch);canvas.addEventListener('pointerup',()=>{drawing=false;last=null;});canvas.addEventListener('pointercancel',()=>{drawing=false;last=null;});
-  host.querySelector('[data-wish-reveal]').onclick=reveal;host.querySelector('[data-wish-next]').onclick=()=>{id=choose(history);remember();draw();};
-  host.querySelector('details').addEventListener('toggle',e=>{if(e.currentTarget.open&&!initialized)draw();});
+function mountDailyWish(host,userId,{integrated=false}={}){
+  if(!host)return ()=>{};
+  const target=integrated?host.querySelector('.skin-story-wish-host'):host;
+  if(!target)return ()=>{};
+  const key=`fz-daily-wish-v1-${userId}`,stored=read(key),today=dayKey();
+  const validId=value=>Number.isInteger(value)&&value>=0&&value<total;
+  const previous=host._dailyWishContext,storedId=stored.day===today&&validId(stored.id)?stored.id:null;
+  if(previous&&previous.userId===String(userId)&&previous.integrated===integrated&&previous.target===target&&previous.canvas.isConnected&&previous.day===today&&(storedId===null||storedId===previous.id))return host._disposeDailyWish;
+  host._disposeDailyWish?.();
+  let currentDay=today;
+  let history=Array.isArray(stored.history)?stored.history.filter(n=>Number.isInteger(n)&&n>=0&&n<total).slice(-90):[];
+  let id=storedId===null?choose(history):storedId;
+  const remember=()=>{history=history.filter(n=>n!==id);history.push(id);history=history.slice(-90);save(key,{day:currentDay,id,history});};remember();
+  const content='<div class="daily-wish-body"><span class="daily-wish-kicker">FZ · 今日小祝福</span><div class="daily-wish-card"><p data-wish-text aria-hidden="true"></p><canvas data-wish-scratch aria-hidden="true"></canvas></div><div class="daily-wish-actions"><button type="button" class="secondary" data-wish-reveal>直接查看</button><button type="button" class="secondary" data-wish-next>换一句</button></div><p class="daily-wish-note">祝福仅供放松，与积分和考核无关。</p><span class="wish-status" data-wish-status role="status" aria-live="polite"></span></div>';
+  target.innerHTML=integrated?content:'<details class="daily-wish"><summary><span aria-hidden="true">✦</span><strong>今日小祝福</strong><small>给自己一点温柔</small></summary>'+content+'</details>';
+  host.hidden=false;host.dataset.dailyWish='';
+  const text=target.querySelector('[data-wish-text]'),canvas=target.querySelector('canvas'),ctx=canvas.getContext('2d'),revealButton=target.querySelector('[data-wish-reveal]'),nextButton=target.querySelector('[data-wish-next]');
+  let revealed=false,drawing=false,last=null,width=0,height=0,disposed=false,hasScratches=false;
+  const mountContext={userId:String(userId),integrated,target,canvas,get day(){return currentDay;},get id(){return id;}};
+  host._dailyWishContext=mountContext;
+  const writeText=()=>{text.textContent=id<combinedTotal?openings[Math.floor(id/endings.length)]+endings[id%endings.length]:originalWishes[id-combinedTotal];};writeText();
+  function draw(force=false){
+    if(disposed||revealed||!ctx)return;
+    const rect=canvas.getBoundingClientRect();if(!rect.width||!rect.height)return;
+    if(!force&&rect.width===width&&rect.height===height)return;
+    let mask=null;
+    if(!force&&hasScratches&&canvas.width&&canvas.height){mask=document.createElement('canvas');mask.width=canvas.width;mask.height=canvas.height;const maskContext=mask.getContext('2d');if(maskContext)maskContext.drawImage(canvas,0,0);else mask=null;}
+    width=rect.width;height=rect.height;last=null;
+    const ratio=Math.min(window.devicePixelRatio||1,2);canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);ctx.setTransform(ratio,0,0,ratio,0,0);ctx.globalCompositeOperation='source-over';
+    if(mask){ctx.drawImage(mask,0,0,width,height);return;}
+    const gradient=ctx.createLinearGradient(0,0,width,height);gradient.addColorStop(0,'#eee6cd');gradient.addColorStop(.5,'#ddd5ba');gradient.addColorStop(1,'#f2ead3');ctx.fillStyle=gradient;ctx.fillRect(0,0,width,height);
+    ctx.strokeStyle='#ae9b6a55';ctx.lineWidth=1;for(let x=-height;x<width;x+=14){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x+height,height);ctx.stroke();}
+    ctx.fillStyle='#5c6049';ctx.font='500 13px system-ui';ctx.textAlign='center';ctx.fillText('轻轻刮开',width/2,height/2-2);ctx.font='11px system-ui';ctx.fillText('收下今天的小祝福',width/2,height/2+19);
+  }
+  function reset(){writeText();revealed=false;hasScratches=false;drawing=false;last=null;canvas.hidden=false;text.setAttribute('aria-hidden','true');revealButton.disabled=false;revealButton.textContent='直接查看';target.querySelector('[data-wish-status]').textContent='新的祝福已准备好';draw(true);}
+  function synchronizeDay(){
+    const nextDay=dayKey();if(disposed||nextDay===currentDay)return false;
+    const latest=read(key);if(Array.isArray(latest.history))history=latest.history.filter(validId).slice(-90);
+    currentDay=nextDay;id=latest.day===nextDay&&validId(latest.id)?latest.id:choose(history);remember();reset();return true;
+  }
+  function reveal(){if(disposed)return;synchronizeDay();if(revealed)return;revealed=true;canvas.hidden=true;text.removeAttribute('aria-hidden');revealButton.disabled=true;revealButton.textContent='已收下祝福';target.querySelector('[data-wish-status]').textContent=text.textContent;}
+  function scratch(event){if(!drawing||revealed||!ctx)return;hasScratches=true;const rect=canvas.getBoundingClientRect(),point={x:event.clientX-rect.left,y:event.clientY-rect.top};ctx.globalCompositeOperation='destination-out';ctx.strokeStyle='#000000';ctx.lineWidth=32;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo((last||point).x,(last||point).y);ctx.lineTo(point.x,point.y);ctx.stroke();last=point;}
+  const start=event=>{synchronizeDay();if(revealed||!ctx)return;drawing=true;last=null;canvas.setPointerCapture(event.pointerId);scratch(event);};
+  const end=()=>{if(!drawing)return;drawing=false;last=null;if(!ctx||!canvas.width||!canvas.height)return;const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;let blank=0,count=0;for(let i=3;i<pixels.length;i+=64){count++;if(pixels[i]<64)blank++;}if(count&&blank/count>.32)reveal();};
+  canvas.addEventListener('pointerdown',start);canvas.addEventListener('pointermove',scratch);canvas.addEventListener('pointerup',end);canvas.addEventListener('pointercancel',end);
+  revealButton.onclick=reveal;
+  nextButton.onclick=()=>{if(!synchronizeDay()){id=choose(history);remember();reset();}};
+  const onResize=()=>draw(),observer=new ResizeObserver(onResize);observer.observe(canvas);
+  const details=target.querySelector('details'),onToggle=()=>{if(details?.open)draw();};details?.addEventListener('toggle',onToggle);if(integrated)draw();
+  const onVisible=()=>{if(!document.hidden)synchronizeDay();};
+  // The next button owns its day rollover; capturing it here would choose twice.
+  const onActivity=event=>{if(event.target?.closest?.('[data-wish-next]'))return;synchronizeDay();};
+  host.addEventListener('pointerdown',onActivity,true);host.addEventListener('keydown',onActivity,true);document.addEventListener('visibilitychange',onVisible);window.addEventListener('focus',onVisible);
+  const dispose=()=>{disposed=true;observer.disconnect();canvas.removeEventListener('pointerdown',start);canvas.removeEventListener('pointermove',scratch);canvas.removeEventListener('pointerup',end);canvas.removeEventListener('pointercancel',end);details?.removeEventListener('toggle',onToggle);host.removeEventListener('pointerdown',onActivity,true);host.removeEventListener('keydown',onActivity,true);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('focus',onVisible);revealButton.onclick=null;nextButton.onclick=null;if(host._dailyWishContext===mountContext){delete host._dailyWishContext;delete host._disposeDailyWish;}};
+  host._disposeDailyWish=dispose;return dispose;
 }
 export { mountDailyWish };

@@ -44,6 +44,25 @@ from app.routers._shared import (
 
 router = APIRouter()
 
+
+@router.get("/hr/temporary-recognizers")
+def temporary_recognizers(db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    from app.services.temporary_recognition import qualification_overview
+    return qualification_overview(db, user)
+
+
+@router.put("/hr/temporary-recognizers/{employee_id}")
+def save_temporary_recognizer(employee_id: int, payload: dict, request: Request,
+                              db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
+    from app.services.temporary_recognition import update_qualification
+    try:
+        result = update_qualification(db, user, employee_id, payload, client_ip(request))
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_data_caches()
+    return result
+
 LOA_REGISTRAR_ROLE_CODES = {"TA_GSM", "GSM", "AM", "OM", "HR_CIRCLE"}
 
 
@@ -468,7 +487,7 @@ def _create_employee(payload: dict, request: Request, db: Session, user: V2User)
         ensure_month_open(db, starts_on[:7], existing.attraction_id, "重新入职注册")
         ensure_month_open(db, starts_on[:7], attraction_id, "重新入职注册")
         previous_deleted_at = existing.account_deleted_at.isoformat()
-        restart_employment(db, existing, attraction_id, starts_on)
+        cancelled_qualifications = restart_employment(db, existing, attraction_id, starts_on, actor_id=user.id)
         employee = existing
     else:
         starts_on = str(payload.get("starts_on") or date.today().isoformat())
@@ -519,7 +538,8 @@ def _create_employee(payload: dict, request: Request, db: Session, user: V2User)
     write_audit(db, user.employee, "重新入职注册" if rehire else "新建员工", "employee", employee.id,
                 before={"previous_deleted_at": previous_deleted_at} if rehire else None,
                 after={"employee_no": employee_no, "role": role.name, "rehired": rehire, "history_retained": True,
-                       'employee_type': employee_type, 'internship_ends_on': internship_ends_on}, ip_address=client_ip(request))
+                       'employee_type': employee_type, 'internship_ends_on': internship_ends_on,
+                       **({'cancelled_temporary_recognizer_dates': cancelled_qualifications} if rehire else {})}, ip_address=client_ip(request))
     db.commit()
     invalidate_data_caches()
     return {

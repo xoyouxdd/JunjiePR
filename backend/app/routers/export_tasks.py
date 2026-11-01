@@ -82,8 +82,17 @@ def scope_key(db, user, target):
     path = parts.path
     if path == "/api/statistics/export" and "DATA_EXPORT" not in user.permissions:
         raise HTTPException(403, "没有导出权限")
-    if path == "/api/pr-rankings/export" and user.role.code not in {"GSM", "AM", "OM"}:
-        raise HTTPException(403, "当前角色不能导出PR排名")
+    if path == "/api/pr-rankings/export":
+        if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
+            raise HTTPException(403, "当前角色不能导出PR排名")
+        from app.services.performance_rankings import pr_ranking_scope
+        params = parse_qs(parts.query, keep_blank_values=True)
+        raw = params.get("attraction_id", [None])[-1]
+        try:
+            attraction_id = int(raw) if raw is not None else None
+        except ValueError:
+            raise HTTPException(422, "景点圈参数无效")
+        pr_ranking_scope(db, user, attraction_id, params.get("population", ["frontline"])[-1], params.get("category", ["overall"])[-1])
     if path == "/api/declaration-statistics/export" and not {"DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"} <= user.permissions:
         raise HTTPException(403, "没有声明统计导出权限")
     visible = ()

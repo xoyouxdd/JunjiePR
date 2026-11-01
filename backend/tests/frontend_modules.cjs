@@ -347,7 +347,7 @@ async function main() {
         const personalNavigation=await taskPage.evaluate(async()=>{const nav=await import('./static/js/app/navigation.js');const items=nav.menuItems();return {items,primary:nav.mobilePrimaryIds(items)};});
         if(['HR_CIRCLE','HR_ADMIN'].includes(role))assert(!personalNavigation.items.some(([id])=>['home','profile'].includes(id)));
         else if(['CM','TR','TA_SUPERVISOR','SUPERVISOR'].includes(role)){assert(personalNavigation.items.some(([id])=>id==='home'));assert(personalNavigation.primary.includes('home'));assert.equal(personalNavigation.items.find(([id])=>id==='home')[1],'首页');}
-        else{assert(!personalNavigation.items.some(([id])=>id==='profile'));assert(await taskPage.locator('#userBadge [data-avatar-settings]').count());if(['TA_GSM','GSM','AM','OM'].includes(role))assert(personalNavigation.primary.includes('register'));if(role==='SYSTEM_ADMIN')assert(personalNavigation.primary.includes('monthClose'));}
+        else{assert(!personalNavigation.items.some(([id])=>id==='profile'));assert(await taskPage.locator('#appearanceBtn[data-avatar-settings]').count());if(['TA_GSM','GSM','AM','OM'].includes(role))assert(personalNavigation.primary.includes('register'));if(role==='SYSTEM_ADMIN')assert(personalNavigation.primary.includes('monthClose'));}
         const shortcutIds=await taskPage.locator('[data-workbench-tab]').evaluateAll(nodes=>nodes.map(node=>node.dataset.workbenchTab));
         if(['CM','TR','TA_GSM','HR_CIRCLE','HR_ADMIN'].includes(role))assert(!shortcutIds.includes('hrMonthlyReport'));
         if(['AM','OM'].includes(role))assert(!shortcutIds.includes('rotationTest'));

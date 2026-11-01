@@ -15,7 +15,7 @@ os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='HR123'
 from fastapi.testclient import TestClient
 from app.main import app
 from app.v2_database import SessionLocal, FILE_DIR
-from app.v2_models import Employee, Role, EmployeeRoleAssignment, GroupMembership
+from app.v2_models import Attraction, Employee, Role, EmployeeRoleAssignment, GroupMembership
 from app.learning_models import LearningShare, LearningRevision, LearningAccess, LearningReaction, LearningAsset, LearningDraft, LearningFeedback
 
 
@@ -260,6 +260,157 @@ def test_group_approval_expiry_revoke_and_shared_attachment(client):
 
 def pdf_reference(id):
     with SessionLocal() as db:return (FILE_DIR/db.get(LearningAsset,id).key).read_bytes()
+
+
+@pytest.mark.parametrize('account', ['SUPTEST01','GSMTEST01','TAGSMTEST01','AMTEST01','OMTEST01','HR01'])
+def test_formal_managers_read_all_circles_without_expanding_edit_scope(client,account):
+    c=client
+    circle_rows=options(c)['circles']
+    assert len(circle_rows)==3
+    materials=[]
+    for circle in circle_rows:
+        asset=upload(c);share=create(c,assets=[asset['id']])
+        with SessionLocal() as db:
+            db.get(LearningShare,share['id']).circle_id=circle['id']
+            db.get(LearningAsset,asset['id']).circle_id=circle['id'];db.commit()
+        materials.append((circle['id'],share['id'],asset['id']))
+    if account=='HR01':
+        assert c.post('/api/login',json={'employee_no':'HR01','password':'HR123'}).status_code==200
+    else:login(c,account)
+    circles=options(c)['circles']
+    assert all(row['readable'] and row['expires_at'] is None for row in circles)
+    for circle_id,share_id,asset_id in materials:
+        row=next(r for r in circles if r['id']==circle_id)
+        listing=ok(c.get('/api/learning',params={'circle_id':circle_id}))
+        assert not next(r for r in listing['items'] if r['id']==share_id)['locked']
+        detail=ok(c.get(f'/api/learning/{share_id}'))
+        assert detail['body']=='旧公开内容' and detail['expires_at'] is None
+        assert c.get(f'/api/learning/{share_id}/assets/{asset_id}').content==pdf_reference(asset_id)
+        if not row['own'] and account in {'SUPTEST01','GSMTEST01','TAGSMTEST01'}:
+            assert not row['can_edit'] and not row['can_manage']
+            assert not detail['can_edit'] and not detail['can_manage'] and not detail['can_publish']
+            assert c.post(f'/api/learning/{share_id}/revisions',json={'title':'跨圈修改','body':'不应允许','summary':'越权测试'}).status_code==403
+        assert c.post('/api/learning/requests',json={'circle_id':circle_id,'reason':'无需申请'}).status_code==409
+    with SessionLocal() as db:
+        employee=db.query(Employee).filter_by(employee_no=account).one()
+        assert db.query(LearningAccess).filter_by(employee_id=employee.id).count()==0
+
+
+@pytest.mark.parametrize('status', ['approved','revoked'])
+def test_manager_read_is_not_expired_by_old_cross_circle_grant(client,status):
+    c=client;s=create(c);target=other_circle(c);move_share(s['id'],target)
+    login(c,'GSMTEST01')
+    with SessionLocal() as db:
+        employee=db.query(Employee).filter_by(employee_no='GSMTEST01').one()
+        db.add(LearningAccess(employee_id=employee.id,circle_id=target,home_circle_id=employee.attraction_id,
+            reason='历史授权',status=status,expires_at=datetime.now()-timedelta(days=1)))
+        db.commit()
+    row=next(r for r in options(c)['circles'] if r['id']==target)
+    assert row['readable'] and row['expires_at'] is None and row['access_status'] is None
+    assert ok(c.get(f'/api/learning/{s["id"]}'))['expires_at'] is None
+
+
+@pytest.mark.parametrize('invalid_flag', ['active','employee_circle'])
+def test_body_and_attachment_require_valid_circle_for_all_read_paths(client,invalid_flag):
+    c=client;asset=upload(c);s=create(c,assets=[asset['id']]);target=other_circle(c)
+    move_share(s['id'],target)
+    with SessionLocal() as db:
+        db.get(LearningAsset,asset['id']).circle_id=target
+        frontline=db.query(Employee).filter_by(employee_no='CMTEST02').one()
+        db.add(LearningAccess(employee_id=frontline.id,circle_id=target,home_circle_id=frontline.attraction_id,
+            reason='有效跨圈授权',status='approved',expires_at=datetime.now()+timedelta(days=7)))
+        db.commit()
+    body_url=f'/api/learning/{s["id"]}'
+    asset_url=f'/api/learning/{s["id"]}/assets/{asset["id"]}'
+    # Cover permanent manager scope, a 7-day grant, and the employee's own circle.
+    for account in ['SUPTEST01','GSMTEST01','TAGSMTEST01','AMTEST01','OMTEST01','HR01','CMTEST02','TRTEST01']:
+        with SessionLocal() as db:
+            employee=db.query(Employee).filter_by(employee_no=account).one()
+            original_home=employee.attraction_id
+            if account=='TRTEST01':employee.attraction_id=target
+            db.commit()
+        try:
+            if account=='HR01':
+                assert c.post('/api/login',json={'employee_no':'HR01','password':'HR123'}).status_code==200
+            else:login(c,account)
+            assert c.get(body_url).status_code==200
+            response=c.get(asset_url)
+            assert response.status_code==200 and response.content==pdf_reference(asset['id'])
+            with SessionLocal() as db:
+                setattr(db.get(Attraction,target),invalid_flag,False);db.commit()
+            assert target not in {row['id'] for row in options(c)['circles']}
+            assert c.get('/api/learning',params={'circle_id':target}).status_code==400
+            assert c.get(body_url).status_code==403
+            response=c.get(asset_url)
+            assert response.status_code==403 and response.content!=pdf_reference(asset['id'])
+        finally:
+            with SessionLocal() as db:
+                setattr(db.get(Attraction,target),invalid_flag,True)
+                db.query(Employee).filter_by(employee_no=account).one().attraction_id=original_home
+                db.commit()
+
+
+@pytest.mark.parametrize('account', ['CMTEST02','TRTEST01','TATEST01'])
+def test_frontline_and_acting_lead_still_need_cross_circle_approval(client,account):
+    c=client;asset=upload(c);s=create(c,assets=[asset['id']]);target=other_circle(c);move_share(s['id'],target)
+    login(c,account)
+    row=next(r for r in options(c)['circles'] if r['id']==target)
+    assert not row['readable']
+    assert c.get(f'/api/learning/{s["id"]}').status_code==403
+    assert c.get(f'/api/learning/{s["id"]}/assets/{asset["id"]}').status_code==403
+
+
+@pytest.mark.parametrize('invalid_flag', ['active','employee_circle'])
+@pytest.mark.parametrize('owner_account', ['TRTEST01','GSMTEST01'])
+def test_private_draft_and_asset_require_valid_circle_without_breaking_drafts(client,invalid_flag,owner_account):
+    c=client
+    share=create(c)
+    login(c,owner_account)
+    asset=upload(c)
+    payload={'title':'私有草稿','body':'未发布正文','category':'岗位操作','assets':[asset['id']],'summary':'补充岗位说明'}
+    if owner_account=='GSMTEST01':payload['share_id']=share['id']
+    draft=ok(c.post('/api/learning/drafts',json=payload))
+    circle_id=next(row['id'] for row in options(c)['circles'] if row['own'])
+    draft_url=f'/api/learning/drafts/{draft["id"]}'
+    asset_url=f'/api/learning/assets/{asset["id"]}'
+    assert ok(c.get(draft_url))['body']=='未发布正文'
+    assert c.get(asset_url).content==pdf_reference(asset['id'])
+    # Read-all managers still cannot inspect another employee's private draft or upload.
+    for account in ['CMTEST02','TATEST01','SUPTEST01','AMTEST01','OMTEST01','HR01']:
+        if account=='HR01':
+            assert c.post('/api/login',json={'employee_no':'HR01','password':'HR123'}).status_code==200
+        else:login(c,account)
+        assert c.get(draft_url).status_code==404
+        assert c.get(asset_url).status_code==403
+    login(c,owner_account)
+    with SessionLocal() as db:
+        setattr(db.get(Attraction,circle_id),invalid_flag,False);db.commit()
+    try:
+        assert ok(c.get('/api/learning/drafts'))['total']==0
+        assert c.get(draft_url).status_code==403
+        response=c.get(asset_url)
+        assert response.status_code==403 and response.content!=pdf_reference(asset['id'])
+        assert c.put(draft_url,json={**payload,'expected_version':draft['version']}).status_code==403
+        assert c.post(draft_url+'/publish',json={'expected_version':draft['version']}).status_code==403
+        assert c.request('DELETE',draft_url,json={'expected_version':draft['version']}).status_code==403
+        with SessionLocal() as db:
+            row=db.get(LearningDraft,draft['id'])
+            assert row.body=='未发布正文' and row.version==draft['version']
+    finally:
+        with SessionLocal() as db:
+            setattr(db.get(Attraction,circle_id),invalid_flag,True);db.commit()
+    assert ok(c.get(draft_url))['body']=='未发布正文'
+    assert c.get(asset_url).content==pdf_reference(asset['id'])
+    saved=ok(c.put(draft_url,json={**payload,'body':'恢复后更新','expected_version':draft['version']}))
+    result=ok(c.post(draft_url+'/publish',json={'expected_version':saved['version']}))
+    assert c.get(draft_url).status_code==404
+    if owner_account=='GSMTEST01':
+        assert result['status']=='pending'
+        assert ok(c.get(f'/api/learning/{share["id"]}'))['body']=='旧公开内容'
+    else:
+        published=ok(c.get(f'/api/learning/{result["id"]}'))
+        assert published['body']=='恢复后更新'
+        assert c.get(f'/api/learning/{result["id"]}/assets/{asset["id"]}').content==pdf_reference(asset['id'])
 
 
 def test_request_checks_live_group_and_identity(client):

@@ -4,6 +4,8 @@
 
 | 文件 | 内容 |
 |---|---|
+| [temporary-recognizers.md](temporary-recognizers.md) | 临时主管认可资格、离散日期与授权规则 |
+| [hr-pr-rankings.md](hr-pr-rankings.md) | 景点圈HR的PR排名权限与导出 |
 | [rotation-workflow-20261028.md](rotation-workflow-20261028.md) | 轮岗独立任务、按线恢复、101及大屏权限 |
 | [workspace-compact-20261027.md](workspace-compact-20261027.md) | 紧凑记录与今日工作、交互趋势、原流程保护及验证 |
 | [third-party-ui.md](third-party-ui.md) | 本地按需界面依赖的来源与许可证 |

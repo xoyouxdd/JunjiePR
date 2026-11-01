@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from app.v2_models import EmployeeRoleAssignment, EmployeeActingDuty, GroupMembership, GroupLeaderAssignment, ManagementScope
+from app.v2_models import EmployeeRoleAssignment, EmployeeActingDuty, GroupMembership, GroupLeaderAssignment, ManagementScope, TemporaryRecognitionQualification
 
 
 def employment_history(employee) -> list[dict]:
@@ -24,7 +24,7 @@ def retain_deleted_employment(employee) -> None:
     employee.employment_history = json.dumps(history, ensure_ascii=False)
 
 
-def restart_employment(db, employee, attraction_id: int | None, starts_on: str) -> None:
+def restart_employment(db, employee, attraction_id: int | None, starts_on: str, *, actor_id: int | None = None) -> list[str]:
     retain_deleted_employment(employee)  # Also supports archives made before cycle tracking existed.
     history = employment_history(employee)
     history[-1]["rehired_on"] = starts_on
@@ -46,12 +46,25 @@ def restart_employment(db, employee, attraction_id: int | None, starts_on: str) 
             db.delete(scope)  # Scheduled access never became historical employment.
         else:
             scope.ends_on = last_day
+    cancelled_qualifications = []
+    for qualification in db.query(TemporaryRecognitionQualification).filter(
+        TemporaryRecognitionQualification.employee_id == employee.id,
+        TemporaryRecognitionQualification.status == "active",
+        TemporaryRecognitionQualification.qualified_on >= starts_on,
+    ).all():
+        qualification.status = "cancelled"
+        qualification.updated_at = datetime.now()
+        if actor_id is not None:
+            qualification.updated_by = actor_id
+        qualification.reason += "；重新入职，旧资格自动取消"
+        cancelled_qualifications.append(qualification.qualified_on)
     employee.attraction_id = attraction_id
     employee.hired_on = starts_on
     employee.terminated_on = None
     employee.is_active = True
     employee.account_deleted_at = None
     employee.account_deleted_by_name = None
+    return sorted(cancelled_qualifications)
 
 
 def previously_employed_on(employee, on_date: str) -> bool:

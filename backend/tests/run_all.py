@@ -38,6 +38,7 @@ BROWSER_TESTS.add("learning_shares_ui.cjs")
 BROWSER_TESTS.add("rotation_shift_groups_ui.cjs")
 BROWSER_TESTS.add("rotation_timeout_cases_ui.cjs")
 BROWSER_TESTS.add("employee_number_aliases_ui.cjs")
+BROWSER_TESTS.update({"appearance_ui.cjs", "appearance_review_ui.cjs", "hr_pr_rankings_ui.cjs", "temporary_recognizers_ui.cjs"})
 ESM_VM_TESTS = {"view_lifecycle.cjs"}
 
 
