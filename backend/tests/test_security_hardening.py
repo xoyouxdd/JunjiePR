@@ -322,9 +322,9 @@ def test_versions_come_from_a_single_source() -> None:
         # Both pages now render a brand image as well as the touch icon.
         # Assert the exact resource multiset, not just a relaxed total count:
         # missing, unversioned, stale, extra or duplicate references must fail.
-        for page, entrypoint, extra_styles in (
+        for page, entrypoint, extra_resources in (
             (login_page, "login.js", []),
-            (app_page, "app.js", ["static/css/workspace-ui.css", "static/css/announcements.css", "static/css/workbench.css", "static/css/avatars.css", "static/css/learning-shares.css"]),
+            (app_page, "app.js", ["static/css/workspace-ui.css", "static/css/announcements.css", "static/css/workbench.css", "static/css/avatars.css", "static/css/learning-shares.css", "static/css/appearance.css", "static/js/appearance-boot.js"]),
         ):
             resources = re.findall(r'(?:src|href)="(static/[^\"]+)"', page)
             expected_resources = [
@@ -333,7 +333,7 @@ def test_versions_come_from_a_single_source() -> None:
                 "static/css/style.css",
                 "static/images/fzpr-icon.png",
                 f"static/js/{entrypoint}",
-                *extra_styles,
+                *extra_resources,
             ]
             assert sorted(resources) == sorted(
                 f"{path}?v={STATIC_CACHE_VERSION}" for path in expected_resources
@@ -343,10 +343,14 @@ def test_versions_come_from_a_single_source() -> None:
         assert importmap is not None
         imports = json.loads(importmap.group(1))["imports"]
         app_root = Path(__file__).resolve().parents[1] / "app"
-        reachable = {"./" + path.relative_to(app_root).as_posix() for path in frontend_sources() if path != STATIC_ROOT.resolve() / "js" / "app.js"}
+        # The appearance bootstrap is a classic script loaded before styles;
+        # app.js is the module entrypoint. Neither belongs in the import map.
+        entrypoints = {STATIC_ROOT.resolve() / "js" / name for name in ("app.js", "appearance-boot.js")}
+        assert f'<script src="static/js/appearance-boot.js?v={STATIC_CACHE_VERSION}"></script>' in app_page
+        reachable = {"./" + path.relative_to(app_root).as_posix() for path in frontend_sources() if path not in entrypoints}
         assert set(imports) == reachable
         assert all(target == f"{specifier}?v={STATIC_CACHE_VERSION}" for specifier, target in imports.items())
-        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 10 + len(imports)
+        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 12 + len(imports)
         assert f'static/css/style.css?v={STATIC_CACHE_VERSION}' in app_page
         assert f'src="static/js/app.js?v={STATIC_CACHE_VERSION}"' in app_page
         assert 'type="module"' in app_page
