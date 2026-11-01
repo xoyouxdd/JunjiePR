@@ -4,7 +4,7 @@ const {chromium,webkit,firefox}=require('playwright');
 const root=path.resolve(__dirname,'../app/static'),history=Array.from({length:12},(_,i)=>({exported_at:'2026-10-19 20:08',month:'2026-10',attraction_name:'热力追踪',title:'CM/TR全部',keyword:i?'':'合成长姓名和员工号',employee_count:120+i}));
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const options='<option value="1">热力追踪</option><option value="2">矮人迷宫</option>';
-const vars={monthNow:()=> '2026-10',monthStart:()=> '2026-10-01',today:()=> '2026-10-20',opt:()=>options,state:{options:{}},circleOptions:options,canExport:true,scopeField:'',recordTypes:'<option value="all">全部</option>',levelOptions:'<option value="1">声明</option>',typeOptions:'<option value="1">合成类型</option>',esc};
+const vars={monthNow:()=> '2026-10',monthStart:()=> '2026-10-01',today:()=> '2026-10-20',opt:()=>options,state:{options:{}},circleOptions:options,scopedHr:false,canExport:true,scopeField:'',recordTypes:'<option value="all">全部</option>',levelOptions:'<option value="1">声明</option>',typeOptions:'<option value="1">合成类型</option>',esc};
 function form(file,id,extra={}){
   const source=fs.readFileSync(path.join(root,'js/app',file),'utf8'),start=source.indexOf(`<form id="${id}"`),end=source.indexOf('</form>',start);
   assert(start>=0&&end>start);return vm.runInNewContext('`'+source.slice(start,end+7)+'`',{...vars,...extra});
@@ -13,6 +13,7 @@ const statsSource=fs.readFileSync(path.join(root,'js/app/statistics.js'),'utf8')
 assert(historyEnd>historyStart);
 const historyHtml=vm.runInNewContext('`'+statsSource.slice(historyStart,historyEnd)+'`',{data:{items:history},esc});
 const fixtures=[form('statistics.js','statsFilter'),form('rankings.js','prFilter'),form('entries.js','entryFilter'),form('declarations.js','declarationFilter'),form('entries.js','entryFilter',{scopeField:'<label>查看范围<select name="scope"><option value="mine">我的登记记录</option></select></label>'})];
+const hrFixture=fixtures.push(form('rankings.js','prFilter',{scopedHr:true,circleOptions:'<option value="1">热力追踪</option>'}))-1;
 const server=http.createServer((req,res)=>{
   const url=new URL(req.url,'http://fixture');
   if(url.pathname==='/'){
@@ -30,6 +31,10 @@ async function main(){
     try{const page=await browser.newPage({viewport:{width:390,height:844},locale:'zh-CN'});
       for(let index=0;index<fixtures.length;index++){
         await page.goto(`http://127.0.0.1:${server.address().port}/?case=${index}`);
+        if(index===hrFixture){
+          assert.equal(await page.locator('[name=attraction_id] option').count(),1);
+          assert.deepEqual(await page.locator('[name=population] option').evaluateAll(xs=>xs.map(x=>x.value)),['frontline']);
+        }
         const original=await page.locator('form').evaluate(form=>[...new FormData(form)]);
         for(const width of [320,360,375,390,414,430,768,1440]){
           await page.setViewportSize({width,height:900});
