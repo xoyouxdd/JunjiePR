@@ -1,7 +1,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium,webkit}=require('playwright');
 const root=path.resolve(__dirname,'../app/static'),catalog=JSON.parse(fs.readFileSync(path.join(root,'images/avatars/catalog.json'),'utf8'));
-const cropped=catalog.avatars.filter(a=>a.display_images),shots=path.resolve(__dirname,'../../tmp');
+const cropped=catalog.avatars.filter(a=>a.display_images),shots=path.resolve(__dirname,'../../output/release-ui');
 const shell=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/css/style.css"><script src="/static/js/appearance-boot.js"></script><main id="app"></main><div id="tabs"></div><script type="module">
 import {avatarAssetFile} from '/static/js/app/format.js';import {avatarMarkup} from '/static/js/app/avatars.js';window.asset=avatarAssetFile;window.markup=avatarMarkup;window.ready=true;</script>`;
 const server=http.createServer((req,res)=>{

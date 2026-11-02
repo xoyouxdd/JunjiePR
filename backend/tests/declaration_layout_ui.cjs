@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium,webkit}=require('playwright');
 const compare=process.argv.includes('--compare');
-const root=path.resolve(__dirname,'../app/static'),out=path.resolve(__dirname,'../../tmp'),before=path.join(out,'declaration-ui-before');
+const root=path.resolve(__dirname,'../app/static'),out=path.resolve(__dirname,'../../output/release-ui'),before=path.join(out,'declaration-ui-before');
 const common={attraction_id:1,attraction_name:'热力追踪',occurred_on:'2026-11-01',level_id:1,level_code:'STATEMENT',level_name:'声明',submitter_name:'王宁 Wendy',submitted_at:'2026-11-01 14:32:08',material_status:'材料已就绪',upgrade_status:'无',business_status:'已生效',raw_status:'active',upgrade_request_id:0,upgrade_role:null,document_url:'/api/files/1',type_id:1,type_name:'安全',employee_name:'陈晓',employee_no:'0183652',employee_id:1};
 const records=[
  {...common,id:1,description:'岗位交接时，未按要求完成设备安全确认。'},

@@ -28,7 +28,7 @@ for(const width of [1920,2560,1440,1024,768,390,320]){
   const shown=pos.filter(p=>p.visible);
   assert.ok(shown.every(p=>Math.abs(p.x-shown[0].x)<1&&Math.abs(p.width-shown[0].width)<1),JSON.stringify({width,skin,pos}));
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-  if(width===1920&&skin==='circle'&&hasNav){await page.screenshot({path:path.resolve(__dirname,'../../tmp/workspace-alignment-fixed.png'),fullPage:true});}
+  if(width===1920&&skin==='circle'&&hasNav){await page.screenshot({path:path.resolve(__dirname,'../../output/release-ui/workspace-alignment-fixed.png'),fullPage:true});}
  }
 }
 }
