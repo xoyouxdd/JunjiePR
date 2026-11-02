@@ -6,7 +6,8 @@ from test_rotation_formal import seed, seed_today, seed_cohort, seed_cross_line,
 import pytest
 from rotation_test_clock import install_rotation_test_clock
 clock_patch=pytest.MonkeyPatch();install_rotation_test_clock(clock_patch)
-setup=seed.__wrapped__()
+# This HTTP fixture keeps the daytime patch alive for the whole server runtime.
+setup=seed.__wrapped__(formal_daytime_runtime=clock_patch)
 next(setup)
 seed_today()
 from app.v2_database import engine

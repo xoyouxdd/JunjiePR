@@ -2,7 +2,7 @@
 from datetime import date
 from fastapi.testclient import TestClient
 import pytest
-from test_rotation_formal import seed, seed_cohort, SessionLocal, S, app, login, ok
+from test_rotation_formal import seed, formal_daytime_runtime, seed_cohort, SessionLocal, S, app, login, ok
 from app.rotation import workflow as W, timeout_cases as C
 
 

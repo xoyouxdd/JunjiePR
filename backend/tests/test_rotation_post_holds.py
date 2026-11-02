@@ -1,5 +1,5 @@
 """Continuous post holds: real permissions/persistence and deterministic engine boundaries."""
-from test_rotation_formal import app, seed, seed_today, login, ok, TestClient, SessionLocal, S, F, date, datetime
+from test_rotation_formal import app, seed, formal_daytime_runtime, seed_today, login, ok, TestClient, SessionLocal, S, F, date, datetime
 from test_rotation_engine import person, live_day, seat, occupants, hm, ActionError
 import pytest
 
@@ -18,12 +18,14 @@ def hold(eng,p='b',on=True,now=hm('09:10')):
 def reset_today():
     with SessionLocal() as db:
         db.info['rotation_formal']=True
-        row=db.query(F.RotationDay).filter_by(work_date=date.today().isoformat()).first()
-        if row:
-            # Recreate this disposable fixture rather than turning a running day
-            # back into a draft that is correctly locked after its first shift.
-            with S.transaction(db):db.delete(row)
-    return seed_today()
+        # Keep the ticker out until both removal and recreation have completed.
+        with S.runtime_for(db).lock:
+            row=db.query(F.RotationDay).filter_by(work_date=date.today().isoformat()).first()
+            if row:
+                # Recreate this disposable fixture rather than turning a running day
+                # back into a draft that is correctly locked after its first shift.
+                with S.transaction(db):db.delete(row)
+            return seed_today()
 
 
 def test_ordinary_push_skips_fixed_person_and_resumes_without_resetting_standing_time():
