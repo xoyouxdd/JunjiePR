@@ -25,6 +25,19 @@ from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
 from app.v2_models import AttendanceMonthlyScore, Employee, SickLeaveRecord  # noqa: E402
 
 
+def _preview_metadata(month):
+    with SessionLocal() as db:
+        from types import SimpleNamespace
+        user=SimpleNamespace(role=SimpleNamespace(code='GSM'))
+        return dict(scope=None,month_revision=sick_leave_import._month_revision(sick_leave_import._active_month_rows(db,user,month)))
+
+
+def _preview_identity(employee_id):
+    with SessionLocal() as db:
+        employee=db.get(Employee,employee_id)
+        return dict(employee_no=employee.employee_no,name=employee.name,system_employee_no=employee.employee_no,system_name=employee.name,system_attraction_id=employee.attraction_id)
+
+
 def test_legacy_manual_sick_registration_stays_disabled_for_production_roles():
     assert all("SICK_REGISTER" not in permissions for permissions in ROLE_PERMISSION_CODES.values())
 
@@ -69,8 +82,8 @@ def test_commit_rechecks_loa_added_after_preview():
         token = "stale-loa-review"
         sick_leave_import._store_preview(token, {
             "created_at": datetime.now(), "filename": "review.xls", "content": b"",
-            "month": "2099-08", "matched": [{
-                "employee_id": target["id"], "date": "2099-08-20", "days": Decimal("1"), "leave_type": "法定病假",
+            "month": "2099-08", **_preview_metadata("2099-08"), "matched": [{
+                "employee_id": target["id"], **_preview_identity(target["id"]), "date": "2099-08-20", "days": Decimal("1"), "leave_type": "法定病假",
             }],
             "unmatched": [], "loa_protected": [], "errors": [], "user_id": user_id,
         })
@@ -124,9 +137,9 @@ def test_monthly_file_covers_prior_absence_for_matched_and_absent_employees():
         token = "file-covers-manual-review"
         sick_leave_import._store_preview(token, {
             "created_at": datetime.now(), "filename": "review.xls", "content": b"",
-            "month": month, "matched": [
-                {"employee_id": matched_id, "date": "2099-07-05", "days": Decimal("0.5"), "leave_type": "法定病假"},
-                {"employee_id": matched_id, "date": "2099-07-06", "days": Decimal("1"), "leave_type": "全薪病假"},
+            "month": month, **_preview_metadata(month), "matched": [
+                {"employee_id": matched_id, **_preview_identity(matched_id), "date": "2099-07-05", "days": Decimal("0.5"), "leave_type": "法定病假"},
+                {"employee_id": matched_id, **_preview_identity(matched_id), "date": "2099-07-06", "days": Decimal("1"), "leave_type": "全薪病假"},
             ], "unmatched": [], "loa_protected": [], "errors": [], "user_id": submitter_id,
         })
         response = client.post("/api/sick-leave-imports/commit", json={"token": token, "month": month})
@@ -592,3 +605,479 @@ def test_expired_preview_token_explains_how_to_recover():
         download = client.get("/api/sick-leave-imports/missing-token/unmatched-file")
         assert download.status_code == 404, download.text
         assert "重新上传文件预检" in download.json()["detail"]
+
+
+@pytest.mark.parametrize('system,file,expected',[
+ ('张森 Jason','张森',True),('张森 Jason','jAsOn',True),('张 森（Jason）','张森',True),
+ ('张森Jason','张森 Jason',True),('张森','Jason',False),('张森 Jason','李森',False),
+ ('张森 Jason','张',False),('张森 Jason','J',False),('张森 Jason','',False),
+ ('Joanne 张森','Ann',False),('张森 Jason Smith','Jason Smith',True),
+ ('张森 Jason','张森 Jason Smith',False),
+])
+def test_import_names_use_complete_contained_parts(system,file,expected):
+    assert sick_leave_import._import_name_matches(system,file) is expected
+
+
+@pytest.mark.parametrize('value,expected',[('01836527','1836527'),('1836527','1836527'),('00123456','0123456'),('0123456','0123456')])
+def test_import_number_aliases_preserve_seven_digit_leading_zero(value,expected):
+    assert _system_number(value)==expected
+
+
+@pytest.mark.parametrize('value',['11836527','001836527','183652','ADMIN',''])
+def test_import_does_not_drop_arbitrary_first_digit(value):
+    with pytest.raises(ValueError):_system_number(value)
+
+
+def _numeric_employee(name='张森 Jason',number=None):
+    from uuid import uuid4
+    from app.v2_models import EmployeeRoleAssignment,Role
+    number=number or str(1000000+int(uuid4().hex[:8],16)%8999999)
+    with SessionLocal() as db:
+        reference=db.query(Employee).filter_by(employee_no='GSMTEST01').one()
+        employee=Employee(employee_no=number,name=name,attraction_id=reference.attraction_id,is_active=True)
+        db.add(employee);db.flush()
+        db.add(EmployeeRoleAssignment(employee_id=employee.id,role_id=db.query(Role).filter_by(code='CM').one().id,starts_on='2020-01-01',status='active',assignment_type='permanent'))
+        db.commit();return employee.id,number
+
+
+def _numeric_preview(client,monkeypatch,number,file_name='张森',source=None):
+    raw=source if source is not None else '0'+number
+    _install_book(monkeypatch,_workbook_rows([[file_name,raw,'2098-06-20','法定病假',8]],[[file_name,raw,'病假时间总计',8]]))
+    response=client.post('/api/sick-leave-imports/preview',files={'workbook':('numeric.xls',b'fake')},data={'month':'2098-06'})
+    assert response.status_code==200,response.text
+    return response.json()
+
+
+@pytest.mark.parametrize('prefixed',[False,True])
+@pytest.mark.parametrize('file_name',['张森','jason'])
+def test_preview_and_commit_accept_aliases_and_contained_names(monkeypatch,prefixed,file_name):
+    with TestClient(app) as client:
+        assert client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'}).status_code==200
+        employee_id,number=_numeric_employee()
+        preview=_numeric_preview(client,monkeypatch,number,file_name,source=('0'+number) if prefixed else number)
+        assert preview['can_commit'] and preview['matched_employee_count']==1,preview
+        row=preview['matched'][0]
+        assert row['employee_id']==employee_id and row['system_employee_no']==number
+        assert row['system_name']=='张森 Jason' and row['match_method']=='工号匹配、姓名包含匹配'
+        result=client.post('/api/sick-leave-imports/commit',json={'token':preview['token'],'month':'2098-06'})
+        assert result.status_code==200,result.text
+        with SessionLocal() as db:
+            row=db.query(SickLeaveRecord).filter_by(employee_id=employee_id,status='active').one()
+            assert row.employee_name_snapshot=='张森 Jason' and row.employee_no_snapshot==number
+
+
+def test_preview_resolves_eight_digit_stored_number_and_rejects_ambiguous_alias(monkeypatch):
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        employee_id,number=_numeric_employee()
+        with SessionLocal() as db:
+            db.get(Employee,employee_id).employee_no='0'+number;db.commit()
+        preview=_numeric_preview(client,monkeypatch,number)
+        assert preview['matched'][0]['employee_id']==employee_id
+        _numeric_employee(number=number)
+        preview=_numeric_preview(client,monkeypatch,number)
+        assert not preview['can_commit'] and not preview['matched']
+        assert '多个档案' in preview['unmatched'][0]['reason']
+        assert client.post('/api/sick-leave-imports/commit',json={'token':preview['token'],'month':'2098-06','reviewed_unmatched':True}).status_code==400
+
+
+@pytest.mark.parametrize('change',['name','number','ambiguous','inactive','circle'])
+def test_commit_revalidates_identity_and_scope_before_covering_old_rows(monkeypatch,change):
+    from app.v2_models import Attraction
+    from app.v2_crypto import hash_password
+    from app.v2_models import UserAccount
+    with TestClient(app) as client:
+        employee_id,number=_numeric_employee()
+        with SessionLocal() as db:
+            account=db.query(UserAccount).filter_by(login_account='HR-HEAT').one()
+            account.enabled=True;account.must_change_password=False;account.password_hash=hash_password('1234')
+            own=db.get(Employee,account.employee_id).attraction_id
+            db.get(Employee,employee_id).attraction_id=own;db.commit()
+        assert client.post('/api/login',json={'employee_no':'HR-HEAT','password':'1234'}).status_code==200
+        preview=_numeric_preview(client,monkeypatch,number)
+        assert len(preview['matched'])==1,preview
+        with SessionLocal() as db:
+            employee=db.get(Employee,employee_id)
+            if change=='name':employee.name='完全不同的人'
+            if change=='number':employee.employee_no=str(int(number)+1)
+            if change=='inactive':employee.is_active=False
+            if change=='circle':employee.attraction_id=db.query(Attraction).filter(Attraction.employee_circle.is_(True),Attraction.id!=own).first().id
+            db.commit()
+        if change=='ambiguous':_numeric_employee(number='0'+number)
+        with SessionLocal() as db:
+            before=[(r.id,r.status) for r in db.query(SickLeaveRecord).filter_by(attendance_month='2098-06').all()]
+        response=client.post('/api/sick-leave-imports/commit',json={'token':preview['token'],'month':'2098-06'})
+        assert response.status_code in (403,409),response.text
+        with SessionLocal() as db:
+            assert [(r.id,r.status) for r in db.query(SickLeaveRecord).filter_by(attendance_month='2098-06').all()]==before
+
+
+def test_preview_never_uses_a_name_to_find_another_employee(monkeypatch):
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        employee_id,number=_numeric_employee()
+        preview=_numeric_preview(client,monkeypatch,number,'完全不同')
+        assert not preview['matched'] and '姓名不匹配' in preview['unmatched'][0]['reason']
+        preview=_numeric_preview(client,monkeypatch,'9999998','张森')
+        assert not preview['matched'] and '不存在' in preview['unmatched'][0]['reason']
+
+
+def _commit_preview(client,preview):
+    return client.post('/api/sick-leave-imports/commit',json={'token':preview['token'],'month':preview['month'],'reviewed_unmatched':True})
+
+
+def _month_snapshot(month='2098-06'):
+    with SessionLocal() as db:
+        return [(r.id,r.status,str(r.leave_days),r.employee_name_snapshot,r.employee_no_snapshot) for r in db.query(SickLeaveRecord).filter_by(attendance_month=month).order_by(SickLeaveRecord.id)]
+
+
+def test_real_biff_workbook_numeric_aliases_names_reconciliation_and_marked_download():
+    content=(Path(__file__).parent/'fixtures/sick_leave_identity.xls').read_bytes()
+    records,summaries,errors=_read_workbook(content)
+    assert not errors and not _reconcile(records,summaries)
+    assert [r['employee_no'] for r in records]==['1836527','1836527','0123456','1234567']
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        for number,name in [('1836527','张森 Jason'),('0123456','李森 Jason'),('1234567','Joanne')]:
+            _numeric_employee(name,number)
+        response=client.post('/api/sick-leave-imports/preview',files={'workbook':('real.xls',content)},data={'month':'2096-06'})
+        assert response.status_code==200,response.text
+        preview=response.json();assert preview['matched_record_count']==3 and len(preview['unmatched'])==1
+        assert preview['unmatched'][0]['name']=='Ann'
+        downloaded=client.get(f"/api/sick-leave-imports/{preview['token']}/unmatched-file")
+        assert downloaded.status_code==200,downloaded.text
+        marked=load_workbook(BytesIO(downloaded.content));ws=marked['测试事务']
+        assert ws.cell(8,1).fill.fgColor.rgb.endswith('FFC7CE')
+        assert ws.cell(15,1).fill.fgColor.rgb.endswith('FFC7CE')
+        assert not ws.cell(5,1).fill.fgColor.rgb.endswith('FFC7CE')
+        result=_commit_preview(client,preview);assert result.status_code==200,result.text
+        assert result.json()['covered_record_count']==3
+
+
+@pytest.mark.parametrize('account',['CMTEST01','TRTEST01','SUPTEST01','TATEST01','TAGSMTEST01','AMTEST01','OMTEST01'])
+def test_import_api_roles_cannot_bypass_entrance(account):
+    with TestClient(app) as client:
+        assert client.post('/api/login',json={'employee_no':account,'password':'1234'}).status_code==200
+        assert client.post('/api/sick-leave-imports/preview',files={'workbook':('fake.xls',b'fake')},data={'month':'2098-06'}).status_code==403
+        assert client.post('/api/sick-leave-imports/commit',json={'token':'fake','month':'2098-06'}).status_code==403
+        assert client.get('/api/sick-leave-imports/fake/unmatched-file').status_code==403
+
+
+@pytest.mark.parametrize('invalid',['other_user','expired','evicted'])
+def test_preview_commit_and_file_are_bound_to_owner_and_lifetime(monkeypatch,invalid):
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number)
+        before=_month_snapshot()
+        if invalid=='other_user':
+            client.post('/api/logout');assert client.post('/api/login',json={'employee_no':'HR01','password':'HR123'}).status_code==200
+        elif invalid=='expired':
+            with sick_leave_import._PREVIEWS_LOCK:sick_leave_import._PREVIEWS[preview['token']]['created_at']=datetime.now()-timedelta(minutes=21)
+        else:sick_leave_import._drop_preview(preview['token'])
+        assert _commit_preview(client,preview).status_code==400
+        assert client.get(f"/api/sick-leave-imports/{preview['token']}/unmatched-file").status_code==404
+        assert _month_snapshot()==before
+
+
+def _login_circle(client):
+    from app.v2_models import UserAccount
+    from app.v2_crypto import hash_password
+    with SessionLocal() as db:
+        account=db.query(UserAccount).filter_by(login_account='HR-HEAT').one()
+        account.enabled=True;account.must_change_password=False;account.password_hash=hash_password('1234')
+        own=db.get(Employee,account.employee_id).attraction_id;actor=account.employee_id;db.commit()
+    assert client.post('/api/login',json={'employee_no':'HR-HEAT','password':'1234'}).status_code==200
+    return own,actor
+
+
+def test_circle_preview_cannot_match_other_circle_or_reuse_scope_changed_token(monkeypatch):
+    from app.v2_models import Attraction
+    with TestClient(app) as client:
+        own,actor=_login_circle(client);employee_id,number=_numeric_employee()
+        with SessionLocal() as db:
+            other=db.query(Attraction).filter(Attraction.employee_circle.is_(True),Attraction.id!=own).first().id
+            db.get(Employee,employee_id).attraction_id=other;db.commit()
+        preview=_numeric_preview(client,monkeypatch,number)
+        assert not preview['matched'] and '景点圈范围' in preview['unmatched'][0]['reason']
+        assert 'system_name' not in preview['unmatched'][0]
+        with SessionLocal() as db:db.get(Employee,employee_id).attraction_id=own;db.commit()
+        preview=_numeric_preview(client,monkeypatch,number);assert len(preview['matched'])==1
+        before=_month_snapshot()
+        with SessionLocal() as db:db.get(Employee,actor).attraction_id=other;db.commit()
+        try:
+            assert _commit_preview(client,preview).status_code==409
+            assert client.get(f"/api/sick-leave-imports/{preview['token']}/unmatched-file").status_code==409
+            assert _month_snapshot()==before
+        finally:
+            with SessionLocal() as db:db.get(Employee,actor).attraction_id=own;db.commit()
+
+
+@pytest.mark.parametrize('change',['cancel','date','name'])
+def test_loa_protected_rows_are_revalidated_before_covering(monkeypatch,change):
+    from app.v2_models import EmployeeLOAPeriod
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        actor=client.get('/api/me').json()['id'];employee_id,number=_numeric_employee()
+        with SessionLocal() as db:
+            period=EmployeeLOAPeriod(employee_id=employee_id,starts_on='2098-06-20',ends_on='2098-06-21',status='active',created_by=actor,created_by_name='测试')
+            db.add(period);db.commit();period_id=period.id
+        preview=_numeric_preview(client,monkeypatch,number)
+        assert not preview['matched'] and len(preview['loa_protected'])==1
+        before=_month_snapshot()
+        with SessionLocal() as db:
+            period=db.get(EmployeeLOAPeriod,period_id)
+            if change=='cancel':period.status='cancelled'
+            elif change=='date':period.starts_on='2098-06-21'
+            else:db.get(Employee,employee_id).name='完全不同'
+            db.commit()
+        assert _commit_preview(client,preview).status_code==409
+        assert _month_snapshot()==before
+
+
+@pytest.mark.parametrize('same_token',[True,False])
+def test_concurrent_month_cover_commits_once_and_rejects_old_preview(monkeypatch,same_token):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from app.v2_models import AuditLog
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee();first=_numeric_preview(client,monkeypatch,number)
+        second=first if same_token else _numeric_preview(client,monkeypatch,number)
+        cookies=dict(client.cookies);barrier=Barrier(2)
+        with SessionLocal() as db:audits=db.query(AuditLog).filter_by(action='覆盖月度病假事务').count()
+        def submit(preview):
+            with TestClient(app) as c:
+                c.cookies.update(cookies);barrier.wait(timeout=10)
+                return _commit_preview(c,preview).status_code
+        with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(submit,[first,second]))
+        assert results.count(200)==1 and all(s in (200,400,409) for s in results),results
+        with SessionLocal() as db:
+            assert db.query(AuditLog).filter_by(action='覆盖月度病假事务').count()==audits+1
+        before=_month_snapshot();assert _commit_preview(client,first).status_code in (400,409)
+        assert _month_snapshot()==before
+
+
+def test_failed_audit_rolls_back_cover_and_releases_preview_for_retry(monkeypatch):
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number);before=_month_snapshot()
+        original=sick_leave_import.write_audit
+        def fail(*args,**kwargs):raise RuntimeError('test audit failure')
+        monkeypatch.setattr(sick_leave_import,'write_audit',fail)
+        with pytest.raises(RuntimeError,match='audit failure'):_commit_preview(client,preview)
+        assert _month_snapshot()==before
+        monkeypatch.setattr(sick_leave_import,'write_audit',original)
+        result=_commit_preview(client,preview);assert result.status_code==200,result.text
+
+
+def test_month_close_added_after_preview_blocks_cover_without_writes(monkeypatch):
+    from app.v2_models import MonthClosure
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number);before=_month_snapshot()
+        with SessionLocal() as db:
+            closed=MonthClosure(closure_month='2098-06',attraction_id=None,status='closed');db.add(closed);db.commit();closure_id=closed.id
+        try:
+            assert _commit_preview(client,preview).status_code==423
+            assert _month_snapshot()==before
+        finally:
+            with SessionLocal() as db:db.delete(db.get(MonthClosure,closure_id));db.commit()
+
+
+def test_marked_download_keeps_formula_like_source_text_inert(monkeypatch):
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        preview=_numeric_preview(client,monkeypatch,'9999997','=1+1')
+        response=client.get(f"/api/sick-leave-imports/{preview['token']}/unmatched-file")
+        assert response.status_code==200,response.text
+        book=load_workbook(BytesIO(response.content))
+        assert book['员工事务'].cell(5,1).data_type!='f'
+        assert book['未覆盖说明'].cell(2,2).data_type!='f'
+
+
+@pytest.mark.parametrize('change',['name_still_contains','alias_spelling','global_circle'])
+def test_global_operator_must_repreview_if_displayed_identity_changes(monkeypatch,change):
+    from app.v2_models import Attraction
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        employee_id,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number);before=_month_snapshot()
+        with SessionLocal() as db:
+            employee=db.get(Employee,employee_id)
+            if change=='name_still_contains':employee.name='张森 Jason 新名称'
+            elif change=='alias_spelling':employee.employee_no='0'+number
+            else:employee.attraction_id=db.query(Attraction).filter(Attraction.employee_circle.is_(True),Attraction.id!=employee.attraction_id).first().id
+            db.commit()
+        assert _commit_preview(client,preview).status_code==409
+        assert _month_snapshot()==before
+
+
+def test_backup_written_after_preview_cannot_be_silently_overwritten(monkeypatch):
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        employee_id,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number)
+        backup=client.post('/api/sick-leave-imports/single',data={'employee_id':employee_id,'leave_start_date':'2098-06-19','leave_end_date':'2098-06-19','leave_days':'1','leave_type':'法定病假'})
+        assert backup.status_code==200,backup.text
+        before=_month_snapshot();assert _commit_preview(client,preview).status_code==409
+        assert _month_snapshot()==before
+
+
+def test_commit_waiting_for_write_lock_rechecks_expired_preview(monkeypatch):
+    from sqlalchemy.orm import Session
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number);before=_month_snapshot()
+        original=Session.execute
+        def execute(db,statement,*args,**kwargs):
+            result=original(db,statement,*args,**kwargs)
+            if getattr(statement,'is_update',False) and getattr(getattr(statement,'table',None),'name',None)=='employees':
+                with sick_leave_import._PREVIEWS_LOCK:
+                    cached=sick_leave_import._PREVIEWS.get(preview['token'])
+                    if cached:cached['created_at']=datetime.now()-timedelta(minutes=21)
+            return result
+        monkeypatch.setattr(Session,'execute',execute)
+        assert _commit_preview(client,preview).status_code==400
+        assert _month_snapshot()==before
+
+
+def test_circle_month_cover_ignores_injected_other_circle_targets(monkeypatch):
+    from app.v2_models import Attraction
+    with TestClient(app) as client:
+        own,actor=_login_circle(client)
+        own_id,number=_numeric_employee();other_id,_=_numeric_employee()
+        with SessionLocal() as db:
+            db.get(Employee,own_id).attraction_id=own
+            other=db.query(Attraction).filter(Attraction.employee_circle.is_(True),Attraction.id!=own).first().id
+            db.get(Employee,other_id).attraction_id=other;db.commit()
+        client.post('/api/logout');client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        result=client.post('/api/sick-leave-imports/single',data={'employee_id':other_id,'leave_start_date':'2098-06-18','leave_end_date':'2098-06-18','leave_days':'1','leave_type':'法定病假'})
+        assert result.status_code==200,result.text
+        other_record=result.json()['record']['id']
+        client.post('/api/logout');_login_circle(client)
+        preview=_numeric_preview(client,monkeypatch,number)
+        result=client.post('/api/sick-leave-imports/commit',json={'token':preview['token'],'month':preview['month'],
+            'attraction_id':other,'scope':[other],'employee_id':other_id,'matched':[{'employee_id':other_id}]})
+        assert result.status_code==200,result.text
+        assert result.json()['covered_employee_count']==1
+        with SessionLocal() as db:
+            assert db.get(SickLeaveRecord,other_record).status=='active'
+            assert db.query(SickLeaveRecord).filter_by(employee_id=own_id,status='active').count()==1
+            assert db.query(SickLeaveRecord).filter_by(employee_id=other_id,status='active').count()==1
+
+
+def test_second_request_cannot_release_another_inflight_preview(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered,released=Event(),Event()
+    original=sick_leave_import.write_audit
+    def hold(db,*args,**kwargs):
+        result=original(db,*args,**kwargs)
+        if len(args)>1 and args[1]=='覆盖月度病假事务':
+            entered.set();assert released.wait(10),'test did not release the first writer'
+        return result
+    with TestClient(app) as first,TestClient(app) as second:
+        first.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee();preview=_numeric_preview(first,monkeypatch,number)
+        second.cookies.update(dict(first.cookies));monkeypatch.setattr(sick_leave_import,'write_audit',hold)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future=pool.submit(_commit_preview,first,preview)
+            try:
+                assert entered.wait(10)
+                response=_commit_preview(second,preview)
+                assert response.status_code==409,response.text
+                with sick_leave_import._PREVIEWS_LOCK:
+                    assert sick_leave_import._PREVIEWS[preview['token']]['committing'] is True
+            finally:released.set()
+            assert future.result(timeout=10).status_code==200
+        before=_month_snapshot();assert _commit_preview(second,preview).status_code==400
+        assert _month_snapshot()==before
+
+
+def test_database_commit_failure_preserves_history_and_allows_safe_retry(monkeypatch):
+    from sqlalchemy.orm import Session
+    from app.v2_models import AuditLog
+    audit=sick_leave_import.write_audit;commit=Session.commit;fail=[True]
+    def mark(db,*args,**kwargs):
+        result=audit(db,*args,**kwargs)
+        if len(args)>1 and args[1]=='覆盖月度病假事务':db.info['test_cover_commit']=True
+        return result
+    def commit_once(db):
+        if db.info.get('test_cover_commit') and fail[0]:
+            fail[0]=False;raise RuntimeError('test database commit failure')
+        return commit(db)
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number);before=_month_snapshot()
+        with SessionLocal() as db:before_audit=db.query(AuditLog).filter_by(action='覆盖月度病假事务').count()
+        monkeypatch.setattr(sick_leave_import,'write_audit',mark);monkeypatch.setattr(Session,'commit',commit_once)
+        with pytest.raises(RuntimeError,match='database commit failure'):_commit_preview(client,preview)
+        assert _month_snapshot()==before
+        with SessionLocal() as db:assert db.query(AuditLog).filter_by(action='覆盖月度病假事务').count()==before_audit
+        cached=sick_leave_import._get_preview(preview['token'],client.get('/api/me').json()['id'])
+        assert cached and not cached.get('committing')
+        assert _commit_preview(client,preview).status_code==200
+        after=_month_snapshot();assert _commit_preview(client,preview).status_code==400
+        assert _month_snapshot()==after
+
+
+@pytest.mark.parametrize('invalid',['month','unreviewed'])
+def test_rejected_request_does_not_consume_or_claim_valid_preview(monkeypatch,invalid):
+    with TestClient(app) as client:
+        client.post('/api/login',json={'employee_no':'GSMTEST01','password':'1234'})
+        _,number=_numeric_employee()
+        preview=_numeric_preview(client,monkeypatch,number,'完全不同' if invalid=='unreviewed' else '张森')
+        before=_month_snapshot()
+        response=client.post('/api/sick-leave-imports/commit',json={'token':preview['token'],'month':'2098-07' if invalid=='month' else preview['month']})
+        assert response.status_code==400,response.text
+        cached=sick_leave_import._get_preview(preview['token'],client.get('/api/me').json()['id'])
+        assert cached and not cached.get('committing') and _month_snapshot()==before
+        result=_commit_preview(client,preview);assert result.status_code==200,result.text
+
+
+@pytest.mark.parametrize('change',['role_revoked','account_disabled'])
+def test_existing_preview_cannot_bypass_lost_role_or_disabled_account(monkeypatch,change):
+    from app.v2_models import UserAccount,EmployeeRoleAssignment,Role
+    from app.v2_crypto import hash_password
+    with TestClient(app) as client:
+        actor,login_no=_numeric_employee('测试导入人')
+        with SessionLocal() as db:
+            assignment=db.query(EmployeeRoleAssignment).filter_by(employee_id=actor,status='active').one()
+            assignment.role_id=db.query(Role).filter_by(code='GSM').one().id
+            db.add(UserAccount(employee_id=actor,login_account=login_no,password_hash=hash_password('1234'),enabled=True,must_change_password=False,credential_initialized=True));db.commit()
+        assert client.post('/api/login',json={'employee_no':login_no,'password':'1234'}).status_code==200
+        _,number=_numeric_employee();preview=_numeric_preview(client,monkeypatch,number);before=_month_snapshot()
+        with SessionLocal() as db:
+            if change=='role_revoked':
+                db.query(EmployeeRoleAssignment).filter_by(employee_id=actor,status='active').one().role_id=db.query(Role).filter_by(code='CM').one().id
+            else:db.query(UserAccount).filter_by(employee_id=actor).one().enabled=False
+            db.commit()
+        expected=403 if change=='role_revoked' else 401
+        assert _commit_preview(client,preview).status_code==expected
+        assert client.get(f"/api/sick-leave-imports/{preview['token']}/unmatched-file").status_code==expected
+        assert _month_snapshot()==before
+
+
+def test_concurrent_distinct_circle_imports_do_not_block_or_cover_each_other(monkeypatch):
+    from app.v2_models import UserAccount
+    from app.v2_crypto import hash_password
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    with TestClient(app) as heat,TestClient(app) as dwarf:
+        own,actor=_login_circle(heat)
+        with SessionLocal() as db:
+            account=db.query(UserAccount).filter_by(login_account='HR-DWARF').one()
+            account.enabled=True;account.must_change_password=False;account.password_hash=hash_password('1234')
+            other=db.get(Employee,account.employee_id).attraction_id;db.commit()
+        assert dwarf.post('/api/login',json={'employee_no':'HR-DWARF','password':'1234'}).status_code==200
+        own_id,number=_numeric_employee();other_id,other_no=_numeric_employee()
+        with SessionLocal() as db:
+            db.get(Employee,own_id).attraction_id=own;db.get(Employee,other_id).attraction_id=other;db.commit()
+        a=_numeric_preview(heat,monkeypatch,number);b=_numeric_preview(dwarf,monkeypatch,other_no)
+        assert a['matched_employee_count']==b['matched_employee_count']==1
+        barrier=Barrier(2)
+        def submit(args):
+            client,preview=args;barrier.wait(timeout=10);return _commit_preview(client,preview)
+        with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(submit,[(heat,a),(dwarf,b)]))
+        assert all(r.status_code==200 for r in results),[r.text for r in results]
+        with SessionLocal() as db:
+            assert db.query(SickLeaveRecord).filter_by(employee_id=own_id,status='active').count()==1
+            assert db.query(SickLeaveRecord).filter_by(employee_id=other_id,status='active').count()==1

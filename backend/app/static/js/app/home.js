@@ -1,12 +1,13 @@
 // Member home-month selection, score summary and recognition history.
 import { api } from './api.js';
-import { beginViewRequest, registerPageCleanup } from './context.js';
+import { beginViewRequest, registerPageCleanup, unregisterPageCleanup } from './context.js';
 import { bindImagePreviews } from './files.js';
 import { esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, portalPath } from './format.js';
 import { bindWithdraw, recognitionCard } from './records.js';
 import { app, state } from './state.js';
 import { mountHonors } from './honors.js';
 import { mountAvatarWardrobe } from './avatars.js';
+import { memoryEligible, mountMonthlyMemory } from './monthly-memory.js';
 
 // 首页"我的信息"：组员显示所在小组与主管/代理主管；主管显示所带小组。
 function homeGroupInfo(organization){
@@ -140,7 +141,9 @@ function homeQueryState(request,selectedMonth,error){
 
 let homeRankCleanup=null;
 let homeAvatarCleanup=null;
+let homeMemoryCleanup=null;
 async function renderHome(){
+  homeMemoryCleanup?.();homeMemoryCleanup=null;
   homeAvatarCleanup?.();homeAvatarCleanup=null;
   homeRankCleanup?.();homeRankCleanup=null;
   const request=beginViewRequest();
@@ -176,9 +179,11 @@ async function renderHome(){
     rejected:(d.records||[]).filter(r=>r.status==='rejected').length,
   };
   const summaryMarkup=`<p class="home-recognition-summary" aria-label="${esc(selectedMonthLabel)}签卡汇总"><span>已计分<strong>${esc(summary.credited)}</strong>张</span>${summary.pending?`<span class="home-recognition-pending">待复核<strong>${esc(summary.pending)}</strong>张</span>`:''}${summary.uncredited?`<span>已确认未计分<strong>${esc(summary.uncredited)}</strong>张</span>`:''}${summary.rejected?`<span>不通过<strong>${esc(summary.rejected)}</strong>张</span>`:''}</p>`;
-  const rankMarkup=`<div id="homeAvatar"></div>`+(d.monthly_rank_available===true?`<details class="member-rank-rules home-hr-notice"><summary>HR提示与月度勋章说明</summary><p>${rankStatement}</p><p>仅本人主动查看，不公开排行榜，不新增奖惩或绩效评定依据。</p></details><div class="member-rank-entry"><button type="button" class="secondary" id="homeRankView" aria-expanded="false" aria-controls="homeRankContent">查看我的月度勋章</button><div id="homeRankContent" hidden></div></div>`:'');
+  const memoryAvailable=memoryEligible(state.me);
+  const personalActions=`<div class="home-personal-actions">${d.monthly_rank_available===true?'<button type="button" class="home-honor-entry" id="homeRankView" aria-label="查看我的月度勋章" aria-expanded="false" aria-controls="homeRankContent"><span class="home-entry-emblem" aria-hidden="true">✦</span><span><strong>月度勋章</strong><small data-rank-label>看见本月荣誉</small></span></button>':''}${memoryAvailable?'<button type="button" class="home-memory-entry" id="homeMemoryView" aria-expanded="false" aria-controls="homeMemoryContent"><span class="home-entry-paper" aria-hidden="true">▤</span><span><strong>月度回忆卡</strong><small>珍藏认可瞬间</small></span></button>':''}</div><div id="homeMemoryContent" hidden></div>`;
+  const rankMarkup=`<div id="homeAvatar"></div>`+(d.monthly_rank_available===true?`<details class="member-rank-rules home-hr-notice"><summary>HR提示与月度勋章说明</summary><p>${rankStatement}</p><p>仅本人主动查看，不公开排行榜，不新增奖惩或绩效评定依据。</p></details><div class="member-rank-entry"><div id="homeRankContent" hidden></div></div>`:'');
   if(!request.write(`<div class="section-gap">
-    <section class="panel member-home-panel" data-season="${season}"><div class="home-info-heading"><h2>我的信息</h2>${homeMonthControl(selectedMonth)}<span class="badge${d.month_closed?' member-month-closed':''}">${esc(monthStatus)}</span>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div>${rankMarkup}<div class="member-info-grid">
+    <section class="panel member-home-panel" data-season="${season}"><div class="home-info-heading"><h2>我的信息</h2>${homeMonthControl(selectedMonth)}<span class="badge${d.month_closed?' member-month-closed':''}">${esc(monthStatus)}</span>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div>${personalActions}${rankMarkup}<div class="member-info-grid">
       <div><span>姓名 / ${organization?'月结角色':'当前角色'}</span><strong>${esc(state.me.name)} · ${esc(organization?.role_label||state.me.role_label||state.me.role_name)}</strong></div>
       <div><span>${organization?'月结景点圈':'当前景点圈'}</span><strong>${esc(organization?.attraction_name||state.me.attraction_name||'未分配')}</strong></div>
       ${homeGroupInfo(organization)}
@@ -192,13 +197,23 @@ async function renderHome(){
     <section class="panel"><h2>我的签卡${isHistoricalMonth?` · ${selectedMonthLabel}`:''}</h2>${summaryMarkup}<div class="mobile-records">${(d.records||[]).length?d.records.map((r,i)=>recognitionCard(r,i,homeReadOnly)).join(''):`<div class="empty">${isHistoricalMonth?`${selectedMonthLabel}暂无签卡`:'本月暂无签卡'}</div>`}</div></section>
   </div>`))return;
   bindHomeMonth();
+  const memoryButton=document.getElementById('homeMemoryView');
+  if(memoryButton)memoryButton.onclick=()=>{
+    const host=document.getElementById('homeMemoryContent');
+    if(memoryButton.getAttribute('aria-expanded')==='true'){
+      homeMemoryCleanup?.();homeMemoryCleanup=null;host.replaceChildren();host.hidden=true;memoryButton.setAttribute('aria-expanded','false');return;
+    }
+    host.hidden=false;memoryButton.setAttribute('aria-expanded','true');
+    const dispose=mountMonthlyMemory(host,{me:{...state.me},month:selectedMonth,rows:d.records||[],isCurrent:()=>request.isCurrent()});
+    const cleanup=()=>{dispose();unregisterPageCleanup(cleanup);};homeMemoryCleanup=cleanup;registerPageCleanup(cleanup);
+  };
   const rankButton=document.getElementById('homeRankView');
   homeAvatarCleanup=mountAvatarWardrobe(document.getElementById('homeAvatar'),{isCurrent:()=>request.isCurrent()});registerPageCleanup(homeAvatarCleanup);
   if(rankButton)rankButton.onclick=async()=>{
     const host=document.getElementById('homeRankContent'),panel=host.closest('.member-home-panel');
     if(rankButton.getAttribute('aria-expanded')==='true'){
       homeRankCleanup?.();homeRankCleanup=null;
-      host.hidden=true;rankButton.setAttribute('aria-expanded','false');rankButton.textContent='查看我的月度勋章';
+      host.hidden=true;rankButton.setAttribute('aria-expanded','false');rankButton.setAttribute('aria-label','查看我的月度勋章');rankButton.querySelector('[data-rank-label]').textContent='看见本月荣誉';
       host.querySelector('.member-rank-hero')?.classList.remove('is-preparing','is-assembling');
       panel.classList.remove('member-rank-panel','member-rank-awaiting');panel.removeAttribute('data-rank-tier');return;
     }
@@ -214,7 +229,7 @@ async function renderHome(){
         state.homeMonth=month;await renderHome();
         if(state.tab==='home'&&state.homeMonth===month)document.getElementById('homeRankView')?.click();
       }});registerPageCleanup(homeRankCleanup);
-      rankButton.setAttribute('aria-expanded','true');rankButton.textContent='收起我的月度勋章';
+      rankButton.setAttribute('aria-expanded','true');rankButton.setAttribute('aria-label','收起我的月度勋章');rankButton.querySelector('[data-rank-label]').textContent='收起本月荣誉';
     }catch(error){if(request.isCurrent())host.innerHTML=`<p class="error" role="alert">查看失败：${esc(error.message)}，可再次点击重试。</p>`;}
     finally{if(rankButton.isConnected)rankButton.disabled=false;}
   };

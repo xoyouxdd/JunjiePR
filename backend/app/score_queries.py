@@ -61,7 +61,7 @@ def employee_month_scores(db: Session, month: str, employee_ids: Iterable[int], 
         ), recognition_totals AS (
             SELECT employee_id,
                    ROUND(SUM(CASE WHEN status='confirmed' THEN
-                       CASE WHEN recognition_date<'2026-09-01' THEN fraction ELSE credited_fraction END
+                       CASE WHEN recognition_date<'2026-09-01' AND COALESCE(monthly_cap_rule_code,'') != 'configured_category' THEN fraction ELSE credited_fraction END
                        ELSE 0 END), 2) AS recognition_score
             FROM recognition_records
             WHERE recognition_month=:month{employee_filter}

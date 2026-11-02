@@ -1,5 +1,6 @@
 """Deduction entry, upgrade and target endpoints."""
 from __future__ import annotations
+from app.services import scoring_policies as scoring_config
 
 import json
 import secrets
@@ -77,7 +78,7 @@ def ensure_repeat_follow_up(
         employee_no=employee.employee_no,
         employee_name=employee.name,
         deduction_type_id=deduction_type.id,
-        deduction_type_name=deduction_type.name,
+        deduction_type_name=scoring_config.category(db,'deduction','all',deduction_type.code,occurred_on).get('name',deduction_type.name),
         occurred_on=occurred_on,
         previous_record_ids=json.dumps([item["id"] for item in repeat_context["previous_records"]]),
         status="pending",
@@ -96,7 +97,7 @@ def ensure_repeat_follow_up(
 
 
 def attendance_repeat_context(db: Session, employee_id: int, deduction_type: DeductionType, occurred_on: str, user: V2User) -> dict:
-    if deduction_type.code not in REPEAT_CONTROLLED_DEDUCTION_CODES:
+    if not scoring_config.repeats(db, deduction_type, occurred_on):
         return {"has_repeat": False, "blocked": False, "requires_confirmation": False, "previous_records": []}
     event_date = parse_iso_date(occurred_on, "事件日期")
     window_start = subtract_calendar_months(event_date, 3).isoformat()
@@ -106,7 +107,7 @@ def attendance_repeat_context(db: Session, employee_id: int, deduction_type: Ded
         .join(DeductionType, DeductionType.id == DeductionRecord.deduction_type_id)
         .filter(
             DeductionRecord.employee_id == employee_id,
-            DeductionType.code.in_(upgrade_type_codes(deduction_type.code)),
+            DeductionType.code.in_(scoring_config.repeat_codes(db, deduction_type, occurred_on)),
             DeductionRecord.status == "active",
             or_(DeductionRecord.upgrade_role.is_(None), DeductionRecord.upgrade_role.notin_({"source_first", "source_second"})),
             DeductionRecord.legacy_upgrade_excluded.is_(False),
@@ -230,7 +231,7 @@ def check_attendance_repeat(
     deduction_type = db.get(DeductionType, deduction_type_id)
     if not deduction_type or not deduction_type.active:
         raise HTTPException(400, "扣分类型无效")
-    ensure_deduction_type_allowed(user, deduction_type)
+    ensure_deduction_type_allowed(user, deduction_type, db, occurred_on)
     result = attendance_repeat_context(db, employee_id, deduction_type, occurred_on, user)
     if result["has_repeat"] and user.role.code in LEADER_CODES:
         follow_up = ensure_repeat_follow_up(db, user, target, deduction_type, occurred_on, result)
@@ -279,7 +280,7 @@ async def create_deduction(
     deduction_type = db.get(DeductionType, deduction_type_id)
     if not level or not level.active or not deduction_type or not deduction_type.active:
         raise HTTPException(400, "扣分类型或等级无效")
-    ensure_deduction_type_allowed(user, deduction_type)
+    ensure_deduction_type_allowed(user, deduction_type, db, occurred_on)
     if "DEDUCTION_DIRECT" in user.permissions and "DEDUCTION_ALL" not in user.permissions and level.code != "STATEMENT":
         raise HTTPException(403, "TA主管、主管只能登记声明1分")
     existing_pending_material = pending_material_conflict(
@@ -293,7 +294,7 @@ async def create_deduction(
         raise_pending_material_conflict(existing_pending_material)
     photo_mode = bool([item for item in (document_images or []) if item and item.filename])
     pdf_mode = bool(document and document.filename)
-    if direct_only_deduction_user(user) and level.code == "STATEMENT" and deduction_type.code in REPEAT_CONTROLLED_DEDUCTION_CODES and (photo_mode or pdf_mode):
+    if direct_only_deduction_user(user) and level.code == "STATEMENT" and scoring_config.repeats(db, deduction_type, occurred_on) and (photo_mode or pdf_mode):
         if statement_upgrade_candidate(db, employee_id, deduction_type.id, occurred_on):
             raise HTTPException(409, "三个月内已有可升级同类声明，请通过声明升级工单提交")
         repeat_context = {"has_repeat": False, "blocked": False, "requires_confirmation": False}
@@ -351,10 +352,11 @@ async def create_deduction(
             employee_group_id_snapshot=group.id if group else None,
             attraction_id_snapshot=target.attraction_id,
             deduction_type_id=deduction_type.id,
-            deduction_type_name=deduction_type.name,
+            deduction_type_name=scoring_config.category(db,'deduction','all',deduction_type.code,occurred_on).get('name',deduction_type.name),
             deduction_level_id=level.id,
             deduction_level_name=level.name,
-            points=level.points,
+            points=scoring_config.deduction_points(db, deduction_type, level, occurred_on),
+            scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)),
             occurred_on=occurred_on,
             deduction_month=occurred_on[:7],
             description=description,
@@ -372,6 +374,8 @@ async def create_deduction(
         )
         db.add(row)
         db.flush()
+        if row.status == "active" and scoring_config.validate_material_repeat(db, row) and not repeat_confirmed:
+            raise HTTPException(409, "同类处分记录已变化，请刷新后确认重复处分及升级级别")
         if photo_mode or needs_pdf_processing:
             queue_photo_material_job(db, row, file_row, source_rows, mode="pdf_compress" if needs_pdf_processing else "deduction")
         elif level.code != "STATEMENT" and row.status == "active":
@@ -432,7 +436,7 @@ def deduction_upgrade_preview(employee_id: int, deduction_type_id: int, occurred
         )
         if existing_pending_material:
             raise_pending_material_conflict(existing_pending_material)
-    if not deduction_type or not deduction_type.active or deduction_type.code not in REPEAT_CONTROLLED_DEDUCTION_CODES:
+    if not deduction_type or not deduction_type.active or not scoring_config.repeats(db, deduction_type, occurred_on):
         return {"eligible": False}
     first = statement_upgrade_candidate(db, target.id, deduction_type.id, occurred_on)
     if not first:
@@ -467,8 +471,9 @@ async def create_deduction_upgrade(
     statement = db.query(DeductionLevel).filter_by(code="STATEMENT", active=True).first()
     reviewer = db.get(Employee, reviewer_id)
     reviewer_role = role_at(db, reviewer.id) if reviewer else None
-    if not deduction_type or deduction_type.code not in REPEAT_CONTROLLED_DEDUCTION_CODES or not statement:
+    if not deduction_type or not scoring_config.repeats(db, deduction_type, occurred_on) or not statement:
         raise HTTPException(400, "该扣分类型不支持声明升级")
+    ensure_deduction_type_allowed(user, deduction_type, db, occurred_on)
     existing_pending_material = pending_material_conflict(
         db,
         employee_id=target.id,
@@ -522,8 +527,8 @@ async def create_deduction_upgrade(
         employee_id=target.id, employee_no=target.employee_no, employee_name=target.name,
         employee_role_snapshot=target_role.name, employee_group_id_snapshot=group.id if group else None,
         attraction_id_snapshot=target.attraction_id, deduction_type_id=deduction_type.id,
-        deduction_type_name=deduction_type.name, deduction_level_id=statement.id,
-        deduction_level_name=statement.name, points=Decimal("0"), occurred_on=occurred_on,
+        deduction_type_name=scoring_config.category(db,'deduction','all',deduction_type.code,occurred_on).get('name',deduction_type.name), deduction_level_id=statement.id,
+        deduction_level_name=statement.name, points=Decimal("0"), scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)), occurred_on=occurred_on,
         deduction_month=occurred_on[:7], description=description, document_file_id=file_row.id,
         submitter_id=user.id, submitter_name=user.name, submitter_role_snapshot=user.role.name,
         permission_scope_snapshot="所有CM/TR（声明升级待审核）", status="material_processing" if (photo_mode or needs_pdf_processing) else "pending_upgrade",
@@ -657,7 +662,7 @@ def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, 
             placeholder = StoredFile(storage_key=f"system/no-document-{secrets.token_hex(12)}", original_filename="无需上传正式文书", extension=".none", mime_type="application/octet-stream", file_size=0, sha256="0" * 64, uploaded_by=user.id, status="not_required")
             db.add(placeholder)
             db.flush()
-            result = DeductionRecord(employee_id=second.employee_id, employee_no=second.employee_no, employee_name=second.employee_name, employee_role_snapshot=second.employee_role_snapshot, employee_group_id_snapshot=second.employee_group_id_snapshot, attraction_id_snapshot=second.attraction_id_snapshot, deduction_type_id=second.deduction_type_id, deduction_type_name=second.deduction_type_name, deduction_level_id=level.id, deduction_level_name=level.name, points=level.points, occurred_on=second.occurred_on, deduction_month=second.deduction_month, description=note, document_file_id=placeholder.id, submitter_id=user.id, submitter_name=user.name, submitter_role_snapshot=user.role.name, permission_scope_snapshot="声明升级审核", status="active", upgrade_role="result", upgrade_state="result")
+            result = DeductionRecord(employee_id=second.employee_id, employee_no=second.employee_no, employee_name=second.employee_name, employee_role_snapshot=second.employee_role_snapshot, employee_group_id_snapshot=second.employee_group_id_snapshot, attraction_id_snapshot=second.attraction_id_snapshot, deduction_type_id=second.deduction_type_id, deduction_type_name=second.deduction_type_name, deduction_level_id=level.id, deduction_level_name=level.name, points=scoring_config.stored_deduction_points(db, second, level), scoring_policy_json=second.scoring_policy_json, occurred_on=second.occurred_on, deduction_month=second.deduction_month, description=note, document_file_id=placeholder.id, submitter_id=user.id, submitter_name=user.name, submitter_role_snapshot=user.role.name, permission_scope_snapshot="声明升级审核", status="active", upgrade_role="result", upgrade_state="result")
             db.add(result)
             db.flush()
             first.upgrade_role, first.upgrade_state = "source_first", "source_first"
@@ -784,6 +789,8 @@ async def retry_deduction_material(
     pdf_mode = bool(document and document.filename)
     if pdf_mode == photo_mode:
         raise HTTPException(400, "请上传一个PDF，或选择1至6张照片材料")
+    if not upgrade_material:
+        scoring_config.validate_material_repeat(db, row)
     source_rows: list[StoredFile] = []
     output = None
     try:
@@ -862,7 +869,7 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
     if row.deduction_level_id == level.id:
         return {"ok": True}
     before = deduction_payload(row)
-    row.deduction_level_id, row.deduction_level_name, row.points = level.id, level.name, level.points
+    row.deduction_level_id, row.deduction_level_name, row.points = level.id, level.name, scoring_config.stored_deduction_points(db, row, level)
     write_audit(db, user.employee, "修改处分级别", "deduction", row.id,
                 before=before, after=deduction_payload(row), reason=reason, ip_address=client_ip(request))
     db.commit()

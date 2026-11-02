@@ -4,6 +4,20 @@ from __future__ import annotations
 from sqlalchemy import text
 
 
+def ensure_scoring_policy_snapshots(db) -> None:
+    for table in ('recognition_records', 'deduction_records'):
+        columns = {row[1] for row in db.execute(text(f'PRAGMA table_info({table})'))}
+        if columns and 'scoring_policy_json' not in columns:
+            db.execute(text(f'ALTER TABLE {table} ADD COLUMN scoring_policy_json TEXT'))
+
+
+def ensure_about_system_credit_columns(db) -> None:
+    columns = {row[1] for row in db.execute(text('PRAGMA table_info(about_system_settings)'))}
+    for name, default in (('maintainers', '赵君杰、张森'), ('feedback', '')):
+        if columns and name not in columns:
+            db.execute(text(f"ALTER TABLE about_system_settings ADD COLUMN {name} TEXT NOT NULL DEFAULT '{default}'"))
+
+
 def ensure_learning_categories(db) -> None:
     for table in ('learning_shares', 'learning_revisions'):
         columns = {row[1] for row in db.execute(text(f'PRAGMA table_info({table})'))}
@@ -242,7 +256,7 @@ def ensure_recognition_credit_cap_and_poc_columns(db) -> None:
             db.execute(text(f"ALTER TABLE recognition_records ADD COLUMN {name} {definition}"))
     # Historic rows keep their original, already-confirmed result. The new cap
     # starts on 2026-09-01 and is deliberately never applied backwards.
-    db.execute(text("UPDATE recognition_records SET credited_fraction=CASE WHEN status='confirmed' THEN fraction ELSE 0 END WHERE credited_fraction IS NULL OR (credited_fraction=0 AND status='confirmed' AND recognition_date < '2026-09-01')"))
+    db.execute(text("UPDATE recognition_records SET credited_fraction=CASE WHEN status='confirmed' THEN fraction ELSE 0 END WHERE credited_fraction IS NULL OR (credited_fraction=0 AND status='confirmed' AND recognition_date < '2026-09-01' AND COALESCE(monthly_cap_rule_code,'') != 'configured_category')"))
     db.execute(text("UPDATE recognition_records SET monthly_cap_status='legacy_not_limited' WHERE recognition_date < '2026-09-01' AND (monthly_cap_status IS NULL OR monthly_cap_status='not_applicable')"))
     db.execute(text("CREATE INDEX IF NOT EXISTS ix_recognition_monthly_cap_lookup ON recognition_records (employee_id, recognition_month, recognition_type_id, status, reviewed_at, id)"))
     db.execute(text("CREATE INDEX IF NOT EXISTS ix_recognition_poc_ranking_lookup ON recognition_records (recognition_date, status, recognizer_role_code_snapshot, operator_role_code_snapshot)"))

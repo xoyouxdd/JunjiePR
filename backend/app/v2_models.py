@@ -9,6 +9,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.connection import Base
 
 
+class AboutSystemSettings(Base):
+    __tablename__ = "about_system_settings"
+    __table_args__ = (CheckConstraint("id = 1", name="about_system_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Retained as an archive of the earlier local-only credits; no longer exposed.
+    contributors: Mapped[str] = mapped_column(Text, default="")
+    maintainers: Mapped[str] = mapped_column(Text, default="赵君杰、张森", server_default="赵君杰、张森")
+    feedback: Mapped[str] = mapped_column(Text, default="", server_default="")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
 class Role(Base):
     __tablename__ = "roles"
 
@@ -611,6 +623,18 @@ class CircleTransferRequest(Base):
     migrated_record_counts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ScoringPolicy(Base):
+    __tablename__ = "scoring_policies"
+    __table_args__ = (UniqueConstraint("kind", "scope", "code", "effective_date", name="uq_scoring_policy_version"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    scope: Mapped[str] = mapped_column(String(20))
+    code: Mapped[str] = mapped_column(String(40))
+    effective_date: Mapped[str] = mapped_column(String(10), index=True)
+    policy_json: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+
+
 class RecognitionType(Base):
     __tablename__ = "recognition_types"
 
@@ -680,6 +704,7 @@ class RecognitionRecord(Base):
     # fraction is the original score frozen at registration.  credited_fraction
     # is the score actually included in monthly performance after any cap.
     fraction: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    scoring_policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     credited_fraction: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"))
     monthly_cap_rule_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     monthly_cap_status: Mapped[str] = mapped_column(String(30), default="not_applicable", index=True)
@@ -1037,6 +1062,7 @@ class DeductionRecord(Base):
     deduction_level_id: Mapped[int] = mapped_column(ForeignKey("deduction_levels.id"))
     deduction_level_name: Mapped[str] = mapped_column(String(30))
     points: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    scoring_policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     occurred_on: Mapped[str] = mapped_column(String(10), index=True)
     deduction_month: Mapped[str] = mapped_column(String(7), index=True)
     description: Mapped[str] = mapped_column(Text)

@@ -10,6 +10,11 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/scoring-rule-center.md](docs/scoring-rule-center.md) | 分类计分规则、生效版本与记录快照 |
+| [docs/sick-import-identity-matching.md](docs/sick-import-identity-matching.md) | 缺勤导入身份核验与事务保护 |
+| [docs/monthly-memory-card.md](docs/monthly-memory-card.md) | 本人月度回忆与本地图片导出 |
+| [docs/rotation-daily-refresh.md](docs/rotation-daily-refresh.md) | 每日班表交换刷新与滚动保护 |
+| [docs/about-system-credits.md](docs/about-system-credits.md) | 关于系统名单编辑与账号权限 |
 | [docs/temporary-recognizers.md](docs/temporary-recognizers.md) | 按日期授权临时主管认可资格、计分与身份边界 |
 | [docs/hr-pr-rankings.md](docs/hr-pr-rankings.md) | 景点圈HR的PR排名与导出范围 |
 | [docs/rotation-workflow-20261028.md](docs/rotation-workflow-20261028.md) | 轮岗独立任务、超时转接、101与大屏正式联动 |
@@ -26,6 +31,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 | [docs/sqlite-schema.md](docs/sqlite-schema.md) | SQLite 表、主键、外键、索引 |
 | [docs/identity-and-supervisor.md](docs/identity-and-supervisor.md) | 本职与代理职务、主管绩效登记复核、日期展示及统计口径 |
 | [docs/monthly-self-rank.md](docs/monthly-self-rank.md) | 个人月结游戏段位、同分中位算法、隐私和未发布开关 |
+| [docs/monthly-memory-card.md](docs/monthly-memory-card.md) | 本人月度认可回忆卡、本地句式库、完整插画和带姓名PNG导出 |
 | [docs/local-update-20261019.md](docs/local-update-20261019.md) | 10月19日导出优化、我的荣誉与名称落实复查 |
 | [docs/leave-management.md](docs/leave-management.md) | LOA、月度病假事务导入与单人备用登记 |
 | [docs/declaration-statistics.md](docs/declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |

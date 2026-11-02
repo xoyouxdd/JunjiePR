@@ -101,6 +101,9 @@ async function fixtureRequest(request, response) {
       role_name: 'CM', permissions: ['SELF_RECOGNITION']} : {...user, must_change_password: mode === 'password'});
   } else if (route === '/api/rotation/adjust/mine') sendJson(response, {items: []});
   else if (route === '/api/options') sendJson(response, options);
+  else if (route === '/api/scoring/recognition-options') sendJson(response, options.recognition_types);
+  else if (route === '/api/scoring/deduction-options') sendJson(response, {types:options.deduction_types,levels:options.deduction_levels});
+  else if (route === '/api/about-system') sendJson(response, {maintainers:'赵君杰',feedback:'张森',can_edit:false,revision:1});
   else if (route === '/api/export-tasks') sendJson(response, {items: []});
   else if (route === '/api/action-center') sendJson(response, {month: '2026-10', items: [], total: 0});
   else if (/^\/api\/month-closes\/\d{4}-\d{2}$/.test(route)) {
@@ -214,7 +217,7 @@ async function main() {
       await page.locator('.tabs-desktop [data-open-about]').click();
       await page.locator('[data-about-version]').filter({hasText: version}).waitFor();
       assert.match(await page.locator('[data-about-dialog]').textContent(), /建设与维护\s*赵君杰/);
-      assert.match(await page.locator('[data-about-dialog]').textContent(), /共同参与\s*张森/);
+      assert.match(await page.locator('[data-about-dialog]').textContent(), /建议与反馈\s*张森/);
       assert.equal(await page.locator('[data-about-dialog] img').evaluate(img => img.complete && img.naturalWidth > 0), true);
       await page.keyboard.press('Shift+Tab');
       assert.equal(await page.locator('[data-about-updates]').evaluate(node => node === document.activeElement), true);

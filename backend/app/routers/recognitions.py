@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionMonthlyQuota, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
+from app.services import scoring_policies as scoring_config
 from app.recognition_encouragement import encouragement_options
 from app.recognition_timing import identify, stage
 from app.services.identity import TEMPORARY_RECOGNIZER_LABEL, temporary_recognizer_ids
@@ -63,6 +64,8 @@ def ensure_enabled_poc_target(db: Session, employee_id: int) -> tuple[Employee, 
 
 def apply_monthly_category_cap(db: Session, row: RecognitionRecord, recognition_type: RecognitionType) -> None:
     """Freeze the actually credited score when a record becomes confirmed."""
+    if scoring_config.apply_credit(db, row):
+        return
     row.credited_fraction = Decimal("0.00")
     row.monthly_cap_rule_code = None
     row.monthly_cap_status = "not_applicable"
@@ -107,18 +110,19 @@ def get_recognizers(attraction_id: int, recognition_date: str | None = None, db:
     if recognition_date:
         parse_iso_date(recognition_date, "认可日期")
     rows = recognizer_options(db, attraction_id, recognition_date)
-    rows.extend(
-        {
-            "id": rule["option_id"],
-            "employee_no": "",
-            "name": rule["name"],
-            "role_code": code,
-            "role_name": "系统固定分值",
-            "score": float(rule["score"]),
-            "special": True,
-        }
-        for code, rule in SPECIAL_RECOGNITION_TYPES.items()
-    )
+    day = recognition_date or date.today().isoformat()
+    role_scores = {}
+    for row in rows:
+        code = row['role_code']
+        if code not in role_scores:
+            role = db.query(Role).filter_by(code=code).one()
+            role_scores[code] = (float(recognition_score_for_role(db,role.id,day,'CM')),float(recognition_score_for_role(db,role.id,day,'SUPERVISOR')))
+        row['score'],row['supervisor_score'] = role_scores[code]
+    for item in db.query(RecognitionType).filter_by(active=True):
+        policies = [scoring_config.category(db, 'recognition', scope, item.code, day) for scope in ('frontline','supervisor')]
+        if item.code != 'POC' and any(p['active'] and p['mode']=='fixed' for p in policies):
+            rows.append(dict(id='special:'+item.code, employee_no='',name=item.name,role_code=item.code,
+                             role_name='系统固定分值',score=policies[0]['score'],supervisor_score=policies[1]['score'],special=True))
     return rows
 
 
@@ -194,7 +198,11 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     if recognition_type.code in DEDICATED_RECOGNITION_TYPE_CODES:
         raise HTTPException(400, "POC特别贡献只能通过专用入口开具")
     selected_recognizer = str(recognizer_employee_id or "").strip()
-    special_rule = SPECIAL_RECOGNITION_TYPES.get(recognition_type.code)
+    score_policy = scoring_config.category(db, 'recognition', target_category, recognition_type.code, recognition_date)
+    if not score_policy['active']:
+        raise HTTPException(400, '该认可类别在此日期或人群未启用')
+    special_rule = ({'option_id':'special:'+recognition_type.code,'name':score_policy.get('name', recognition_type.name),'score':Decimal(str(score_policy['score'])),
+                     'monthly_limit':score_policy['count']} if score_policy['mode']=='fixed' else None)
     recognizer_role = None
     if special_rule:
         if selected_recognizer != special_rule["option_id"]:
@@ -230,7 +238,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         fraction = recognition_score_for_role(db, recognizer_role.id, recognition_date, target_role.code)
     if not is_self and not special_rule and target_duty_code == "TA_SUPERVISOR" and user.role.code in LEADER_CODES:
         raise HTTPException(403, "该员工认可日期处于代理TA主管期间，主管和TA主管不能为其代录加分")
-    quota_code = recognition_type.code if special_rule and special_rule["monthly_limit"] else None
+    quota_code = recognition_type.code if special_rule and score_policy["count"] == 1 and score_policy["overflow"] == "block" else None
     active_same_day_rows = (
         db.query(RecognitionRecord)
         .filter(
@@ -278,7 +286,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     if quota_code and db.query(RecognitionMonthlyQuota).filter_by(
         employee_id=target.id, quota_code=quota_code, quota_month=recognition_date[:7]
     ).first():
-        raise HTTPException(409, "该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分")
+        raise HTTPException(409, ("该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分" if recognition_type.code == "COMMENDATION_LETTER" else "本类别每名员工每月只能计分一次"))
     reviewer = current_leader_for_employee(db, target.id) if is_self else None
     if is_self and not shared_file and (not image or not image.filename):
         raise HTTPException(400, "CM/TR本人登记必须上传1张认可图片")
@@ -295,7 +303,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         recognition_date=recognition_date,
         recognition_month=recognition_date[:7],
         recognition_type_id=recognition_type.id,
-        recognition_type_name=recognition_type.name,
+        recognition_type_name=score_policy.get('name', recognition_type.name),
         content=content,
         recognizer_employee_id=recognizer.id,
         recognizer_name=recognizer_name,
@@ -314,6 +322,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         employee_acting_duty_code=target_duty_code,
         source="self" if is_self else "manager",
         fraction=fraction,
+        scoring_policy_json=scoring_config.dump(score_policy),
         status="pending" if is_self else "confirmed",
         same_day_duplicate_group=duplicate_group,
         same_day_duplicate_sequence=duplicate_sequence,
@@ -325,6 +334,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         # The write lock acquired by flush serializes this check with qualification cancellation.
         if recognizer_role_name == TEMPORARY_RECOGNIZER_LABEL and recognizer.id not in temporary_recognizer_ids(db, recognition_date):
             raise HTTPException(409, "临时主管认可资格已变更，请刷新后重新选择认可人")
+        scoring_config.reserve_count(db, row, score_policy)
         if row.status == "confirmed":
             apply_monthly_category_cap(db, row, recognition_type)
             db.flush()
@@ -362,7 +372,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         if duplicate_row:
             return {"ok": True, "record": recognition_payload(duplicate_row), "duplicate": True}
         if quota_code:
-            raise HTTPException(409, "该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分") from exc
+            raise HTTPException(409, ("该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分" if recognition_type.code == "COMMENDATION_LETTER" else "本类别每名员工每月只能计分一次")) from exc
         raise
     except Exception:
         if not commit:
@@ -754,7 +764,13 @@ def apply_recognition_review(db: Session, row: RecognitionRecord, payload: dict,
         row.credited_fraction = Decimal("0.00")
         row.monthly_cap_status = "not_applicable"
         row.monthly_cap_reason = None
-    quota_code = recognition_type.code if recognition_type and recognition_type.code == "COMMENDATION_LETTER" else None
+    frozen_policy = json.loads(row.scoring_policy_json) if row.scoring_policy_json else None
+    if frozen_policy:
+        quota_code = recognition_type.code if recognition_type and frozen_policy['mode']=='fixed' and frozen_policy['count']==1 and frozen_policy['overflow']=='block' else None
+    else:
+        quota_code = recognition_type.code if recognition_type and recognition_type.code == 'COMMENDATION_LETTER' else None
+    if after in ('pending','confirmed') and frozen_policy:
+        scoring_config.reserve_count(db, row, frozen_policy)
     quota = db.query(RecognitionMonthlyQuota).filter_by(recognition_id=row.id).first()
     if after == "rejected" and quota:
         db.delete(quota)

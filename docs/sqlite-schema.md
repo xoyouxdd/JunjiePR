@@ -1,5 +1,7 @@
 # SQLite 表、键、索引
 
+2026-11-02新增：`scoring_policies`以id为主键，kind/scope/code/effective_date组合唯一，保存policy_json和version；`recognition_records`、`deduction_records`追加可空scoring_policy_json快照，旧记录保留NULL及原数值。`about_system_settings`为id=1的单行配置，保存maintainers、feedback、revision，旧contributors仅归档保留。启动迁移幂等补列。轮岗五岗位迁移仅扩充标准配置模板，不重写每日班表和历史运行状态。规则见 `scoring-rule-center.md` 与 `about-system-credits.md`。
+
 `temporary_recognition_qualifications`：主键id，员工外键employee_id与日期qualified_on组合唯一；保存status、reason、操作人外键updated_by及updated_at。独立于角色/代理职务表，按认可日期核验资格；通过启动建表流程新增，不修改旧表列。规则见 `temporary-recognizers.md`。
 
 对照本地候选程序 `2026.10.19.1`。权威定义在代码里，本文件只记录现在落地的结构：

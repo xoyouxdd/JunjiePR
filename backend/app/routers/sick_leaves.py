@@ -1,5 +1,6 @@
 """Sick-leave registration endpoints."""
 from __future__ import annotations
+from app.services import scoring_policies as scoring_config
 
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -198,7 +199,7 @@ async def create_sick_leave(
         statement = db.query(DeductionLevel).filter_by(code="STATEMENT", active=True).first()
         if not violation_type or not statement:
             raise HTTPException(409, "违规病假声明配置缺失，请联系管理员")
-        ensure_deduction_type_allowed(user, violation_type)
+        ensure_deduction_type_allowed(user, violation_type, db, leave_start_date)
         existing_pending_material = pending_material_conflict(
             db,
             employee_id=target.id,
@@ -265,7 +266,7 @@ async def create_sick_leave(
                 employee_role_snapshot=target_role.name, employee_group_id_snapshot=group.id if group else None,
                 attraction_id_snapshot=target.attraction_id, deduction_type_id=violation_type.id,
                 deduction_type_name=violation_type.name, deduction_level_id=statement.id,
-                deduction_level_name=statement.name, points=Decimal("0") if first_statement else statement.points, occurred_on=leave_start_date,
+                deduction_level_name=statement.name, points=Decimal('0') if first_statement else scoring_config.deduction_points(db, violation_type, statement, leave_start_date), scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, violation_type, leave_start_date)), occurred_on=leave_start_date,
                 deduction_month=leave_start_date[:7], description=f"违规病假（关联缺勤：{leave_start_date} 至 {leave_end_date}）：" + ((note or "").strip() or "待补充处理说明"),
                 document_file_id=violation_file_row.id, submitter_id=user.id, submitter_name=user.name,
                 submitter_role_snapshot=user.role.name, permission_scope_snapshot="缺勤登记违规病假声明",

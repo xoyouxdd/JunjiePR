@@ -586,6 +586,11 @@ def _apply_success_result(db, job: DeductionMaterialJob, output: StoredFile, ded
     if job.mode in {"upgrade", "upgrade_pdf_compress"}:
         _finalize_upgrade(db, job, deduction)
     else:
+        from app.services.scoring_policies import validate_material_repeat
+        try:
+            validate_material_repeat(db, deduction)
+        except HTTPException as exc:
+            raise MaterialError("repeat_upgrade_required", str(exc.detail)) from exc
         deduction.status = "active"
         follow_ups = db.query(DeductionFollowUp).filter_by(employee_id=deduction.employee_id, deduction_type_id=deduction.deduction_type_id, occurred_on=deduction.occurred_on, status="pending").all()
         for follow_up in follow_ups:

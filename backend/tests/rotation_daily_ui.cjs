@@ -26,7 +26,7 @@ async function main(){try{
     await page.locator('[data-daily-date-button="2026-10-06"]').click();
     await page.locator('[data-daily-person="A#0"]').waitFor({timeout:10000}).catch(async e=>{console.error(await page.locator('body').innerText(),errors);throw e;});
     async function data(){const r=await context.request.get(base+'/api/rotation/daily/2026-10-06');assert(r.ok());return r.json();}
-    async function choose(a,b){await page.locator(`[data-daily-person="${a}"]`).dragTo(page.locator(`[data-daily-person="${b}"]`));await page.getByRole('button',{name:'确认交换',exact:true}).click();await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading);}
+    async function choose(a,b){await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.modalOpen);await page.locator(`[data-daily-person="${a}"]`).dragTo(page.locator(`[data-daily-person="${b}"]`));await page.getByRole('button',{name:'确认交换',exact:true}).click();await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading);}
     // Post clicks remain available for drag; double-click enters inline rename,
     // without accidentally opening a swap dialog on the second click.
     let renameWrites=0;

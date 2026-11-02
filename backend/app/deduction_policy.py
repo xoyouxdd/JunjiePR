@@ -79,9 +79,13 @@ def direct_only_deduction_user(user: V2User) -> bool:
     return "DEDUCTION_DIRECT" in user.permissions and "DEDUCTION_ALL" not in user.permissions
 
 
-def ensure_deduction_type_allowed(user: V2User, deduction_type: DeductionType) -> None:
+def ensure_deduction_type_allowed(user: V2User, deduction_type: DeductionType, db=None, on_date=None) -> None:
     if direct_only_deduction_user(user) and deduction_type.code in DIRECT_HIDDEN_DEDUCTION_CODES:
         raise HTTPException(403, "TA主管、主管不能登记迟到30分钟以上或早退30分钟以上")
+    if db is not None:
+        from app.services.scoring_policies import deduction_allowed
+        from datetime import date
+        deduction_allowed(db, user, deduction_type, on_date or date.today().isoformat())
 
 
 def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id: int, occurred_on: str) -> DeductionRecord | None:
@@ -89,6 +93,9 @@ def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id
     statement = db.query(DeductionLevel).filter_by(code="STATEMENT", active=True).first()
     deduction_type = db.get(DeductionType, deduction_type_id)
     if not statement or not deduction_type:
+        return None
+    from app.services.scoring_policies import repeats, repeat_codes
+    if not repeats(db, deduction_type, occurred_on):
         return None
     event_date = parse_iso_date(occurred_on, "事件日期")
     window_start = subtract_calendar_months(event_date, 3).isoformat()
@@ -98,7 +105,7 @@ def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id
         .join(DeductionType, DeductionType.id == DeductionRecord.deduction_type_id)
         .filter(
             DeductionRecord.employee_id == employee_id,
-            DeductionType.code.in_(upgrade_type_codes(deduction_type.code)),
+            DeductionType.code.in_(repeat_codes(db, deduction_type, occurred_on)),
             DeductionRecord.deduction_level_id == statement.id,
             DeductionRecord.status == "active",
             DeductionRecord.legacy_upgrade_excluded.is_(False),

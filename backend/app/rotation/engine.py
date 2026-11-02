@@ -58,8 +58,8 @@ DEFAULT_LINES = [
     {'id': 'C1', 'group': 'C', 'posts': [{'name': '上客3'}, {'name': '上协3'}, {'name': '预演'}, {'name': '预演协助'}, {'name': '单人队末', 'openAt': '09:00'}]},
     {'id': 'C2', 'group': 'C', 'posts': [{'name': '快迎1', 'seven': 2}, {'name': '单人迎宾', 'openAt': '08:15'}, {'name': '分组3'}, {'name': '上客4'}, {'name': '上协4'}]},
     {'id': 'D1', 'group': 'D', 'posts': [{'name': '河马池'}, {'name': '铁马出口'}, {'name': '迎宾协助'}, {'name': '下客1'}, {'name': '下客2'}]},
-    {'id': 'D2', 'group': 'D', 'standby': True, 'posts': [{'name': '铁马A'}, {'name': '铁马B'}, {'name': '铁马C'}]},
-    {'id': 'E', 'group': 'E', 'standby': True, 'posts': [{'name': '城内巡视'}, {'name': '队末'}]},
+    {'id': 'D2', 'group': 'D', 'standby': True, 'posts': [{'name': '铁马A'}, {'name': '铁马B'}, {'name': '铁马C'}, {'name': '备用'}, {'name': '备用'}]},
+    {'id': 'E', 'group': 'E', 'standby': True, 'posts': [{'name': '城内巡视'}, {'name': '队末'}, {'name': '备用'}, {'name': '备用'}, {'name': '备用'}]},
 ]
 
 POOL_STATES = ('walkback', 'pending', 'rest', 'meal', 'ready')

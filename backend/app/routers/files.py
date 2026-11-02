@@ -1,5 +1,7 @@
 """File serving and shared option endpoints."""
 from __future__ import annotations
+from datetime import date
+from app.services import scoring_policies as scoring_config
 
 from io import BytesIO
 import re
@@ -45,6 +47,9 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(current_user))
     deduction_types.sort(key=lambda row: (deduction_order.get(row.code, len(deduction_order)), row.id))
     if direct_only_deduction_user(user):
         deduction_types = [row for row in deduction_types if row.code not in DIRECT_HIDDEN_DEDUCTION_CODES]
+    day = date.today().isoformat()
+    deduction_types = [row for row in deduction_types if scoring_config.category(db,'deduction','all',row.code,day)['active'] and
+                       (scoring_config.category(db,'deduction','all',row.code,day)['direct'] if direct_only_deduction_user(user) else scoring_config.category(db,'deduction','all',row.code,day)['manager'])]
     role_query = db.query(Role).filter(Role.active.is_(True))
     if "HR_MANAGE" in user.permissions and "SYSTEM_ADMIN" not in user.permissions:
         role_query = role_query.filter(Role.code.in_(CIRCLE_HR_MANAGED_ROLE_CODES))
@@ -74,27 +79,18 @@ def options(db: Session = Depends(get_db), user: V2User = Depends(current_user))
         "attractions": circle_payload,
         "employee_circles": circle_payload,
         "recognition_venues": [{"id": row.id, "name": row.name} for row in venues],
-        "recognition_types": [
-            {
-                "id": row.id,
-                "code": row.code,
-                "name": row.name,
-                "fixed_score": float(SPECIAL_RECOGNITION_TYPES[row.code]["score"]) if row.code in SPECIAL_RECOGNITION_TYPES else None,
-                "monthly_limit": SPECIAL_RECOGNITION_TYPES[row.code]["monthly_limit"] if row.code in SPECIAL_RECOGNITION_TYPES else None,
-                "dedicated_entry": row.code in DEDICATED_RECOGNITION_TYPE_CODES,
-            }
-            for row in recognition_types
-        ],
+        "recognition_types": scoring_config.recognition_types(db, 'supervisor' if user.base_role.code=='SUPERVISOR' else 'frontline', day),
         "deduction_types": [
             {
                 "id": row.id,
                 "code": row.code,
-                "name": row.name,
-                "repeat_check": row.code in REPEAT_CONTROLLED_DEDUCTION_CODES,
+                "name": scoring_config.category(db,'deduction','all',row.code,day).get('name',row.name),
+                "repeat_check": scoring_config.repeats(db,row,day),
+                "fixed_points": scoring_config.category(db,'deduction','all',row.code,day)['score'] if scoring_config.category(db,'deduction','all',row.code,day)['mode']=='fixed' else None,
             }
             for row in deduction_types
         ],
-        "deduction_levels": [{"id": row.id, "code": row.code, "name": row.name, "points": float(row.points)} for row in db.query(DeductionLevel).filter(DeductionLevel.active.is_(True)).order_by(DeductionLevel.points).all()],
+        "deduction_levels": [{"id": row.id, "code": row.code, "name": row.name, "points": float(scoring_config.level_score(db,row,day))} for row in db.query(DeductionLevel).filter(DeductionLevel.active.is_(True)).order_by(DeductionLevel.points).all()],
     }
 
 

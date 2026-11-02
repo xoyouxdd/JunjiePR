@@ -27,6 +27,39 @@ def read(rotation, day=FUTURE, at=None):
         return D.day_payload(db, rotation.attraction_id, day, at)
 
 
+def test_five_post_spares_use_existing_rename_flow_without_changing_other_slots(rotation):
+    with rotation.factory() as db, S.transaction(db):
+        cfg = S.load_config(db, rotation.attraction_id)
+        cfg.lines_json = S._dumps(S.E.DEFAULT_LINES)
+    prepare(rotation)
+    before = read(rotation)
+    assert all(len(line['posts']) == 5 for line in before['draft']['lines'])
+    plan = deepcopy(before['draft']['plan'])
+    original = deepcopy(before['draft']['lines'])
+    identities = None
+    for key, name in [('D2#3', '备用改名甲'), ('D2#4', '备用改名乙'),
+                      ('E#2', '备用改名丙'), ('E#3', '备用改名丁'), ('E#4', '备用改名戊')]:
+        edit(rotation, action='draft_rename_post', post=key, expected_name='备用', name=name)
+        current_keys = [post['key'] for line in read(rotation)['draft']['lines'] for post in line['posts']]
+        if identities is None:
+            identities = current_keys  # Existing rename flow initializes workflow identities once.
+            assert len(set(identities)) == 45
+        assert current_keys == identities
+        line_id, index = key.split('#')
+        next(line for line in original if line['id'] == line_id)['posts'][int(index)]['name'] = name
+    after = read(rotation)
+    actual = deepcopy(after['draft']['lines'])
+    for lines in (actual, original):
+        for line in lines:
+            for post in line['posts']:
+                post.pop('key', None)
+                post.pop('hold101Role', None)
+    assert actual == original
+    assert after['draft']['plan'] == plan
+    assert next(line for line in after['draft']['lines'] if line['id'] == 'D2')['standby']
+    assert next(line for line in after['draft']['lines'] if line['id'] == 'E')['standby']
+
+
 def edit(rotation, **body):
     data = read(rotation)
     with rotation.factory() as db:

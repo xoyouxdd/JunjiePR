@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.v2_models import RecognitionRecord
 from datetime import date
 from decimal import Decimal
+import json
 
 
 SPECIAL_RECOGNITION_TYPES = {
@@ -31,6 +32,8 @@ MONTHLY_CATEGORY_CAP_LIMIT = Decimal("5.00")
 
 def effective_recognition_credit(row: RecognitionRecord) -> Decimal:
     """Legacy records before the 2026-09-01 cap retain their raw score."""
+    if getattr(row, 'scoring_policy_json', None) and json.loads(row.scoring_policy_json).get('configured'):
+        return Decimal(row.credited_fraction or 0)
     if row.recognition_date and date.fromisoformat(row.recognition_date) < MONTHLY_CATEGORY_CAP_EFFECTIVE_DATE:
         return Decimal(row.fraction or 0)
     return Decimal(row.credited_fraction or 0)

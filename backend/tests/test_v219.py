@@ -1243,7 +1243,8 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     assert "function recognizerGroups(rows)" in script
     assert "recognitionSubmissionData(e.target,selfMode)" in script
     assert "data-hr-group-select" in script
-    assert "const canEdit=state.me.role_code==='SYSTEM_ADMIN'" in script
+    assert "canEdit=initial.can_edit" in script
+    assert "/api/hr/scoring-config" in script
     assert "label:'热力追踪主管'" in script
     assert "label:'矮人迷宫主管'" in script
     assert "label:'小熊罐子主管'" in script

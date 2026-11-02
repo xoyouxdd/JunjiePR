@@ -39,7 +39,7 @@ def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
     score = score or {"recognition_score": 0, "attendance_score": 0, "deduction_score": 0, "total_score": 0}
     categories = {
         name: float(total or 0)
-        for name, total in db.query(RecognitionRecord.recognition_type_name, text("SUM(CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END)"))
+        for name, total in db.query(RecognitionRecord.recognition_type_name, text("SUM(CASE WHEN recognition_date < '2026-09-01' AND COALESCE(monthly_cap_rule_code,'') != 'configured_category' THEN fraction ELSE credited_fraction END)"))
         .filter(
             RecognitionRecord.employee_id == user.id,
             RecognitionRecord.recognition_month == month,

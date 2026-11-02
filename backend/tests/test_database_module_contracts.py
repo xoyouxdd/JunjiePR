@@ -53,6 +53,9 @@ EXPECTED_STEPS = (
     ("2026-10-employee-employment-history", "ensure_employee_employment_history"),
     ("2026-10-employee-type-internship", "ensure_employee_type_columns"),
     ("2026-10-learning-library-categories", "ensure_learning_categories"),
+    ("2026-11-about-system-credit-columns", "ensure_about_system_credit_columns"),
+    ("2026-11-rotation-five-posts", "ensure_rotation_five_posts"),
+    ("2026-11-scoring-policy-snapshots", "ensure_scoring_policy_snapshots"),
 )
 
 

@@ -1,3 +1,4 @@
+import {renderScoreSettings} from './score-settings.js';
 // Groups, cross-circle transfers, month close, score rules and audit logs.
 import { api, json } from './api.js';
 import { beginViewRequest, render } from './context.js';
@@ -96,7 +97,7 @@ async function renderHrGroups(){
   app.querySelectorAll('[data-close-group]').forEach(button=>button.onclick=async()=>{const group=groups.find(row=>String(row.id)===button.dataset.closeGroup);const reason=await promptModal(`关闭 ${group.name}`,'该组没有组员。关闭后不再出现在小组选项中，历史记录保留并标注“已关闭”；空出的字母会在下次新建小组时优先使用。请输入关闭原因（必填）：','关闭原因');if(!reason)return;try{await api('/api/hr/groups/'+group.id+'/close',json('POST',{reason,revision:group.revision}));toast('小组已关闭');request.refresh(renderHrGroups)}catch(error){toast(error.message,true)}});
 }
 
-async function renderHrScores(){const request=beginViewRequest();const rows=await api('/api/hr/score-rules');if(!request.isCurrent())return;const canEdit=state.me.role_code==='SYSTEM_ADMIN',editable=canEdit?rows:[],readOnly=canEdit?[]:rows,scopeHint=canEdit?'<div class="notice">这是全系统统一分值规则，修改后会影响所有景点圈后续新登记的认可；历史签卡不追溯改分。</div>':'<div class="notice">当前显示全系统统一分值规则，仅最高管理员可调整；本页面为只读。</div>';if(!request.write(`<section class="panel"><h2>认可人角色默认分值</h2><p>分值按角色和生效日期保留历史，已登记签卡不追溯改分。</p>${scopeHint}<div class="table-wrap sticky-col"><table><thead><tr><th>角色</th><th>当前分值</th><th>新分值</th><th>生效日期</th><th>操作</th></tr></thead><tbody>${editable.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td><input name="score" type="number" min="0" step="0.01" value="${r.score}"></td><td><input name="date" type="date" value="${today()}"></td><td><button class="primary" data-score-role="${r.role_code}">生效</button></td></tr>`).join('')}${readOnly.map(r=>`<tr><td>${esc(r.role_name)}</td><td>${fmt(r.score)}</td><td colspan="3"><span class="not-applicable">全局规则只读</span></td></tr>`).join('')}</tbody></table></div></section>`))return;app.querySelectorAll('[data-score-role]').forEach(b=>b.onclick=async()=>{const tr=b.closest('tr');try{await api('/api/hr/score-rules',json('POST',{role_code:b.dataset.scoreRole,score:tr.querySelector('[name=score]').value,effective_date:tr.querySelector('[name=date]').value}));toast('新分值规则已生效');request.refresh(render)}catch(x){toast(x.message,true)}})}
+async function renderHrScores(){return renderScoreSettings();}
 
 async function renderLogs(){
   const request=beginViewRequest();const rows=await api('/api/admin/logs');if(!request.isCurrent())return;

@@ -275,7 +275,9 @@ def seed_reference_data(db) -> None:
         ("ATT_MISSING_CLOCK", "考勤-未打卡"),
         ("ATT_REMOTE_CLOCK", "考勤-异地打卡"),
     )
-    desired_deduction_codes = {code for code, _ in desired_deduction_types}
+    from app.v2_models import ScoringPolicy
+    configured_codes = {row.code for row in db.query(ScoringPolicy).filter_by(kind='deduction')}
+    desired_deduction_codes = {code for code, _ in desired_deduction_types} | configured_codes
     db.query(DeductionType).filter(DeductionType.code.notin_(desired_deduction_codes)).update(
         {DeductionType.active: False}, synchronize_session=False
     )

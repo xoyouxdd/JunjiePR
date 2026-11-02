@@ -16,7 +16,7 @@ def create_score_view(db) -> None:
                 UNION SELECT employee_id, deduction_month FROM deduction_records
             ), recognition_totals AS (
                 SELECT employee_id, recognition_month AS score_month,
-                       ROUND(SUM(CASE WHEN status = 'confirmed' THEN CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END ELSE 0 END), 2) AS recognition_score
+                       ROUND(SUM(CASE WHEN status = 'confirmed' THEN CASE WHEN recognition_date < '2026-09-01' AND COALESCE(monthly_cap_rule_code,'') != 'configured_category' THEN fraction ELSE credited_fraction END ELSE 0 END), 2) AS recognition_score
                 FROM recognition_records GROUP BY employee_id, recognition_month
             ), attendance_totals AS (
                 SELECT employee_id, attendance_month AS score_month,

@@ -340,6 +340,9 @@ button.rt-chip { cursor: pointer; }
 .rotation-screen .rt-ready > .rt-departure-preview[open] { width:min(340px,calc(100% - 16px)); max-height:calc(100dvh - 110px); overflow:auto; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:0 8px 24px #0f172a26; }
 
 /* Personal-route workflow: compact shared board and mobile task comparison. */
+/* Workflow content grows beyond one screen; retain the legacy screen layout elsewhere. */
+.rotation-screen:has(.rt-workflow-board){height:auto;min-height:100vh;min-height:100dvh;overflow-y:auto}
+.rotation-screen .rt-workflow-board .rt-board{height:auto}
 .rt-workflow-board{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
 .rt-workflow-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px}
 .rt-workflow-heading h1{margin:0;font-size:21px}
@@ -431,3 +434,7 @@ button.rt-chip { cursor: pointer; }
 .rt-confirm-result{background:var(--info-bg);border:1px solid var(--line);border-radius:8px;padding:12px;margin:16px 0}.rt-confirm-result>strong{display:block;color:var(--primary)}.rt-confirm-page .rt-confirm-result p{font-size:13px;margin:5px 0 0}
 .rt-confirm-page>button.primary{width:100%;min-height:46px;border-radius:9px;font-size:15px}.rt-confirm-page .rt-confirm-receipt{font-size:12px;color:var(--text-secondary);margin:10px 0 0}
 @media(max-width:360px){.rt-confirm-page{padding:16px!important}.rt-confirm-page .rt-confirm-brand{margin:-16px -16px 16px;padding:14px 16px}.rt-confirm-page .rt-task-slot{padding:7px 5px}}
+
+/* Keep status updates one line under the page CSP (no inline styles). */
+.rt-daily-selection{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rotation-page .rt-main{overflow-anchor:none}

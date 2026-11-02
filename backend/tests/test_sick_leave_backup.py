@@ -27,6 +27,19 @@ from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, Employee, EmployeeLOAPeriod, EmployeeRoleAssignment, MonthClosure, Role, SickLeaveRecord, StoredFile, UserAccount  # noqa: E402
 
 
+def _preview_metadata(month):
+    with SessionLocal() as db:
+        from types import SimpleNamespace
+        user=SimpleNamespace(role=SimpleNamespace(code='GSM'))
+        return dict(scope=None,month_revision=sick_leave_import._month_revision(sick_leave_import._active_month_rows(db,user,month)))
+
+
+def _preview_identity(employee_id):
+    with SessionLocal() as db:
+        employee=db.get(Employee,employee_id)
+        return dict(employee_no=employee.employee_no,name=employee.name,system_employee_no=employee.employee_no,system_name=employee.name,system_attraction_id=employee.attraction_id)
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as value:
@@ -212,7 +225,7 @@ def test_full_month_file_covers_backup_even_when_employee_is_absent_from_file(cl
         ids.append(response.json()["record"]["id"])
     user = client.get("/api/me").json()["id"]
     token = "backup-covered-by-file"
-    sick_leave_import._store_preview(token, {"created_at": datetime.now(), "filename": "month.xls", "content": b"", "month": month, "matched": [{"employee_id": target, "date": month + "-03", "days": Decimal("1"), "leave_type": "全薪病假"}], "unmatched": [], "loa_protected": [], "errors": [], "user_id": user})
+    sick_leave_import._store_preview(token, {"created_at": datetime.now(), "filename": "month.xls", "content": b"", "month": month, **_preview_metadata(month), "matched": [{"employee_id": target, **_preview_identity(target), "date": month + "-03", "days": Decimal("1"), "leave_type": "全薪病假"}], "unmatched": [], "loa_protected": [], "errors": [], "user_id": user})
     response = client.post("/api/sick-leave-imports/commit", json={"token": token, "month": month})
     assert response.status_code == 200, response.text
     assert response.json()["replaced_record_count"] == 2 and response.json()["absent_employee_count"] == 1

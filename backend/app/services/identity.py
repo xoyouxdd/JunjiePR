@@ -114,7 +114,7 @@ def acting_period_notes(db: Session, employee_ids: list[int] | set[int], start: 
     for duty in duty_rows:
         period_start, period_end = max(duty.starts_on, start), min(duty.ends_on or end, end)
         credited = db.query(func.sum(case(
-            (RecognitionRecord.recognition_date < "2026-09-01", RecognitionRecord.fraction),
+            ((RecognitionRecord.recognition_date < "2026-09-01") & (func.coalesce(RecognitionRecord.monthly_cap_rule_code, "") != "configured_category"), RecognitionRecord.fraction),
             else_=RecognitionRecord.credited_fraction,
         ))).filter(
             RecognitionRecord.employee_id == duty.employee_id,
@@ -419,6 +419,10 @@ def recognizer_options(db: Session, attraction_id: int, on_date: str | date | No
 
 
 def recognition_score_for_role(db: Session, role_id: int, on_date: str, recipient_base_code: str | None = None) -> Decimal:
+    from app.services.scoring_policies import role_score
+    configured = role_score(db, db.get(Role, role_id).code, on_date, recipient_base_code)
+    if configured is not None:
+        return configured
     rule = (
         db.query(RecognitionScoreRule)
         .filter(

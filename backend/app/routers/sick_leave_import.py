@@ -1,12 +1,15 @@
 """Monthly sick-leave import from the HR transaction workbook."""
 from __future__ import annotations
-from app.employee_numbers import employee_number
+from app.employee_numbers import employee_number, employee_number_aliases
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 import secrets
+import hashlib
+import json
 import re
+import unicodedata
 from threading import Lock
 
 import xlrd
@@ -69,6 +72,36 @@ def _get_preview(token: str, user_id: int) -> dict | None:
         _prune_previews(datetime.now())
         preview = _PREVIEWS.get(token)
         return preview if preview and preview["user_id"] == user_id else None
+
+
+def _claim_preview(token, user_id):
+    with _PREVIEWS_LOCK:
+        _prune_previews(datetime.now())
+        preview = _PREVIEWS.get(token)
+        if not preview or preview['user_id'] != user_id:
+            raise HTTPException(400, _PREVIEW_EXPIRED_MESSAGE)
+        if preview.get('committing'):
+            raise HTTPException(409, '该预检正在提交，请勿重复覆盖')
+        preview['committing'] = True
+        return preview
+
+
+def _release_preview(token, preview):
+    with _PREVIEWS_LOCK:
+        if _PREVIEWS.get(token) is preview:
+            preview.pop('committing', None)
+
+
+def _month_revision(rows):
+    values = [(r.id, r.employee_id, r.leave_start_date, r.leave_end_date, str(r.leave_days),
+               str(r.charged_days), r.leave_type, r.import_source, r.is_violation)
+              for r in sorted(rows, key=lambda r:r.id)]
+    return hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
+
+
+def _preview_scope(db, user):
+    scope = scoped_hr_attraction_ids(db, user)
+    return sorted(scope) if scope is not None else None
 
 
 def _drop_preview(token: str) -> None:
@@ -178,7 +211,7 @@ def _hours_value(value) -> Decimal:
 
 
 def _chinese_name(value: str) -> str:
-    return value.split(",")[-1].strip().replace("，", "").strip()
+    return value.replace("，", ",").split(",")[-1].strip()
 
 
 def _source_id(value) -> str:
@@ -202,9 +235,35 @@ def _source_id(value) -> str:
 
 def _system_number(source_id: str) -> str:
     value = str(source_id).strip()
-    if len(value) != _SOURCE_ID_LENGTH or not value.isdigit():
-        raise ValueError(f"源文件 ID 必须为 {_SOURCE_ID_LENGTH} 位数字：{value or '空'}")
-    return value[1:]
+    if not re.fullmatch(r'(?:[0-9]{7}|0[0-9]{7})', value):
+        raise ValueError('源文件 ID 须为7位员工号或前导0的 8 位数字')
+    return employee_number(value)
+
+
+def _matching_employee(db, number):
+    rows = db.query(Employee).filter(Employee.employee_no.in_(employee_number_aliases(number))).limit(2).all()
+    if len(rows) > 1:
+        raise HTTPException(409, '员工号对应多个档案，请先处理重复工号')
+    return rows[0] if rows else None
+
+
+def _name_key(value):
+    value = unicodedata.normalize('NFKC', str(value or '')).casefold()
+    value = re.sub(r'[^\w\s\u3400-\u9fff]', ' ', value).replace('_', ' ')
+    value = re.sub(r'\s+', ' ', value).strip()
+    value = re.sub(r'(?<=[\u3400-\u9fff])\s+(?=[\w])|(?<=[a-z])\s+(?=[\u3400-\u9fff])', '', value)
+    return value
+
+
+def _import_name_matches(system_name, file_name):
+    system, name = _name_key(system_name), _name_key(file_name)
+    # Single characters/initials are not enough to prove an identity.
+    if not (len(re.findall(r'[\u3400-\u9fff]', name)) >= 2 or re.search(r'[a-z]{2,}', name)):
+        return False
+    # Match complete English name parts, so Ann does not match Joanne.
+    left = r'(?<![a-z])' if name and name[0].isascii() and name[0].isalpha() else ''
+    right = r'(?![a-z])' if name and name[-1].isascii() and name[-1].isalpha() else ''
+    return bool(name and re.search(left + re.escape(name) + right, system))
 
 
 class _SummaryTotals(dict):
@@ -242,6 +301,7 @@ def _read_workbook(content: bytes) -> tuple[list[dict], dict[tuple[str, str], De
             continue
         records.append({
             "row": row_index + 1, "sheet_name": sheet.name, "source_id": source_id, "employee_no": employee_no,
+            "file_employee_no": str(int(row[t_id])) if isinstance(row[t_id], float) else str(row[t_id]).strip(),
             "source_name": source_name, "name": _chinese_name(source_name), "date": leave_date,
             "leave_type": leave_type, "hours": hours, "days": hours / Decimal("8"),
         })
@@ -336,19 +396,29 @@ async def preview_sick_leave_import(
         )
     unmatched, matched, loa_protected = [], [], []
     for row in records:
-        employee = db.query(Employee).filter(Employee.employee_no == row["employee_no"]).first()
-        reason = ""
-        if not employee:
-            reason = "系统中不存在该员工号"
-        elif employee.name != row["name"]:
-            reason = f"姓名不匹配（系统：{employee.name}）"
-        elif not employee.is_active:
-            reason = "员工当前不在职"
-        else:
-            try:
-                ensure_scoped_hr_employee(db, user, employee)
-            except HTTPException:
-                reason = "不在当前账号可导入的景点圈范围"
+        reason = ''
+        try:
+            employee = _matching_employee(db, row['employee_no'])
+        except HTTPException as exc:
+            employee = None
+            reason = str(exc.detail)
+            errors.append(f"工作表“{row['sheet_name']}”第 {row['row']} 行：{reason}")
+        if not reason:
+            if not employee:
+                reason = '系统中不存在该员工号'
+            elif not employee.is_active:
+                reason = '员工当前不在职'
+            else:
+                try:
+                    ensure_scoped_hr_employee(db, user, employee)
+                except HTTPException:
+                    reason = '不在当前账号可导入的景点圈范围'
+                if not reason:
+                    row.update(system_employee_no=employee.employee_no, system_name=employee.name, system_attraction_id=employee.attraction_id)
+                    if not _import_name_matches(employee.name, row['name']):
+                        reason = f'姓名不匹配（系统：{employee.name}）'
+                    else:
+                        row['match_method'] = '工号匹配、姓名一致' if _name_key(employee.name) == _name_key(row['name']) else '工号匹配、姓名包含匹配'
         if reason:
             unmatched.append({**row, "reason": reason})
         else:
@@ -366,12 +436,12 @@ async def preview_sick_leave_import(
     old_rows = _active_month_rows(db, user, month)
     file_employee_ids = {row["employee_id"] for row in matched + loa_protected}
     removed_employee_ids = {row.employee_id for row in old_rows} - file_employee_ids
-    _store_preview(token, {"created_at": datetime.now(), "filename": workbook.filename, "content": content, "month": month, "matched": matched, "unmatched": unmatched, "loa_protected": loa_protected, "errors": errors, "user_id": user.id})
+    _store_preview(token, {"created_at": datetime.now(), "filename": workbook.filename, "content": content, "month": month, "matched": matched, "unmatched": unmatched, "loa_protected": loa_protected, "errors": errors, "user_id": user.id, "scope": _preview_scope(db,user), "month_revision": _month_revision(old_rows)})
     return {
         "token": token, "month": month, "blocking_errors": errors,
         "matched_employee_count": len({row["employee_id"] for row in matched}), "matched_record_count": len(matched),
         "replaced_record_count": len(old_rows), "absent_employee_count": len(removed_employee_ids),
-        "unmatched": unmatched, "skipped_unmatched_count": len(unmatched),
+        "matched": matched, "unmatched": unmatched, "skipped_unmatched_count": len(unmatched),
         "loa_protected": loa_protected, "can_commit": not errors,
     }
 
@@ -542,18 +612,43 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
     month = preview["month"]
     if payload.get("month") != month:
         raise HTTPException(400, "提交月份与预检月份不一致，请重新预检")
-    employee_ids = sorted({row["employee_id"] for row in preview["matched"]})
-    employees = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(employee_ids)).all()}
-    if len(employees) != len(employee_ids) or any(not employee.is_active for employee in employees.values()):
-        raise HTTPException(409, "员工资料已变更，请重新预检文件")
+    employee_ids = sorted({row['employee_id'] for row in preview['matched']})
+    validation_rows = preview['matched'] + preview['loa_protected']
+    validation_ids = sorted({row['employee_id'] for row in validation_rows})
+    claimed = _claim_preview(token, user.id)
+    if claimed is not preview:
+        _release_preview(token, claimed)
+        raise HTTPException(409, _PREVIEW_EXPIRED_MESSAGE)
     try:
+        # Serialize identity revalidation with other writes before covering records.
+        db.execute(update(Employee).where(Employee.id.in_(validation_ids)).values(updated_at=Employee.updated_at))
+        db.expire_all()
+        if _get_preview(token,user.id) is not preview:
+            raise HTTPException(400, _PREVIEW_EXPIRED_MESSAGE)
+        if 'scope' not in preview or preview['scope'] != _preview_scope(db,user):
+            raise HTTPException(409, '账号可导入范围已变化，请重新预检')
+        old_rows = _active_month_rows(db,user,month)
+        if preview.get('month_revision') != _month_revision(old_rows):
+            raise HTTPException(409, '该月份缺勤已变化，请重新预检，不能用旧预检覆盖')
+        validation_employees = {e.id:e for e in db.query(Employee).filter(Employee.id.in_(validation_ids)).all()}
+        employees = {eid:validation_employees[eid] for eid in employee_ids if eid in validation_employees}
+        if len(validation_employees) != len(validation_ids) or any(not e.is_active for e in validation_employees.values()):
+            raise HTTPException(409, '员工资料已变更，请重新预检文件')
+        for item in validation_rows:
+            employee = _matching_employee(db, item.get('employee_no', ''))
+            if not employee or employee.id != item['employee_id'] or not _import_name_matches(employee.name, item.get('name', '')):
+                raise HTTPException(409, '员工工号或姓名已变化，请重新预检文件')
+            ensure_scoped_hr_employee(db, user, employee)
+            identity = {'system_employee_no':employee.employee_no,'system_name':employee.name,'system_attraction_id':employee.attraction_id}
+            if any(key not in item or item[key] != value for key,value in identity.items()):
+                raise HTTPException(409, '预检中的员工资料已变化，请重新预检')
         replaced_record_count = 0
         replaced_manual_count = 0
         scope = scoped_hr_attraction_ids(db, user)
         for attraction_id in scope if scope is not None else (None,):
             ensure_month_open(db, month, attraction_id, "覆盖月度病假")
         loa_periods = db.query(EmployeeLOAPeriod).filter(
-            EmployeeLOAPeriod.employee_id.in_(employee_ids),
+            EmployeeLOAPeriod.employee_id.in_(validation_ids),
             EmployeeLOAPeriod.status != "cancelled",
         ).all()
         loa_by_employee: dict[int, list[EmployeeLOAPeriod]] = {}
@@ -566,7 +661,10 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
                 for period in loa_by_employee.get(item["employee_id"], ())
             ):
                 raise HTTPException(409, "预检后LOA记录已变化，请重新上传文件预检")
-        old_rows = _active_month_rows(db, user, month)
+        for item in preview['loa_protected']:
+            if not any(p.starts_on <= item['date'] and (p.ends_on is None or p.ends_on >= item['date'])
+                       for p in loa_by_employee.get(item['employee_id'], ())):
+                raise HTTPException(409, '预检后的LOA保护已变化，请重新预检')
         affected_ids = set(employees) | {row.employee_id for row in old_rows}
         affected_employees = {employee.id: employee for employee in db.query(Employee).filter(Employee.id.in_(affected_ids)).all()} if affected_ids else {}
         for employee in affected_employees.values():
@@ -598,11 +696,13 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
             recalculate_attendance(db, employee, month)
         write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "replaced_records": replaced_record_count, "replaced_manual_records": replaced_manual_count, "absent_employees": absent_employee_count, "unmatched": len(preview["unmatched"]), "unmatched_reviewed_by": user.name if preview["unmatched"] else None, "unmatched_reasons": [{"row": row["row"], "employee_no": row["employee_no"], "reason": row["reason"]} for row in preview["unmatched"]], "loa_protected": len(preview["loa_protected"])})
         db.commit()
+        _drop_preview(token)
     except Exception:
         db.rollback()
         raise
+    finally:
+        _release_preview(token, preview)
     invalidate_data_caches()
-    _drop_preview(token)
     return {"ok": True, "month": month, "covered_employee_count": len(employees), "covered_record_count": len(preview["matched"]), "replaced_record_count": replaced_record_count, "replaced_manual_count": replaced_manual_count, "absent_employee_count": absent_employee_count, "unmatched_count": len(preview["unmatched"]), "loa_protected_count": len(preview["loa_protected"])}
 
 
@@ -611,10 +711,13 @@ def download_unmatched_sick_leave_file(token: str, db: Session = Depends(get_db)
     preview = _get_preview(token, user.id)
     if not preview:
         raise HTTPException(404, _PREVIEW_EXPIRED_MESSAGE)
+    if 'scope' not in preview or preview['scope'] != _preview_scope(db,user):
+        raise HTTPException(409, '账号可导入范围已变化，请重新预检')
     try:
         source = xlrd.open_workbook(file_contents=preview["content"])
     except (KeyError, xlrd.biffh.XLRDError) as exc:
         raise HTTPException(404, "原始预检文件已不可用，请重新上传") from exc
+    from app.excel_export_utils import excel_safe_value
     workbook = Workbook()
     workbook.remove(workbook.active)
     red = PatternFill("solid", fgColor="FFC7CE")
@@ -631,7 +734,7 @@ def download_unmatched_sick_leave_file(token: str, db: Session = Depends(get_db)
             summary_id_column = _header_index(source_sheet.row_values(summary_header_row), "ID")
         for row_index in range(source_sheet.nrows):
             values = source_sheet.row_values(row_index)
-            sheet.append(values)
+            sheet.append([excel_safe_value(v) for v in values])
             summary_matches_unimported = False
             if summary_marker is not None and summary_id_column is not None and row_index > summary_marker:
                 try:
@@ -647,7 +750,7 @@ def download_unmatched_sick_leave_file(token: str, db: Session = Depends(get_db)
     sheet = workbook.create_sheet("未覆盖说明")
     sheet.append(["文件行号", "源文件姓名", "源文件ID", "转换后系统员工号", "日期", "病假类型", "时数", "换算天数", "未覆盖原因"])
     for item in not_imported:
-        sheet.append([item["row"], item["source_name"], item["source_id"], item["employee_no"], item["date"], item["leave_type"], float(item["hours"]), float(item["days"]), item["reason"]])
+        sheet.append([excel_safe_value(v) for v in [item["row"], item["source_name"], item["source_id"], item["employee_no"], item["date"], item["leave_type"], float(item["hours"]), float(item["days"]), item["reason"]]])
         for cell in sheet[sheet.max_row]:
             cell.fill = red
     for cell in sheet[1]:

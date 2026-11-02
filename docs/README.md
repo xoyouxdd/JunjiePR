@@ -4,6 +4,11 @@
 
 | 文件 | 内容 |
 |---|---|
+| [scoring-rule-center.md](scoring-rule-center.md) | 分类计分规则、生效版本与记录快照 |
+| [sick-import-identity-matching.md](sick-import-identity-matching.md) | 缺勤导入身份核验与事务保护 |
+| [monthly-memory-card.md](monthly-memory-card.md) | 本人月度回忆与本地图片导出 |
+| [rotation-daily-refresh.md](rotation-daily-refresh.md) | 每日班表交换刷新与滚动保护 |
+| [about-system-credits.md](about-system-credits.md) | 关于系统名单编辑与账号权限 |
 | [temporary-recognizers.md](temporary-recognizers.md) | 临时主管认可资格、离散日期与授权规则 |
 | [hr-pr-rankings.md](hr-pr-rankings.md) | 景点圈HR的PR排名权限与导出 |
 | [rotation-workflow-20261028.md](rotation-workflow-20261028.md) | 轮岗独立任务、按线恢复、101及大屏权限 |

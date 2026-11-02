@@ -301,16 +301,40 @@ function initialDraftView(data) {
 }
 
 const daily={month:'',date:'',calendar:null,data:null,time:'',loading:false,error:'',request:0,busy:false,source:null,mode:'people'};
-async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,prepare=true){
-  const liveVersion=RT.data.version;const generation=++daily.request;daily.date=date;daily.month=date.slice(0,7);daily.time=time;daily.source=null;daily.loading=true;daily.error='';RT.render(false,true);
+function dailyPendingUI(){
+  if(tab!=='draft')return;
+  const position={x:window.scrollX,y:window.scrollY,parents:[]};
+  for(let el=$app.parentElement;el;el=el.parentElement)position.parents.push([el,el.scrollLeft,el.scrollTop]);
+  const pending=daily.busy||daily.loading||!!daily.error;
+  $app.setAttribute('aria-busy',String(daily.busy||daily.loading));
+  const status=$app.querySelector('[data-daily-status]');
+  const selection=$app.querySelector('[data-daily-selection]');
+  if(status){status.hidden=!!selection||!daily.busy&&!daily.loading;status.textContent=daily.busy?'正在保存调整…':daily.loading?'正在读取班表…':'';}
+  if(selection&&!daily.source){selection.textContent=daily.error?daily.error+'，请刷新班表后重试。':daily.busy?'正在保存调整…':daily.loading?'正在读取班表…':'拖拽到目标位置交换';selection.title=selection.textContent;selection.setAttribute('role',daily.error?'alert':'status');}
+  const error=$app.querySelector('[data-daily-error]');
+  if(error){error.hidden=!!selection||!daily.error;error.textContent=daily.error?daily.error+'，请刷新班表后重试。':'';}
+  for(const [el,disabled,draggable] of daily.pendingControls||[]){el.disabled=disabled;el.draggable=draggable;}
+  daily.pendingControls=[];
+  if(pending)$app.querySelectorAll('[data-daily-person],[data-daily-post],[data-daily-rename],[data-draft],[data-list],[data-role],[data-d],#draftClose').forEach(el=>{
+    daily.pendingControls.push([el,el.disabled,el.draggable]);el.disabled=true;el.draggable=false;
+  });
+  $app.getBoundingClientRect(); // Flush layout before restoring browser scroll anchoring.
+  for(const [el,x,y] of position.parents){el.scrollLeft=x;el.scrollTop=y;}
+  window.scrollTo({left:position.x,top:position.y,behavior:'instant'});
+}
+async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,prepare=true,{refreshMonth=true}={}){
+  const retained=daily.data?.date===date&&daily.calendar?.month===date.slice(0,7);
+  const liveVersion=RT.data.version;const generation=++daily.request;daily.date=date;daily.month=date.slice(0,7);daily.time=time;daily.source=null;daily.loading=true;daily.error='';
+  if(retained)dailyPendingUI();else RT.render(false,true);
   try{
-    const [month,loaded]=await Promise.all([rtApi('/api/rotation/daily?month='+encodeURIComponent(daily.month)),rtApi('/api/rotation/daily/'+date+(time?'?at='+encodeURIComponent(time):''))]);
+    const [month,loaded]=await Promise.all([refreshMonth||!retained?rtApi('/api/rotation/daily?month='+encodeURIComponent(daily.month)):Promise.resolve(daily.calendar),rtApi('/api/rotation/daily/'+date+(time?'?at='+encodeURIComponent(time):''))]);
     if(generation!==daily.request)return;let data=loaded;
     if(prepare&&data.date>data.today&&data.can_generate&&data.revision===0){try{await rtPost('/api/rotation/daily/'+date,{action:'draft_generate',revision:0});}catch(error){const latest=await rtApi('/api/rotation/daily/'+date);if(!latest.revision)throw error;}data=await rtApi('/api/rotation/daily/'+date);}
-    if(generation!==daily.request)return;daily.calendar={...month,days:month.days.map(d=>d.date===date?{...d,status:data.draft?'draft':data.day?.status||d.status}:d)};daily.data=data;daily.liveVersion=liveVersion;
-  }catch(error){if(generation===daily.request){daily.error=error.message;daily.data=null;daily.calendar=null;}}
-  finally{if(generation===daily.request){daily.loading=false;if(tab==='draft'){RT.render(false,true);}}}
+    if(generation!==daily.request)return;daily.calendar={...month,days:month.days.map(d=>d.date===date?{...d,status:data.draft?'draft':data.day?.status||null}:d)};daily.data=data;daily.liveVersion=liveVersion;
+  }catch(error){if(generation===daily.request){daily.error=error.message;if(!retained){daily.data=null;daily.calendar=null;}}}
+  finally{if(generation===daily.request){daily.loading=false;if(tab==='draft'&&RT.data){if(retained&&daily.error)dailyPendingUI();else RT.render(false,true);}}}
 }
+
 function dailyBoard(data,editable=false){
   if(!data.day)return '';
   return `<div class="rt-workflow-board">${workflowBoardContent(data.day,0,false,{daily:true,editable,frozen:data.frozen})}</div>`;
@@ -321,11 +345,11 @@ function dailyHistory(data){
 }
 function draftView(){
   const data=daily.data,calendar=daily.calendar;
-  const controls=`<section class="panel rt-daily"><header><h2>每日班表</h2><p class="field-hint">预排未来班表；首班前与今日看板同步，首班开始后固定，只读回顾。</p></header><div class="rt-row"><label>月份<input type="month" data-daily-month value="${esc(daily.month||RT.data.clock.date.slice(0,7))}"></label><label>日期<input type="date" data-daily-date value="${esc(daily.date||RT.data.clock.date)}"></label><button type="button" class="secondary" data-daily-reload>刷新班表</button></div>${calendar?`<div class="rt-daily-calendar" role="group" aria-label="本月每日班表">${['一','二','三','四','五','六','日'].map(d=>`<span class="rt-daily-weekday">${d}</span>`).join('')}${'<span aria-hidden="true"></span>'.repeat((new Date(calendar.month+'-01T12:00:00').getDay()+6)%7)}${calendar.days.map(d=>`<button type="button" class="${d.date===daily.date?'primary':'secondary'}" data-daily-date-button="${d.date}" aria-pressed="${d.date===daily.date}"><strong>${Number(d.date.slice(-2))}</strong><small>${d.status==='draft'?'预排':d.status==='live'?'已启用':d.status==='ended'?'已结束':d.has_roster?'有班表':'无班表'}</small></button>`).join('')}</div>`:''}${daily.loading?'<p role="status">正在读取班表…</p>':''}${daily.error?`<p role="alert" class="rt-warn">${esc(daily.error)}，可刷新重试。</p>`:''}</section>`;
-  if(!data||daily.loading)return controls;
+  const controls=`<section class="panel rt-daily"><header><h2>每日班表</h2><p class="field-hint">预排未来班表；首班前与今日看板同步，首班开始后固定，只读回顾。</p></header><div class="rt-row"><label>月份<input type="month" data-daily-month value="${esc(daily.month||RT.data.clock.date.slice(0,7))}"></label><label>日期<input type="date" data-daily-date value="${esc(daily.date||RT.data.clock.date)}"></label><button type="button" class="secondary" data-daily-reload>刷新班表</button></div>${calendar?`<div class="rt-daily-calendar" role="group" aria-label="本月每日班表">${['一','二','三','四','五','六','日'].map(d=>`<span class="rt-daily-weekday">${d}</span>`).join('')}${'<span aria-hidden="true"></span>'.repeat((new Date(calendar.month+'-01T12:00:00').getDay()+6)%7)}${calendar.days.map(d=>`<button type="button" class="${d.date===daily.date?'primary':'secondary'}" data-daily-date-button="${d.date}" aria-pressed="${d.date===daily.date}"><strong>${Number(d.date.slice(-2))}</strong><small>${d.status==='draft'?'预排':d.status==='live'?'已启用':d.status==='ended'?'已结束':d.has_roster?'有班表':'无班表'}</small></button>`).join('')}</div>`:''}<p role="status" data-daily-status ${daily.loading||daily.busy?'':'hidden'}>${daily.busy?'正在保存调整…':daily.loading?'正在读取班表…':''}</p><p role="alert" class="rt-warn" data-daily-error ${daily.error?'':'hidden'}>${daily.error?esc(daily.error)+'，请刷新班表后重试。':''}</p></section>`;
+  if(!data||data.date!==daily.date)return controls;
   const roster=`<section class="panel"><details><summary>上传班表 · ${data.roster.people.length}人${data.roster.file_name?' · '+esc(data.roster.file_name):''}</summary><div class="rt-scroll"><table class="rt-table"><thead><tr><th>姓名</th><th>工号</th><th>班次原文</th></tr></thead><tbody>${data.roster.people.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.employee_no)}</td><td>${esc(p.cell)}</td></tr>`).join('')}</tbody></table></div></details></section>`;
   if(data.can_edit){
-    return controls+roster+`<section class="panel"><h3>调整当日预排</h3><p class="field-hint">拖拽人员或岗位进行交换，支持跨线；岗位连同预排人员移动，双击岗位名称修改。</p><span role="status" data-daily-selection>拖拽到目标位置交换</span>${data.roster_changed?'<p class="rt-warn">上传班表已更新，当前预排仍为原安排，不会自动启用；请重新生成并核对。</p>':''}</section>`+initialDraftView(data);
+    return controls+roster+`<section class="panel"><h3>调整当日预排</h3><p class="field-hint">拖拽人员或岗位进行交换，支持跨线；岗位连同预排人员移动，双击岗位名称修改。</p><span role="status" data-daily-selection class="rt-daily-selection">拖拽到目标位置交换</span>${data.roster_changed?'<p class="rt-warn">上传班表已更新，当前预排仍为原安排，不会自动启用；请重新生成并核对。</p>':''}</section>`+initialDraftView(data);
   }
   if(data.day||data.times.length||data.legacy_history){
     return controls+roster+dailyHistory(data);
@@ -334,11 +358,23 @@ function draftView(){
   return controls+roster+'<section class="panel rt-empty"><h3>暂无可查看的轮岗</h3><p class="field-hint">没有历史快照时不会根据现在的规则补造过去记录；新日期请先上传班表。</p></section>';
 }
 async function dailySend(body){
-  if(daily.busy||!daily.data)return;daily.busy=true;const date=daily.date,revision=daily.data.revision,planRevision=daily.data.plan_revision,request=daily.request;
-  try{await rtPost('/api/rotation/daily/'+date,{...body,revision,plan_revision:planRevision});toast('每日班表已保存');if(daily.request===request&&daily.date===date)await loadDaily(date,'',body.action!=='draft_discard');await RT.load();}
-  catch(error){toast(error.message,true);if(daily.request===request&&daily.date===date)await loadDaily(date,daily.time,false);}
-  finally{daily.busy=false;daily.source=null;}
+  if(daily.busy||daily.loading||daily.error||!daily.data)return;
+  daily.busy=true;dailyPendingUI();
+  const date=daily.date,revision=daily.data.revision,planRevision=daily.data.plan_revision,request=daily.request;
+  const swapping=['draft_swap_people','draft_swap_posts'].includes(body.action);
+  try{
+    await rtPost('/api/rotation/daily/'+date,{...body,revision,plan_revision:planRevision});
+    toast('每日班表已保存');
+    if(daily.request===request&&daily.date===date)await loadDaily(date,'',body.action!=='draft_discard',{refreshMonth:!swapping});
+    // Swaps do not change the month calendar or require a foreground live-board
+    // reload. Existing SSE/polling continues to synchronize the live board.
+    if(!swapping)await RT.load();
+  }catch(error){
+    toast(error.message,true);
+    if(RT.data&&daily.request===request&&daily.date===date)await loadDaily(date,daily.time,false,{refreshMonth:false});
+  }finally{daily.busy=false;daily.source=null;dailyPendingUI();}
 }
+
 function dailyLabel(key,mode){
   if(key.startsWith('person:'))return daily.data?.draft?.persons[key.slice(7)]?.name||'待安排人员';
   const [line,index]=key.split('#'),draft=daily.data?.draft,post=draft?.lines.find(l=>l.id===line)?.posts[Number(index)];
@@ -346,7 +382,7 @@ function dailyLabel(key,mode){
   return `${line}线 · ${post?.name||key}${mode==='people'?' · '+(draft?.persons[pid]?.name||'空岗'):''}`;
 }
 function dailyChoose(key,mode=daily.mode){
-  if(daily.busy||!daily.data?.can_edit)return;
+  if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
   if(!daily.source||daily.mode!==mode){daily.source=key;daily.mode=mode;$app.querySelectorAll('[data-daily-person],[data-daily-post]').forEach(b=>b.classList.toggle('is-selected',mode==='people'?b.dataset.dailyPerson===key:b.dataset.dailyPost===key));const text=$app.querySelector('[data-daily-selection]');if(text)text.textContent='已选 '+dailyLabel(key,mode)+'，请选择目标';return;}
   const source=daily.source;daily.source=null;$app.querySelectorAll('.is-selected').forEach(b=>b.classList.remove('is-selected'));if(source===key)return;
   const revision=daily.data.revision,date=daily.date;
@@ -356,7 +392,7 @@ function dailyChoose(key,mode=daily.mode){
   });
 }
 function dailyRenamePost(button){
-  if(daily.busy||daily.loading||!daily.data?.can_edit||RT.editingPost)return;
+  if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit||RT.editingPost)return;
   const key=button.dataset.dailyRename,name=button.textContent,date=daily.date,request=daily.request;
   const input=document.createElement('input');input.type='text';input.className='rt-inline-post-name';input.value=name;input.maxLength=40;input.setAttribute('aria-label','岗位名称');
   let finished=false;daily.source=null;RT.editingPost=true;button.replaceWith(input);input.focus();input.select();
@@ -386,10 +422,10 @@ function bindDraft(){
     const mode=b.dataset.dailyPerson?'people':'posts',key=b.dataset.dailyPerson||b.dataset.dailyPost;
     let touchStart=null;
     b.onclick=()=>{};
-    b.onpointerdown=e=>{if(e.pointerType!=='touch'||daily.busy)return;touchStart={x:e.clientX,y:e.clientY};RT.dragging=true;b.setPointerCapture(e.pointerId);};
+    b.onpointerdown=e=>{if(e.pointerType!=='touch'||daily.busy||daily.loading||daily.error)return;touchStart={x:e.clientX,y:e.clientY};RT.dragging=true;b.setPointerCapture(e.pointerId);};
     b.onpointerup=e=>{if(!touchStart)return;const moved=Math.hypot(e.clientX-touchStart.x,e.clientY-touchStart.y)>12;touchStart=null;RT.dragging=false;RT.pressing=false;if(!moved)return;e.preventDefault();const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-daily-slot]');if(target){daily.source=key;daily.mode=mode;dailyChoose(target.dataset.dailySlot,mode);}};
     b.onpointercancel=()=>{touchStart=null;RT.dragging=false;RT.pressing=false;};
-    b.ondragstart=e=>{if(daily.busy){e.preventDefault();return;}RT.dragging=true;e.dataTransfer.setData('text/plain',JSON.stringify({mode,key}));};
+    b.ondragstart=e=>{if(daily.busy||daily.loading||daily.error){e.preventDefault();return;}RT.dragging=true;e.dataTransfer.setData('text/plain',JSON.stringify({mode,key}));};
     b.ondragend=()=>{RT.dragging=false;RT.pressing=false;};
   });
   $app.querySelectorAll('[data-daily-rename]').forEach(button=>{
@@ -645,7 +681,7 @@ RT.render = (fromTicker,forceDaily=false) => {
   if(tab==='draft'&&!forceDaily&&daily.data?.can_edit&&daily.date<=RT.data.clock.date&&!daily.loading&&!daily.busy&&!editing()){
     // Drafts and enabled boards both become read-only at the first shift.
     const boundary=daily.date<RT.data.clock.date||nowMin()>=daily.data.first_start;
-    if(boundary||!daily.source&&!fromTicker&&daily.liveVersion!==RT.data.version){void loadDaily(daily.date,'',false);return;}
+    if(boundary||!daily.source&&!fromTicker&&daily.liveVersion!==RT.data.version){void loadDaily(daily.date,'',false,{refreshMonth:false});return;}
   }
   // 每秒刷新只更新看板；表单页在正在输入或由计时器触发时不重绘
   if (fromTicker && tab !== 'board') return;
@@ -654,17 +690,21 @@ RT.render = (fromTicker,forceDaily=false) => {
   // Live-board SSE must not replace the calendar or a pending daily-plan selection.
   if(tab==='draft'&&!forceDaily&&$app.querySelector('.rt-daily'))return;
   if (editing()&&!(forceDaily&&tab==='draft')) return;
+  const pageScroll=tab==='draft'?{x:window.scrollX,y:window.scrollY,parents:[]}:null;
+  if(pageScroll)for(let el=$app.parentElement;el;el=el.parentElement)pageScroll.parents.push([el,el.scrollLeft,el.scrollTop]);
   if (!fromTicker) renderClockBar();
   const html = tab === 'board' ? boardView() : tab === 'draft' ? draftView() : tab === 'roster' ? rosterView() : tab === 'records' ? recordsView() : settingsView();
   const expanded = tab==='draft'?[...$app.querySelectorAll('details')].map(el=>el.open):[];
   const scroll = [...$app.querySelectorAll('.rt-chips, .rt-scroll')].map(el => el.scrollTop);
   $app.innerHTML = html;
+  if(tab!=='draft')$app.removeAttribute('aria-busy');
   if (tab === 'board') $app.querySelectorAll('tr[data-pid]').forEach(row => {
     row.draggable = personOf(row.dataset.pid)?.state === 'notyet';
   });
   [...$app.querySelectorAll('.rt-chips, .rt-scroll')].forEach((el, i) => { el.scrollTop = scroll[i] || 0; });
   if(formalRotation&&!isManager()&&!personalRotation)$app.querySelectorAll('[data-pid],[data-post],[data-line],[draggable]').forEach(el=>{el.removeAttribute('tabindex');el.draggable=false;if(el.tagName==='BUTTON')el.disabled=true;});
-  if (tab === 'draft'){[...$app.querySelectorAll('details')].forEach((el,i)=>{el.open=expanded[i]||false;});bindDraft();}
+  if (tab === 'draft'){[...$app.querySelectorAll('details')].forEach((el,i)=>{el.open=expanded[i]||false;});bindDraft();dailyPendingUI();}
+  if(pageScroll){for(const [el,x,y] of pageScroll.parents){el.scrollLeft=x;el.scrollTop=y;}window.scrollTo({left:pageScroll.x,top:pageScroll.y,behavior:'instant'});}
   if (tab === 'roster') bindRoster();
   if (tab === 'records') bindRecords();
   if (tab === 'settings') bindSettings();

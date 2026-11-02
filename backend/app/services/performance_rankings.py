@@ -259,7 +259,7 @@ def pr_ranking_payload(
             raise HTTPException(400, "请选择有效的认可类型")
         subtype_name = subtype.name if subtype else "全部加分类别"
         uncapped_ranking = bool(subtype and subtype.code in {"SAFETY", "COURTESY", "EFFICIENCY", "SHOW", "INCLUSION"})
-        rows = db.query(RecognitionRecord.employee_id, func.count(RecognitionRecord.id), text("SUM(CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END)"), func.max(RecognitionRecord.recognition_date), func.sum(RecognitionRecord.fraction)).filter(
+        rows = db.query(RecognitionRecord.employee_id, func.count(RecognitionRecord.id), text("SUM(CASE WHEN recognition_date < '2026-09-01' AND COALESCE(monthly_cap_rule_code,'') != 'configured_category' THEN fraction ELSE credited_fraction END)"), func.max(RecognitionRecord.recognition_date), func.sum(RecognitionRecord.fraction)).filter(
             RecognitionRecord.employee_id.in_(employee_ids) if employee_ids else RecognitionRecord.employee_id == -1,
             RecognitionRecord.status == "confirmed", RecognitionRecord.recognition_date >= start_value, RecognitionRecord.recognition_date <= end_value,
         )
@@ -383,7 +383,7 @@ def pr_ranking_payload(
         if months:
             db.commit()
         recognition_totals = dict(
-            db.query(RecognitionRecord.employee_id, text("SUM(CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END)"))
+            db.query(RecognitionRecord.employee_id, text("SUM(CASE WHEN recognition_date < '2026-09-01' AND COALESCE(monthly_cap_rule_code,'') != 'configured_category' THEN fraction ELSE credited_fraction END)"))
             .filter(
                 RecognitionRecord.employee_id.in_(employee_ids) if employee_ids else RecognitionRecord.employee_id == -1,
                 RecognitionRecord.status == "confirmed",

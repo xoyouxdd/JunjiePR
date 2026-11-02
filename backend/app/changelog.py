@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.02.1", "date": "2026-11-02", "status": "candidate",
+     "items": [{"summary": "计分规则、缺勤核验与月度回忆更新", "detail": "分值设置支持按生效日期管理分类规则并保存记录快照，沿用原配置权限；缺勤导入完善工号姓名核验、预检凭证及覆盖冲突保护。本人首页增加本地生成的月度回忆卡。轮岗完善每日班表交换刷新、滚动与五岗位配置迁移；关于系统支持按原授权账号维护名单。", "audiences": ["all"]}]},
     {"version": "2026.11.01.1", "date": "2026-11-01", "status": "candidate",
      "items": [{"summary": "认可资格、PR排名与外观更新", "detail": "员工管理支持按日期授予CM/TR临时主管认可资格，保留本人身份与原权限；景点圈HR可查询导出本圈限定人群的PR排名。知识库完善主管跨圈阅读及权限校验。个人设置增加本机外观主题与页眉插画，祝福卡融入页眉并完善页面切换清理。", "audiences": ["all"]}]},
     {"version": "2026.10.31.2", "date": "2026-10-31", "status": "candidate",

@@ -140,7 +140,7 @@ def capture_month_ranks(db: Session, closure: MonthClosure) -> int:
     if ids:
         for employee_id, name, value in db.query(
             RecognitionRecord.employee_id, RecognitionRecord.recognition_type_name,
-            text("SUM(CASE WHEN recognition_date < '2026-09-01' THEN fraction ELSE credited_fraction END)"),
+            text("SUM(CASE WHEN recognition_date < '2026-09-01' AND COALESCE(monthly_cap_rule_code,'') != 'configured_category' THEN fraction ELSE credited_fraction END)"),
         ).filter(RecognitionRecord.employee_id.in_(ids),
                  RecognitionRecord.recognition_month == closure.closure_month,
                  RecognitionRecord.status == "confirmed").group_by(

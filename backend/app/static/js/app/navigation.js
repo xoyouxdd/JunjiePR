@@ -1,5 +1,5 @@
 // Role-aware navigation, identity display and action badges. Pages are composed through context.render().
-import { api } from './api.js';
+import { api, json } from './api.js';
 import { setAnnouncementBadge, startAnnouncementNotifications } from './announcement-state.js';
 import { logout } from './auth.js';
 import { render } from './context.js';
@@ -254,15 +254,29 @@ function showAboutSystem(trigger){
   if(document.querySelector('[data-about-dialog]'))return;
   const overlay=document.createElement('div');
   overlay.className='modal-overlay';
-  overlay.innerHTML=`<section class="modal-card about-system" data-about-dialog role="dialog" aria-modal="true" aria-labelledby="aboutSystemTitle"><header class="about-system-heading"><h3 id="aboutSystemTitle">关于系统</h3><button type="button" class="secondary" data-about-close>关闭</button></header><div class="about-system-brand"><img src="${esc(document.querySelector('.app-brand-logo').src)}" alt="" width="62" height="62"><h2>FZ团队工作台</h2><p class="field-hint" data-about-version aria-live="polite">正在读取版本…</p></div><button type="button" class="secondary about-system-updates" data-about-updates><span>更新记录</span><span aria-hidden="true">›</span></button><dl class="about-system-credits"><div><dt>建设与维护</dt><dd>赵君杰</dd></div><div><dt>共同参与</dt><dd>张森</dd></div></dl></section>`;
+  overlay.innerHTML=`<section class="modal-card about-system" data-about-dialog role="dialog" aria-modal="true" aria-labelledby="aboutSystemTitle"><header class="about-system-heading"><h3 id="aboutSystemTitle">关于系统</h3><button type="button" class="about-system-close" data-about-close aria-label="关闭关于系统">×</button></header><div class="about-system-brand"><img src="${esc(document.querySelector('.app-brand-logo').src)}" alt="" width="62" height="62"><h2>FZ团队工作台</h2><p class="field-hint" data-about-version aria-live="polite">正在读取版本…</p></div><button type="button" class="secondary about-system-updates" data-about-updates><span>更新记录</span><span aria-hidden="true">›</span></button><dl class="about-system-credits"><div class="about-system-maintainers"><dt>建设与维护</dt><dd><span data-about-maintainers>正在读取…</span><button type="button" class="link-button about-system-edit" data-about-edit hidden>编辑名单</button></dd></div><div><dt>建议与反馈</dt><dd><span data-about-feedback>正在读取…</span></dd></div></dl><form class="about-system-editor" data-about-form hidden><label for="aboutMaintainers">建设与维护</label><textarea id="aboutMaintainers" name="maintainers" rows="2" maxlength="200" required placeholder="多个姓名可分行填写"></textarea><label for="aboutFeedback">建议与反馈</label><textarea id="aboutFeedback" name="feedback" rows="2" maxlength="200" placeholder="填写提供建议与反馈的人员姓名"></textarea><p class="field-hint">每项最多200字，可分行填写；建议与反馈可留空。</p><div class="about-system-editor-actions"><button type="submit">保存</button><button type="button" class="secondary" data-about-cancel>取消</button></div></form><p class="field-hint about-system-status" data-about-status role="status" aria-live="polite"></p></section>`;
   document.body.appendChild(overlay);
   const close=overlay.querySelector('[data-about-close]');
-  const layer=bindDialogLayer(overlay,{initialFocus:close,onClose:()=>{const target=trigger?.getClientRects().length?trigger:tabs.querySelector('[data-open-more]');target?.focus({preventScroll:true});}});
+  let saving=false,credits=null;
+  const layer=bindDialogLayer(overlay,{initialFocus:close,allowClose:()=>!saving,onClose:()=>{const target=trigger?.getClientRects().length?trigger:tabs.querySelector('[data-open-more]');target?.focus({preventScroll:true});}});
   close.onclick=()=>layer.close();
   overlay.addEventListener('click',event=>{if(event.target===overlay)layer.close();});
   overlay.querySelector('[data-about-updates]').onclick=()=>{layer.close();gotoTab('changelog');};
   const version=overlay.querySelector('[data-about-version]');
   api('/api/changelog').then(data=>{if(overlay.isConnected)version.textContent=data.app_version?`版本 ${data.app_version}`:'暂时无法读取版本';}).catch(()=>{if(overlay.isConnected)version.textContent='暂时无法读取版本';});
+  const names=overlay.querySelector('[data-about-maintainers]'),feedback=overlay.querySelector('[data-about-feedback]'),edit=overlay.querySelector('[data-about-edit]'),form=overlay.querySelector('[data-about-form]'),input=form.elements.maintainers,feedbackInput=form.elements.feedback,cancel=overlay.querySelector('[data-about-cancel]'),status=overlay.querySelector('[data-about-status]'),updates=overlay.querySelector('[data-about-updates]');
+  const paintCredits=()=>{names.textContent=credits.maintainers;feedback.textContent=credits.feedback||'—';edit.hidden=!credits.can_edit;};
+  api('/api/about-system').then(data=>{if(!overlay.isConnected)return;credits=data;paintCredits();}).catch(()=>{if(overlay.isConnected){names.textContent='名单读取失败，请重新打开';feedback.textContent='—';}});
+  edit.onclick=()=>{if(!credits?.can_edit)return;input.value=credits.maintainers;feedbackInput.value=credits.feedback;form.hidden=false;edit.hidden=true;status.textContent='';input.focus();};
+  cancel.onclick=()=>{form.hidden=true;status.textContent='';paintCredits();edit.focus();};
+  form.onsubmit=async event=>{
+    event.preventDefault();if(saving||!credits?.can_edit)return;
+    saving=true;status.textContent='正在保存…';
+    const controls=[...form.querySelectorAll('button,textarea'),close,updates];controls.forEach(node=>node.disabled=true);
+    try{credits=await api('/api/about-system',json('PUT',{maintainers:input.value,feedback:feedbackInput.value,revision:credits.revision}));form.hidden=true;paintCredits();status.textContent='已保存';edit.focus();}
+    catch(error){status.textContent=error.message;}
+    finally{saving=false;controls.forEach(node=>node.disabled=false);}
+  };
 }
 
 function renderTabs() {
