@@ -33,7 +33,7 @@ for(const width of [320,390,1280]){
   };
   document.getElementById('trigger').onclick=()=>showAboutSystem(document.getElementById('trigger'));
  })();`);
- const open=async()=>{await page.locator('#trigger').click();await page.locator('[data-about-maintainers]').filter({hasText:'张森'}).waitFor();};
+ const open=async()=>{await page.locator('#trigger').click();await page.locator('[data-about-maintainers]').filter({hasText:'张森'}).waitFor();await page.locator('[data-about-dialog]').evaluate(async el=>{await Promise.all(el.getAnimations({subtree:true}).map(animation=>animation.finished));});};
  await open();
  assert.equal(await page.locator('.about-system-credits dt').allTextContents().then(x=>x.join('|')),'建设与维护|建议与反馈');
  assert.equal(await page.locator('[data-about-feedback]').textContent(),'—');
