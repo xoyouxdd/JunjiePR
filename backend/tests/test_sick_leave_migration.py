@@ -208,11 +208,20 @@ def test_index_repair_precedes_appended_employment_history_step() -> None:
     # append after it rather than deleting, moving or rerunning old steps.
     employee_type = ('2026-10-employee-type-internship', 'ensure_employee_type_columns')
     learning_categories = ('2026-10-learning-library-categories', 'ensure_learning_categories')
-    assert SCHEMA_MIGRATION_STEPS[-4:] == [repair, employment, employee_type, learning_categories]
+    about_system = ('2026-11-about-system-credit-columns', 'ensure_about_system_credit_columns')
+    rotation_posts = ('2026-11-rotation-five-posts', 'ensure_rotation_five_posts')
+    scoring_snapshots = ('2026-11-scoring-policy-snapshots', 'ensure_scoring_policy_snapshots')
+    assert SCHEMA_MIGRATION_STEPS[-7:] == [
+        repair, employment, employee_type, learning_categories,
+        about_system, rotation_posts, scoring_snapshots,
+    ]
     assert SCHEMA_MIGRATION_STEPS.count(repair) == 1
     assert SCHEMA_MIGRATION_STEPS.count(employment) == 1
     assert SCHEMA_MIGRATION_STEPS.count(employee_type) == 1
     assert SCHEMA_MIGRATION_STEPS.count(learning_categories) == 1
+    assert SCHEMA_MIGRATION_STEPS.count(about_system) == 1
+    assert SCHEMA_MIGRATION_STEPS.count(rotation_posts) == 1
+    assert SCHEMA_MIGRATION_STEPS.count(scoring_snapshots) == 1
 
 
 def test_fresh_database_has_all_model_and_composite_indexes(tmp_path: Path) -> None:
