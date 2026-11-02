@@ -1,7 +1,7 @@
 // Browser-only appearance preferences; business state and identity colors are independent.
 import { bindDialogLayer } from './dialogs.js';
 import { registerPageCleanup, unregisterPageCleanup } from './context.js';
-import { esc, portalPath } from './format.js';
+import { avatarAssetFile, esc, portalPath } from './format.js';
 import { state } from './state.js';
 import { logout } from './auth.js';
 
@@ -20,7 +20,7 @@ function mountArtwork(host){
   host.addEventListener('click',event=>{const button=event.target.closest('[data-artwork-choice]');if(button&&host.contains(button))select(button.dataset.artworkChoice,button.dataset.artworkName||button.textContent.trim());});
   function paint(){
     const rows=group?items.filter(item=>item.group===group):items,pages=Math.max(1,Math.ceil(rows.length/8));page=Math.min(page,pages-1);
-    catalog.innerHTML=`<label class="appearance-artwork-group">插画分类<select data-artwork-group><option value="">全部插画</option>${[...new Set(items.map(item=>item.group))].map(name=>`<option value="${esc(name)}" ${name===group?'selected':''}>${esc(name)}</option>`).join('')}</select></label><div class="appearance-artwork-grid">${rows.slice(page*8,page*8+8).map(item=>`<button type="button" class="appearance-artwork-item" data-artwork-choice="avatar:${esc(item.key)}" data-artwork-name="${esc(item.name)}" aria-pressed="false"><img src="${esc(portalPath('/static/images/avatars/'+item.key+'-160.webp'))}" width="160" height="160" alt="" loading="lazy" decoding="async"><span>${esc(item.name)}</span></button>`).join('')}</div><div class="appearance-artwork-pages"><button type="button" class="secondary" data-artwork-prev ${page===0?'disabled':''}>上一页</button><span>${page+1} / ${pages}</span><button type="button" class="secondary" data-artwork-next ${page===pages-1?'disabled':''}>下一页</button></div>`;
+    catalog.innerHTML=`<label class="appearance-artwork-group">插画分类<select data-artwork-group><option value="">全部插画</option>${[...new Set(items.map(item=>item.group))].map(name=>`<option value="${esc(name)}" ${name===group?'selected':''}>${esc(name)}</option>`).join('')}</select></label><div class="appearance-artwork-grid">${rows.slice(page*8,page*8+8).map(item=>`<button type="button" class="appearance-artwork-item" data-artwork-choice="avatar:${esc(item.key)}" data-artwork-name="${esc(item.name)}" aria-pressed="false"><img src="${esc(portalPath('/static/images/avatars/'+avatarAssetFile(item.key,160)))}" width="160" height="160" alt="" loading="lazy" decoding="async"><span>${esc(item.name)}</span></button>`).join('')}</div><div class="appearance-artwork-pages"><button type="button" class="secondary" data-artwork-prev ${page===0?'disabled':''}>上一页</button><span>${page+1} / ${pages}</span><button type="button" class="secondary" data-artwork-next ${page===pages-1?'disabled':''}>下一页</button></div>`;
     catalog.querySelector('[data-artwork-group]').onchange=event=>{group=event.target.value;page=0;paint();};
     catalog.querySelector('[data-artwork-prev]').onclick=()=>{page--;paint();};catalog.querySelector('[data-artwork-next]').onclick=()=>{page++;paint();};sync();
   }

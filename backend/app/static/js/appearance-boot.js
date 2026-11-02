@@ -8,7 +8,10 @@
   try { artwork = validArtwork(localStorage.getItem(artworkKey)); } catch { /* Storage may be disabled. */ }
   const applyArtwork = () => {
     document.documentElement.dataset.headerArtwork = artwork.startsWith('avatar:') ? 'portrait' : artwork;
-    if (artwork.startsWith('avatar:')) document.documentElement.style.setProperty('--header-portrait', `url("${new URL(artwork.slice(7) + '-160.webp', assetBase).href}")`);
+    if (artwork.startsWith('avatar:')) {
+      const avatar=artwork.slice(7),suffix=/^(?:base-01-(?:0[1-9]|1[0-6])|base-03-0[23])$/.test(avatar)?'-160-crop.svg':'-160.webp';
+      document.documentElement.style.setProperty('--header-portrait', `url("${new URL(avatar+suffix, assetBase).href}")`);
+    }
     else document.documentElement.style.removeProperty('--header-portrait');
   };
   applyArtwork();

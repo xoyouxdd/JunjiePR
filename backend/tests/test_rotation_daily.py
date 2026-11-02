@@ -392,3 +392,102 @@ def test_unpublished_today_freezes_at_first_shift_but_can_still_publish(rotation
     published=read(rotation,DAY)
     assert published['frozen'] and not published['can_edit']
     assert [[(p['name'],p['occ']) for p in l['posts']] for l in published['day']['lines']]==[[ (p['name'],p['occ']) for p in l['posts']] for l in frozen['day']['lines']]
+
+
+def legacy_standard_day(rotation,formal=False,work_date=FUTURE):
+    from app.rotation.namespace import tables_for
+    with rotation.factory() as db:
+        cfg=S.load_config(db,rotation.attraction_id)
+        old=deepcopy(S.E.DEFAULT_LINES);old[-2]['posts']=old[-2]['posts'][:3];old[-1]['posts']=old[-1]['posts'][:2]
+        cfg.lines_json=S._dumps(old);db.commit()
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        # Preserve a real custom name, assignment and all original stable identities.
+        state['lines'][0]['posts'][0]['name']='已修改名称'
+        state['date']=work_date
+        if formal:
+            db.info['rotation_formal']=True
+            cfg=S.load_config(db,rotation.attraction_id);S.set_sim_clock(cfg,DAY,240,paused=True)
+            row=tables_for(db).RotationDay(attraction_id=rotation.attraction_id,work_date=work_date,status='draft',state_json=S._dumps(state),version=1)
+            db.add(row);db.flush()
+        else:
+            row.work_date=work_date;S.save_day(db,row,state)
+        return deepcopy(state),row.version
+
+
+@pytest.mark.parametrize('formal',[False,True])
+def test_existing_unstarted_plans_fill_spares_without_resetting_arrangement(rotation,formal):
+    before,version=legacy_standard_day(rotation,formal)
+    def load():
+        with rotation.factory() as db:
+            db.info['rotation_formal']=formal
+            return D.day_payload(db,rotation.attraction_id,FUTURE)
+    after=load();lines={l['id']:l for l in after['draft']['lines']}
+    assert len(lines['D2']['posts'])==len(lines['E']['posts'])==5
+    assert [p['name'] for p in lines['D2']['posts'][3:]]==['备用']*2
+    assert [p['name'] for p in lines['E']['posts'][2:]]==['备用']*3
+    assert after['draft']['plan']==before['plan'] and after['draft']['persons']==before['persons']
+    for a,b in zip(after['draft']['lines'],before['lines']):assert a['posts'][:len(b['posts'])]==b['posts']
+    keys=[p['key'] for line in after['draft']['lines'] for p in line['posts'] if p.get('name')=='备用']
+    assert len(set(keys))==5
+    assert after['revision']==version+1
+    again=load();assert again['draft']==after['draft'] and again['revision']==after['revision']
+    with rotation.factory() as db:
+        from app.rotation.namespace import tables_for
+        db.info['rotation_formal']=formal
+        assert db.query(tables_for(db).RotationEvent).filter_by(event_type='draft_fill_spares').count()==1
+    if formal:
+        # Upgrading formal storage must not modify the independent sandbox plan.
+        with rotation.factory() as db:assert len(S.day_state(S.day_row(db,rotation.attraction_id,FUTURE))['lines'][-1]['posts'])==2
+
+
+@pytest.mark.parametrize('work_date,minute',[(DAY,240),(DAY,500),('2026-10-03',240)])
+def test_fill_only_before_first_shift_never_rewrites_frozen_or_past_day(rotation,work_date,minute):
+    before,version=legacy_standard_day(rotation,work_date=work_date)
+    with rotation.factory() as db:
+        cfg=S.load_config(db,rotation.attraction_id);S.set_sim_clock(cfg,DAY,minute,paused=True);db.commit()
+    read(rotation,work_date)
+    with rotation.factory() as db:
+        row=S.day_row(db,rotation.attraction_id,work_date);stored=S.day_state(row)
+        if work_date==DAY and minute<435:
+            assert len(stored['lines'][-1]['posts'])==5 and row.version==version+1
+        else:
+            assert stored==before and row.version==version
+
+
+def test_spare_fill_keeps_custom_lines_and_does_not_trim_extra_posts():
+    state={'lines':[{'id':'F','posts':[{'name':'自定义'}]}, {'id':'A1','posts':[{'name':str(i)} for i in range(6)]}]}
+    before=deepcopy(state);assert D.fill_prestart_spares(state)=={};assert state==before
+
+
+def test_enabled_today_before_first_shift_adds_only_closed_empty_spares(rotation):
+    legacy_standard_day(rotation,work_date=DAY)
+    with rotation.factory() as db:
+        S.do_draft_action(db,rotation.attraction_id,'test',{'action':'publish','date':DAY})
+        before=deepcopy(S.day_state(S.day_row(db,rotation.attraction_id,DAY)))
+        snapshots={r.id:r.payload for r in db.query(RotationSnapshot).all()}
+    after=read(rotation,DAY)
+    assert after['prestart_live'] and after['draft']['plan']==before['plan']
+    for line in after['draft']['lines']:
+        old=next(l for l in before['lines'] if l['id']==line['id'])
+        assert line['posts'][:len(old['posts'])]==old['posts']
+        for post in line['posts'][len(old['posts']):]:
+            assert post['name']=='备用' and not post['open'] and post['occ'] is None
+    with rotation.factory() as db:
+        assert all(db.get(RotationSnapshot,key).payload==payload for key,payload in snapshots.items())
+        assert len(S.board_payload(db,rotation.attraction_id)['day']['lines'][-1]['posts'])==5
+
+
+def test_legacy_spare_fill_commit_failure_rolls_back_and_can_retry(rotation,monkeypatch):
+    before,version=legacy_standard_day(rotation)
+    with rotation.factory() as db:
+        def fail():raise RuntimeError('test fill commit failure')
+        monkeypatch.setattr(db,'commit',fail)
+        with pytest.raises(RuntimeError,match='fill commit failure'):D.day_payload(db,rotation.attraction_id,FUTURE)
+    with rotation.factory() as db:
+        row=S.day_row(db,rotation.attraction_id,FUTURE)
+        assert row.version==version and S.day_state(row)==before
+        from app.rotation.models import RotationEvent
+        assert db.query(RotationEvent).filter_by(event_type='draft_fill_spares').count()==0
+    assert len(read(rotation)['draft']['lines'][-1]['posts'])==5

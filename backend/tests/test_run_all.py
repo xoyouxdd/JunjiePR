@@ -13,6 +13,12 @@ def test_recent_playwright_fixtures_are_in_browser_suite():
                 & {path.name for path, kind in run_all.collect_tests("node")})
 
 
+def test_every_playwright_fixture_is_classified_as_browser():
+    for path, kind in run_all.collect_tests('all'):
+        if path.suffix == '.cjs' and "require('playwright')" in path.read_text(encoding='utf-8'):
+            assert kind == 'browser', path.name
+
+
 def prepare(monkeypatch, tmp_path: Path, names: list[str]):
     tests = tmp_path / "tests"
     tests.mkdir()

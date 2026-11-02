@@ -31,8 +31,18 @@ def login(client,no):
     ok(client.post('/api/login',json={'employee_no':no,'password':'formal-fixture-2026'}))
 
 
+@pytest.fixture(scope='module')
+def formal_daytime_runtime():
+    # The ticker outlives individual TestClient/request fixtures. Keep the same
+    # daytime clock between cases too, rather than briefly restoring wall time.
+    from rotation_test_clock import install_rotation_test_clock
+    with pytest.MonkeyPatch.context() as patch:
+        install_rotation_test_clock(patch)
+        yield
+
+
 @pytest.fixture(scope='module',autouse=True)
-def seed():
+def seed(formal_daytime_runtime):
     with TestClient(app):
         with SessionLocal() as db:
             for i,code in enumerate(['CM','TR','SUPERVISOR','TA_SUPERVISOR','GSM','TA_GSM']):

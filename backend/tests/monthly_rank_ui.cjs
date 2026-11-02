@@ -73,6 +73,8 @@ const server=http.createServer((req,res)=>{
   else if(route==='/api/rotation/adjust/mine')json(res,{items:[]});
   else if(route==='/api/export-tasks'&&req.method==='GET')json(res,{items:[]});
   else if(route==='/api/action-center')json(res,{items:[],total:0});
+  // Reviewer badge polling can run during this long, multi-role fixture.
+  else if(route==='/api/deduction-upgrades/pending')json(res,{items:[]});
   else if(route==='/favicon.ico'){res.writeHead(204);res.end();}
   else{missing.push(route);res.writeHead(404);res.end();}
 });

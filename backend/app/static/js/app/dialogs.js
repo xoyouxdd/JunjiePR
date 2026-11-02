@@ -55,6 +55,25 @@ function selectModal(title,message,rows,confirmText='提交'){return new Promise
 function showSaveWarnings(result){const warnings=result?.warnings||[];if(warnings.length)noticeModal('请注意',`<ul>${warnings.map(text=>`<li>${esc(text)}</li>`).join('')}</ul>`);}
 
 // 通用表单弹窗：onSubmit 抛错时保留弹窗并提示，成功后关闭。
-function formModal(title,subtitle,body,confirmText,{onReady,onSubmit}={}){return new Promise(resolve=>{const overlay=document.createElement('div');overlay.className='modal-overlay';const titleId='dialog-title-'+Date.now();overlay.innerHTML=`<section class="modal-card form-modal" role="dialog" aria-modal="true" aria-labelledby="${titleId}"><h3 id="${titleId}">${esc(title)}</h3>${subtitle?`<p class="field-hint form-modal-subtitle">${subtitle}</p>`:''}<form class="form-stack" data-modal-form novalidate>${body}<div class="modal-actions"><button type="button" class="secondary" data-modal-cancel>取消</button><button type="submit" class="primary">${esc(confirmText)}</button></div></form></section>`;document.body.appendChild(overlay);const form=overlay.querySelector('[data-modal-form]'),cancel=overlay.querySelector('[data-modal-cancel]'),submit=form.querySelector('[type=submit]');const layer=bindDialogLayer(overlay,{initialFocus:form.querySelector('select,input')||cancel,onClose:value=>resolve(value===true)});cancel.onclick=()=>layer.close(false);onReady?.(form,()=>layer.close(false));form.onsubmit=async event=>{event.preventDefault();submit.disabled=true;try{await onSubmit(form);layer.close(true)}catch(error){toast(error.message,true)}finally{submit.disabled=false}};});}
+function formModal(title,subtitle,body,confirmText,{onReady,onSubmit,lockWhileSubmitting=false}={}){
+  return new Promise(resolve=>{
+    const overlay=document.createElement('div');overlay.className='modal-overlay';
+    const titleId='dialog-title-'+Date.now();
+    overlay.innerHTML=`<section class="modal-card form-modal" role="dialog" aria-modal="true" aria-labelledby="${titleId}"><h3 id="${titleId}">${esc(title)}</h3>${subtitle?`<p class="field-hint form-modal-subtitle">${subtitle}</p>`:''}<form class="form-stack" data-modal-form novalidate>${body}<div class="modal-actions"><button type="button" class="secondary" data-modal-cancel>取消</button><button type="submit" class="primary">${esc(confirmText)}</button></div></form></section>`;
+    document.body.appendChild(overlay);
+    const form=overlay.querySelector('[data-modal-form]'),cancel=overlay.querySelector('[data-modal-cancel]'),submit=form.querySelector('[type=submit]');
+    let submitting=false;
+    const layer=bindDialogLayer(overlay,{initialFocus:form.querySelector('select,input')||cancel,allowClose:()=>!lockWhileSubmitting||!submitting,onClose:value=>resolve(value===true)});
+    cancel.onclick=()=>layer.close(false);onReady?.(form,()=>layer.close(false));
+    form.onsubmit=async event=>{
+      event.preventDefault();
+      if(lockWhileSubmitting&&submitting)return;
+      submitting=true;submit.disabled=true;if(lockWhileSubmitting)cancel.disabled=true;
+      try{await onSubmit(form);submitting=false;layer.close(true);}
+      catch(error){toast(error.message,true);}
+      finally{submitting=false;submit.disabled=false;if(lockWhileSubmitting)cancel.disabled=false;}
+    };
+  });
+}
 
 export { bindDialogLayer, confirmModal, formModal, leaveLayer, noticeModal, promptModal, selectModal, showSaveWarnings };

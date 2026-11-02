@@ -40,6 +40,9 @@ BROWSER_TESTS.add("rotation_timeout_cases_ui.cjs")
 BROWSER_TESTS.add("employee_number_aliases_ui.cjs")
 BROWSER_TESTS.update({"appearance_ui.cjs", "appearance_review_ui.cjs", "hr_pr_rankings_ui.cjs", "temporary_recognizers_ui.cjs"})
 ESM_VM_TESTS = {"view_lifecycle.cjs"}
+BROWSER_TESTS.update({"avatar_crop_ui.cjs", "declaration_admin_ui.cjs", "declaration_layout_ui.cjs",
+                      "declaration_pending_ui.cjs", "declaration_review_ui.cjs",
+                      "workspace_alignment_ui.cjs", "workspace_mobile_alignment_ui.cjs"})
 BROWSER_TESTS.update({"about_system_ui.cjs", "monthly_memory_failure_ui.cjs", "monthly_memory_review_ui.cjs", "monthly_memory_ui.cjs", "rotation_daily_refresh_ui.cjs", "rotation_screen_scroll_ui.cjs", "scoring_config_ui.cjs", "sick_import_identity_ui.cjs"})
 
 

@@ -19,7 +19,14 @@ const engines=process.env.APPEARANCE_ENGINES?.split(',')||['chromium','webkit','
    console.log('Appearance checks: '+engine);
    browser=await({chromium,webkit,firefox}[engine]).launch(engine==='chromium'?{channel:'msedge',headless:true}:{headless:true});
    async function login(account){
-    const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage();
+    const context=await browser.newContext({viewport:{width:1440,height:1000}});
+    // Isolate appearance's zero-request contract from the independent minute
+    // badge ticker. All API requests from the tested controls are still counted.
+    await context.addInitScript(()=>{
+      const schedule=window.setInterval.bind(window);
+      window.setInterval=(callback,delay,...args)=>schedule(delay===60000?()=>{}:callback,delay,...args);
+    });
+    const page=await context.newPage();
     page.on('pageerror',e=>errors.push(engine+': '+e.message));
     page.on('response',r=>{if(r.url().includes('/api/')&&r.status()>=500)errors.push(engine+': API '+r.status()+' '+r.url());});
     await page.goto(base+'/login');await page.locator('[name=employee_no]').fill(account);await page.locator('[name=password]').fill(password);await page.locator('#loginForm button[type=submit]').click();await page.waitForURL(base+'/');
@@ -31,6 +38,9 @@ const engines=process.env.APPEARANCE_ENGINES?.split(',')||['chromium','webkit','
    const {context,page}=await login('CMTEST02');
    await page.locator('#tabs [data-tab=register]:visible').click();await page.locator('#app form').first().waitFor();
    const draft=page.locator('#app input[name=content]').first();await draft.waitFor();await draft.fill('皮肤切换保留草稿');
+   // Freeze the baseline only after the independent recognizer request settles.
+   // Otherwise a successful late response looks like a skin-induced DOM change.
+   await page.waitForFunction(()=>document.querySelector('[data-batch-recognizer]')?.getAttribute('aria-busy')!=='true'&&[...document.querySelectorAll('[name=recognizer_employee_id] option')].some(option=>option.value));
    await page.evaluate(()=>{window.skinOriginalForm=document.querySelector('#app form');});
    await page.locator('#appearanceBtn[data-avatar-settings]').click();await page.locator('[data-skin-choice=blue]').waitFor();
    let requests=[];page.on('request',r=>{if(r.url().includes('/api/'))requests.push(r.url());});
@@ -75,7 +85,7 @@ const engines=process.env.APPEARANCE_ENGINES?.split(',')||['chromium','webkit','
    assert.equal(chosenSkin,'circle');assert.equal(await page.locator('#userBadge').innerHTML(),badgeBefore);
    await page.locator('[data-skin-choice=medal]').click();assert.equal(await page.evaluate(()=>window.FZAppearance.getArtwork()),'avatar:new-zoo-clawhauser');
    assert(await page.locator('.skin-portrait-front').evaluate(e=>getComputedStyle(e).backgroundImage.includes('new-zoo-clawhauser')));
-   assert.equal(requests.length,beforeArtworkRequests,'Art and skin selection must make zero business API calls');
+   assert.equal(requests.length,beforeArtworkRequests,'Art and skin selection must make zero business API calls: '+requests.slice(beforeArtworkRequests).join(', '));
    if(engine==='chromium')await page.screenshot({path:path.join(output,'artwork-selector.png'),fullPage:true});
    await page.keyboard.press('Escape');await page.locator('[data-avatar-dialog]').waitFor({state:'detached'});await page.reload();await page.locator('#appearanceBtn').waitFor();
    assert.equal(await page.evaluate(()=>window.FZAppearance.getArtwork()),'avatar:new-zoo-clawhauser');

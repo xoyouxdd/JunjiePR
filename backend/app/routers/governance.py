@@ -11,7 +11,7 @@ from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
-from app.month_closure import month_close_period_policy, month_close_work_queries
+from app.month_closure import month_close_period_policy, month_close_work_queries, reserve_month_write
 from app.services.monthly_ranks import capture_month_ranks, prepare_rank_attendance
 from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
 from app.routers._shared import (
@@ -30,6 +30,19 @@ from app.routers._shared import (
 )
 
 router = APIRouter()
+
+
+def month_close_attraction_id(payload: dict) -> int | None:
+    value = payload.get('attraction_id')
+    if value is None or value == '':
+        return None
+    if type(value) is int and 0 < value <= 2**63 - 1:
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if len(value) <= 19 and value.isascii() and value.isdecimal() and 0 < int(value) <= 2**63 - 1:
+            return int(value)
+    raise HTTPException(400, '请选择有效景点圈')
 
 
 def ensure_month_close_scope(db: Session, user: V2User, attraction_id: int | None) -> Attraction | None:
@@ -466,8 +479,7 @@ def close_month(
     user: V2User = Depends(current_user),
 ):
     month = parse_score_month(month)
-    raw_attraction_id = payload.get("attraction_id")
-    attraction_id = int(raw_attraction_id) if raw_attraction_id not in (None, "") else None
+    attraction_id = month_close_attraction_id(payload)
     attraction = ensure_month_close_scope(db, user, attraction_id)
     period_policy = month_close_period_policy(month)
     if not period_policy["close_period_allowed"]:
@@ -475,6 +487,7 @@ def close_month(
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "关闭月结原因必填")
+    reserve_month_write(db)
     effective = month_closure_scope(db, month, attraction_id)
     if effective:
         effective_attraction = db.get(Attraction, effective.attraction_id) if effective.attraction_id else None
@@ -559,8 +572,7 @@ def reopen_month(
     user: V2User = Depends(current_user),
 ):
     month = parse_score_month(month)
-    raw_attraction_id = payload.get("attraction_id")
-    attraction_id = int(raw_attraction_id) if raw_attraction_id not in (None, "") else None
+    attraction_id = month_close_attraction_id(payload)
     attraction = ensure_month_close_scope(db, user, attraction_id)
     if user.role.code not in MONTH_CLOSE_ROLE_CODES:
         raise HTTPException(403, "仅景点圈HR或最高管理员可以临时开放月结")
@@ -569,6 +581,7 @@ def reopen_month(
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "重新开启原因必填")
+    reserve_month_write(db)
     effective = month_closure_scope(db, month, attraction_id)
     if attraction_id is not None and effective and effective.attraction_id is None:
         raise HTTPException(409, detail={

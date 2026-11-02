@@ -8,7 +8,7 @@ from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, DeductionUpgradeRequest, Employee, MonthClosure, RecognitionRecord
 from datetime import date, datetime, timedelta
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import event, or_, text
 from sqlalchemy.orm import Session
 
 
@@ -44,6 +44,38 @@ def month_closure_scope(db: Session, month: str, attraction_id: int | None) -> M
 
 def ensure_month_open(db: Session, month: str, attraction_id: int | None, operation: str) -> None:
     month = parse_score_month(month)
+    _check_month_open(db, month, attraction_id, operation)
+    # Reads/uploads need not reserve SQLite's writer. Validate again under the
+    # actual write transaction, including callers which use SQL UPDATE directly.
+    db.info.setdefault('_month_write_checks', {})[(month, attraction_id)] = operation
+
+
+def reserve_month_write(db: Session) -> None:
+    """Join an existing write transaction, or reserve SQLite's sole writer."""
+    connection = db.connection()
+    if connection.dialect.name == 'sqlite' and not connection.connection.driver_connection.in_transaction:
+        db.execute(text('BEGIN IMMEDIATE'))
+
+
+@event.listens_for(Session, 'before_flush')
+@event.listens_for(Session, 'before_commit')
+def _validate_month_writes(db: Session, *args) -> None:
+    checks = db.info.get('_month_write_checks')
+    if not checks:
+        return
+    reserve_month_write(db)
+    with db.no_autoflush:
+        for (month, attraction_id), operation in tuple(checks.items()):
+            _check_month_open(db, month, attraction_id, operation)
+
+
+@event.listens_for(Session, 'after_transaction_end')
+def _clear_month_write_checks(db: Session, transaction) -> None:
+    if transaction.parent is None:
+        db.info.pop('_month_write_checks', None)
+
+
+def _check_month_open(db: Session, month: str, attraction_id: int | None, operation: str) -> None:
     closure = month_closure_scope(db, month, attraction_id)
     if not closure:
         return

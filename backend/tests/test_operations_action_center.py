@@ -3,7 +3,7 @@ from frontend_source import read_frontend_source
 
 import json
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -38,7 +38,7 @@ def prepare_health_report() -> None:
         json.dumps(
             {
                 "ok": False,
-                "checked_at_utc": "2026-08-19T00:00:00Z",
+                "checked_at_utc": datetime.now(timezone.utc).isoformat(),
                 "task": {"exists": True, "enabled": True, "state": "Ready", "last_task_result": 0},
                 "latest_backup": {"file_name": "recognition_v2-20260819T000000-000.db", "age_hours": 30, "quick_check": "ok", "sha256_verified": True},
                 "issues": [{"code": "backup_stale", "message": "The latest backup is older than the allowed age."}],

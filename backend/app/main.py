@@ -27,6 +27,7 @@ from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 from app.runtime_environment import environment_kind, environment_label, validate_runtime_paths
 from app.recognition_timing import RecognitionTimingMiddleware
 from app.request_timing import RequestTimingMiddleware
+from app.http_utils import client_ip
 
 # Starlette 0.47+ streams file parts to a spooled temp file. The 1MB
 # max_part_size only caps non-file form fields; 100MB materials are files.
@@ -167,8 +168,7 @@ async def validation_error_response(request: Request, exc: RequestValidationErro
             session = db.query(UserSession).filter(UserSession.token_hash == token_hash(raw_token)).first()
             account = db.get(UserAccount, session.account_id) if session else None
             operator = db.get(Employee, account.employee_id) if account else None
-        forwarded_for = request.headers.get("x-forwarded-for", "")
-        ip_address = forwarded_for.split(",", 1)[0].strip() or (request.client.host if request.client else None)
+        ip_address = client_ip(request)
         write_audit(
             db,
             operator,

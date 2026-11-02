@@ -10,6 +10,11 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/avatar-crop-fix.md](docs/avatar-crop-fix.md) | 头像裁切与显示验证 |
+| [docs/declaration-admin-corrections.md](docs/declaration-admin-corrections.md) | 声明类型更正、作废及还原 |
+| [docs/declaration-layout-review.md](docs/declaration-layout-review.md) | 声明统计布局检查 |
+| [docs/rotation-five-posts.md](docs/rotation-five-posts.md) | 每日班表五岗兼容 |
+| [docs/workspace-alignment-fix.md](docs/workspace-alignment-fix.md) | 工作台对齐与窄屏检查 |
 | [docs/scoring-rule-center.md](docs/scoring-rule-center.md) | 分类计分规则、生效版本与记录快照 |
 | [docs/sick-import-identity-matching.md](docs/sick-import-identity-matching.md) | 缺勤导入身份核验与事务保护 |
 | [docs/monthly-memory-card.md](docs/monthly-memory-card.md) | 本人月度回忆与本地图片导出 |

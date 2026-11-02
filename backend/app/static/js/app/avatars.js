@@ -1,6 +1,6 @@
 // Static thumbnails and account-backed cosmetics. No timers or per-person API reads.
 import { api, json } from './api.js';
-import { esc, portalPath } from './format.js';
+import { avatarAssetFile, esc, portalPath } from './format.js';
 import { state } from './state.js';
 import { registerPageCleanup, unregisterPageCleanup } from './context.js';
 import { bindDialogLayer } from './dialogs.js';
@@ -8,7 +8,7 @@ import { mountAppearance } from './appearance.js';
 
 const assetRoot='/static/images/avatars/';
 const validKey=key=>/^[a-z0-9][a-z0-9-]{0,79}$/.test(key||'');
-const thumb=(key,size=64)=>portalPath(assetRoot+key+'-'+size+'.webp');
+const thumb=(key,size=64)=>portalPath(assetRoot+avatarAssetFile(key,size));
 function avatarMarkup(key,name,{deferred=false}={}){
   if(!validKey(key))return '';
   return `<img class="employee-avatar-small" ${deferred?'data-avatar-src':'src'}="${esc(thumb(key))}" width="32" height="32" alt="" loading="lazy" decoding="async">`;

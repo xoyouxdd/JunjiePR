@@ -521,6 +521,7 @@ function bindRoster() {
 // ---------------------------------------------------------------- 记录
 
 const EVENT_NAME = {
+  draft_fill_spares: '补齐备用岗位',
   workflow_checkpoint:'操作恢复点',workflow_restore:'恢复线路上一步',rename_post:'岗位改名',hold101:'101定岗',resume101:'取消101定岗',task_timeout:'任务超时',task_transfer:'任务转接',task_refresh:'任务刷新',
   force_place:'强制安排上岗',entry_group:'整组上岗',entry_ready:'本人确认到位',entry_solo:'调整单人上岗',entry_adjust:'调整协同组合',entry_return:'本人到场重新领取安排',
   post_hold:'设置持续定岗',post_resume:'结束定岗', publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
@@ -543,6 +544,7 @@ function detailText(item) {
   if(item.type==='force_place'&&d.previous)parts.push(`${({meal:'吃饭',meal_rest:'饭后休息',rest:'休息'})[d.previous.kind]||'休息'}中断，剩余 ${Math.ceil(d.previous.remaining||0)} 分钟${d.replaced?'，原人员下线待确认休息':''}`);
   if(item.type==='post_order'&&d.target_line)parts.push(`跨线至 ${d.target_line}`);
   if(item.type==='post_order'&&d.mode)parts.push(d.mode==='posts'?'只交换岗位':d.mode==='with_people'?'岗位和人员一起交换':'调整岗位顺序');
+  if(item.type==='draft_fill_spares')parts.push(Object.entries(d.added||{}).map(([line,count])=>`${line}线新增${count}个备用岗位`).join('，'));
   if(item.type==='entry_group')parts.push(`${d.participants?.length||0}人整组执行`);
   return parts.join('，');
 }

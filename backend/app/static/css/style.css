@@ -1598,6 +1598,14 @@ details.form-more > summary {
 /* Very wide screens: keep line length readable instead of stretching forms edge to edge. */
 @media (min-width: 761px) {
   .app-frame > .app-shell > * { max-width: 1440px; margin-left: auto; margin-right: auto; }
+  /* Keep the shared heading, theme banner and page body on the same grid.
+     Theme banner margin shorthands must not override wide-screen centering. */
+  .app-frame > .app-shell > :is(#pageHeading,#themeStory,#app) {
+    width: 100%;
+    min-width: 0;
+    margin-left: auto;
+    margin-right: auto;
+  }
 }
 
 @media (max-width: 760px) {
@@ -2423,3 +2431,110 @@ body.rotation-personal-only .rt-line{margin-top:12px;}
 .evidence-selected-actions button { width:auto; padding:8px 10px; }
 .evidence-selected-actions small { flex-basis:100%; color:var(--text-label); font-size:12px; }
 .evidence-selected>p { flex-basis:100%; margin:0; }
+
+/* Declaration statistics: presentation only; scope all rules to this view. */
+.declaration-statistics-page .panel { padding: 22px; }
+.declaration-statistics-page .statistics-page-heading { margin-bottom: 8px; }
+.declaration-statistics-page .statistics-page-heading + p,
+.declaration-statistics-page .statistics-scope { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.declaration-statistics-page .declaration-filter { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px 16px; margin-top: 20px; }
+.declaration-statistics-page .declaration-filter label { font-size: 13px; color: var(--text-label); }
+.declaration-statistics-page .declaration-filter input,
+.declaration-statistics-page .declaration-filter select { min-height: 42px; }
+.declaration-statistics-page .declaration-search { grid-column: span 2; }
+.declaration-statistics-page .statistics-actions { grid-column: auto; display: flex; gap: 8px; align-self: end; }
+.declaration-statistics-page .statistics-actions button { flex: 1; min-width: 0; padding-inline: 10px; white-space: nowrap; }
+.declaration-statistics-page .declaration-kpis { grid-template-columns: repeat(6,minmax(0,1fr)); gap: 12px; margin: 20px 0 12px; }
+.declaration-statistics-page .trend-card { min-height: 86px; padding: 14px 16px; box-shadow: none; }
+.declaration-statistics-page .declaration-total { background: var(--surface-soft); }
+.declaration-statistics-page .declaration-kpi { border-left-width: 2px; }
+.declaration-statistics-page .trend-card strong { font-size: 25px; font-variant-numeric: tabular-nums; }
+.declaration-statistics-page .declaration-statuses { gap: 8px 22px; padding: 10px 0 20px; margin: 0; }
+.declaration-statistics-page .declaration-status-count { border: 0; border-radius: 0; padding: 0; background: transparent; font-size: 12px; }
+.declaration-statistics-page .declaration-status-count strong { color: var(--text-label); font-weight: 600; }
+.declaration-statistics-page .declaration-circle-list { gap: 16px; }
+.declaration-statistics-page .declaration-circle { border-radius: 12px; }
+.declaration-statistics-page .declaration-circle-toggle { background: var(--surface-soft); min-height: 56px; padding: 14px 18px; }
+.declaration-statistics-page .declaration-circle-toggle strong { color: var(--text-strong); }
+.declaration-statistics-page .declaration-level-toggle { min-height: 44px; padding: 10px 18px; border-left-width: 2px; font-size: 13px; }
+.declaration-statistics-page .declaration-inline { padding: 16px; }
+.declaration-statistics-page .declaration-desktop table { min-width: 940px; table-layout: fixed; }
+.declaration-statistics-page .declaration-desktop col { width: 15%; }
+.declaration-statistics-page .declaration-desktop col:nth-child(2) { width: 18%; }
+.declaration-statistics-page .declaration-desktop col:nth-child(3) { width: 24%; }
+.declaration-statistics-page .declaration-desktop col:nth-child(6) { width: 13%; }
+.declaration-statistics-page .declaration-desktop th { padding: 12px; font-size: 12px; }
+.declaration-statistics-page .declaration-desktop td { padding: 18px 12px; font-size: 13px; line-height: 1.6; overflow-wrap: break-word; }
+.declaration-statistics-page .declaration-person,
+.declaration-statistics-page .declaration-registration { display: grid; gap: 5px; }
+.declaration-statistics-page .declaration-person strong { font-size: 15px; color: var(--text-strong); }
+.declaration-statistics-page .declaration-person span,
+.declaration-statistics-page .declaration-person time,
+.declaration-statistics-page .declaration-employee-no,
+.declaration-statistics-page .declaration-registration time { font-size: 12px; color: var(--muted); font-weight: 400; }
+.declaration-statistics-page .declaration-person time { white-space: nowrap; }
+.declaration-statistics-page .declaration-registration strong { font-weight: 500; }
+.declaration-statistics-page .declaration-classification { display: grid; gap: 9px; }
+.declaration-statistics-page .declaration-classification label { display: grid; grid-template-columns: 28px minmax(0,1fr); align-items: center; gap: 6px; margin: 0; font-size: 13px; font-weight: 400; }
+.declaration-statistics-page .declaration-classification label > span:first-child { font-size: 11px; color: var(--muted); }
+.declaration-statistics-page .declaration-classification select { width: 100%; min-width: 0; min-height: 36px; height: auto; margin: 0; padding: 6px 7px; font-size: 13px; border-radius: 7px; background-color: var(--panel); }
+.declaration-statistics-page .declaration-classification .declaration-level { min-height: 30px; height: auto; margin: 0; justify-self: start; }
+.declaration-statistics-page .declaration-description { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; color: var(--text); line-height: 1.8; }
+.declaration-statistics-page .declaration-business-state { margin-bottom: 12px; }
+.declaration-statistics-page .declaration-workflow { display: grid; gap: 9px; margin: 0; }
+.declaration-statistics-page .declaration-workflow > div { display: grid; gap: 2px; }
+.declaration-statistics-page .declaration-workflow dt,
+.declaration-statistics-page .declaration-field-caption { color: var(--muted); font-size: 11px; font-weight: 400; }
+.declaration-statistics-page .declaration-workflow dd { margin: 0; font-size: 12px; color: var(--text-label); }
+.declaration-statistics-page .declaration-operations { display: grid; justify-items: start; gap: 14px; }
+.declaration-statistics-page .declaration-material-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.declaration-statistics-page .declaration-material-actions .declaration-material { min-height: 32px; padding: 5px 8px; margin: 0; font-size: 12px; }
+.declaration-statistics-page a.declaration-material { border: 0; background: transparent; color: var(--primary); padding-inline: 0; text-decoration: none; }
+.declaration-statistics-page .declaration-status-action { width: auto; min-height: 32px; padding: 5px 12px; font-size: 12px; background: var(--panel); border: 1px solid var(--danger-border); color: var(--danger-text); }
+.declaration-statistics-page [data-declaration-action="restore"] { border-color: var(--line); color: var(--primary); }
+@media (pointer: coarse) {
+  .declaration-statistics-page .declaration-classification select { min-height: 44px; font-size: 16px; }
+  .declaration-statistics-page .declaration-material-actions .declaration-material,
+  .declaration-statistics-page .declaration-status-action { min-height: 44px; }
+}
+@media (max-width: 1100px) and (min-width: 761px) {
+  .declaration-statistics-page .declaration-filter { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .declaration-statistics-page .declaration-search { grid-column: auto; }
+  .declaration-statistics-page .statistics-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .declaration-statistics-page .statistics-actions button { flex: 0 0 auto; min-width: 110px; }
+  .declaration-statistics-page .declaration-kpis { gap: 8px; }
+  .declaration-statistics-page .trend-card { padding: 12px 10px; }
+}
+@media (max-width: 760px) {
+  .declaration-statistics-page .panel { padding: 16px; }
+  .declaration-statistics-page .declaration-filter { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 16px; }
+  .declaration-statistics-page .declaration-search,
+  .declaration-statistics-page .statistics-actions { grid-column: 1 / -1; }
+  .declaration-statistics-page .declaration-filter input,
+  .declaration-statistics-page .declaration-filter select { font-size: 16px; min-height: 44px; }
+  .declaration-statistics-page .statistics-actions button { min-height: 44px; }
+  .declaration-statistics-page .declaration-kpis { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 16px; }
+  .declaration-statistics-page .declaration-kpi { min-height: 68px; }
+  .declaration-statistics-page .trend-card { padding: 11px 12px; }
+  .declaration-statistics-page .trend-card strong { font-size: 22px; }
+  .declaration-statistics-page .declaration-statuses { gap: 12px; padding-bottom: 18px; }
+  .declaration-statistics-page .declaration-circle-toggle { padding: 12px; }
+  .declaration-statistics-page .declaration-inline { padding: 10px; }
+  .declaration-statistics-page .declaration-record { padding: 16px; gap: 14px; border-radius: 10px; }
+  .declaration-statistics-page .declaration-record-heading { display: flex; gap: 10px; align-items: start; justify-content: space-between; }
+  .declaration-statistics-page .declaration-record-heading > div { display: grid; gap: 4px; }
+  .declaration-statistics-page .declaration-record-heading strong { font-size: 16px; color: var(--text-strong); }
+  .declaration-statistics-page .declaration-record-heading small { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .declaration-statistics-page .declaration-record-context { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .declaration-statistics-page .declaration-classification { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding: 12px 0; border-block: 1px solid var(--line); }
+  .declaration-statistics-page .declaration-classification label { grid-template-columns: minmax(0,1fr); gap: 6px; }
+  .declaration-statistics-page .declaration-classification select { min-height: 44px; font-size: 16px; }
+  .declaration-statistics-page .declaration-record-content { display: grid; gap: 6px; }
+  .declaration-statistics-page .declaration-record-content .declaration-description { font-size: 14px; }
+  .declaration-statistics-page .declaration-workflow { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+  .declaration-statistics-page .declaration-registration { gap: 4px; }
+  .declaration-statistics-page .declaration-registration strong { font-size: 12px; }
+  .declaration-statistics-page .declaration-operations { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .declaration-statistics-page .declaration-material-actions .declaration-material,
+  .declaration-statistics-page .declaration-status-action { min-height: 44px; display: inline-flex; align-items: center; }
+}

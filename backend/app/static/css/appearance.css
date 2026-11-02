@@ -401,7 +401,7 @@ html[data-header-artwork="medal"] .skin-story-wish .skin-portrait{display:none;}
   html[data-skin] .app-topbar .app-brand strong{font-size:15px;letter-spacing:0;}
   html[data-skin] .app-topbar .app-brand small{display:none;}
   html[data-skin] .app-topbar .app-identity{justify-self:stretch;overflow:hidden;}
-  html[data-skin] .app-topbar #userBadge{justify-content:center;gap:7px;max-width:none;}
+  html[data-skin] .app-topbar #userBadge{justify-content:center;gap:7px;width:100%;max-width:100%;}
   html[data-skin] .app-topbar .identity-portrait{width:28px;height:28px;flex-basis:28px;padding:1px;}
   html[data-skin] .app-topbar .identity-portrait>span{font-size:12px;}
   html[data-skin] .app-topbar .identity-name{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}

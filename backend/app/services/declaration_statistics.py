@@ -85,7 +85,8 @@ def declaration_payload(
             "material_status": MATERIAL_LABELS.get(row.material_status, row.material_status),
             "upgrade_status": UPGRADE_LABELS.get(row.upgrade_state or "", row.upgrade_state or "无"),
             "business_status": business_status, "raw_status": row.status,
-            "upgrade_request_id": row.upgrade_request_id or 0, "document_url": document_url,
+            "voided_at": row.voided_at.isoformat() if row.voided_at else None,
+            "upgrade_request_id": row.upgrade_request_id or 0, "upgrade_role": row.upgrade_role, "document_url": document_url,
         })
 
     level_counts = Counter(row["level_id"] for row in records)
@@ -107,6 +108,6 @@ def declaration_payload(
         "statuses": {name: sum(row["business_status"] == name for row in records) for name in dict.fromkeys(STATUS_LABELS.values())},
         "attractions": [{"id": item.id, "name": item.name} for item in sorted(attraction_rows, key=lambda item: item.name)
                         if item.employee_circle or item.id in circle_rows],
-        "types": [{"id": item.id, "name": item.name} for item in sorted(types.values(), key=lambda item: item.name)],
+        "types": [{"id": item.id, "name": item.name, "active": item.active} for item in sorted(types.values(), key=lambda item: item.name)],
         "circles": circles, "records": records,
     }

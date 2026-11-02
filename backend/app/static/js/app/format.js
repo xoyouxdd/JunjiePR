@@ -48,4 +48,6 @@ function fmtDeduction(value){return Number(value||0)===0?'0.00':`-${fmt(value)}`
 
 function actingNoteMarkup(row){return row.acting_note?`<small class="field-hint acting-note">${esc(row.acting_note)}</small>`:'';}
 
-export { actingNoteMarkup, circleTheme, employeeNumber, esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, monthNow, monthStart, pad2, portalPath, prefersReducedMotion, recognitionScoreNote, recognitionScoreText, today };
+function avatarAssetFile(key,size=64){return `${key}-${size}${/^(?:base-01-(?:0[1-9]|1[0-6])|base-03-0[23])$/.test(key)?'-crop.svg':'.webp'}`;}
+
+export { avatarAssetFile, actingNoteMarkup, circleTheme, employeeNumber, esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, monthNow, monthStart, pad2, portalPath, prefersReducedMotion, recognitionScoreNote, recognitionScoreText, today };

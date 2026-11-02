@@ -11,7 +11,7 @@ from sqlalchemy import or_, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_database import get_db
+from app.v2_database import FILE_DIR, get_db
 from app.v2_models import Attraction, DeductionLevel, DeductionFollowUp, DeductionMaterialJob, DeductionUpgradeRequest, DeductionUpgradeTransfer, DeductionRecord, DeductionType, Employee, Role, StoredFile, UserAccount
 from app.v2_services import LEADER_CODES, current_group_for_employee, duty_code_at, remove_upload_file, role_at, scoring_category, write_audit
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
@@ -858,6 +858,9 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
         raise HTTPException(400, "请选择有效处分级别并刷新原记录")
     if row.deduction_level_id != expected:
         raise HTTPException(409, "处分级别已变化，请刷新后核对")
+    for field, current in [('expected_type_id', row.deduction_type_id), ('expected_status', row.status)]:
+        if field in payload and payload[field] != current:
+            raise HTTPException(409, "处分类型或状态已变化，请刷新后核对")
     level = db.get(DeductionLevel, level_id)
     allowed = {"STATEMENT", "MEMO", "WARNING_1", "WARNING_2"}
     original = db.get(DeductionLevel, row.deduction_level_id)
@@ -870,7 +873,119 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
         return {"ok": True}
     before = deduction_payload(row)
     row.deduction_level_id, row.deduction_level_name, row.points = level.id, level.name, scoring_config.stored_deduction_points(db, row, level)
+    if row.status == 'active':
+        scoring_config.validate_material_repeat(db, row)
     write_audit(db, user.employee, "修改处分级别", "deduction", row.id,
+                before=before, after=deduction_payload(row), reason=reason, ip_address=client_ip(request))
+    db.commit()
+    invalidate_data_caches()
+    return {"ok": True}
+
+
+def _standalone_correction(db, row, action):
+    linked = db.query(DeductionUpgradeRequest.id).filter(or_(
+        DeductionUpgradeRequest.first_deduction_id == row.id,
+        DeductionUpgradeRequest.second_deduction_id == row.id,
+        DeductionUpgradeRequest.result_deduction_id == row.id)).first()
+    if row.upgrade_request_id or row.upgrade_role or linked:
+        raise HTTPException(400, "升级工单关联记录请通过原升级流程处理")
+    employee = db.get(Employee, row.employee_id)
+    ensure_month_open(db, row.deduction_month,
+                      row.attraction_id_snapshot or (employee.attraction_id if employee else None), action)
+
+
+def _correction_reason(payload):
+    reason = str(payload.get("reason") or "").strip()
+    if not reason or len(reason) > 500:
+        raise HTTPException(400, "请填写500字以内的操作原因")
+    return reason
+
+
+@router.patch("/deductions/{record_id}/type")
+def correct_deduction_type(record_id: int, payload: dict, request: Request,
+                          db: Session = Depends(get_db),
+                          user: V2User = Depends(require_permissions("SYSTEM_ADMIN"))):
+    db.execute(text("BEGIN IMMEDIATE"))
+    row = db.get(DeductionRecord, record_id)
+    if not row:
+        raise HTTPException(404, "扣分记录不存在")
+    _standalone_correction(db, row, "修改处分类型")
+    if row.status not in {"active", "pending_material", "material_failed", "void"}:
+        raise HTTPException(400, "当前记录状态不可修改类型")
+    type_id, expected = payload.get("type_id"), payload.get("expected_type_id")
+    if type(type_id) is not int or type(expected) is not int:
+        raise HTTPException(400, "请选择有效处分类型并刷新原记录")
+    if (row.deduction_type_id != expected or row.status != payload.get("expected_status")
+            or row.deduction_level_id != payload.get("expected_level_id")):
+        raise HTTPException(409, "记录已变化，请刷新后核对")
+    target = db.get(DeductionType, type_id)
+    if not target or not target.active:
+        raise HTTPException(400, "处分类型无效或已停用")
+    reason = _correction_reason(payload)
+    if type_id == expected:
+        return {"ok": True}
+    before = deduction_payload(row)
+    policy = scoring_config.deduction_snapshot(db, target, row.occurred_on)
+    if not policy['active']:
+        raise HTTPException(400, "该处分类型在事件日期尚未启用")
+    # Keep the original level tariffs while applying the corrected category's mode.
+    policy['levels'] = (json.loads(row.scoring_policy_json).get('levels') if row.scoring_policy_json else None) or {
+        level.code: str(level.points) for level in db.query(DeductionLevel).all()}
+    row.deduction_type_id, row.deduction_type_name = target.id, target.name
+    row.scoring_policy_json = scoring_config.dump(policy)
+    row.points = scoring_config.stored_deduction_points(db, row, db.get(DeductionLevel, row.deduction_level_id))
+    if row.status == 'active':
+        scoring_config.validate_material_repeat(db, row)
+    write_audit(db, user.employee, "修改处分类型", "deduction", row.id,
+                before=before, after=deduction_payload(row), reason=reason, ip_address=client_ip(request))
+    db.commit()
+    invalidate_data_caches()
+    return {"ok": True}
+
+
+@router.post("/deductions/{record_id}/restore")
+def restore_deduction(record_id: int, payload: dict, request: Request,
+                      db: Session = Depends(get_db),
+                      user: V2User = Depends(require_permissions("SYSTEM_ADMIN"))):
+    db.execute(text("BEGIN IMMEDIATE"))
+    row = db.get(DeductionRecord, record_id)
+    if not row:
+        raise HTTPException(404, "扣分记录不存在")
+    _standalone_correction(db, row, "还原扣分")
+    if row.status != 'void':
+        raise HTTPException(409, "记录状态已变化，请刷新后核对")
+    if not row.voided_at or payload.get('expected_voided_at') != row.voided_at.isoformat():
+        raise HTTPException(409, "作废记录已变化，请刷新后核对")
+    if (payload.get('expected_type_id') != row.deduction_type_id
+            or payload.get('expected_level_id') != row.deduction_level_id):
+        raise HTTPException(409, "处分类型或等级已变化，请刷新后核对")
+    reason = _correction_reason(payload)
+    previous = row.voided_from_status
+    if previous not in {'active', 'pending_material', 'material_failed'}:
+        raise HTTPException(400, "缺少可核实的作废前状态，不能直接还原")
+    if row.material_status == 'processing':
+        raise HTTPException(409, "材料正在处理中，请完成后再还原")
+    if previous == 'active':
+        material = db.get(StoredFile, row.document_file_id)
+        if row.material_status != 'ready' or not material or material.status != 'active':
+            raise HTTPException(409, "原生效材料不可用，不能直接恢复计分")
+        try:
+            path = (FILE_DIR / material.storage_key).resolve()
+            available = False
+            if FILE_DIR.resolve() in path.parents and path.is_file():
+                with path.open('rb') as source:
+                    available = bool(source.read(1))
+        except (OSError, ValueError):
+            available = False
+        if not available:
+            raise HTTPException(409, "原生效材料文件缺失或不可读取，请先核对材料后再还原")
+        scoring_config.validate_material_repeat(db, row)
+    before = deduction_payload(row)
+    row.status = previous
+    row.voided_from_status = None
+    row.voided_by = row.voided_by_name = row.voided_by_role_code = row.voided_by_role_name = None
+    row.void_permission_scope_snapshot = row.voided_at = row.void_reason = None
+    write_audit(db, user.employee, "还原扣分", "deduction", row.id,
                 before=before, after=deduction_payload(row), reason=reason, ip_address=client_ip(request))
     db.commit()
     invalidate_data_caches()
@@ -879,13 +994,18 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
 
 @router.post("/deductions/{record_id}/void")
 def void_deduction(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    db.execute(text("BEGIN IMMEDIATE"))
     row = db.get(DeductionRecord, record_id)
     if not row:
         raise HTTPException(404, "扣分记录不存在")
     if row.submitter_id != user.id and "SYSTEM_ADMIN" not in user.permissions:
         raise HTTPException(403, "只有原登记人或管理员可以作废")
-    if row.upgrade_request_id:
-        raise HTTPException(400, "声明升级工单关联记录不可作废；请在升级工单中完成审核处理")
+    _standalone_correction(db, row, "作废扣分")
+    if payload.get('expected_status') is not None and payload['expected_status'] != row.status:
+        raise HTTPException(409, "记录状态已变化，请刷新后核对")
+    for field, current in [('expected_type_id', row.deduction_type_id), ('expected_level_id', row.deduction_level_id)]:
+        if field in payload and payload[field] != current:
+            raise HTTPException(409, "处分类型或等级已变化，请刷新后核对")
     if row.status not in {"active", "pending_material", "material_failed"}:
         raise HTTPException(400, "记录已经作废")
     employee = db.get(Employee, row.employee_id)

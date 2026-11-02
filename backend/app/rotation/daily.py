@@ -6,6 +6,7 @@ from datetime import date
 import hashlib
 import json
 import zlib
+from uuid import uuid4
 from app.rotation import service as S
 from app.rotation.namespace import tables_for
 from app.rotation.models import RotationDay, RotationRosterEntry, RotationSnapshot
@@ -89,6 +90,20 @@ def planned_view(db, cfg, attraction_id, work_date, state, settings=None):
     return present(db, cfg, attraction_id, work_date, view, min(240, first_start(view) - 1), settings)
 
 
+def fill_prestart_spares(state):
+    """Append missing standard slots without moving any planned people/posts."""
+    standard = {line['id'] for line in S.E.DEFAULT_LINES}
+    added = {}
+    for line in state['lines']:
+        if line['id'] not in standard or len(line['posts']) >= 5:
+            continue
+        added[line['id']] = 5 - len(line['posts'])
+        for _ in range(added[line['id']]):
+            line['posts'].append(dict(name='备用',openAt=None,closeAt=None,seven=None,
+                key=uuid4().hex,hold101Role=None,open=False,opened=True,manual=False,occ=None,since=None))
+    return added
+
+
 @S.transactional
 def day_payload(db,attraction_id,work_date,at=None):
     RotationSnapshot = tables_for(db).RotationSnapshot
@@ -99,6 +114,16 @@ def day_payload(db,attraction_id,work_date,at=None):
     row=S.day_row(db,attraction_id,work_date)
     roster=S.roster_summary(db,attraction_id,work_date)
     state=S.day_state(row) if row else None
+    # Templates do not retrofit already-generated plans. Only upgrade editable
+    # pre-start states; historical/frozen snapshots and existing assignments stay intact.
+    editable = bool(state and at is None and
+        (row.status == 'draft' and draft_editable(state,work_date,today,now)
+         or work_date == today and prestart(state,now)))
+    if editable:
+        added = fill_prestart_spares(state)
+        if added:
+            S.save_day(db,row,state)
+            S.DbHooks(db,attraction_id,work_date).log('draft_fill_spares','system',None,None,None,{'added':added})
     if state and work_date==today and row.status=='live':
         S.advance(db,cfg,row,state,now)
     query=db.query(RotationSnapshot).filter_by(attraction_id=attraction_id,work_date=work_date)

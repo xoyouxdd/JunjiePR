@@ -4,6 +4,11 @@
 
 | 文件 | 内容 |
 |---|---|
+| [avatar-crop-fix.md](avatar-crop-fix.md) | 头像裁切与显示验证 |
+| [declaration-admin-corrections.md](declaration-admin-corrections.md) | 声明类型更正、作废及还原 |
+| [declaration-layout-review.md](declaration-layout-review.md) | 声明统计布局检查 |
+| [rotation-five-posts.md](rotation-five-posts.md) | 每日班表五岗兼容 |
+| [workspace-alignment-fix.md](workspace-alignment-fix.md) | 工作台对齐与窄屏检查 |
 | [scoring-rule-center.md](scoring-rule-center.md) | 分类计分规则、生效版本与记录快照 |
 | [sick-import-identity-matching.md](sick-import-identity-matching.md) | 缺勤导入身份核验与事务保护 |
 | [monthly-memory-card.md](monthly-memory-card.md) | 本人月度回忆与本地图片导出 |

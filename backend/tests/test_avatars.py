@@ -146,3 +146,26 @@ def test_hr_cannot_access_wardrobe(system, role):
     switch(make('wardrobe-hr-'+role, role=role), role)
     assert client.get('/api/self-avatar-wardrobe').status_code == 403
     assert client.put('/api/self-avatar-wardrobe', json={'favorites': [], 'recent': [], 'presets': [None, None, None]}).status_code == 403
+
+
+def test_display_crop_assets_are_bounded_self_contained_and_keep_original_pixels():
+    import base64
+    from xml.etree import ElementTree as ET
+    root=Path(__file__).resolve().parents[1]/'app/static/images/avatars'
+    catalog=json.loads((root/'catalog.json').read_text(encoding='utf-8'))['avatars']
+    cropped=[a for a in catalog if 'display_images' in a]
+    assert {a['key'] for a in cropped}=={f'base-01-{n:02}' for n in range(1,17)}|{'base-03-02','base-03-03'}
+    for avatar in cropped:
+        for size,limit in [('64',4000),('160',16000)]:
+            meta=avatar['display_images'][size];data=(root/meta['file']).read_bytes()
+            assert len(data)==meta['bytes']<limit
+            assert hashlib.sha256(data).hexdigest()==meta['sha256']
+            svg=ET.fromstring(data)
+            assert svg.attrib['width']==size and svg.attrib['height']==size
+            x,y,w,h=map(float,svg.attrib['viewBox'].split())
+            assert y==0 and w==h and x>=0 and y+h<float(size)
+            image=list(svg)[0]
+            assert len(list(svg))==1 and image.tag.endswith('image')
+            href=image.attrib['href'];assert href.startswith('data:image/webp;base64,')
+            assert base64.b64decode(href.split(',',1)[1])==(root/avatar['images'][size]['file']).read_bytes()
+            assert 'script' not in data.decode().lower() and 'http:' not in href and 'https:' not in href
