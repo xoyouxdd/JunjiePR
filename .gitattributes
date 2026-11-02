@@ -1,0 +1,2 @@
+# Generated avatar views have byte counts and SHA-256 values in catalog.json.
+backend/app/static/images/avatars/*-crop.svg text eol=lf
