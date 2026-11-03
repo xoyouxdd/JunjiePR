@@ -7,6 +7,10 @@ const {chromium}=require('playwright');
  await page.addStyleTag({content:fs.readFileSync(path.resolve(__dirname,'../app/static/css/rotation.css'),'utf8')});
  await page.addScriptTag({content:`window.RT={data:{attraction_name:'示例圈',day:{date:'2026-10-30',lines:[],persons:Array.from({length:22},(_,i)=>({pid:String(i),name:'示例人员'+i,role:'rotation',state:'notyet',start:i<20?555:i===20?540:600,end:i<21?1335:1080}))}}};
  window.pad2=n=>String(n).padStart(2,'0');window.esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');window.hm=n=>pad2(Math.floor(n/60))+':'+pad2(n%60);window.STATE_NAME={notyet:'班次未开始'};window.poolState=p=>p.state;window.outsideKind=()=>false;window.opWaiting=()=>false;window.badges=()=>'';`});
+ const common=fs.readFileSync(path.resolve(__dirname,'../app/static/js/rotation-common.js'),'utf8');
+ const helperStart=common.indexOf('function rotationTaskPaused('),helperEnd=common.indexOf('\nfunction rotationUsesTasks(',helperStart);
+ assert(helperStart>=0&&helperEnd>helperStart);
+ await page.addScriptTag({content:common.slice(helperStart,helperEnd)});
  await page.addScriptTag({content:fs.readFileSync(path.resolve(__dirname,'../app/static/js/rotation-workflow.js'),'utf8')});
  await page.evaluate(()=>document.dispatchEvent(new Event('DOMContentLoaded')));
  for(const daily of [false,true]){
