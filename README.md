@@ -10,6 +10,9 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/rotation-display-consistency.md](docs/rotation-display-consistency.md) | 轮岗大屏、手机和个人页显示统一 |
+| [docs/rotation-break-window.md](docs/rotation-break-window.md) | 餐休展示与正式派发窗口 |
+| [docs/rotation-waiting-notice.md](docs/rotation-waiting-notice.md) | 等待匹配提示与异常保留 |
 | [docs/avatar-crop-fix.md](docs/avatar-crop-fix.md) | 头像裁切与显示验证 |
 | [docs/declaration-admin-corrections.md](docs/declaration-admin-corrections.md) | 声明类型更正、作废及还原 |
 | [docs/declaration-layout-review.md](docs/declaration-layout-review.md) | 声明统计布局检查 |

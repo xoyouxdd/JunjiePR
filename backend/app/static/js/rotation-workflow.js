@@ -15,7 +15,8 @@ function shortRotationShift(p){
 }
 function rotationName(p){return `<span class="rt-name-row"><strong>${esc(p.name)}</strong><small>${shortRotationShift(p)}</small></span>`;}
 function workflowTaskSummary(p){
-  if(!p.task)return p.assign?assignmentPlanText(p):'去向安排中';
+  if(!rotationAssignment(p))return '去向安排中';
+  if(!p.task)return assignmentPlanText(p);
   const rows=p.task.routes.slice(1);
   if(rows.length>2){const last=rows.at(-1);return `顺推 ${rows.length-1} 岗；${esc(last.name)} → ${esc(last.to.replace(/下岗.*休息.*$/,'下岗休息'))}`;}
   return rows.slice(0,2).map(r=>`${esc(r.name)} → ${esc(r.to.replace(/下岗.*休息.*$/,'下岗休息'))}`).join('；')||'按任务接替';
@@ -27,7 +28,7 @@ function workflowComparison(p){
   return `<section class="rt-task-comparison"><h4>执行本任务前后</h4><div class="rt-task-columns"><div><p>执行前 · 当前站位</p>${table(t.beforePosts,false)}</div><div><p>执行后 · 预计站位</p>${table(t.afterPosts,true)}</div></div><small>蓝色仅标出本任务变化，不代表其他任务已经执行。</small></section>`;
 }
 function workflowPools(n,ops,view={}){
-  const day=view.day||RT.data.day,posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean))),allPeople=day.persons.filter(p=>!posted.has(p.pid)),ps=allPeople.filter(p=>view.daily||!p.timeoutCase&&!p.timeoutPending),seen=new Set();
+  const day=view.day||RT.data.day,posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean))),allPeople=day.persons.filter(p=>!posted.has(p.pid)),ps=allPeople.filter(p=>view.daily||!rotationTaskPaused(p)),seen=new Set();
   const section=(title,list,chip,cls='')=>{list.forEach(p=>seen.add(p.pid));const contents=cls==='rt-others'&&list.length?workflowShiftGroups(list,chip,day,view):`<div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(chip).join(''):'暂无'}</div>`;return `<section class="rt-sect ${cls}${list.length?'':' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2>${contents}</section>`;};
   const drag=p=>ops&&['rest','meal','ready','notyet'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:'';
   const card=(p,action,body,cls='')=>{
@@ -40,7 +41,7 @@ function workflowPools(n,ops,view={}){
     return `<${tag}${action?' type="button"':''} class="rt-chip ${cls}"${action?` data-wf-pid="${esc(p.pid)}" data-wf-action="${action}" ${can&&!confirmationBlocked()?'':'aria-disabled="true"'}`:''}${drag(p)}>${rotationName(p)}${body}${badges(p)}</${tag}>`;
   };
   let html='';
-  if(!view.daily){const paused=allPeople.filter(p=>p.timeoutCase||p.timeoutPending);if(paused.length)html+=section('关联任务待处理',paused,p=>card(p,null,`<span class="rt-go">${esc(p.timeoutCase?.line||p.timeoutPending?.line||'')} · ${p.timeoutCase?'待负责人核实':'等待前序完成'}</span><span class="rt-sub">旧详情暂停执行 · 暂不计确认超时</span>`,'late'),'rt-related-paused');}
+  if(!view.daily){const paused=allPeople.filter(rotationTaskPaused);if(paused.length)html+=section('关联任务待处理',paused,p=>card(p,null,`<span class="rt-go">${esc(p.timeoutCase?.line||p.timeoutPending?.line||p.task?.line||'')} · ${p.timeoutPending?'等待前序完成':'待负责人核实'}</span><span class="rt-sub">旧详情暂停执行 · 暂不计确认超时</span>`,'late'),'rt-related-paused');}
   if(view.daily){
     const initial=p=>p.role==='rotation'&&p.state==='notyet'&&[420,435].includes(p.start);
     const pending=p=>['walkback','pending','op'].includes(p.state)||p.role==='op'&&p.state==='notyet';
@@ -53,10 +54,13 @@ function workflowPools(n,ops,view={}){
     html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),chip,'rt-others');
     return html;
   }
-  html+=section('待出发',ps.filter(p=>!p.entryHold&&poolState(p,n)==='ready'),p=>card(p,p.assign?'depart':null,`${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}<span class="rt-task-summary">${workflowTaskSummary(p)}</span><span class="rt-sub">${p.task?`${hm(p.task.allowedAt)} 可出发 · ${hm(p.task.deadlineAt)} 前确认`:p.assign?hm(p.assign.departAt)+' 出发':'等待安排'}</span>${p.task&&n<p.task.allowedAt?`<span class="rt-sub">餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(p.task.allowedAt-n))} 分钟</span>`:''}${p.task?.transferredFromName?`<span class="rt-transfer">任务转接自 ${esc(p.task.transferredFromName)}</span>`:''}`,'wait'),'rt-ready');
+  html+=section('待出发',ps.filter(p=>!p.entryHold&&poolState(p,n)==='ready'),p=>{
+    const a=rotationAssignment(p),task=a?p.task:null;
+    return card(p,a?'depart':null,`${a?`<span class="rt-go">${goText(p)}</span>`:''}<span class="rt-task-summary">${workflowTaskSummary(p)}</span><span class="rt-sub">${task?`${taskTime(task.allowedAt)} 可出发 · ${taskTime(task.deadlineAt)} 前确认`:a?taskTime(a.departAt)+' 出发':'等待安排'}</span>${task&&n<task.allowedAt?`<span class="rt-sub">餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(task.allowedAt-n))} 分钟</span>`:''}${task?.transferredFromName?`<span class="rt-transfer">任务转接自 ${esc(task.transferredFromName)}</span>`:''}`,'wait');
+  },'rt-ready');
   html+=section('待确定休息',ps.filter(p=>p.state==='walkback'||p.state==='pending'||opWaiting(p)),p=>card(p,'arrive',`<span class="rt-sub">${opWaiting(p)?'OP · 待确认休息':p.after==='done'?'轮岗结束，回休息室确认':'已下线，到休息室后确认'}</span>`),'rt-arrivals');
-  html+=section('吃饭区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='meal'),p=>card(p,null,`<span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟</span>${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}`,'meal'),'rt-meals');
-  html+=section('休息区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='rest'),p=>card(p,null,`<span class="rt-sub">${waitingInitialRest(p)?'预排休息 · '+hm(p.start)+' 开始计时':'至 '+hm(restUntil(p))+' · 剩 '+Math.max(0,Math.ceil(restUntil(p)-n))+' 分钟'}</span>${p.assign?`<span class="rt-go">${goText(p)}</span>`:''}`,'rest'),'rt-resting');
+  html+=section('吃饭区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='meal'),p=>card(p,null,`<span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟</span>`,'meal'),'rt-meals');
+  html+=section('休息区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='rest'),p=>card(p,null,`<span class="rt-sub">${waitingInitialRest(p)?'预排休息 · '+hm(p.start)+' 开始计时':'至 '+hm(p.readyAt)+' · 剩 '+Math.max(0,Math.ceil((p.readyAt??n)-n))+' 分钟'}</span>`,'rest'),'rt-resting');
   html+=section('圈外人员',ps.filter(outsideKind),p=>card(p,null,`<span class="rt-sub">${esc(p.leaveReason||p.away?.reason||outsideKind(p))}</span>`,'dim'),'rt-outside');
   html+=section('任务超时 · 待本人确认',ps.filter(p=>p.entryHold),p=>card(p,'entry_return',`<span class="rt-sub">${esc(p.taskTimeout?.line||'')} · ${esc(p.taskTimeout?.entryPost||'原上岗')} 任务超时</span><span class="rt-task-summary">${p.taskTimeout?.transferredToName?'已转 '+esc(p.taskTimeout.transferredToName):'等待转接'}</span><span class="rt-sub">确认后立即分配，不新增休息</span>`,'late'),'rt-timeout');
   html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),p=>card(p,null,`<span class="rt-sub">${esc(p.state==='notyet'?'班次未开始':STATE_NAME[p.state]||'')}</span>`,'dim'),'rt-others');
@@ -74,7 +78,7 @@ const workflowTimeoutSeen=new Set();
 function workflowTimeoutBanner(day,ops){
   const cases=day.timeoutCases||[];
   if(ops&&cases.length&&!RT.modalOpen&&!RT.submitting&&!RT.editingPost){const c=cases.find(c=>{const key='fz.rotation.timeout.notice:'+c.id;try{return !workflowTimeoutSeen.has(key)&&!sessionStorage.getItem(key);}catch(_){return !workflowTimeoutSeen.has(key);}});if(c)setTimeout(()=>{if(RT.modalOpen||!RT.data.day?.timeoutCases?.some(x=>x.id===c.id))return;const key='fz.rotation.timeout.notice:'+c.id;workflowTimeoutSeen.add(key);try{sessionStorage.setItem(key,'1');}catch(_){}confirmBox('强提醒 · '+c.line+'站位待核实','<p>超时影响同线关联任务，相关任务已暂停。请核实执行情况，补记完成或顺接任务。</p><p>关闭提醒后仍保留在看板及待办中，不会每分钟重复弹出。</p>','立即处理',()=>{setTimeout(()=>workflowHandleTimeout(c.id),0);return true;});},0);}
-  return cases.map(c=>`<section class="rt-timeout-banner" role="status"><div><strong>${esc(c.line)} · 关联任务待核实</strong><p>${c.people.length} 人受影响 · ${c.handler?'处理中：'+esc(c.handler):'等待负责人接手'}</p></div>${ops?`<button type="button" class="primary" data-wf-timeout="${esc(c.id)}">${c.handler&&c.handler!==me?.name?'接替处理':'立即处理'}</button>`:''}</section>`).join('')+(day.timeoutWaitingMatch||[]).map(d=>`<p class="rt-timeout-waiting">${esc(d.line)} · 顺接后的需求等待匹配</p>`).join('');
+  return cases.map(c=>`<section class="rt-timeout-banner" role="status"><div><strong>${esc(c.line)} · 关联任务待核实</strong><p>${c.people.length} 人受影响 · ${c.handler?'处理中：'+esc(c.handler):'等待负责人接手'}</p></div>${ops?`<button type="button" class="primary" data-wf-timeout="${esc(c.id)}">${c.handler&&c.handler!==me?.name?'接替处理':'立即处理'}</button>`:''}</section>`).join('');
 }
 async function workflowHandleTimeout(id,takeover=false,reason=''){
   const c=RT.data.day?.timeoutCases?.find(c=>c.id===id);if(!c){toast('异常已变化，请刷新',true);return;}

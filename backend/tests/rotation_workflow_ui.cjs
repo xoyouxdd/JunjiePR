@@ -24,6 +24,10 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   // Shared task details and before/after are rendered in the real mobile inbox.
   const health=await mobile.request.get(base+'/health').then(r=>r.json());await mobile.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}});
   await phone.goto(base+'/?view=actionCenter');await phone.locator('[data-formal-rotation-todo] .rt-task-comparison').waitFor({timeout:15000});
+  const legacy=await mobile.newPage();legacy.on('pageerror',e=>errors.push(e.message));
+  await legacy.goto(base+'/rotation-board?personal=1');await legacy.locator('[data-member-act=depart]').waitFor();
+  assert(await legacy.locator('[data-member-act=depart]').isEnabled());
+  assert.equal(await legacy.locator('.rotation-test-badge').count(),0);
   assert.equal(await phone.locator('.rt-task-columns .rt-task-line').count(),2);
   assert.equal(await phone.locator('[data-confirm-page=depart] .rt-confirm-times strong').count(),2);
   assert.equal(await phone.locator('.rt-confirm-routes>div').count()>0,true);
@@ -36,6 +40,9 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
    // Confirm only this person's task; the other two remain independent.
    await phone.locator('[data-rotation-task=depart]').click();await phone.locator('[data-modal-confirm]').click();
    await screenPage.waitForFunction(()=>RT.data.day.persons.find(p=>p.pid==='9710000').state==='onpost');
+   await legacy.waitForFunction(()=>RT.data.person?.state==='onpost');
+   assert.equal(await legacy.locator('[data-member-act=depart]').count(),0);
+   assert((await legacy.locator('.rt-status').innerText()).includes('连续在岗'));
    assert.equal(await screenPage.evaluate(()=>RT.data.day.persons.find(p=>p.pid==='9710010').state),'ready');
    await board.locator('[data-wf-undo]').click();await board.locator('#rtModal select[name=line]').waitFor();await board.locator('#rtModal button[type=submit]').click();await board.locator('[data-wf-notified]').waitFor();
    assert(await board.locator('#rtModal .rt-task-line').count()>=2);await board.locator('[data-wf-notified]').check();await board.locator('[data-ok]').click();
@@ -55,6 +62,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
    await screenPage.waitForFunction(k=>RT.data.day.lines.find(l=>l.id==='A1')?.posts[1].key===k,key);
   }
   await manager.request.post(base+'/__fixture/cohort',{data:{three:true,hold101:true}});
+  await legacy.close();
   await board.reload();await board.locator('[data-wf-101]').waitFor();await board.locator('[data-wf-101]').click();
   await screenPage.waitForFunction(()=>document.querySelectorAll('.holding101').length===2);
   assert.equal(await screenPage.locator('[data-wf-101]').count(),0);

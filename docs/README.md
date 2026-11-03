@@ -4,6 +4,9 @@
 
 | 文件 | 内容 |
 |---|---|
+| [rotation-display-consistency.md](rotation-display-consistency.md) | 轮岗跨页面任务和时间显示 |
+| [rotation-break-window.md](rotation-break-window.md) | 餐休展示与正式派发窗口 |
+| [rotation-waiting-notice.md](rotation-waiting-notice.md) | 等待匹配提示与异常保留 |
 | [avatar-crop-fix.md](avatar-crop-fix.md) | 头像裁切与显示验证 |
 | [declaration-admin-corrections.md](declaration-admin-corrections.md) | 声明类型更正、作废及还原 |
 | [declaration-layout-review.md](declaration-layout-review.md) | 声明统计布局检查 |

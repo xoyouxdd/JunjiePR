@@ -345,3 +345,49 @@ def test_modern_400_person_projection_uses_issued_routes_without_legacy_simulati
     views=[person_view(eng,p,540,{}) for p in eng.P.values()]
     assert len(views)==400
     assert all(p['departureRoutes']==p['task']['routes'] for p in views if p['task'])
+
+@pytest.mark.parametrize('break_state',['rest','meal'])
+def test_long_break_forecast_does_not_publish_before_three_minute_window(break_state):
+    eng,_=fixture(1)
+    p=eng.P['new0'];p.update(state=break_state,readyAt=585,assign={'line':'A','mode':'push','departAt':585})
+    assert not W.plan(eng,540)
+    assert W.task_for(eng,p) is None
+    assert p['state']==break_state and p['readyAt']==585
+    assert not W.plan(eng,581.99)
+    assert W.task_for(eng,p) is None
+    assert W.plan(eng,582)
+    task=W.task_for(eng,p)
+    assert task['allowedAt']==585 and task['deadlineAt']==588
+    assert p['state']==break_state and p['readyAt']==585
+    with pytest.raises(ActionError):eng.act_depart(p['pid'],584.99,'screen')
+
+
+@pytest.mark.parametrize('state,kind',[('rest','rest'),('meal','meal'),('rest','meal_rest'),('ready','rest')])
+def test_unpublished_forecasts_never_become_personal_notice_routes(state,kind):
+    from app.rotation.service import desired_notices
+    eng,_=fixture(1);p=eng.P['new0']
+    p.update(state=state,breakKind=kind,readyAt=585,
+             assign={'line':'A','mode':'push','departAt':620})
+    before=deepcopy(eng.d)
+    notice=desired_notices(eng,540)[(p['pid'],'step')]
+    assert notice[0]=='rest' and '正式任务' in notice[2]
+    assert '10:20' not in str(notice) and '出发去 A' not in str(notice)
+    assert eng.d==before  # Presentation must not change rest or the engine plan.
+
+
+@pytest.mark.parametrize('minute,expected',[(585,'09:45'),(585.5,'09:45:30'),
+    (585.75,'09:45:45'),(1439.999,'23:59:59'),(1440,'00:00'),(-.25,'23:59:45')])
+def test_display_time_preserves_actual_clock_minute_and_fractional_seconds(minute,expected):
+    from app.rotation.service import display_time
+    assert display_time(minute)==expected
+
+
+def test_published_fractional_deadline_is_not_rounded_to_another_minute():
+    from app.rotation.service import desired_notices
+    eng,_=fixture(1);p=eng.P['new0']
+    p.update(state='rest',readyAt=540.75,assign={'line':'A','mode':'push','departAt':540.75})
+    W.plan(eng,538)
+    task=W.task_for(eng,p);assert task['allowedAt']==540.75
+    notice=desired_notices(eng,538)[(p['pid'],'step')]
+    assert '09:00:45 允许出发' in notice[2] and '09:03:45 前确认' in notice[2]
+    with pytest.raises(ActionError):W.execute(eng,p,540.74,'screen')

@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.03.2", "date": "2026-11-03", "status": "candidate",
+     "items": [{"summary": "轮岗任务与餐休显示统一", "detail": "大屏、手机和旧个人页统一暂停、前序等待及正式任务展示；餐休区仅显示实际剩余时间，不提前展示未派发路线。保留关联异常处理入口，隐藏顺接需求等待匹配的堆叠提示，明确历史时间待核实标记并统一分钟和秒数显示。", "audiences": ["all"]}]},
     {"version": "2026.11.03.1", "date": "2026-11-03", "status": "candidate",
      "items": [{"summary": "声明更正、并发保护与界面修复", "detail": "最高管理员可按原权限更正声明类型及作废还原，保留材料、升级、月结与审计保护；月结与业务写入增加事务内复核。备份健康检查识别过期报告，轮岗兼容补齐可编辑五岗预排。修复头像边缘串图、工作台对齐和声明统计桌面及手机布局。", "audiences": ["all"]}]},
     {"version": "2026.11.02.1", "date": "2026-11-02", "status": "candidate",

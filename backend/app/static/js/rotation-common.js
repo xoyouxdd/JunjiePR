@@ -13,8 +13,13 @@ const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;
 const pad2 = value => String(value).padStart(2, '0');
 function hm(minute) {
   if (minute === null || minute === undefined) return '--:--';
-  const m = ((Math.round(minute) % 1440) + 1440) % 1440;
+  const m = ((Math.floor(minute) % 1440) + 1440) % 1440;
   return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+}
+function taskTime(minute) {
+  if(minute===null||minute===undefined)return '--:--';
+  const seconds=Math.floor((minute-Math.floor(minute))*60+1e-6);
+  return hm(minute)+(seconds?':'+pad2(seconds):'');
 }
 function hms(minute) {
   const s = Math.max(0, Math.floor(minute * 60));
@@ -51,12 +56,20 @@ function departureEarly() {
 }
 
 function canDepartNow(p, n) {
-  if(RT.data?.day?.taskWorkflow&&!p.task)return false;
+  if(rotationTaskPaused(p)||p.entryHold)return false;
+  if(rotationUsesTasks(p)&&p.task?.status!=='assigned')return false;
   if(p.task&&(!p.canDepart||n<p.task.allowedAt-1e-8||n>p.task.deadlineAt+1e-8))return false;
   if(p.departureBlocked||p.assign?.blocked)return false;
   if(p.entryGroup&&n<p.assign.departAt-.01)return false;
   if(p.entryGroup&&(p.entryGroup.blocked||p.entryGroup.members.find(m=>m.pid===p.pid)?.confirmed))return false;
   return departureTimeReady(p,n);
+}
+
+function rotationTaskPaused(p){return !!(p.timeoutCase||p.timeoutPending||p.task?.status==='exception_hold');}
+function rotationUsesTasks(p){return !!(formalRotation||RT.data?.taskWorkflow||RT.data?.day?.taskWorkflow||p.task);}
+function rotationAssignment(p){
+  if(rotationTaskPaused(p)||p.entryHold)return null;
+  return rotationUsesTasks(p)?(p.task?.status==='assigned'?p.assign:null):p.assign;
 }
 
 function departureTimeReady(p,n){
@@ -76,6 +89,7 @@ function poolState(p, n) {
 
 function restUntil(p) {
   if (waitingInitialRest(p)) return p.scheduledRestStart;
+  if(rotationUsesTasks(p))return p.readyAt??0;
   return Math.max(p.readyAt ?? 0, p.assign?.departAt ?? 0);
 }
 
@@ -418,7 +432,7 @@ function departureForecast(people,n,compact=false){
 }
 
 function goText(p) {
-  const a = p.assign;
+  const a = rotationAssignment(p);
   if (!a) return '';
   const destination=`→ ${esc(a.line)}${a.entryPost?' · '+esc(a.entryPost):''}`;
   if (a.mode === 'push7') return `${destination} <small>推7点 替 ${esc(a.targetName || '')}</small>`;
@@ -432,6 +446,7 @@ function preparingText(kind) {
 
 function badges(p) {
   const out = [];
+  if(p.timingUnverified)out.push('<span class="rt-badge prep">历史时间待核实</span>');
   if(p.interruptedBreak&&['meal','meal_rest'].includes(p.interruptedBreak.kind))out.push('<span class="rt-badge meal">餐休曾中断</span>');
   if (p.mealEligible && !p.ate) out.push('<span class="rt-badge meal">未休饭</span>');
   if (p.breakKind === 'meal_rest' && p.state === 'rest') out.push('<span class="rt-badge rest">饭后剩余休息时间</span>');
@@ -474,6 +489,7 @@ function lineCard(L, n, ops, view = {}) {
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;
       else if (p && (p.continuousStart??p.lineStart) !== null && (p.continuousStart??p.lineStart) !== undefined) mins = `${Math.max(0, Math.floor(n - (p.continuousStart??p.lineStart)))} 分`;
       if(p?.waitingReplacement)who+='<span class="rt-badge prep">待接替下班 · 留守</span>';
+      if(p?.timingUnverified)who+='<span class="rt-badge prep">历史时间待核实</span>';
     }
     if(x.hold){cls+=' holding';who+=`<span class="rt-badge post-hold">${x.hold101?'101':'定岗'} · ${hm(Math.floor(x.hold.since))}起</span>`;}
     if (i === exitIndex) cls += ' exit';

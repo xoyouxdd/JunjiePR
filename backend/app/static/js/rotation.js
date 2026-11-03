@@ -141,12 +141,14 @@ function poolView(n) {
 function personMenu(p) {
   const active = RT.data.day.lines.filter(L => L.active);
   const state = poolState(p, nowMin());
+  const assignment=rotationAssignment(p);
   const info = `<dl class="rt-kv">
     <dt>工号</dt><dd>${esc(p.pid)}</dd>
     <dt>班次</dt><dd>${hm(p.start)}-${hm(p.end)}${p.mealEligible ? '（有吃饭）' : '（只休息）'}${p.ate ? '，已吃饭' : ''}</dd>
     <dt>状态</dt><dd>${STATE_NAME[state] || ''}${state === 'rest' ? `至 ${hm(restUntil(p))}` : ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（${preparingText(p.preparing)}）` : ''}</dd>
     ${p.postHold?`<dt>持续定岗</dt><dd>${hm(Math.floor(p.postHold.since))}起 · ${esc(p.postHold.reason)}；手动取消或零点结束。</dd>`:''}
-    <dt>去向</dt><dd>${p.assign ? `${goText(p)}，${hm(p.assign.departAt)} 出发` : '无'}</dd>
+    <dt>去向</dt><dd>${assignment ? `${goText(p)}，${taskTime(assignment.departAt)} 出发` : '待正式派发'}</dd>
+    ${p.timingUnverified?'<dt>计时状态</dt><dd>历史时间待核实，当前分钟数为核实后已记录时间。</dd>':''}
     <dt>今天去过</dt><dd>${esc(p.visited.join('、') || '无')}</dd>
     ${p.absences.length ? `<dt>固定暂离</dt><dd>${p.absences.map(a => `${hm(a.start)}-${hm(a.end)} ${esc(a.label)}${a.missed ? '（错过）' : ''}`).join('；')}</dd>` : ''}
     ${p.note ? `<dt>备注</dt><dd>${esc(p.note)}</dd>` : ''}</dl>`;
@@ -637,19 +639,21 @@ function memberView() {
   const d = RT.data;
   const p = d.person;
   const n = nowMin();
+  if(p&&rotationTaskPaused(p))return `<section class="panel rt-todo"><h2>关联任务待处理</h2><strong>${esc(p.name)}</strong><p role="status">${p.timeoutPending?'等待前序完成后更新任务，暂不计确认超时':'同线关联任务待负责人核实，暂不计确认超时'}</p><p>旧详情暂停执行，请等待更新后的安排。</p></section>`;
+  const assignment=p?rotationAssignment(p):null;
   const open = d.notices.filter(x => x.status === 'open');
   const done = d.notices.filter(x => x.status !== 'open');
-  const action = p && (['walkback', 'pending'].includes(p.state)||opWaiting(p)) ? 'arrive' : p?.assign ? 'depart' : null;
-  const can = action === 'arrive' || (action === 'depart' && canDepartNow(p, n));
-  const actionButton = action ? `<div class="rt-actions"><button type="button" class="primary" data-member-act="${action}" ${can && !confirmationBlocked() ? '' : 'disabled'}>${RT.pendingConfirmation ? '正在核实确认结果' : RT.submitting ? '正在提交' : action === 'arrive' ? '确认已到休息室' : can ? '去轮岗' : '等待出发'}</button></div>` : '';
-  const todo = `<section class="panel rt-todo"><div class="rt-todo-head"><h2>待办</h2><span class="rotation-test-badge">测试</span></div>
+  const action = p?.entryHold?'entry_return':p && (['walkback', 'pending'].includes(p.state)||opWaiting(p)) ? 'arrive' : assignment ? 'depart' : null;
+  const can = action === 'arrive' || action==='entry_return' || (action === 'depart' && canDepartNow(p, n));
+  const actionButton = action ? `<div class="rt-actions"><button type="button" class="primary" data-member-act="${action}" ${can && !confirmationBlocked() ? '' : 'disabled'}>${RT.pendingConfirmation ? '正在核实确认结果' : RT.submitting ? '正在提交' : action==='entry_return'?'确认知晓，重新领取':action === 'arrive' ? '确认已到休息室' : can ? '去轮岗' : '等待出发'}</button></div>` : '';
+  const todo = `<section class="panel rt-todo"><div class="rt-todo-head"><h2>待办</h2>${formalRotation?'':'<span class="rotation-test-badge">测试</span>'}</div>
     ${open.length ? open.map(x => `<article class="rt-notice ${esc(x.kind)}"><strong>${esc(x.title)}</strong>${x.body ? `<p>${esc(x.body)}</p>` : ''}</article>`).join('') : '<p class="field-hint">当前没有轮岗待办。</p>'}
-    ${action === 'depart' ? `<div class="rt-route">${assignmentDescription(p.assign)}</div>` : ''}${actionButton}
+    ${action === 'depart' ? `<div class="rt-route">${assignmentDescription(assignment)}${p.task?`<p>${taskTime(p.task.allowedAt)} 可出发 · ${taskTime(p.task.deadlineAt)} 前确认</p>${n<p.task.allowedAt?`<p>餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(p.task.allowedAt-n))} 分钟</p>`:''}`:''}</div>` : ''}${action==='entry_return'?'<p>确认后立即恢复可分配状态，不新增休息时间；已转给他人的任务保持不变。</p>':''}${actionButton}
     ${done.length ? `<details><summary>已完成 ${done.length} 项</summary>${done.map(x => `<p class="rt-notice-done">${esc(x.updated_at || '')} ${esc(x.title)}</p>`).join('')}</details>` : ''}</section>`;
   if (!p) return `${todo}<section class="panel rt-empty"><h2>今天没有你的轮岗</h2><p>名单发布后这里会显示你的状态和所在线。</p></section>`;
   const state = poolState(p, n);
   let status = STATE_NAME[state] || '';
-  if (p.state === 'onpost') status = `在 ${esc(p.line)} 线 ${esc(p.post || '')}，已站 ${Math.max(0, Math.floor(n - (p.lineStart || n)))} 分钟`;
+  if (p.state === 'onpost') status = `在 ${esc(p.line)} 线 ${esc(p.post || '')}，${p.timingUnverified?'核实后已记录':'连续在岗'} ${Math.max(0, Math.floor(n - (p.continuousStart ?? p.lineStart ?? n)))} 分钟`;
   if (state === 'rest' || state === 'meal') {
     const until = state === 'meal' ? p.readyAt : restUntil(p);
     status = `${state === 'meal' ? '吃饭' : '休息'}至 ${hm(until)}，还剩 ${Math.max(0, Math.ceil(until - n))} 分钟`;
@@ -657,11 +661,11 @@ function memberView() {
   if (waitingInitialRest(p)) status = `班次未开始 · ${hm(p.scheduledRestStart)}自动开始休息`;
   if (p.state === 'heading') status = `前往 ${esc(p.assign ? p.assign.line : '')} 线，约 ${hm(p.arriveAt)} 到岗`;
   if (p.state === 'away' && p.away) status = `暂离：${esc(p.away.reason)}${p.away.until !== null && p.away.until !== undefined ? `，${hm(p.away.until)} 回` : ''}`;
-  const next = p.assign ? `<p>下一步：${goText(p)}，${hm(p.assign.departAt)} 出发</p>` : '';
-  const line = d.line ? `<section class="panel"><h2>${esc(d.line.id)} 线</h2><div class="rt-line">${d.line.posts.map(x => `<div class="rt-post${x.occ === p.pid ? ' me' : ''}${x.open ? '' : ' closed'}"><span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${x.open ? esc(x.occName || '空岗') : '未开'}${x.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span></div>`).join('')}</div></section>` : '';
+  const next = assignment ? `<p>下一步：${goText(p)}，${taskTime(assignment.departAt)} 出发</p>` : '';
+  const line = d.line&&(!rotationUsesTasks(p)||assignment||p.state==='onpost') ? `<section class="panel"><h2>${esc(d.line.id)} 线</h2><div class="rt-line">${d.line.posts.map(x => `<div class="rt-post${x.occ === p.pid ? ' me' : ''}${x.open ? '' : ' closed'}"><span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${x.open ? esc(x.occName || '空岗') : '未开'}${x.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span></div>`).join('')}</div></section>` : '';
   const today = (d.today || []).map(s => `<span class="rt-pill">${esc(s.line)} ${hm(s.start)}-${hm(s.end)}</span>`).join('');
   const week = Object.entries(d.week_minutes || {}).sort().map(([lineId, m]) => `<span class="rt-pill">${esc(lineId)} ${Math.round(m)} 分钟</span>`).join('');
-  const results = d.confirmations || [];
+  const results = (d.confirmations || []).filter(r=>!['reversed','superseded'].includes(r.status));
   const resultCard = r => `<article class="rt-confirmation"><strong>${hm(r.minute)} · ${r.action === 'depart' ? '已确认进线' : '已确认到达休息室'}</strong>${r.action === 'depart' ? `<p>进入 ${esc(r.line)} 线 · ${esc(r.post)}</p>${r.assignment?.targetName ? `<p>${esc(r.assignment.why || (r.assignment.mode === 'push7' ? '推7点' : '替换'))}：${esc(r.assignment.targetName)}<br>原岗位：${esc(r.assignment.targetLine || r.assignment.line)} · ${esc(r.assignment.targetPost)}</p>` : ''}${r.assignment?.mode === 'chain' ? '<p class="field-hint">从入口岗依次推进，推至目标人员所在岗位。</p>' : ''}` : `<p>${STATE_NAME[r.state] || ''}${['rest','meal','ready'].includes(r.state) && r.readyAt ? `至 ${hm(r.readyAt)}` : ''}</p>`}<small>${r.source === 'member' ? '个人待办确认' : '大屏确认'}</small></article>`;
   const confirmations = results.length ? `<section class="panel"><h2>本次确认</h2>${resultCard(results[0])}${results.length > 1 ? `<details><summary>此前确认 ${results.length - 1} 条</summary>${results.slice(1).map(resultCard).join('')}</details>` : ''}</section>` : '';
   return `${todo}<section class="panel"><h2>${esc(p.name)}</h2><p class="rt-status">${status}</p>${next}<p class="field-hint">班次 ${hm(p.start)}-${hm(p.end)}${p.mealEligible ? (p.ate ? '，已吃饭' : '，有吃饭') : ''}${badges(p)}</p></section>${confirmations}${line}

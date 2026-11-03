@@ -784,3 +784,29 @@ def test_restore_scheduled_closure_after_it_executed_restores_occupant_state(mon
         board=ok(operator.get('/api/rotation-board/board'))['day']
         assert board['lines'][0]['posts'][0]['open'] and board['lines'][0]['posts'][0]['occ']=='9710020'
         assert next(p for p in board['persons'] if p['pid']=='9710020')['state']=='onpost'
+
+
+def test_personal_open_notice_projection_hides_legacy_forecast_without_changing_history():
+    aid=seed_cohort()
+    with SessionLocal() as db:
+        db.info['rotation_formal']=True
+        with S.transaction(db):
+            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
+            now=state['lastTick'];p=state['persons']['9710000']
+            p.update(state='rest',readyAt=now+45,assign={'line':'A1','mode':'push','departAt':now+80})
+            state['rotationTasks']={}
+            S.save_day(db,row,state)
+            Notice=F.RotationNotice
+            db.query(Notice).filter_by(attraction_id=aid,work_date=row.work_date,employee_no=p['pid']).delete()
+            old=Notice(attraction_id=aid,work_date=row.work_date,employee_no=p['pid'],slot='step',
+                kind='rest',title='旧休息提示',body='预计进入A1线旧岗位',status='open')
+            done=Notice(attraction_id=aid,work_date=row.work_date,employee_no=p['pid'],slot='step',
+                kind='rest',title='历史提示',body='保留的历史正文',status='done')
+            db.add_all([old,done]);db.flush();old_id=old.id;done_id=done.id
+        data=S.member_payload(db,aid,'9710000')
+        assert data['taskWorkflow'] is True
+        open_notice=next(n for n in data['notices'] if n['id']==old_id)
+        assert '正式任务' in open_notice['body'] and '旧岗位' not in open_notice['body']
+        assert next(n for n in data['notices'] if n['id']==done_id)['body']=='保留的历史正文'
+        assert db.get(Notice,old_id).body=='预计进入A1线旧岗位'
+        assert db.get(Notice,done_id).body=='保留的历史正文'

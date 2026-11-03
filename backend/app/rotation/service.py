@@ -575,8 +575,16 @@ def start_rotation_ticker() -> None:
 
 # ---------------------------------------------------------------- 待办（测试阶段只在轮岗页显示）
 
+def display_time(minute: float) -> str:
+    """Presentation only: keep clock minutes and fractional task seconds consistent."""
+    whole = math.floor(minute)
+    seconds = math.floor((minute - whole) * 60 + 1e-6)
+    value = f"{(whole // 60) % 24:02d}:{whole % 60:02d}"
+    return value + (f":{seconds:02d}" if seconds else "")
+
+
 def _go_text(eng: E.Engine, a: dict) -> str:
-    text = f"{fmt(a['departAt'])} 出发去 {a['line']} 线"
+    text = f"{display_time(a['departAt'])} 出发去 {a['line']} 线"
     target = eng.P.get(a.get("target")) if a.get("target") else None
     if a.get("mode") == "push7" and target:
         text += f"，推 7 点：替换 {target['name']}（他下来休息）"
@@ -617,14 +625,15 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
             task=eng.d.get('rotationTasks',{}).get(a['taskId'])
             if task and task.get('status')=='assigned':
                 source=eng.P.get(task.get('transferredFrom'),{}).get('name')
-                body=f"{fmt(task['allowedAt'])} 允许出发，{fmt(task['deadlineAt'])} 前确认。"
+                body=f"{display_time(task['allowedAt'])} 允许出发，{display_time(task['deadlineAt'])} 前确认。"
                 if now<task['allowedAt']:body+='剩余餐休继续计时，未到允许出发时间不能确认上岗。'
                 if source:body+='任务转接自 '+source+'。'
                 step=('depart',f"待出发 · {a['line']} 线" if now<task['allowedAt'] else f"现在出发去 {a['line']} 线",body)
         elif st in ("rest", "meal"):
             word = "吃饭" if st == "meal" else "饭后剩余休息时间" if p.get("breakKind") == "meal_rest" else "休息"
-            body = "正常轮岗须等倒计时结束；现场强制安排须填写原因并预览确认。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。"
-            step = ("rest", f"{word}至 {fmt(p['readyAt'])}", body)
+            body = ("餐休继续计时，正式任务派发后再显示去向，请留意大屏。" if eng.d.get('taskWorkflow') else
+                    "正常轮岗须等倒计时结束；现场强制安排须填写原因并预览确认。" if p.get("breakKind") == "meal_rest" else _go_text(eng, a) if a else "去向安排中，请留意大屏。")
+            step = ("rest", f"{word}至 {display_time(p['readyAt'])}", body)
         elif st == "ready":
             if p.get('entryHold'):
                 step = ('entry_return', '请本人到场后重新领取安排', '同行任务已调整；本提示不代表缺勤，请到场后在本人待办确认。')
@@ -633,10 +642,12 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
                     from app.rotation.workflow import locate
                     _,_,post=locate(eng,timeout.get('entryKey'))
                     step=('entry_return', f"{timeout['line']} · {post['name'] if post else '原上岗'}任务超时", ('已转由 '+receiver+' 执行。' if receiver else '等待下一位可分配人员承接。')+'本人确认后立即恢复可分配状态，不新增休息；原任务未转接时可重新承接。')
+            elif eng.d.get('taskWorkflow'):
+                step = ("rest", "正在安排去向", "正式任务尚未派发，请留意休息室大屏。")
             elif a and now >= max(a["departAt"] - (0 if a.get('taskId') else early), a.get("notBefore", 0)):
                 step = ("depart", f"现在出发去 {a['line']} 线", _go_text(eng, a) + "。在个人待办或休息室大屏确认「去轮岗」。")
             elif a:
-                step = ("rest", f"{fmt(a['departAt'])} 出发去 {a['line']} 线", _go_text(eng, a))
+                step = ("rest", f"{display_time(a['departAt'])} 出发去 {a['line']} 线", _go_text(eng, a))
             else:
                 step = ("rest", "正在安排去向", "请留意休息室大屏。")
         elif st == "onpost" and no in taken:
@@ -645,7 +656,7 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
             if ra.get("mode") == "chain":
                 arrive = ra["departAt"] + eng.walk(ra["line"])
                 word = "出圈" if ra.get("why") == "推出圈" else "下班"
-                step = ("leaving", f"准备{word}", f"约 {fmt(arrive)} {replacer['name']} 从入口岗推进来，把你推{word}。")
+                step = ("leaving", f"准备{word}", f"约 {display_time(arrive)} {replacer['name']} 从入口岗推进来，把你推{word}。")
         if step:
             out[(no, "step")] = step
         if st not in ("done", "excluded"):
@@ -1029,6 +1040,20 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
     if not p:
         return out
     eng, _ = engine_for(db, cfg, row, state)
+    out['taskWorkflow'] = bool(state.get('taskWorkflow'))
+    if out['taskWorkflow']:
+        # Existing open notices can predate a UI/rule-text update. Project their
+        # current wording without rewriting completed notices or stored history.
+        desired = desired_notices(eng, minute)
+        current_notices = []
+        for notice, view in zip(notices, out['notices']):
+            if notice.status == 'open':
+                current = desired.get((employee_no, notice.slot))
+                if current is None:
+                    continue
+                view.update(zip(('kind', 'title', 'body'), current))
+            current_notices.append(view)
+        out['notices'] = current_notices
     eng._read_projection = _read_projection_cache(db, cfg, row, minute)
     out["person"] = person_view(eng, p, minute, eng.targeted() if state["status"] == "live" else {})
     out["confirmations"] = [r for r in reversed(list(state.get("confirmations", {}).values()))
@@ -1539,7 +1564,7 @@ def day_log(db: Session, attraction_id: int, day: str, limit: int = 500) -> list
         for member in db.query(TemporaryMember).filter_by(attraction_id=attraction_id):
             names.setdefault(member.employee_no,member.name)
     return [{
-        "id": r.id, "minute": r.minute, "time": fmt(r.minute), "actor": r.actor_name, "actor_type": r.actor_type,
+        "id": r.id, "minute": r.minute, "time": display_time(r.minute), "actor": r.actor_name, "actor_type": r.actor_type,
         "type": r.event_type, "employee_no": r.employee_no, "name": json.loads(r.detail_json or '{}').get('rotation_identity',{}).get('name') or names.get(r.employee_no, r.employee_no),
         "line": r.line, "post": r.post, "detail": json.loads(r.detail_json) if r.detail_json else None,
         "temporary": bool(json.loads(r.detail_json or '{}').get('rotation_temporary')),
@@ -1597,7 +1622,7 @@ def person_record(db: Session, attraction_id: int, employee_no: str, day: str) -
                       "identity_labels":_identity_labels(identity_by_day.get(s.work_date,{}))} for s in segs],
         "totals": totals,
         "duties": [{"date": d.work_date, "kind": d.kind} for d in duties],
-        "events": [{"date": e.work_date, "time": fmt(e.minute), "type": e.event_type, "actor": e.actor_name, "line": e.line, "post": e.post,
+        "events": [{"date": e.work_date, "time": display_time(e.minute), "type": e.event_type, "actor": e.actor_name, "line": e.line, "post": e.post,
                     "temporary":bool(json.loads(e.detail_json or '{}').get('rotation_temporary')),
                     "actor_temporary":e.actor_type=='temporary',
                     "identity_labels":_identity_labels(json.loads(e.detail_json or '{}').get('rotation_identity',{})),

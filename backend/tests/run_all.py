@@ -31,6 +31,8 @@ BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "de
 BROWSER_TESTS.update({"rotation_assignment_window_ui.cjs", "month_close_scope_ui.cjs", "recognition_photo_ui.cjs"})
 BROWSER_TESTS.add("workspace_compact_ui.cjs")
 BROWSER_TESTS.add("rotation_workflow_ui.cjs")
+BROWSER_TESTS.add("rotation_display_consistency_ui.cjs")
+BROWSER_TESTS.update({"rotation_break_window_ui.cjs", "rotation_waiting_notice_ui.cjs"})
 BROWSER_TESTS.add("avatar_ui.cjs")
 BROWSER_TESTS.add("avatar_integration_ui.cjs")
 BROWSER_TESTS.add("announcement_all_leads_ui.cjs")
