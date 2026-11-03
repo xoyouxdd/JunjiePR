@@ -391,3 +391,16 @@ def test_published_fractional_deadline_is_not_rounded_to_another_minute():
     notice=desired_notices(eng,538)[(p['pid'],'step')]
     assert '09:00:45 允许出发' in notice[2] and '09:03:45 前确认' in notice[2]
     with pytest.raises(ActionError):W.execute(eng,p,540.74,'screen')
+
+
+def test_explicit_early_relief_target_survives_substitute_selection():
+    eng,_=fixture(3)
+    eng.d['plan'].update(seven={'A#0':'old0','A#1':'old1'},push7=['new0','new1'],
+                         push7Targets={'new0':'old0','new1':'old1'})
+    eng.P['new0'].update(state='excluded',role='excluded',assign=None)
+    for pid in ['new1','new2']:
+        eng.P[pid].update(state='ready',start=435,readyAt=540,assign=None)
+    for pid in ['old0','old1']:eng.P[pid]['flags'].append('7点岗')
+    eng._assign_all(540)
+    assert eng.d['plan']['push7Targets']=={'new2':'old0','new1':'old1'}
+    assert {a:b for _,a,b in eng._push7_pairs()}=={'new2':'old0','new1':'old1'}

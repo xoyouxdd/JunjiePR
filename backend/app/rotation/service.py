@@ -885,14 +885,20 @@ def opening_status(eng: E.Engine, line: dict, index: int) -> str | None:
 
 
 def lines_view(eng: E.Engine) -> list[dict]:
+    def display_occ(line,index,post):
+        if post.get('occ'):return post['occ']
+        key=f"{line['id']}#{index}"
+        pid=eng.d['plan']['seven'].get(key) or eng.d['plan']['crew'].get(key)
+        return pid if line.get('active') and eng.P.get(pid,{}).get('state')=='notyet' else None
     return [{
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
         "walk": eng.walk(L["id"]),
-        "posts": [{"name": x["name"], "open": x.get("open"), "occ": x.get("occ"),
-                   "key":x.get('key'),"occName": eng.P.get(x.get("occ"), {}).get("name"), "since": x.get("since"), "hold": x.get("hold") or x.get('hold101'),
+        "posts": [{"name": x["name"], "open": x.get("open"), "occ": display_occ(L,i,x),
+                   "key":x.get('key'),"occName": eng.P.get(display_occ(L,i,x), {}).get("name"), "since": x.get("since"), "hold": x.get("hold") or x.get('hold101'),
+                   "prearranged":eng.P.get(display_occ(L,i,x),{}).get('state')=='notyet',
                    "hold101":bool(x.get('hold101')),"hold101Role":x.get('hold101Role'),
                    "manualHold":x.get('hold'),
-                   "continuousStart":eng.P.get(x.get('occ'),{}).get('continuousStart'),
+                   "continuousStart":eng.P.get(display_occ(L,i,x),{}).get('continuousStart'),
                    "openingStatus":opening_status(eng,L,i),
                    "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for i,x in enumerate(L["posts"])],
     } for L in eng.d["lines"]]
@@ -1470,6 +1476,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             raise ActionError("没有正在编辑的草稿，请先生成")
         state = day_state(row)
         plan = state["plan"]
+        from app.rotation.daily import seven_relief_slots, normalize_seven_assignments
+        previous_relief=seven_relief_slots(state) if 'push7Targets' in plan else None
         if act == "draft_set":
             _require(body, "kind", "key")
             kind, key, pid = body["kind"], body["key"], body.get("pid") or None
@@ -1482,7 +1490,7 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 raise ActionError("名单里没有这个人")
             for k in ("crew", "seven"):
                 for kk in list(plan[k]):
-                    if pid and plan[k][kk] == pid:
+                    if kk==key or pid and plan[k][kk] == pid:
                         del plan[k][kk]
             if pid:
                 plan[kind][key] = pid
@@ -1503,6 +1511,16 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 if x not in state["persons"]:
                     raise ActionError("名单里没有这个人")
             plan[body["kind"]] = pids
+            if body['kind']=='push7' and 'targets' in body:
+                from app.rotation.daily import seven_slot_order
+                targets=body['targets']
+                expected=[plan['seven'][key] for key in seven_slot_order(state)]
+                if targets!=expected or len(targets)!=len(body.get('pids',[])):
+                    raise ConfirmationConflict('7点岗位或接替对象已变化，请刷新预排')
+                bindings={}
+                for pid,target in zip(body['pids'],targets):
+                    if pid and pid not in bindings:bindings[pid]=target
+                plan['push7Targets']=bindings
         elif act == "draft_close":
             _require(body, "close")
             action_time(body["close"])
@@ -1540,6 +1558,9 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             state["lastTick"] = now
             write_duties(db, attraction_id, day, plan)
             sync_notices(db, attraction_id, state, eng, now)
+        if previous_relief is not None:
+            if act=='draft_list' and body.get('kind')=='push7' and 'targets' not in body:plan.pop('push7Targets',None)
+            elif act in ('draft_set','draft_role'):normalize_seven_assignments(state,previous_relief)
         save_day(db, row, state)
 
 

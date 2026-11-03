@@ -34,6 +34,10 @@ async function phoneView(page,p,minute,extra={}){
   window.fixture={taskWorkflow:true,clock:{date:'2026-11-03',minute},person:p,
    confirmations:[{action:'arrive',status:'executed',minute:540,source:'screen'}],rotation_circles:[],...extra};
   const host=document.getElementById('host');host.innerHTML='';
+  window.confirmationReply=extra.confirmationReply??{confirmed:false};
+  window.confirmationOffline=!!extra.confirmationOffline;
+  sessionStorage.removeItem('formalRotation.todo.1');
+  if(extra.pendingRecord)sessionStorage.setItem('formalRotation.todo.1',JSON.stringify(extra.pendingRecord));
   mountRotationTasks(host,{isCurrent:()=>true});
  },{p,minute,extra});
  await page.locator('#host .rt-personal-task').waitFor();
@@ -50,7 +54,8 @@ async function phoneView(page,p,minute,extra={}){
   await phone.setContent('<body><link id="formalRotationStyles"><div id="host"></div></body>');
   await phone.addStyleTag({content:fs.readFileSync(path.join(root,'css/rotation.css'),'utf8')});
   await phone.addScriptTag({content:`window.fixture={};window.cleanups=[];window.state={me:{rotation_entry:true,id:1}};
-   window.api=async()=>structuredClone(window.fixture);window.json=()=>{};window.beginViewRequest=()=>{};
+   const storage=new Map();Object.defineProperty(window,'sessionStorage',{value:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)}});
+   window.api=async url=>{if(url.includes('/confirmation?')){if(window.confirmationOffline)throw new Error('offline');return structuredClone(window.confirmationReply);}return structuredClone(window.fixture);};window.json=()=>{};window.beginViewRequest=()=>{};
    window.registerPageCleanup=fn=>window.cleanups.push(fn);window.confirmModal=()=>{};window.formModal=()=>{};
    window.refreshActionBadge=()=>{};window.toast=()=>{};window.esc=x=>String(x??'').replaceAll('<','&lt;');window.portalPath=x=>x;`});
   await phone.addScriptTag({content:personal});
@@ -90,11 +95,34 @@ async function phoneView(page,p,minute,extra={}){
   // New task after recovery replaces the paused view, without requiring another phone acknowledgement.
   const recovered=issued({...basePerson,state:'ready'});recovered.canDepart=true;
   await phoneView(phone,recovered,585.75);assert(await phone.locator('[data-rotation-task=depart]').isEnabled());
+  const pendingRecord={date:'2026-11-03',body:{action:'depart',pid:'1',confirmation_token:'old-token'}};
+  for(const reply of [{confirmed:false},{confirmed:false,result:{status:'reversed'}},{confirmed:false,result:{status:'superseded'}},{confirmed:true,result:{action:'entry_return',status:'executed',source:'screen'}}]){
+   await phoneView(phone,recovered,585.75,{pendingRecord,confirmationReply:reply});
+   assert.equal(await phone.evaluate(()=>sessionStorage.getItem('formalRotation.todo.1')),null);
+   assert.equal(await phone.locator('[data-rotation-retry]').count(),0);
+   assert(await phone.locator('[data-rotation-task=depart]').isEnabled());
+  }
+  // Unknown transport result remains pending; an authoritative negative result clears it on reconnect.
+  await phone.evaluate(({p,pendingRecord})=>{
+   cleanups.splice(0).forEach(fn=>fn());fixture={taskWorkflow:true,clock:{date:'2026-11-03',minute:585.75},person:p,confirmations:[],rotation_circles:[]};
+   confirmationOffline=true;sessionStorage.setItem('formalRotation.todo.1',JSON.stringify(pendingRecord));document.getElementById('host').innerHTML='';mountRotationTasks(document.getElementById('host'),{isCurrent:()=>true});
+  },{p:recovered,pendingRecord});
+  await phone.locator('[data-rotation-refresh]').waitFor();
+  assert(await phone.evaluate(()=>!!sessionStorage.getItem('formalRotation.todo.1')));
+  await phone.evaluate(()=>{confirmationOffline=false;confirmationReply={confirmed:false};document.querySelector('[data-rotation-refresh]').click();});
+  await phone.locator('[data-rotation-task=depart]').waitFor();
+  assert.equal(await phone.locator('[data-rotation-retry]').count(),0);
   const hold={...basePerson,state:'ready',assign:null,entryHold:{reason:'任务超时'},taskTimeout:{task:'t'},confirmationTokens:{entry_return:'token'}};
   const v=await boardViews(board,hold,600),f=await phoneView(phone,hold,600);
   assert(v.screen.includes('data-wf-action="entry_return"'));assert(v.legacy.includes('data-member-act="entry_return"'));
   assert(f.html.includes('data-rotation-task="entry_return"'));
   for(const html of [v.screen,v.legacy,f.html])assert(html.includes('不新增休息'));
+  const acknowledgement={action:'entry_return',status:'executed',minute:585.75,state:'ready',readyAt:585.75,source:'supervisor'};
+  const acknowledgedLegacy=await boardViews(board,recovered,585.75,{confirmations:[acknowledgement]});
+  const acknowledgedPhone=await phoneView(phone,recovered,585.75,{confirmations:[acknowledgement]});
+  for(const html of [acknowledgedLegacy.legacy,acknowledgedPhone.html]){
+   assert(html.includes('已恢复可分配状态'));assert(!html.includes('已到休息室'));assert(!html.includes('已确认到达休息室'));
+  }
   for(const unknown of [false,true]){
    const p={...basePerson,state:'onpost',line:'D1',post:'河马池',assign:null,continuousStart:500,lineStart:590,timingUnverified:unknown};
    const v=await boardViews(board,p,600),f=await phoneView(phone,p,600,{confirmations:[{action:'depart',status:'executed',source:'supervisor',minute:500,line:'D1',post:'河马池'}]});
@@ -107,6 +135,15 @@ async function phoneView(page,p,minute,extra={}){
    const a=await board.evaluate(x=>({minute:hm(x),precise:taskTime(x)}),value);
    const b=await phone.evaluate(x=>({minute:hm(x),precise:taskTime(x)}),value);assert.deepEqual(a,b);
   }
+  const reliefFields=await board.evaluate(()=>{
+   const persons={};for(const pid of ['1','2','3','4','5','6'])persons[pid]={pid,name:'人员'+pid,role:'rotation',start:Number(pid)<=3?420:435,end:1080};
+   const draft={date:'2026-11-03',draftAlerts:[],persons,lines:[{id:'A',posts:[{name:'迎宾',seven:1},{name:'快迎',seven:2},{name:'小C',seven:3}]}],
+    plan:{seven:{'A#0':'1','A#1':'2','A#2':'3'},crew:{},push7:['5','6'],push7Targets:{'5':'2','6':'3'},lost:[]}};
+   const host=document.createElement('div');host.innerHTML=initialDraftView({date:draft.date,draft,can_edit:true});
+   return [...host.querySelectorAll('[data-list=push7]')].map(x=>[x.dataset.target,x.value,x.parentElement.textContent]);
+  });
+  assert.deepEqual(reliefFields.map(x=>x.slice(0,2)),[['1',''],['2','5'],['3','6']]);
+  assert(reliefFields.every(x=>x[2].includes('接替 人员'+x[0])));
   // Neither an estimate nor an old reversed receipt may be offered as an active task.
   const empty={...basePerson,state:'ready'};
   const noTask=await boardViews(board,empty,625);assert(!noTask.can);assert(!noTask.legacy.includes('data-member-act="depart"'));

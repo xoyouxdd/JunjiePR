@@ -94,6 +94,20 @@ async function main() {
     vm.runInContext(`RT.sync='offline';acceptLiveData({version:5,clock:{}});`,c);
     assert.equal(vm.runInContext('RT.sync',c),'polling');
   }
-  console.log('rotation confirmation: mobile UI, snapshots, unknown results, conflicts and response ordering passed');
+  {
+    const c=context();
+    vm.runInContext(`
+      confirmBox=(title,message,label,fn)=>{modalTitle=title;run=fn;};
+      RT.data.person.entryHold={reason:'timeout'};RT.data.person.taskTimeout={task:'old'};
+      RT.data.person.confirmationTokens.entry_return='b'.repeat(64);
+      rtApi=async()=>({result:{action:'entry_return',status:'executed',state:'ready'}});
+      confirmRotation(RT.data.person,'entry_return','/api/rotation/me/act');
+    `,c);
+    assert.match(c.modalTitle,/任务超时确认/);assert.doesNotMatch(c.modalTitle,/到达休息室/);
+    assert.equal(await c.run(),true);
+    assert.ok(c.messages.some(x=>x.message.includes('已恢复可分配状态，不新增休息')));
+    assert.ok(!c.messages.some(x=>x.message.includes('已确认到达休息室')));
+  }
+  console.log('rotation confirmation: mobile UI, snapshots, unknown results, conflicts, timeout acknowledgement and response ordering passed');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

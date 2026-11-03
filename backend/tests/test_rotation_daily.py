@@ -27,6 +27,80 @@ def read(rotation, day=FUTURE, at=None):
         return D.day_payload(db, rotation.attraction_id, day, at)
 
 
+@pytest.mark.parametrize('lid',['D2','E'])
+def test_future_standby_line_can_enable_assign_and_disable_without_starting_timers(rotation,lid):
+    with rotation.factory() as db,S.transaction(db):
+        cfg=S.load_config(db,rotation.attraction_id)
+        cfg.lines_json=S._dumps(S.lines_of(cfg)+[{'id':lid,'standby':True,'posts':[{'name':'备用'+str(i)} for i in range(5)]}])
+        configured=cfg.lines_json
+    prepare(rotation);before=read(rotation);original=deepcopy(before['draft']['plan'])
+    from test_rotation_engine import Hooks
+    from app.rotation import workflow as W
+    board=S.E.Engine(deepcopy(before['draft']),dict(S.E.DEFAULT_SETTINGS),Hooks());W.initialize(board);board.publish(240,'board')
+    board.act_line(lid,True,240,'board')
+    edit(rotation,action='draft_line',line=lid,active=True)
+    opened=read(rotation);line=next(l for l in opened['draft']['lines'] if l['id']==lid)
+    assert not line['standby'] and all(post['open'] for post in line['posts'])
+    assert next(l for l in opened['day']['lines'] if l['id']==lid)['active']
+    assigned=set(original['crew'].values())|set(original['seven'].values())
+    pid=next(pid for pid in opened['draft']['persons'] if pid not in assigned)
+    edit(rotation,action='draft_swap_people',source='person:'+pid,target=lid+'#4')
+    board.act_plan_place(pid,lid,4,240,'board')
+    assert board.d['plan']==read(rotation)['draft']['plan']
+    assert read(rotation)['draft']['plan']['crew'][lid+'#4']==pid
+    edit(rotation,action='draft_line',line=lid,active=False)
+    board.act_line(lid,False,240,'board')
+    closed=read(rotation)['draft'];assert closed['plan']==original
+    assert board.d['plan']==closed['plan']
+    assert next(l for l in closed['lines'] if l['id']==lid)['standby']
+    with rotation.factory() as db:
+        assert S.load_config(db,rotation.attraction_id).lines_json==configured
+        assert db.query(RotationSegment).count()==0
+        row=S.day_row(db,rotation.attraction_id,FUTURE);assert row.status=='draft'
+        assert not S.day_state(row).get('confirmations')
+
+
+def test_prearranged_line_enable_survives_publish_but_not_global_template(rotation):
+    with rotation.factory() as db,S.transaction(db):
+        cfg=S.load_config(db,rotation.attraction_id)
+        cfg.lines_json=S._dumps(S.lines_of(cfg)+[{'id':'D2','standby':True,'posts':[{'name':'铁马A'}]}])
+    prepare(rotation);edit(rotation,action='draft_line',line='D2',active=True)
+    with rotation.factory() as db,S.transaction(db):S.set_sim_clock(S.load_config(db,rotation.attraction_id),FUTURE,240,paused=True)
+    edit(rotation,action='publish')
+    with rotation.factory() as db:
+        state=S.day_state(S.day_row(db,rotation.attraction_id,FUTURE))
+        assert next(l for l in state['lines'] if l['id']=='D2')['active']
+        assert all(p.get('continuousStart') is None for p in state['persons'].values())
+        assert db.query(RotationSegment).count()==0
+        assert next(l for l in S.lines_of(S.load_config(db,rotation.attraction_id)) if l['id']=='D2')['standby']
+
+
+def test_prearranged_line_disable_keeps_other_early_relief_pair(rotation):
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        state['persons']['6']={**deepcopy(state['persons']['5']),'pid':'6'}
+        for lid in ['A','B']:
+            key=lid+'#0';pid=state['plan']['crew'].pop(key)
+            state['persons'][pid]['start']=420;D.slot(state,key)[0]['posts'][0]['seven']=1 if lid=='A' else 2
+            state['plan']['seven'][key]=pid
+        targets=dict(zip(['5','6'],state['plan']['seven'].values()))
+        state['plan']['push7']=['5','6'];S.save_day(db,row,state)
+    edit(rotation,action='draft_line',line='A',active=False)
+    state=read(rotation)['draft']
+    assert state['plan']['push7']==['6'] and state['plan']['push7Targets']=={'6':targets['6']}
+    assert not any(key.startswith('A#') for kind in ('crew','seven') for key in state['plan'][kind])
+
+
+@pytest.mark.parametrize('line,active',[('missing',True),('A','true'),('A',1),(None,True)])
+def test_prearranged_line_rejects_invalid_or_stale_changes(rotation,line,active):
+    prepare(rotation);before=read(rotation)
+    with pytest.raises(S.ActionError):edit(rotation,action='draft_line',line=line,active=active)
+    assert read(rotation)['draft']==before['draft']
+    with rotation.factory() as db,pytest.raises(S.ConfirmationConflict):
+        D.edit(db,rotation.attraction_id,'测试',FUTURE,{'action':'draft_line','line':'A','active':False,'revision':0})
+
+
 def test_five_post_spares_use_existing_rename_flow_without_changing_other_slots(rotation):
     with rotation.factory() as db, S.transaction(db):
         cfg = S.load_config(db, rotation.attraction_id)
@@ -218,7 +292,7 @@ def test_month_validation_roster_replacement_and_manual_draft_compatibility(rota
         assert S.day_row(db, rotation.attraction_id, DAY).status == 'draft'
 
 
-def test_seven_shift_validation_and_post_swap_carry_assignments(rotation):
+def test_seven_post_accepts_another_shift_and_post_swap_carries_assignment(rotation):
     prepare(rotation)
     with rotation.factory() as db, S.transaction(db):
         row = S.day_row(db, rotation.attraction_id, FUTURE)
@@ -229,14 +303,162 @@ def test_seven_shift_validation_and_post_swap_carry_assignments(rotation):
         state['plan']['seven']['A#0'] = pid
         S.save_day(db, row, state)
     before = read(rotation)
-    with pytest.raises(S.ActionError, match='7点岗位'): edit(rotation, action='draft_swap_people', source='A#0', target='B#0')
-    assert read(rotation)['draft'] == before['draft']
+    later=before['draft']['plan']['crew']['B#0']
+    edit(rotation, action='draft_swap_people', source='A#0', target='B#0')
+    swapped=read(rotation)['draft']
+    assert swapped['plan']['crew']['A#0']==later and swapped['plan']['crew']['B#0']==pid
+    assert 'A#0' not in swapped['plan']['seven']
     edit(rotation, action='draft_swap_posts', source='A#0', target='A#1')
     after = read(rotation)['draft']
-    assert after['plan']['seven']['A#1'] == pid and 'A#0' not in after['plan']['seven']
+    assert after['plan']['crew']['A#1'] == later
+    assert after['plan']['crew']['A#0'] == before['draft']['plan']['crew']['A#1']
     assert after['lines'][0]['posts'][1]['seven'] == 1
     for bad in ([], {}, None):
         with pytest.raises(S.ActionError): edit(rotation, action=bad)
+
+
+@pytest.mark.parametrize('post_name',['小C','迎宾','快迎1'])
+@pytest.mark.parametrize('shift_start',[435,540])
+def test_other_shift_on_early_post_keeps_own_clock_and_is_not_push7_target(rotation,post_name,shift_start):
+    from test_rotation_engine import Hooks
+    from app.rotation import workflow as W
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        early=state['plan']['crew'].pop('A#0');later=state['plan']['crew']['B#0']
+        state['persons'][early]['start']=420;state['persons'][later]['start']=shift_start
+        state['lines'][0]['posts'][0].update(name=post_name,seven=1)
+        state['plan']['seven']['A#0']=early
+        state['plan']['push7']=['relief']
+        state['persons']['relief']={**deepcopy(state['persons'][later]),'pid':'relief','start':435}
+        S.save_day(db,row,state)
+    edit(rotation,action='draft_swap_people',source='A#0',target='B#0')
+    saved=read(rotation)['draft']
+    assert saved['lines'][0]['posts'][0]['seven']==1
+    assert saved['persons'][later]['start']==shift_start and saved['persons'][early]['start']==420
+    assert saved['plan']['crew']['A#0']==later and saved['plan']['seven']=={}
+    assert saved['plan']['push7']==[]
+    eng=S.E.Engine(deepcopy(saved),dict(S.E.DEFAULT_SETTINGS),Hooks());W.initialize(eng)
+    eng.publish(419,'test');eng.tick(420)
+    assert eng.P[later]['state']=='notyet' and eng.P[later]['continuousStart'] is None
+    eng.tick(shift_start)
+    assert eng.P[later]['state']=='onpost' and eng.P[later]['continuousStart']==shift_start
+    assert '7点岗' not in eng.P[later]['flags'] and eng._push7_pairs()==[]
+
+
+def test_early_post_dropdown_and_pool_replacements_do_not_duplicate_slot(rotation):
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        early=state['plan']['crew'].pop('A#0');later=state['plan']['crew']['B#0']
+        state['persons'][early]['start']=420;state['lines'][0]['posts'][0]['seven']=1
+        state['plan']['seven']['A#0']=early;S.save_day(db,row,state)
+    edit(rotation,action='draft_set',kind='seven',key='A#0',pid=later)
+    current=read(rotation)['draft']
+    assert current['plan']['crew']['A#0']==later and 'A#0' not in current['plan']['seven']
+    edit(rotation,action='draft_swap_people',source='person:'+early,target='A#0')
+    current=read(rotation)['draft']
+    assert current['plan']['seven']['A#0']==early and 'A#0' not in current['plan']['crew']
+    assert all(later not in current['plan'][k].values() for k in ('seven','crew'))
+
+
+@pytest.mark.parametrize('source_seated',[True,False])
+@pytest.mark.parametrize('timed',[True,False])
+def test_same_prestart_person_change_matches_daily_board_and_published_plan(rotation,source_seated,timed):
+    from test_rotation_engine import Hooks
+    from app.rotation import workflow as W
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        early=state['plan']['crew'].pop('A#0');later=state['plan']['crew']['B#0']
+        state['persons'][early]['start']=420;state['persons'][later]['start']=540
+        state['lines'][0]['posts'][0].update(seven=1,openAt='09:00' if timed else None)
+        state['plan']['seven']['A#0']=early
+        if not source_seated:state['plan']['crew'].pop('B#0')
+        S.save_day(db,row,state)
+    before=read(rotation)['draft'];board=S.E.Engine(deepcopy(before),dict(S.E.DEFAULT_SETTINGS),Hooks());W.initialize(board);board.publish(419,'board')
+    board.act_plan_place(later,'A',0,419,'board')
+    edit(rotation,action='draft_swap_people',source='B#0' if source_seated else 'person:'+later,target='A#0')
+    daily=read(rotation)
+    assert board.d['plan']==daily['draft']['plan']
+    actual_lines=S.lines_view(board)
+    for lines in [actual_lines,daily['day']['lines']]:
+        post=next(line for line in lines if line['id']=='A')['posts'][0]
+        assert post['occ']==later and post['prearranged']
+        assert post['open'] is (not timed) and post['since'] is None
+        assert sum(p['occ']==later for line in lines for p in line['posts'])==1
+    assert board.P[later]['continuousStart'] is None
+    board.tick(540)
+    assert board.P[later]['state']=='onpost' and board.P[later]['continuousStart']==540
+    assert '7点岗' not in board.P[later]['flags']
+
+
+def test_seven_post_replacement_preserves_other_eligible_relief_workers(rotation):
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        prototype=deepcopy(state['persons']['5'])
+        state['persons']['6']={**prototype,'pid':'6'}
+        state['plan']['crew']={};state['plan']['seven']={}
+        state['lines'][0]['posts'].append({**deepcopy(state['lines'][0]['posts'][0]),
+            'name':'第三7点岗位','key':'extra-seven-test','occ':None,'since':None})
+        for i,pid in enumerate(['1','2','3']):
+            state['persons'][pid]['start']=420
+            state['lines'][0]['posts'][i]['seven']=i+1
+            state['plan']['seven']['A#'+str(i)]=pid
+        state['plan']['push7']=['4','5','6'];S.save_day(db,row,state)
+    edit(rotation,action='draft_swap_people',source='person:4',target='A#0')
+    state=read(rotation)['draft']
+    assert state['plan']['crew']['A#0']=='4'
+    assert state['plan']['seven']=={'A#1':'2','A#2':'3'}
+    assert state['plan']['push7']==['5','6']
+
+
+@pytest.mark.parametrize('index',[0,1,2])
+@pytest.mark.parametrize('entry',['pool','dropdown','swap'])
+def test_replacing_any_early_post_preserves_other_relief_targets(rotation,index,entry):
+    prepare(rotation)
+    with rotation.factory() as db,S.transaction(db):
+        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
+        prototype=deepcopy(state['persons']['5'])
+        for pid in ['6','7']:state['persons'][pid]={**deepcopy(prototype),'pid':pid}
+        state['persons']['7']['start']=540
+        state['lines'][0]['posts'].append({**deepcopy(state['lines'][0]['posts'][0]),'name':'第三7点岗位','key':'third-early','occ':None,'since':None})
+        state['plan']['crew']={'B#0':'7'} if entry=='swap' else {}
+        state['plan']['seven']={}
+        for i,pid in enumerate(['1','2','3']):
+            state['persons'][pid]['start']=420;state['lines'][0]['posts'][i]['seven']=i+1
+            state['plan']['seven']['A#'+str(i)]=pid
+        state['plan']['push7']=['4','5','6'];S.save_day(db,row,state)
+    key='A#'+str(index)
+    if entry=='dropdown':edit(rotation,action='draft_set',kind='seven',key=key,pid='7')
+    else:edit(rotation,action='draft_swap_people',source='B#0' if entry=='swap' else 'person:7',target=key)
+    saved=read(rotation)['draft'];expected={relay:target for i,(relay,target) in enumerate(zip(['4','5','6'],['1','2','3'])) if i!=index}
+    assert saved['plan']['push7Targets']==expected
+    assert saved['plan']['push7']==list(expected)
+    assert saved['plan']['crew'][key]=='7' and saved['persons']['7']['start']==540
+    from test_rotation_engine import Hooks
+    from app.rotation import workflow as W
+    eng=S.E.Engine(deepcopy(saved),dict(S.E.DEFAULT_SETTINGS),Hooks());W.initialize(eng)
+    eng.publish(419,'test');eng.tick(435)
+    assert {a:b for _,a,b in eng._push7_pairs()}==expected
+    assert eng.P['7']['state']=='notyet' and eng.P['7']['continuousStart'] is None
+    # Adding the original early worker back must not silently retarget peers.
+    if entry!='swap':
+        edit(rotation,action='draft_swap_people',source='person:'+str(index+1),target=key)
+        restored=read(rotation)['draft']
+        assert restored['plan']['push7Targets']==expected
+        slots=['1','2','3'];selected=[expected.get(relay) and relay or '' for relay in ['4','5','6']]
+        edit(rotation,action='draft_list',kind='push7',pids=selected,targets=slots)
+        assert read(rotation)['draft']['plan']['push7Targets']==expected
+        before_bad=read(rotation)['draft']
+        with pytest.raises(S.ConfirmationConflict):
+            edit(rotation,action='draft_list',kind='push7',pids=selected,targets=list(reversed(slots)))
+        assert read(rotation)['draft']==before_bad
+        edit(rotation,action='draft_list',kind='push7',pids=['4','5','6'])
+        manual=read(rotation)['draft']
+        assert 'push7Targets' not in manual['plan']
+        assert S.E.Engine(manual,dict(S.E.DEFAULT_SETTINGS),Hooks())._push7_pairs()==[(0,'4','1'),(1,'5','2'),(2,'6','3')]
 
 
 def test_snapshot_write_rolls_back_with_failed_commit(rotation, monkeypatch):

@@ -492,7 +492,7 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             state.pop('dailyOpening',None);state['lastTick']=240
             state['plan'].update(crew={'A1#0':'9710020','A1#1':'9710030','B1#0':'9710040'},seven={},push7=[])
-            for p in state['persons'].values():p.update(state='notyet',start=435,line=None,lineStart=None,assign=None,visited=[])
+            for p in state['persons'].values():p.update(state='notyet',start=435,line=None,lineStart=None,continuousStart=None,assign=None,visited=[])
             for line in state['lines']:
                 for i,post in enumerate(line['posts']):post.update(occ=state['plan']['crew'].get(f"{line['id']}#{i}"),since=None)
             S.save_day(db,row,state)
@@ -503,15 +503,25 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
         before=ok(manager.get(path));assert before['can_edit'] and before['prestart_live']
         body={'action':'draft_swap_people','source':'A1#0','target':'B1#0','revision':before['revision'],'plan_revision':before['plan_revision']}
         assert tr.post(path,json=body).status_code==cm.post(path,json=body).status_code==403
+        line_body={'action':'draft_line','line':'B1','active':False,'revision':before['revision'],'plan_revision':before['plan_revision']}
+        assert tr.post(path,json=line_body).status_code==cm.post(path,json=line_body).status_code==403
         ok(manager.post(path,json=body))
         after=ok(manager.get(path));board=ok(manager.get('/api/rotation-board/board'))['day']
         assert after['day']['lines']==board['lines']
+        for active in (False,True):
+            ok(manager.post(path,json={'action':'draft_line','line':'B1','active':active,
+                'revision':after['revision'],'plan_revision':after['plan_revision']}))
+            after=ok(manager.get(path));board=ok(manager.get('/api/rotation-board/board'))['day']
+            assert after['day']['lines']==board['lines']
+            assert next(line for line in board['lines'] if line['id']=='B1')['active'] is active
+            assert all(p.get('continuousStart') is None for p in board['persons'])
         clock['minute']=435
         frozen=ok(manager.get(path))
         assert frozen['frozen'] and frozen['opening_source']=='opening' and not frozen['can_edit']
         assert frozen['day']['lines']==after['day']['lines']
         body.update(revision=frozen['revision'],plan_revision=frozen['plan_revision'])
         assert manager.post(path,json=body).status_code==400
+        assert manager.post(path,json={**line_body,'revision':frozen['revision'],'plan_revision':frozen['plan_revision']}).status_code==400
         clock['minute']=720
         ok(manager.get('/api/rotation-board/board'))
         assert ok(manager.get(path))['day']==frozen['day']

@@ -345,7 +345,7 @@ function confirmRotation(p, action, path, wholeGroup=false) {
   if(action==='depart'){const routes=p.entryGroup?.routes||p.departureRoutes||[];text+=`<h4>现场通知与接替去向</h4><ul>${routes.map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul>${p.task?workflowComparison(p):''}<p>确认接受安排，按方案前往通知并接替。下线人员回休息室后确认休息／吃饭。</p>`;}
   if(action==='arrive'&&p.mealOptions?.canChoose)text+=`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线，提交时再次核对。</p>`;
   if(action==='arrive'&&p.mealOptions?.forced)text+='<p>已到原有强制饭点，本次安排吃饭。</p>';
-  confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : '到达休息室'}`, text,
+  confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : action==='entry_return'?'任务超时确认':'到达休息室'}`, text,
     action === 'depart' ? '确认去轮岗' : action==='entry_return'?'确认知晓，重新领取':'确认已到达', async () => {
       if (confirmationBlocked()) { toast('当前连接不可用，请稍后确认', true); return false; }
       RT.submitting = true;
@@ -366,7 +366,7 @@ function confirmRotation(p, action, path, wholeGroup=false) {
       }
       RT.submitting = false;
       storePendingConfirmation(null);
-      toast(out.result?.status==='waiting'?'已确认上岗安排，等待同行人':out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : '已确认到达休息室');
+      toast(out.result?.status==='waiting'?'已确认上岗安排，等待同行人':out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : action==='entry_return'?'已恢复可分配状态，不新增休息':'已确认到达休息室');
       // The mutation succeeded even if the subsequent view refresh fails.
       try { await RT.load(); } catch (_) { toast('确认成功，等待画面恢复同步'); }
       return true;
@@ -475,9 +475,11 @@ function lineCard(L, n, ops, view = {}) {
       const key=L.id+'#'+i,p=lookup(x.occ);
       const label=view.editable?`<button type="button" class="rt-pn rt-daily-post" data-daily-rename="${esc(key)}" ${editable?`draggable="true" data-daily-post="${esc(key)}"`:''} aria-label="${esc(x.name)}，双击改名${editable?'，拖拽交换岗位':''}">${esc(x.name)}</button>`:`<span class="rt-pn">${esc(x.name)}</span>`;
       const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="交换人员 ${esc(key)}">${esc(p?.name||'空岗')}</button>`:`<span class="rt-who-name">${esc(p?.name||'空岗')}</span>`;
-      return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',label,person,x.open?(p?'预排':'空岗'):'未开岗');
+      const markedLabel=x.seven?`<span class="rt-daily-post-label">${label}<small class="rt-badge p7">7点岗位</small></span>`:label;
+      return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',markedLabel,person,x.open?(p?'预排':'空岗'):p?'预排 · 未开岗':'未开岗');
     }
     if (!L.active) { cls += ' closed'; who = '待命'; }
+    else if(x.prearranged){const p=lookup(x.occ);who=esc(p?.name||x.occ);mins=`${hm(p?.start)} 开始`;}
     else if (!x.open) { cls += ' closed'; who = x.openAt && !x.opened ? `${esc(x.openAt)} 开` : '未开'; }
     else if (!x.occ && x.openingStatus) { cls += ' pending-add'; who = x.openingStatus==='preparing'?'准备加岗':'匹配中'; }
     else if (!x.occ) { cls += ' vacant'; who = '空岗'; }
@@ -495,7 +497,7 @@ function lineCard(L, n, ops, view = {}) {
     if (i === exitIndex) cls += ' exit';
     const scheduled = value => /^\d{2}:\d{2}$/.test(value || '') ? Number(value.slice(0,2))*60+Number(value.slice(3)) : null;
     if (L.active && !x.open && !x.opened && scheduled(x.openAt) > n) {
-      cls += ' pending-add'; who = `待加 ${esc(x.openAt)}`;
+      cls += ' pending-add'; who = x.prearranged?who+`<span class="rt-badge prep">待加 ${esc(x.openAt)}</span>`:`待加 ${esc(x.openAt)}`;
     } else if (L.active && x.open && scheduled(x.closeAt) > n) {
       cls += ' pending-remove'; who += `<span class="rt-schedule-label">待撤 ${esc(x.closeAt)}</span>`;
     }
@@ -506,6 +508,6 @@ function lineCard(L, n, ops, view = {}) {
   const inc = !daily&&incoming.length&&!RT.data?.day?.taskWorkflow ? `<div class="rt-incoming">即将进线：${incoming.slice(0, 3).map(p => `<b>${esc(p.name)}</b> ${p.state === 'heading' ? '前往中' : hm(p.assign.departAt)}`).join('，')}${incoming.length > 3 ? ` 等 ${incoming.length} 人` : ''}</div>` : '';
   const occupied = L.posts.filter(x => x.open && x.occ).length;
   const opened = L.posts.filter(x => x.open).length;
-  const head = ops ? ` data-line="${esc(L.id)}" tabindex="0" role="button"` : '';
+  const head = daily&&view.editable ? ` data-daily-line="${esc(L.id)}" tabindex="0" role="button" aria-label="${esc(L.id)}线预排${L.standby?'启用':'停用'}" title="点击或右键设置线路预排"` : ops ? ` data-line="${esc(L.id)}" tabindex="0" role="button"` : '';
   return `<div class="rt-line${L.active ? '' : ' off'}"><div class="rt-line-head g-${esc(L.group || '')}"${head}><span class="rt-lid">${esc(L.id)}</span><span>${daily?`${opened}/${L.posts.length} 岗`:L.active ? `${occupied}/${opened} 岗` : '待命线'}</span></div>${rows}${inc}</div>`;
 }

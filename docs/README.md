@@ -4,6 +4,8 @@
 
 | 文件 | 内容 |
 |---|---|
+| [rotation-early-post-shifts.md](rotation-early-post-shifts.md) | 7点岗位跨班次预排与接替关系 |
+| [rotation-prearranged-lines.md](rotation-prearranged-lines.md) | 每日预排线路启停与权限 |
 | [rotation-display-consistency.md](rotation-display-consistency.md) | 轮岗跨页面任务和时间显示 |
 | [rotation-break-window.md](rotation-break-window.md) | 餐休展示与正式派发窗口 |
 | [rotation-waiting-notice.md](rotation-waiting-notice.md) | 等待匹配提示与异常保留 |

@@ -192,17 +192,71 @@ def slot(state,key):
     return line,i,kind
 
 
+def seven_relief_slots(state):
+    plan=state['plan']
+    if 'push7Targets' in plan:
+        positions={pid:key for key,pid in plan['seven'].items()}
+        return {positions[target]:pid for pid,target in plan['push7Targets'].items() if target in positions and pid in plan['push7']}
+    order=seven_slot_order(state)
+    return dict(zip(order,plan['push7']))
+
+
+def seven_slot_order(state):
+    return sorted(state['plan']['seven'],key=lambda key:slot(state,key)[0]['posts'][slot(state,key)[1]].get('seven') or 9)
+
+
+def normalize_seven_assignments(state, previous_slots=None):
+    """The slot retains its early-post marker; a later worker remains regular crew."""
+    plan=state['plan']
+    removed=[key for key,pid in plan['seven'].items() if state['persons'].get(pid,{}).get('start')!=420]
+    if not removed and 'push7Targets' not in plan:return False
+    before=deepcopy(plan)
+    previous_slots=seven_relief_slots(state) if previous_slots is None else previous_slots
+    for key in removed:plan['crew'][key]=plan['seven'].pop(key)
+    # Bind remaining duties to their own early posts instead of shifting the
+    # remaining list onto a different target when an intermediate post changes.
+    assigned=set(plan['seven'].values())|set(plan['crew'].values())
+    targets={previous_slots[key]:target for key,target in plan['seven'].items() if key in previous_slots}
+    plan['push7']=[pid for pid in plan['push7'] if pid not in assigned and pid in targets]
+    plan['push7Targets']={pid:targets[pid] for pid in plan['push7']}
+    return plan!=before
+
+
+def set_prestart_line(state,lid,active):
+    if not isinstance(lid,str) or type(active) is not bool:raise S.ActionError('线路或启用状态无效')
+    line=next((line for line in state['lines'] if line['id']==lid),None)
+    if line is None:raise S.ActionError('线路不存在')
+    if not active and any(post.get('hold') or post.get('hold101') for post in line['posts']):
+        raise S.ActionError('本线还有定岗人员，请先取消定岗再停用')
+    if (not line.get('standby',False))==active and line.get('active',active)==active:return False
+    previous=seven_relief_slots(state)
+    line.update(standby=not active,active=active)
+    if not active:
+        had_seven=any(key.startswith(lid+'#') for key in state['plan']['seven'])
+        for kind in ('crew','seven'):
+            for key in list(state['plan'][kind]):
+                if key.startswith(lid+'#'):state['plan'][kind].pop(key)
+        if had_seven:state['plan'].setdefault('push7Targets',{})
+        normalize_seven_assignments(state,previous)
+    for post in line['posts']:
+        post.update(open=active and not post.get('openAt'),opened=not bool(post.get('openAt')),occ=None,since=None,manual=False)
+    sync_prestart(state);validate_plan(state)
+    return True
+
+
 def validate_plan(state):
-    used=[]
+    used=[];posts=[]
     for kind in ('seven','crew'):
         for key,pid in state['plan'][kind].items():
             _,_,actual=slot(state,key)
             p=state['persons'].get(pid)
             if not p or p['role']!='rotation':raise S.ActionError('只能安排本日轮岗人员')
             if kind=='seven' and p['start']!=420:raise S.ActionError('7点岗位只能安排07:00班次人员')
-            if actual!=kind:raise S.ActionError('岗位类型与安排不一致')
+            if actual!=kind and not(kind=='crew' and actual=='seven' and p['start']!=420):raise S.ActionError('岗位类型与安排不一致')
             used.append(pid)
+            posts.append(key)
     if len(used)!=len(set(used)):raise S.ActionError('同一人员不能安排两个岗位')
+    if len(posts)!=len(set(posts)):raise S.ActionError('同一岗位不能安排两个人员')
 
 
 @S.transactional
@@ -225,6 +279,7 @@ def edit(db,attraction_id,actor,work_date,body):
         planned=S.day_row(db,attraction_id,work_date);state=S.day_state(planned);state['dailyAutoStart']=work_date>today;S.save_day(db,planned,state);return
     if not row or (row.status!='draft' and not live_edit):raise S.ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
     state=S.day_state(row)
+    previous_slots=seven_relief_slots(state)
     upload=S.roster_upload_for(db,attraction_id,work_date)
     if action=='publish' and upload and state.get('rosterUploadId') and state['rosterUploadId']!=upload.id:
         raise S.ActionError('上传班表已更新，请重新生成并核对预排后启用')
@@ -247,13 +302,23 @@ def edit(db,attraction_id,actor,work_date,body):
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,line['id'],name,{'from':old,'to':name,'post':body['post']})
         return
+    if action=='draft_line':
+        lid=body.get('line');active=body.get('active')
+        if not set_prestart_line(state,lid,active):return
+        if live_edit:
+            sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'])
+        S.save_day(db,row,state)
+        S.DbHooks(db,attraction_id,work_date).log(action,actor,None,lid,None,{'active':active})
+        return
     if action in ('draft_swap_people','draft_swap_posts'):
         source,target=body.get('source'),body.get('target')
         if action=='draft_swap_people' and isinstance(source,str) and source.startswith('person:'):
             pid=source[7:];right,j,other=slot(state,target)
             if pid not in state['persons'] or state['persons'][pid]['role']!='rotation':raise S.ActionError('只能安排本日轮岗人员')
             if any(pid in state['plan'][k].values() for k in ('crew','seven')):raise S.ActionError('人员安排已变化，请刷新后重试')
+            for k in ('crew','seven'):state['plan'][k].pop(target,None)
             state['plan'][other][target]=pid
+            normalize_seven_assignments(state,previous_slots)
             validate_plan(state)
             state['plan']['push7']=[p for p in state['plan']['push7'] if p!=pid]
             if live_edit:
@@ -267,17 +332,22 @@ def edit(db,attraction_id,actor,work_date,body):
             if left is not right and (any(n!=i and x['name']==right['posts'][j]['name'] for n,x in enumerate(left['posts'])) or any(n!=j and x['name']==left['posts'][i]['name'] for n,x in enumerate(right['posts']))):
                 raise S.ActionError('交换后同一线路岗位名称重复')
             left['posts'][i],right['posts'][j]=right['posts'][j],left['posts'][i]
+            a=previous_slots.pop(source,None);b=previous_slots.pop(target,None)
+            if a:previous_slots[target]=a
+            if b:previous_slots[source]=b
         if action=='draft_swap_posts':
             for k in ('seven','crew'):
                 a=state['plan'][k].pop(source,None);b=state['plan'][k].pop(target,None)
                 if a:state['plan'][k][target]=a
                 if b:state['plan'][k][source]=b
         else:
-            a=state['plan'][kind].get(source);b=state['plan'][other].get(target)
+            a=state['plan']['seven'].get(source) or state['plan']['crew'].get(source)
+            b=state['plan']['seven'].get(target) or state['plan']['crew'].get(target)
             for k in ('seven','crew'):
                 state['plan'][k].pop(source,None);state['plan'][k].pop(target,None)
             if a:state['plan'][other][target]=a
             if b:state['plan'][kind][source]=b
+        normalize_seven_assignments(state,previous_slots)
         validate_plan(state)
         # Role changes and person swaps must not duplicate a push7 assignment.
         assigned=set(state['plan']['crew'].values())|set(state['plan']['seven'].values())
@@ -296,7 +366,9 @@ def edit(db,attraction_id,actor,work_date,body):
     S.do_draft_action(db,attraction_id,actor,{**body,'date':work_date})
     updated=S.day_row(db,attraction_id,work_date)
     if updated and updated.status=='draft':
-        state=S.day_state(updated);validate_plan(state)
+        state=S.day_state(updated)
+        normalized=normalize_seven_assignments(state,None if action=='draft_list' and body.get('kind')=='push7' else previous_slots);validate_plan(state)
+        if normalized:S.save_day(db,updated,state)
         if live_edit:
             state['status']='live';sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan']);S.save_day(db,updated,state)
 

@@ -280,9 +280,14 @@ function initialDraftView(data) {
   if(!draft)return `<section class="panel"><h2>${esc(data.date)} · 生成预排</h2><button type="button" class="primary" data-d="generate">生成草稿</button></section>`;
   const plan=draft.plan,persons=Object.values(draft.persons).sort((a,b)=>a.start-b.start||a.name.localeCompare(b.name,'zh')),rot=persons.filter(p=>p.role==='rotation');
   const option=(selected,list)=>'<option value="">（空）</option>'+list.map(p=>`<option value="${esc(p.pid)}" ${p.pid===selected?'selected':''}>${esc(p.name)} ${hm(p.start)}-${hm(p.end)}</option>`).join('');
-  const placements=draft.lines.filter(l=>!l.standby).map(l=>`<details><summary>${esc(l.id)}线 · 选择预排人员</summary>${l.posts.map((x,i)=>{const key=`${l.id}#${i}`,kind=x.seven||plan.seven[key]?'seven':'crew';return `<label>${esc(x.name)}<select data-draft="${kind}" data-key="${esc(key)}">${option(plan[kind][key],kind==='seven'?rot.filter(p=>p.start===420):rot)}</select></label>`;}).join('')}</details>`).join('');
+  const placements=draft.lines.filter(l=>!l.standby).map(l=>`<details><summary>${esc(l.id)}线 · 选择预排人员</summary>${l.posts.map((x,i)=>{const key=`${l.id}#${i}`,kind=x.seven||plan.seven[key]?'seven':'crew';return `<label>${esc(x.name)}${x.seven?'（7点岗位）':''}<select data-draft="${kind}" data-key="${esc(key)}">${option(plan.seven[key]||plan.crew[key],rot)}</select></label>`;}).join('')}</details>`).join('');
   const early=rot.filter(p=>p.start>=420&&p.start<=435),lates=rot.filter(p=>p.start>=720),sevenCount=Object.keys(plan.seven).length;
-  const listSelect=(kind,n,pool)=>Array.from({length:n},(_,i)=>`<select data-list="${kind}">${option(plan[kind][i],pool)}</select>`).join(' ');
+  const earlyKeys=Object.keys(plan.seven).sort((a,b)=>{const order=key=>{const [lid,i]=key.split('#');return draft.lines.find(l=>l.id===lid)?.posts[Number(i)]?.seven||9;};return order(a)-order(b);});
+  const listSelect=(kind,n,pool)=>Array.from({length:n},(_,i)=>{
+    if(kind!=='push7')return `<select data-list="${kind}">${option(plan[kind][i],pool)}</select>`;
+    const target=plan.seven[earlyKeys[i]],selected=plan.push7Targets?plan.push7.find(pid=>plan.push7Targets[pid]===target):plan.push7[i];
+    return `<label>接替 ${esc(draft.persons[target]?.name||target)}<select data-list="push7" data-target="${esc(target)}">${option(selected,pool)}</select></label>`;
+  }).join(' ');
   const roleSelect=p=>`<select data-role="${esc(p.pid)}">${[['rotation','轮岗'],['op','OP'],['excluded','不轮岗']].map(([v,t])=>`<option value="${v}" ${p.role===v?'selected':''}>${t}</option>`).join('')}</select>`;
   return `<section class="panel"><h2>${esc(draft.date)} · ${data.prestart_live?'开班前看板':'预排看板'}</h2>
     <p class="field-hint">${data.prestart_live?'今天首班开始前与看板同步；首班开始后固定整份班表，之后在看板调整。':'未来日期只保存预排，不提前开始计时。岗位和人员可拖拽交换，双击岗位名称修改。'}</p>
@@ -291,7 +296,7 @@ function initialDraftView(data) {
       ${draft.draftAlerts.map(a=>`<div class="rt-warn">${esc(a)}</div>`).join('')}
       <div class="rt-row"><label class="rt-daily-field">闭园时间<input type="time" id="draftClose" value="${esc(draft.closeAt||'')}"></label></div>
       ${placements}
-      <h3>推7点和送失物</h3><p class="field-hint">保留本周次数推荐；7点岗位仅安排07:00班次，07:15人员负责接替。</p>
+      <h3>推7点和送失物</h3><p class="field-hint">7点岗位也可选择其他班次，按所选人员实际班次生效，不提前计时。推7点仅针对实际07:00班次人员，保留本周次数推荐。</p>
       <div class="rt-row"><span>推7点</span>${sevenCount?listSelect('push7',sevenCount,early):'今天没有7点岗位'}</div>
       <div class="rt-row"><span>送失物</span>${listSelect('lost',Math.max(2,plan.lost.length),lates)}</div>
       <h3>人员角色</h3><p class="field-hint">OP及不轮岗设置仅影响轮岗安排。</p>
@@ -383,12 +388,26 @@ function dailyLabel(key,mode){
   const pid=draft?.plan.seven[key]||draft?.plan.crew[key];
   return `${line}线 · ${post?.name||key}${mode==='people'?' · '+(draft?.persons[pid]?.name||'空岗'):''}`;
 }
+function dailyLineMenu(lid){
+  if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
+  if(formalRotation&&!me?.capabilities?.can_manage)return;
+  const line=daily.data.draft?.lines.find(l=>l.id===lid);if(!line)return;
+  const active=!line.standby,date=daily.date,revision=daily.data.revision;
+  confirmBox(`${active?'停用':'启用'} ${esc(lid)}线预排`,
+    `只保存 ${esc(date)} 的线路预排，不提前开始计时。${active?'该线路预排人员将返回待安排区，其他线路保持原安排。':'启用后可继续拖拽安排人员，按岗位配置及实际班次生效。'}`,
+    active?'停用线路':'启用线路',()=>{
+      if(daily.date!==date||daily.data?.revision!==revision){toast('班表已变化，请重新打开线路设置',true);return false;}
+      return dailySend({action:'draft_line',line:lid,active:!active});
+    },{warn:active});
+}
 function dailyChoose(key,mode=daily.mode){
   if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
   if(!daily.source||daily.mode!==mode){daily.source=key;daily.mode=mode;$app.querySelectorAll('[data-daily-person],[data-daily-post]').forEach(b=>b.classList.toggle('is-selected',mode==='people'?b.dataset.dailyPerson===key:b.dataset.dailyPost===key));const text=$app.querySelector('[data-daily-selection]');if(text)text.textContent='已选 '+dailyLabel(key,mode)+'，请选择目标';return;}
   const source=daily.source;daily.source=null;$app.querySelectorAll('.is-selected').forEach(b=>b.classList.remove('is-selected'));if(source===key)return;
   const revision=daily.data.revision,date=daily.date;
-  confirmBox(mode==='posts'?'交换两个岗位':'交换两处人员',`${esc(dailyLabel(source,mode))} ↔ ${esc(dailyLabel(key,mode))}。保存这一天的预排；今天首班前同步看板，未到班次不计时。`,'确认交换',()=>{
+  const sevenPosts=[source,key].filter(k=>!k.startsWith('person:')).map(k=>{const [lid,i]=k.split('#');return daily.data.draft?.lines.find(l=>l.id===lid)?.posts[Number(i)];}).filter(p=>p?.seven);
+  const reminder=sevenPosts.length?`<p class="field-hint" role="status">提醒：${sevenPosts.map(p=>esc(p.name)).join('、')}为7点岗位，可安排其他班次人员；按实际班次生效，不提前计时。</p>`:'';
+  confirmBox(mode==='posts'?'交换两个岗位':'交换两处人员',`${esc(dailyLabel(source,mode))} ↔ ${esc(dailyLabel(key,mode))}。${reminder}保存这一天的预排；今天首班前同步看板，未到班次不计时。`,'确认交换',()=>{
     if(daily.date!==date||daily.data?.revision!==revision){toast('班表已变化，请重新选择',true);return;}
     return dailySend({action:mode==='posts'?'draft_swap_posts':'draft_swap_people',source,target:key});
   });
@@ -412,6 +431,11 @@ function dailyRenamePost(button){
   input.addEventListener('blur',()=>void finish(true));
 }
 function bindDraft(){
+  $app.querySelectorAll('[data-daily-line]').forEach(head=>{
+    head.onclick=()=>dailyLineMenu(head.dataset.dailyLine);
+    head.oncontextmenu=event=>{event.preventDefault();event.stopPropagation();dailyLineMenu(head.dataset.dailyLine);};
+    head.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();head.click();}};
+  });
   const month=$app.querySelector('[data-daily-month]'),date=$app.querySelector('[data-daily-date]');
   if(month)month.onchange=()=>{if(month.value)void loadDaily(month.value+'-01','');};
   if(date)date.onchange=()=>{if(date.value)void loadDaily(date.value,'');};
@@ -446,7 +470,7 @@ function bindDraft(){
   });
   const close=document.getElementById('draftClose');if(close)close.onchange=()=>void send({action:'draft_close',close:close.value});
   $app.querySelectorAll('[data-draft]').forEach(n=>n.onchange=()=>void send({action:'draft_set',kind:n.dataset.draft,key:n.dataset.key,pid:n.value}));
-  $app.querySelectorAll('[data-list]').forEach(n=>n.onchange=()=>void send({action:'draft_list',kind:n.dataset.list,pids:[...$app.querySelectorAll(`[data-list="${n.dataset.list}"]`)].map(x=>x.value)}));
+  $app.querySelectorAll('[data-list]').forEach(n=>n.onchange=()=>{const list=[...$app.querySelectorAll(`[data-list="${n.dataset.list}"]`)];void send({action:'draft_list',kind:n.dataset.list,pids:list.map(x=>x.value),...(n.dataset.list==='push7'?{targets:list.map(x=>x.dataset.target)}:{})});});
   $app.querySelectorAll('[data-role]').forEach(n=>n.onchange=()=>void send({action:'draft_role',pid:n.dataset.role,role:n.value}));
 }
 
@@ -523,7 +547,7 @@ function bindRoster() {
 // ---------------------------------------------------------------- 记录
 
 const EVENT_NAME = {
-  draft_fill_spares: '补齐备用岗位',
+  draft_fill_spares: '补齐备用岗位',draft_line:'预排线路启停',
   workflow_checkpoint:'操作恢复点',workflow_restore:'恢复线路上一步',rename_post:'岗位改名',hold101:'101定岗',resume101:'取消101定岗',task_timeout:'任务超时',task_transfer:'任务转接',task_refresh:'任务刷新',
   force_place:'强制安排上岗',entry_group:'整组上岗',entry_ready:'本人确认到位',entry_solo:'调整单人上岗',entry_adjust:'调整协同组合',entry_return:'本人到场重新领取安排',
   post_hold:'设置持续定岗',post_resume:'结束定岗', publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
@@ -547,6 +571,7 @@ function detailText(item) {
   if(item.type==='post_order'&&d.target_line)parts.push(`跨线至 ${d.target_line}`);
   if(item.type==='post_order'&&d.mode)parts.push(d.mode==='posts'?'只交换岗位':d.mode==='with_people'?'岗位和人员一起交换':'调整岗位顺序');
   if(item.type==='draft_fill_spares')parts.push(Object.entries(d.added||{}).map(([line,count])=>`${line}线新增${count}个备用岗位`).join('，'));
+  if(item.type==='draft_line')parts.push(d.active?'启用预排线路':'停用预排线路');
   if(item.type==='entry_group')parts.push(`${d.participants?.length||0}人整组执行`);
   return parts.join('，');
 }
@@ -666,7 +691,7 @@ function memberView() {
   const today = (d.today || []).map(s => `<span class="rt-pill">${esc(s.line)} ${hm(s.start)}-${hm(s.end)}</span>`).join('');
   const week = Object.entries(d.week_minutes || {}).sort().map(([lineId, m]) => `<span class="rt-pill">${esc(lineId)} ${Math.round(m)} 分钟</span>`).join('');
   const results = (d.confirmations || []).filter(r=>!['reversed','superseded'].includes(r.status));
-  const resultCard = r => `<article class="rt-confirmation"><strong>${hm(r.minute)} · ${r.action === 'depart' ? '已确认进线' : '已确认到达休息室'}</strong>${r.action === 'depart' ? `<p>进入 ${esc(r.line)} 线 · ${esc(r.post)}</p>${r.assignment?.targetName ? `<p>${esc(r.assignment.why || (r.assignment.mode === 'push7' ? '推7点' : '替换'))}：${esc(r.assignment.targetName)}<br>原岗位：${esc(r.assignment.targetLine || r.assignment.line)} · ${esc(r.assignment.targetPost)}</p>` : ''}${r.assignment?.mode === 'chain' ? '<p class="field-hint">从入口岗依次推进，推至目标人员所在岗位。</p>' : ''}` : `<p>${STATE_NAME[r.state] || ''}${['rest','meal','ready'].includes(r.state) && r.readyAt ? `至 ${hm(r.readyAt)}` : ''}</p>`}<small>${r.source === 'member' ? '个人待办确认' : '大屏确认'}</small></article>`;
+  const resultCard = r => `<article class="rt-confirmation"><strong>${hm(r.minute)} · ${r.action === 'depart' ? '已确认进线' : r.action==='entry_return'?'已恢复可分配状态':'已确认到达休息室'}</strong>${r.action === 'depart' ? `<p>进入 ${esc(r.line)} 线 · ${esc(r.post)}</p>${r.assignment?.targetName ? `<p>${esc(r.assignment.why || (r.assignment.mode === 'push7' ? '推7点' : '替换'))}：${esc(r.assignment.targetName)}<br>原岗位：${esc(r.assignment.targetLine || r.assignment.line)} · ${esc(r.assignment.targetPost)}</p>` : ''}${r.assignment?.mode === 'chain' ? '<p class="field-hint">从入口岗依次推进，推至目标人员所在岗位。</p>' : ''}` : r.action==='entry_return'?'<p>立即恢复分配，不新增休息时间。</p>':`<p>${STATE_NAME[r.state] || ''}${['rest','meal','ready'].includes(r.state) && r.readyAt ? `至 ${hm(r.readyAt)}` : ''}</p>`}<small>${r.source === 'member' ? '个人待办确认' : r.source==='screen'?'大屏确认':'主管确认'}</small></article>`;
   const confirmations = results.length ? `<section class="panel"><h2>本次确认</h2>${resultCard(results[0])}${results.length > 1 ? `<details><summary>此前确认 ${results.length - 1} 条</summary>${results.slice(1).map(resultCard).join('')}</details>` : ''}</section>` : '';
   return `${todo}<section class="panel"><h2>${esc(p.name)}</h2><p class="rt-status">${status}</p>${next}<p class="field-hint">班次 ${hm(p.start)}-${hm(p.end)}${p.mealEligible ? (p.ate ? '，已吃饭' : '，有吃饭') : ''}${badges(p)}</p></section>${confirmations}${line}
     <section class="panel"><h2>今天去过的线</h2><div class="rt-row">${today || '<span class="field-hint">暂无</span>'}</div><h2>本周各线累计</h2><div class="rt-row">${week || '<span class="field-hint">暂无</span>'}</div></section>`;

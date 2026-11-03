@@ -16,6 +16,15 @@ def prestart():
     return eng, hooks
 
 
+def test_preview_fingerprint_changes_when_only_unopened_prearrangement_changes():
+    from app.rotation.manual import fingerprint
+    eng,_=prestart();state=eng.d
+    for post in state['lines'][0]['posts']:post.update(open=False,occ=None)
+    before=fingerprint(state)
+    state['plan']['crew']['A#0'],state['plan']['crew']['A#1']=state['plan']['crew']['A#1'],state['plan']['crew']['A#0']
+    assert fingerprint(state)!=before
+
+
 def test_preopening_push_moves_plan_without_starting_timers():
     eng, hooks = prestart()
     eng.act_post('A', 0, False, 540, 'operator', close_mode='push')

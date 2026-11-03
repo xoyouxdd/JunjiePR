@@ -821,6 +821,10 @@ class Engine:
 
     def _push7_pairs(self):
         plan = self.d['plan']
+        if 'push7Targets' in plan:
+            actual=set(plan['seven'].values())
+            return [(i,pid,plan['push7Targets'][pid]) for i,pid in enumerate(plan['push7'])
+                    if plan['push7Targets'].get(pid) in actual]
         order = sorted(plan['seven'], key=self._seven_order)
         return list(zip(range(len(plan['push7'])), plan['push7'], [plan['seven'][k] for k in order]))
 
@@ -842,6 +846,9 @@ class Engine:
                 sub = self._push7_substitute(now)
                 if sub:
                     plan['push7'][idx] = sub['pid']
+                    if 'push7Targets' in plan:
+                        plan['push7Targets'].pop(a,None)
+                        plan['push7Targets'][sub['pid']]=b
                     if '推7点' not in sub['flags']:
                         sub['flags'].append('推7点')
                     self.h.log('push7_substitute', 'system', sub['pid'], None, None, {'instead_of': a})
@@ -1144,6 +1151,30 @@ class Engine:
         p = self.person(pid)
         if p['state'] != 'notyet' or now >= p['start'] or p['role'] != 'rotation':
             raise ActionError('只能拖拽尚未开始班次的轮岗人员')
+        from app.rotation import workflow as W
+        from app.rotation import daily as D
+        if W.enabled(self) and D.prestart(self.d,now):
+            key=f'{lid}#{i}';line,index,kind=D.slot(self.d,key)
+            if not line['active']:raise ActionError('目标线路未启用')
+            plan=self.d['plan'];previous=D.seven_relief_slots(self.d)
+            source=next((k for group in ('crew','seven') for k,value in plan[group].items() if value==pid),None)
+            if source==key:return
+            target=plan['seven'].get(key) or plan['crew'].get(key) or line['posts'][index].get('occ')
+            if target and self.P[target]['state']!='notyet':raise ActionError('不能交换已开始班次的人员')
+            source_kind=D.slot(self.d,source)[2] if source else None
+            for group in ('crew','seven'):
+                plan[group]={k:value for k,value in plan[group].items() if value not in (pid,target)}
+            plan[kind][key]=pid
+            if target and source:plan[source_kind][source]=target
+            D.normalize_seven_assignments(self.d,previous);D.validate_plan(self.d)
+            assigned=set(plan['crew'].values())|set(plan['seven'].values())
+            plan['push7']=[value for value in plan['push7'] if value not in assigned]
+            for changed in [key]+([source] if source else []):
+                owner,j,_=D.slot(self.d,changed);post=owner['posts'][j]
+                who=plan['seven'].get(changed) or plan['crew'].get(changed)
+                post.update(occ=who if post['open'] else None,since=None)
+            self.h.log('plan_place',actor,pid,lid,line['posts'][index]['name'],{'swapped':target})
+            return
         L, i, post = self.post(lid, i)
         if not L['active'] or not post['open']:
             raise ActionError('目标岗位未开放')
@@ -1413,6 +1444,11 @@ class Engine:
                    {'from': i, 'to': target_i, 'target_line': target_lid, 'mode': mode})
 
     def act_line(self, lid, active, now, actor):
+        from app.rotation import workflow as W, daily as D
+        if W.enabled(self) and D.prestart(self.d,now):
+            if D.set_prestart_line(self.d,lid,active):
+                self.h.log('line_on' if active else 'line_off',actor,None,lid,None,{'prestart':True})
+            return
         L = self.line(lid)
         if not active and any((x.get('hold') or x.get('hold101')) for x in L['posts']):
             raise ActionError('本线还有定岗人员，请先取消定岗再停用')

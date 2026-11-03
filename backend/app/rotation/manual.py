@@ -6,7 +6,7 @@ from app.rotation.engine import Engine, ActionError
 
 def fingerprint(state):
     value={'date':state['date'],'epoch':state.get('confirmationEpoch'),'closed':state.get('closed'),
-           'lines':state['lines'],'persons':{pid:{k:p.get(k) for k in ('state','line','readyAt','assign','start','end','continuousStart','confirmationSequence')} for pid,p in state['persons'].items()},
+           'lines':state['lines'],'plan':state.get('plan'),'persons':{pid:{k:p.get(k) for k in ('state','line','readyAt','assign','start','end','continuousStart','confirmationSequence')} for pid,p in state['persons'].items()},
            'tasks':{key:(task['revision'],task['status']) for key,task in state.get('rotationTasks',{}).items()}}
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 

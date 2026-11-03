@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.04.1", "date": "2026-11-04", "status": "candidate",
+     "items": [{"summary": "轮岗预排与确认提示完善", "detail": "7点岗位支持安排其他班次人员，按实际班次计时并保留有效推7点接替关系；可编辑预排支持线路启停，沿用首班冻结、版本及权限保护。手机重连按服务器回执清理已撤销或替换的旧凭证，超时确认明确提示恢复分配且不新增休息。", "audiences": ["all"]}]},
     {"version": "2026.11.03.2", "date": "2026-11-03", "status": "candidate",
      "items": [{"summary": "轮岗任务与餐休显示统一", "detail": "大屏、手机和旧个人页统一暂停、前序等待及正式任务展示；餐休区仅显示实际剩余时间，不提前展示未派发路线。保留关联异常处理入口，隐藏顺接需求等待匹配的堆叠提示，明确历史时间待核实标记并统一分钟和秒数显示。", "audiences": ["all"]}]},
     {"version": "2026.11.03.1", "date": "2026-11-03", "status": "candidate",
