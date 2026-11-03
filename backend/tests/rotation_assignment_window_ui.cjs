@@ -12,7 +12,9 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   for(const [ctx,no] of [[cm,'9710000'],[op,'9710020']]){assert((await ctx.request.post(base+'/api/login',{data:{employee_no:no,password:'formal-fixture-2026'}})).ok());const h=await ctx.request.get(base+'/health').then(r=>r.json());await ctx.request.post(base+'/api/changelog/announcement/read',{data:{version:h.version}});}
   const personal=await cm.newPage(),board=await op.newPage();for(const p of [personal,board])p.on('pageerror',e=>errors.push(e.message));
   const reset=async remaining=>assert((await op.request.post(base+'/__fixture/assignment-window',{data:{remaining}})).ok());
-  await reset(4);await personal.goto(base+'/?view=actionCenter');await personal.locator('[data-formal-rotation-todo]').getByText(/预计安排/).waitFor();
+  await reset(4);await personal.goto(base+'/?view=actionCenter');await personal.locator('[data-formal-rotation-todo]').getByText(/休息至/).waitFor();
+  assert.equal(await personal.locator('.rt-confirm-destination,.rt-task-comparison,.rt-confirm-routes').count(),0);
+  assert(!/A1|B1/.test(await personal.locator('[data-formal-rotation-todo]').innerText()));
   assert.equal(await personal.locator('[data-rotation-task=depart]').count(),0);
   let data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(!data.person.assignmentLocked&&!data.person.canDepart);
   await reset(3);await personal.reload();await personal.locator('[data-formal-rotation-todo]').getByText(/本轮任务已派发/).waitFor();
@@ -34,6 +36,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   await reset(0);data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert(data.person.canDepart,JSON.stringify(data.person));await personal.reload();await personal.locator('[data-rotation-task=depart]').waitFor();
   await personal.locator('[data-rotation-task=depart]').click();await personal.locator('[data-modal-confirm]').click();
   await personal.locator('[data-formal-rotation-todo]').getByText(/已确认上岗安排，请前往 A1线/).waitFor();
+  assert.equal((await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'onpost');
   assert.deepEqual(errors,[]);console.log(engine+': early preview, exact 3-minute lock, no early departure, mutable teammate, closed-line route refresh, final confirmation and widths passed');
   await browser.close();browser=null;
  }
