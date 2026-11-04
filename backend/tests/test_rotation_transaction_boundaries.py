@@ -148,13 +148,26 @@ def test_simultaneous_confirmation_executes_exactly_once(rotation):
     assert state['lines'][0]['posts'][1]['occ'] == '3'
 
 
-def test_committed_confirmation_notifies_all_live_subscribers(rotation):
-    from app.routers.rotation import rotation_stream
+def test_committed_confirmation_notifies_all_live_subscribers(rotation, monkeypatch):
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from app.rotation.access import start_session
+    from app.routers import rotation as rotation_router
+
+    monkeypatch.setattr(rotation_router, "SessionLocal", rotation.factory)
     body = confirmation_setup(rotation)
+    response = Response()
+    with rotation.factory() as db:
+        start_session(db, Request({"type": "http", "scheme": "https", "path": "/", "headers": []}),
+                      response, member_employee_no="1")
+        db.commit()
+    cookie = response.headers["set-cookie"].split(";", 1)[0]
     async def connected():
         return False
     async def check():
-        streams = [await rotation_stream(SimpleNamespace(is_disconnected=connected), actor=None) for _ in range(20)]
+        cookies = Request({"type": "http", "headers": [(b"cookie", cookie.encode())]}).cookies
+        request = SimpleNamespace(cookies=cookies, is_disconnected=connected)
+        streams = [await rotation_router.rotation_stream(request) for _ in range(20)]
         iterators = [response.body_iterator for response in streams]
         try:
             initial = await asyncio.gather(*(iterator.__anext__() for iterator in iterators))

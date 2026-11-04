@@ -442,7 +442,7 @@ def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
     assert "function isNativePickerControl(" in script
     assert "node.inert=true" in script
     assert "if(isNativePickerControl(document.activeElement))return" in script
-    assert "bindDialogLayer(overlay,{initialFocus:cancel,onClose:value=>resolve(value===true)})" in script
+    assert "bindDialogLayer(overlay,{initialFocus:cancel,onClose:value=>{cleanup?.();resolve(value===true);}})" in script
     assert "bindDialogLayer(overlay,{initialFocus:input,onClose:value=>resolve(typeof value==='string'?value:null)})" in script
     assert "bindDialogLayer(drawer,{" in script
     assert "allowClose:()=>!submitting" in script
