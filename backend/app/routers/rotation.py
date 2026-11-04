@@ -37,7 +37,7 @@ from app.routers._shared import client_ip, parse_iso_date
 from app.security import request_is_https
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, token_hash
-from app.v2_database import get_db
+from app.v2_database import SessionLocal, get_db
 from app.v2_services import write_audit
 
 
@@ -229,7 +229,9 @@ def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: Rot
         return service.do_live_action(db, rotation_attraction_id(db), actor,
                                       {"action": payload["action"], "pid": payload.get("pid"),
                                        "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice"),
-                                       "group_confirm": payload.get('group_confirm',False),"expected_plan":payload.get('expected_plan')})
+                                       "group_confirm": payload.get('group_confirm',False),"expected_plan":payload.get('expected_plan'),
+                                       **({'expected_arrival_outcome': payload['expected_arrival_outcome']}
+                                          if 'expected_arrival_outcome' in payload else {})})
     except service.ActionError as exc:
         raise _action_error(exc) from exc
 
@@ -375,14 +377,31 @@ def rotation_config_update(payload: dict, db: Session = Depends(get_db), actor: 
 # ---------------------------------------------------------------- 实时同步
 
 @router.get("/stream")
-async def rotation_stream(request: Request, actor: RotationActor = Depends(require_actor)):
+async def rotation_stream(request: Request):
     """推送版本号：版本变了，页面再去拉取最新数据。"""
 
     from app.rotation.namespace import runtime_for
-    runtime=runtime_for(formal=getattr(actor,'formal',False))
+    from starlette.concurrency import run_in_threadpool
+
+    def check_access():
+        with SessionLocal() as db:
+            actor = require_actor(request, db)
+            return actor.formal, actor.kind, actor.actor_id, actor.member_employee_no
+
+    identity = await run_in_threadpool(check_access)
+    runtime = runtime_for(formal=identity[0])
     async def events():
         last, idle = None, 0.0
+        clock = asyncio.get_running_loop().time
+        next_check = clock() + 15
         while not await request.is_disconnected():
+            if clock() >= next_check:
+                try:
+                    if await run_in_threadpool(check_access) != identity:
+                        break
+                except HTTPException:
+                    break
+                next_check = clock() + 15
             version = runtime.version
             if version != last:
                 last, idle = version, 0.0

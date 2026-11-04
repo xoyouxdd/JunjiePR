@@ -40,7 +40,7 @@ function personalReceipt(result){
 function entryRoutes(routes){return (routes||[]).map(r=>`<li><strong>${esc(r.name)}</strong>：${esc(r.from)} → ${esc(r.to)}</li>`).join('');}
 function entryCard(p){
   const g=p.entryGroup;if(!g)return '';
-  return `<section class="rt-entry-group"><h4>${esc(g.line)}线 · ${g.members.length}人协同上岗</h4><p role="status">${g.confirmed} / ${g.members.length} 人已确认安排</p><ul>${g.members.map(m=>`<li>${esc(m.name)} · ${esc(m.task||'上岗')} → ${esc(m.entryPost||'待核实岗位')} · ${hm(m.start)}–${hm(m.end)} · ${m.confirmed?'已确认':'待本人确认'}</li>`).join('')}</ul><p>出发前全员确认后一起前往，现场无需再次操作手机</p><h4>现场通知与接替去向</h4><p>向岗上伙伴说明本组来几人、各自任务，并按以下路线接替。下线人员回休息室后确认休息／吃饭。</p><ul>${entryRoutes(g.routes)}</ul>${g.blocked?`<p role="alert">${esc(g.blocked)}</p>`:''}</section>`;
+  return `<section class="rt-entry-group"><h4>${esc(g.line)}线 · ${g.members.length}人协同上岗</h4><p role="status">${g.confirmed} / ${g.members.length} 人已确认安排</p><ul>${g.members.map(m=>`<li>${esc(m.name)} · ${esc(m.task||'上岗')} → ${esc(m.entryPost||'待核实岗位')} · ${hm(m.start)}–${hm(m.end)} · ${m.confirmed?'已确认':'待本人确认'}</li>`).join('')}</ul><p>出发前全员确认后一起前往，现场无需再次操作手机</p><h4>现场通知与接替去向</h4><p>向岗上伙伴说明本组来几人、各自任务，并按以下路线接替。</p><ul>${entryRoutes(g.routes)}</ul>${g.blocked?`<p role="alert">${esc(g.blocked)}</p>`:''}</section>`;
 }
 function taskLine(line,pid){
   if(!line)return '';
@@ -94,14 +94,29 @@ function mountRotationTasks(host,request,onComplete){
   selectedCircle=pending?.body?.attraction_id||null;
   const save=value=>{pending=value;try{if(value)sessionStorage.setItem(key,JSON.stringify(value));else sessionStorage.removeItem(key);}catch{}};
   const current=()=>!closed&&request.isCurrent()&&host.isConnected;
-  const confirmScope=(title,message)=>confirmModal(title,`<p>当前景点圈：${esc(data?.identity?.attraction_name||state.me.attraction_name||'')}</p>${message}`);
+  const confirmScope=(title,message,options)=>confirmModal(title,`<p>当前景点圈：${esc(data?.identity?.attraction_name||state.me.attraction_name||'')}</p>${message}`,'确认',options);
+  const arrivalFormState=payload=>{
+    const p=payload?.person;
+    return JSON.stringify([payload?.clock?.date,payload?.attraction_id,p?.state,p?.confirmationTokens,
+      p?.canDepart,p?.arrivalOutcome,p?.mealOptions?.canChoose,p?.mealOptions?.forced,personalTaskPaused(p||{})]);
+  };
   async function load(force=false){
     if(loading){if(force)queuedScope=true;return;}
-    if(!current()||busy||!force&&host.contains(document.activeElement)&&['INPUT','SELECT'].includes(document.activeElement.tagName))return;
+    if(!current()||busy)return;
     loading=true;
     try{
       const requestedCircle=selectedCircle;
-      const next=await api('/api/rotation-board/me'+(requestedCircle?'?attraction_id='+requestedCircle:''));if(!current()||requestedCircle!==selectedCircle)return;data=next;selectedCircle=next.attraction_id||selectedCircle;
+      const next=await api('/api/rotation-board/me'+(requestedCircle?'?attraction_id='+requestedCircle:''));
+      if(!current()||busy||requestedCircle!==selectedCircle)return;
+      const active=document.activeElement;
+      const sameArrival=data?.clock.date===next.clock.date&&data?.attraction_id===next.attraction_id
+        &&data?.person?.confirmationTokens?.arrive===next.person?.confirmationTokens?.arrive;
+      const keepControl=!force&&!pending&&host.contains(active)&&(
+        active?.matches?.('[name=formalRotationMeal]')&&arrivalFormState(data)===arrivalFormState(next)
+        ||active?.matches?.('[data-personal-circle]')&&JSON.stringify(data?.rotation_circles)===JSON.stringify(next.rotation_circles)
+          &&arrivalFormState(data)===arrivalFormState(next));
+      data=next;selectedCircle=next.attraction_id||selectedCircle;
+      if(keepControl)return;
       if(pending){
         if(pending.date!==data.clock.date){save(null);toast('此前轮岗确认已跨日，请联系主管核对当日记录。',true);}
         else{
@@ -126,7 +141,7 @@ function mountRotationTasks(host,request,onComplete){
         selectedCircle=Number(event.target.value);host.dataset.scopeLoading='true';
         host.querySelectorAll('button,select').forEach(el=>el.disabled=true);void load(true);
       });
-      const previousMeal=host.querySelector('[name=formalRotationMeal]:checked')?.value;
+      const previousMeal=sameArrival?host.querySelector('[name=formalRotationMeal]:checked')?.value:null;
       const p=data.person;
       const empty=host.parentElement.querySelector('.action-center-empty');if(empty)empty.hidden=!!p;
       const personalEmpty=document.getElementById('rotationPersonalEmpty');
@@ -204,19 +219,76 @@ function mountRotationTasks(host,request,onComplete){
     busy=true;
     const p=data.person,meal=host.querySelector('[name=formalRotationMeal]:checked')?.value||'rest';
     let completed=false;
-    const body=retry?pending.body:{action,pid:p.pid,confirmation_token:p.confirmationTokens?.[action],meal_choice:meal,...(data.attraction_id?{attraction_id:data.attraction_id}:{})};
+    const body=retry?{...pending.body}:{action,pid:p.pid,confirmation_token:p.confirmationTokens?.[action],meal_choice:meal,...(data.attraction_id?{attraction_id:data.attraction_id}:{})};
+    const date=retry?pending.date:data.clock.date;
     if(single){body.single=true;body.missing=p.entryGroup.members.filter(m=>m.pid!==p.pid).map(m=>m.pid);}
+    async function refreshConfirmation(){
+      const latest=await api('/api/rotation-board/me'+(body.attraction_id?'?attraction_id='+body.attraction_id:''));
+      const next=latest.person;
+      if(!current()||latest.clock.date!==date||(body.attraction_id&&latest.attraction_id!==body.attraction_id)
+          ||next?.pid!==body.pid||next.confirmationTokens?.[action]!==body.confirmation_token)return null;
+      return next;
+    }
+    const watchConfirmation=(update=()=>{})=>({onOpen:(container,close)=>{
+      let open=true, checking=false;
+      const timer=setInterval(async()=>{
+        if(!current()){clearInterval(timer);return;}
+        if(checking||document.hidden)return;
+        checking=true;
+        try{
+          const next=await refreshConfirmation();
+          if(open&&current()){
+            if(next&&!personalTaskPaused(next))update(container,next);
+            else{toast('轮岗安排已更新，请查看当前状态');close();}
+          }
+        }catch{}finally{checking=false;}
+      },5000);
+      return ()=>{open=false;clearInterval(timer);};
+    }});
     try{
       const a=p.assign;
       if(single&&!await confirmScope('确认其他同行人未到场',`请确认 ${p.entryGroup.members.filter(m=>m.pid!==p.pid).map(m=>esc(m.name)).join('、')} 暂未到场。单人安排将优先接替下班／出圈任务：<ul>${entryRoutes(p.entryGroup?.soloRoutes)}</ul>请核对以上新路径。同行人已确认安排时不能使用此模式。`))return;
       if(action==='entry_adjust'){if(!await confirmScope('重试同行组合调整','沿用上次提交的组合预览；仅调整任务，剩余人员仍需重新确认上岗。'))return;}
-      else if(action==='entry_return'){if(!await confirmScope('确认本人已到场',p.taskTimeout?'确认后立即恢复可分配状态，不新增休息时间。原任务尚未转接时可重新承接；已经转给他人的任务保持不变。':'重新领取最新安排，本次操作不会直接上岗。'))return;}
-      else if(p.entryGroup&&action==='depart'){if(!single&&!await confirmScope('确认上岗安排',`${entryCard(p)}确认后请在出发前等待同行人，全员确认后一起前往，现场无需再次操作手机。`))return;}
-      else
-      if(!await confirmScope(action==='depart'?'确认去上岗':'确认已到休息室',action==='depart'?`进入 ${esc(a?.line||'')}线 · ${esc(a?.entryPost||'入口岗位')}。${a?.targetName?'按原推岗规则替换 '+esc(a.targetName)+'。':''}<ul>${entryRoutes(p.departureRoutes)}</ul>确认表示接受安排并前往执行。下线人员回休息室后确认休息／吃饭。`:`请确认本人已到达休息室。${p.arrivalOutcome==='done'?'本次确认后结束当日轮岗。':p.arrivalOutcome==='away'?'本次确认后按原安排转为圈外状态。':p.mealOptions?.forced?'本次安排吃饭。':meal==='meal'?'本次选择吃饭。':'本次选择休息。'}`))return;
-      if(!current())return;
-      save({date:data.clock.date,body});
-      const out=await api('/api/rotation-board/me/act',json('POST',body));save(null);completed=true;
+      else if(action==='entry_return'){if(!await confirmScope('确认本人已到场',p.taskTimeout?'确认后立即恢复可分配状态，不新增休息时间。原任务尚未转接时可重新承接；已经转给他人的任务保持不变。':'重新领取最新安排，本次操作不会直接上岗。',watchConfirmation()))return;}
+      else if(p.entryGroup&&action==='depart'){if(!single&&!await confirmScope('确认上岗安排',`${entryCard(p)}确认后请在出发前等待同行人，全员确认后一起前往，现场无需再次操作手机。`,watchConfirmation()))return;}
+      else if(action==='depart'){
+        const watch=p.task&&watchConfirmation((container,next)=>{
+          const list=container.querySelector('[data-departure-routes]');
+          const html=entryRoutes(next.departureRoutes);
+          if(list.innerHTML!==html)list.innerHTML=html;
+        });
+        if(!await confirmScope('确认去上岗',`进入 ${esc(a?.line||'')}线 · ${esc(a?.entryPost||'入口岗位')}。${a?.targetName?'按原推岗规则替换 '+esc(a.targetName)+'。':''}<ul data-departure-routes aria-live="polite">${entryRoutes(p.departureRoutes)}</ul>确认后按以上路线通知并接替。`,watch||undefined))return;
+      }
+      let arriving=p, updated=false, out;
+      while(current()){
+        if(action==='arrive'){
+          const message=()=>{
+            const outcome=arriving.arrivalOutcome==='done'?'本次确认后结束当日轮岗。':arriving.arrivalOutcome==='away'?'本次确认后按原安排转为圈外状态。':arriving.mealOptions?.forced?'本次安排吃饭。':body.meal_choice==='meal'?'本次选择吃饭。':'本次选择休息。';
+            return (updated?'到达后的安排已更新，请核对后确认。':'请确认本人已到达休息室。')+outcome;
+          };
+          if(!await confirmScope('确认已到休息室',`<p data-arrival-message aria-live="polite">${message()}</p>`,watchConfirmation((container,next)=>{
+            if((next.arrivalOutcome??null)===(arriving.arrivalOutcome??null))return;
+            arriving=next;updated=true;
+            container.querySelector('[data-arrival-message]').textContent=message();
+          }))||!current())return;
+          body.expected_arrival_outcome=arriving.arrivalOutcome??null;
+        }
+        save({date,body});
+        try{
+          out=await api('/api/rotation-board/me/act',json('POST',body));
+          break;
+        }catch(error){
+          if(action!=='arrive'||error.status!==409||!current())throw error;
+          save(null);
+          const next=await refreshConfirmation();
+          if(!current())return;
+          if(!next||(next.arrivalOutcome??null)===body.expected_arrival_outcome)throw error;
+          arriving=next;
+          updated=true;
+        }
+      }
+      if(!out)return;
+      save(null);completed=true;
       toast(out.result?.status==='waiting'?'本人已确认，等待同行人确认安排':out.duplicate?'本次已确认，无需重复操作':'轮岗已确认，正在同步看板');
     }catch(error){if(error.status&&error.status<500)save(null);toast(error.message||'提交结果待核对，请勿重复确认',true);}
     finally{busy=false;if(current()){await load();await refreshActionBadge();if(completed&&current())onComplete?.();}}

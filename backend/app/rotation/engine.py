@@ -3,8 +3,8 @@
 由原型 rotation-board/engine.py 迁移，并按 2026-10 确认的规则修改：
 - 没有“上线满多少分钟才推”的保护；派人先推出口岗站得最久的人，站岗时长（整分钟）相同时
   再看当天没进过这条线、本周在这条线累计少；
-- 推下班、推出圈（固定暂离）最优先：替换者在下班/出圈前 offLead 分钟到岗，从入口岗推进，
-  链条后移到要走的人为止把他推出来；被推出的人直接转为已下班/出圈中，不需要到大屏确认；
+- 正式轮岗中，在岗距下班 25 分钟开始优先匹配推下班，再匹配推出圈和普通轮岗；
+  推下班和推出圈从入口岗推进到目标岗位，被替下的人直接结束轮岗或出圈；
 - 推 7 点：07:15 班的人直接在 7 点岗位对换 07:00 班的人，被替下的人照常休息后轮岗；
 - 到出圈时间仍没人替：继续在岗并保持准备出圈，一直找人来推，超过 outWarnAfter 分钟提醒主管；
 - 吃饭：休息中、待出发和吃饭/饭后休息剩余15分钟及以内的人数达到开放线数时，可自选休息或吃饭；默认休息，保留强制饭点；
@@ -66,6 +66,8 @@ POOL_STATES = ('walkback', 'pending', 'rest', 'meal', 'ready')
 REST_STATES = ('rest', 'meal', 'ready')
 CLOSING_WORK = '闭园后工作'
 TARGET_MODES = ('push7', 'chain')
+SHIFT_PREPARE_MINUTES = 25
+SHIFT_FINISH_MINUTES = 30
 
 
 class ActionError(Exception):
@@ -346,9 +348,9 @@ class Engine:
             for x in L['posts']:
                 x['occ'] = None
                 x['since'] = None
-                x['open'] = L['active'] and not x.get('openAt')
+                x['open'] = L['active'] and not x.get('openAt') and not x.get('draftClosed')
                 x['opened'] = not x.get('openAt')
-                x['manual'] = False
+                x['manual'] = bool(x.get('draftClosed'))
         for p in self.P.values():
             p.update(state='notyet', assign=None, visited=[], ate=False, flags=[],
                      line=None, lineStart=None, continuousStart=None, readyAt=None, breakKind=None, breakStart=None,
@@ -553,6 +555,9 @@ class Engine:
                 if p['pid'] in seat7:
                     p['flags'].append('7点岗')
                 self.h.log('crew_start', 'system', p['pid'], lid, x['name'], {})
+                hold = x.pop('draftHold', None)
+                if hold and hold['pid'] == p['pid']:
+                    self.act_post_hold(lid, i, p['pid'], True, hold['reason'], t, hold['by'])
                 return
         if self.opening_rest_candidate(p):
             p.update(state='rest', breakKind='rest', breakStart=t, arriveAnchor=t,
@@ -579,7 +584,7 @@ class Engine:
         p['lineStart'] = None
 
     def _push_off(self, x_pid, L, i, now, reason):
-        """把某人从线上替下，进入下线途中，之后要到大屏点“去休息”。"""
+        """把某人从线上替下，按剩余班次时间决定是否回休息室。"""
         p = self.P[x_pid]
         self._leave_line(p, L, i, now)
         from app.rotation.workflow import finish_continuous
@@ -589,7 +594,10 @@ class Engine:
         p['downReason'] = reason
         p['arriveAnchor'] = None
         p['after'] = 'closing' if reason == '闭园' else self._arrive_outcome(p, now + self.S['walkMin'])[0]
-        self.h.log('pushed_off', 'system', x_pid, L['id'], L['posts'][i]['name'], {'reason': reason})
+        if self.d.get('taskWorkflow') and reason != '闭园' and self.shift_finishes_on_exit(p, now):
+            p.update(state='done', after='done', assign=None)
+        self.h.log('pushed_off', 'system', x_pid, L['id'], L['posts'][i]['name'],
+                   {'reason': reason, 'outcome': p['state']})
 
     def _go_out(self, p, a, now, actor):
         """出圈（固定暂离）：转为暂离，到暂离结束回到池子。"""
@@ -601,20 +609,21 @@ class Engine:
         p['away'] = {'reason': a['label'], 'until': a['end'], 'fixed': True}
         self.h.log('away', actor, p['pid'], None, None, {'reason': a['label'], 'fixed': True})
 
-    def _remove_leaving(self, x_pid, L, i, now, why):
+    def _remove_leaving(self, x_pid, L, i, now, why, *, outcome=None):
         """推下班 / 推出圈：被推出的人不回大屏，直接转为已下班或出圈中。"""
         p = self.P[x_pid]
         self._leave_line(p, L, i, now)
         from app.rotation.workflow import finish_continuous
         finish_continuous(p,now)
         p['downReason'] = why
-        _, kind, a = self.leave_at(p, now)
-        if kind == 'out' and a is not None:
+        a = self.next_absence(p, now)
+        if outcome != 'done' and a is not None:
             self._go_out(p, a, now, 'system')
         else:
             p['state'] = 'done'
             p['assign'] = None
-        self.h.log('pushed_out', 'system', x_pid, L['id'], L['posts'][i]['name'], {'reason': why})
+        self.h.log('pushed_out', 'system', x_pid, L['id'], L['posts'][i]['name'],
+                   {'reason': why, 'outcome': p['state']})
 
     # -------- 到线
     def _arrive_line(self, p, now):
@@ -807,17 +816,36 @@ class Engine:
         taken = self.targeted()
         cm = self.close_min()
         S = self.S
+        modern = self.d.get('taskWorkflow')
+        if modern:
+            from app.rotation import workflow as W
+            reserved = {move['pid'] for task in self.d['rotationTasks'].values()
+                        if task['status'] in W.ACTIVE | {'exception_hold'} for move in task['moves']}
+        else:
+            reserved = set()
         for p in self.P.values():
-            if p['state'] != 'onpost' or p['pid'] in taken or self.held(p['pid']):
+            if p['state'] != 'onpost' or p['pid'] in taken or p['pid'] in reserved or self.held(p['pid']):
                 continue
             t, kind, _ = self.leave_at(p, now)
             need_at = t - S['offLead']
+            if modern:
+                if self.preparing_shift_end(p, now):
+                    kind, need_at = 'off', p['end'] - SHIFT_PREPARE_MINUTES
+                elif kind == 'off':
+                    continue
             if cm is not None and need_at >= cm + S.get('closeDelay', 0):
                 continue  # 闭园时会统一撤下，不用另找替换
             if now >= need_at - S['endLead']:
                 needs.append((need_at, p, kind))
-        needs.sort(key=lambda n: n[0])
+        needs.sort(key=lambda n: self.replacement_priority(n[1], n[2], n[0], now) if modern else n[0])
         return needs
+
+    def replacement_priority(self, p, kind, need_at, now):
+        if kind == 'out':
+            return (1, need_at)
+        from app.rotation.workflow import continuous_minutes
+        _, index = self.find_post(p['pid'])
+        return (0, p['end'], -continuous_minutes(p, now), p.get('line') or '', -index if index is not None else 1)
 
     def _push7_pairs(self):
         plan = self.d['plan']
@@ -861,6 +889,16 @@ class Engine:
                                 'departAt': max(now, self._ready_time(pa, now)), 'why': '推7点'}
                 pa['push7done'] = True
                 changed = True
+        # Reconsider automatic forecasts before issuing tasks. An issued route,
+        # its refresh and the recovery queue retain their existing ownership.
+        forecasts = {}
+        if self.d.get('taskWorkflow'):
+            for p in self.P.values():
+                a = p.get('assign') or {}
+                if (a.get('mode') == 'chain' and p['state'] in REST_STATES and not a.get('manual')
+                        and not p.get('_taskRefresh') and not self.assignment_locked(p, now)):
+                    forecasts[p['pid']] = a
+                    p['assign'] = None
         # 推下班 / 推出圈
         for need_at, x, kind in self._replace_needs(now):
             walk = self.walk(x['line'])
@@ -868,7 +906,7 @@ class Engine:
             for p in self.P.values():
                 if p.get('entryHold') or p['state'] not in REST_STATES or p['role'] not in ('rotation', 'op'):
                     continue
-                if self.assignment_locked(p, now):
+                if self.assignment_locked(p, now) or p.get('_taskRefresh'):
                     continue
                 if p.get('assign') and p['assign'].get('mode') in TARGET_MODES:
                     continue
@@ -885,7 +923,7 @@ class Engine:
             pick['assign'] = {'line': x['line'], 'mode': 'chain', 'target': x['pid'],
                               'departAt': max(ready, need_at - walk),
                               'why': '推出圈' if kind == 'out' else '推下班'}
-            changed = True
+            changed = changed or pick['assign'] != forecasts.get(pick['pid'])
         # 普通分配
         if self._assign_openings(now):
             changed = True
@@ -899,7 +937,7 @@ class Engine:
                 if a:
                     p['assign'] = a
                     changed = True
-        return changed
+        return changed or any(self.P[pid].get('assign') != old for pid, old in forecasts.items())
 
     def _assign_openings(self, now):
         """人工加岗优先预留下一位可轮岗人员，从入口推进补空岗。"""
@@ -1024,10 +1062,21 @@ class Engine:
         return best[1] if best else None
 
     # -------- 大屏操作
+    def preparing_shift_end(self, p, now):
+        return p['state'] == 'onpost' and p['end'] - now <= SHIFT_PREPARE_MINUTES
+
+    def shift_finishes_on_exit(self, p, now):
+        return p['end'] - now <= SHIFT_FINISH_MINUTES
+
     def _arrive_outcome(self, p, now):
         """点“去休息”时的去向：('done' 下班 / 'away' 出圈 / None 正常休息)。"""
         anchor = p.get('arriveAnchor') or now
         t, kind, _ = self.leave_at(p, now)
+        if self.d.get('taskWorkflow'):
+            if self.shift_finishes_on_exit(p, now):
+                return 'done', 'off'
+            if kind == 'off':
+                return None, kind
         if t - (anchor + self.S['breakMin'] + self.S['walkMin']) <= self.S['noBoardBefore']:
             return ('away' if kind == 'out' else 'done'), kind
         return None, kind
@@ -1695,6 +1744,9 @@ class Engine:
                 if kind == 'out':
                     if now >= t + S['outWarnAfter'] and p['pid'] not in taken:
                         out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 已过出圈时间 %s %d 分钟，暂无人可推' % (p['name'], fmt(t), now - t)})
+                elif self.d.get('taskWorkflow'):
+                    if self.preparing_shift_end(p, now) and p['pid'] not in taken:
+                        out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 已准备下班，暂无人可替' % p['name']})
                 elif now >= t - S['offLead'] - 10 and p['pid'] not in taken:
                     out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 需在 %s 前推%s，暂无人可替' % (p['name'], fmt(t - S['offLead']), word)})
             if p.get('role') in ('rotation', 'op') and st not in ('done', 'excluded', 'notyet', 'meal') and not p.get('ate') \

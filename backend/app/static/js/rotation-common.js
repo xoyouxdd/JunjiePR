@@ -78,11 +78,16 @@ function departureTimeReady(p,n){
     && n >= p.assign.departAt - (p.entryGroup?0:departureEarly()) - 0.01;
 }
 
-// 基础休息结束后，等待定时开岗的人员仍显示在休息区。
 function poolState(p, n) {
   // A published task changes the display area, never the person's break state.
   if (!p.entryHold && p.task?.status === 'assigned' && ['rest','meal','ready'].includes(p.state)) return 'ready';
   if (waitingInitialRest(p)) return 'rest';
+  // The board clock can reach the break end before the next server update.
+  // This only moves the card. Confirmation still requires an issued task.
+  if (rotationUsesTasks(p)) {
+    if (['rest','meal'].includes(p.state) && p.readyAt != null && n >= p.readyAt) return 'ready';
+    if (p.state === 'ready') return (p.readyAt ?? n) > n ? 'rest' : 'ready';
+  }
   if (p.state === 'ready' && ((p.readyAt ?? n) > n + 0.01 || (p.assign && !departureTimeReady(p, n)))) return 'rest';
   return p.state;
 }
@@ -200,12 +205,16 @@ function renderClock() {
 
 // ---------------------------------------------------------------- 弹窗
 
+let activeRotationConfirmation = null;
+
 function closeModal() {
+  activeRotationConfirmation = null;
   document.getElementById('rtModal').innerHTML = '';
   RT.modalOpen = false;
   RT.render();
 }
 function openModal(html, bind) {
+  activeRotationConfirmation = null;
   const host = document.getElementById('rtModal');
   host.innerHTML = `<div class="modal-overlay rt-overlay"><section class="modal-card rt-card" role="dialog" aria-modal="true">${html}</section></div>`;
   RT.modalOpen = true;
@@ -222,13 +231,25 @@ function confirmBox(title, message, okText, run, { warn = false, autoCancel = 0 
   let timer = null;
   openModal(`<h3>${title}</h3><div class="modal-message">${message}</div><div class="modal-actions"><button type="button" class="secondary" data-close>取消</button><button type="button" class="${warn ? 'danger' : 'primary'}" data-ok>${esc(okText)}</button></div>`, host => {
     const ok = host.querySelector('[data-ok]');
+    const isCurrent = () => RT.modalOpen && host.contains(ok);
+    const startAutoCancel = () => {
+      if (autoCancel) timer = setTimeout(() => {
+        if (isCurrent()) closeModal();
+      }, autoCancel);
+    };
     ok.onclick = async () => {
       clearTimeout(timer);
       ok.disabled = true;
       const done = await run();
-      if (done !== false) closeModal(); else ok.disabled = false;
+      if (!isCurrent()) return;
+      if (done !== false) {
+        closeModal();
+        return;
+      }
+      ok.disabled = false;
+      startAutoCancel();
     };
-    if (autoCancel) timer = setTimeout(() => { if (RT.modalOpen && document.getElementById('rtModal').contains(ok)) closeModal(); }, autoCancel);
+    startAutoCancel();
   });
 }
 
@@ -286,6 +307,29 @@ function acceptLiveData(data) {
   RT.lastSyncedAt = Date.now();
   if (RT.sync === 'offline') RT.sync = 'polling';
   renderSyncStatus();
+  if (RT.modalOpen && activeRotationConfirmation && !RT.submitting) {
+    const step = activeRotationConfirmation;
+    const person = data.person?.pid === step.pid ? data.person : data.day?.persons?.find(p => p.pid === step.pid);
+    if (data.clock.date !== step.date || rotationTaskPaused(person || {})
+        || person?.confirmationTokens?.[step.tokenAction] !== step.token) {
+      closeModal();
+      toast('轮岗安排已更新，请查看当前状态');
+    } else if (step.tokenAction === 'arrive' && step.checkArrival) {
+      step.outcome = person.arrivalOutcome ?? null;
+      const message = document.querySelector?.('#rtModal [data-rt-arrival-outcome]');
+      if (message) message.textContent = arrivalConfirmationText(step.outcome);
+      const choices = document.querySelector?.('#rtModal [data-rt-arrival-meals]');
+      if (choices) choices.hidden = step.outcome !== null;
+    }
+  }
+  if (RT.modalOpen) {
+    const list = document.querySelector?.('#rtModal [data-departure-person]');
+    const person = list && data.day?.persons?.find(p => p.pid === list.dataset.departurePerson);
+    if (person?.departureRoutes && person.confirmationTokens?.depart === list.dataset.departureToken) {
+      const html = departureRouteItems(person.departureRoutes);
+      if (list.innerHTML !== html) list.innerHTML = html;
+    }
+  }
   if (!RT.modalOpen && !RT.pressing) RT.render();
   return true;
 }
@@ -342,10 +386,21 @@ function assignmentDescription(a) {
   return `${own}${target}${a.mode === 'chain' ? '<br>从入口岗依次推进，推至目标人员所在岗位。' : ''}`;
 }
 
+function departureRouteItems(routes) {
+  return routes.map(r => `<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('');
+}
+
+function arrivalConfirmationText(outcome) {
+  if (outcome === 'done') return '确认到达后结束当日轮岗。';
+  if (outcome === 'away') return '确认到达后按当前安排转为圈外状态。';
+  return '请确认本人已到达休息室。确认后按餐休安排开始计时。';
+}
+
 function confirmRotation(p, action, path, wholeGroup=false) {
   if (confirmationBlocked()) { toast('请等待联网同步或确认结果核实后再操作', true); return; }
   const date = RT.data.clock.date;
-  const token = p.confirmationTokens?.[wholeGroup?'group_depart':action];
+  const tokenAction = wholeGroup?'group_depart':action;
+  const token = p.confirmationTokens?.[tokenAction];
   if (!token) { toast('任务已变化，请等待最新画面', true); scheduleLoad(); return; }
   if (action === 'depart' && !(wholeGroup&&p.entryGroup?groupCanDepart(p.entryGroup,nowMin()):canDepartNow(p, nowMin()))) { toast('休息未结束或还没到出发时间', true); return; }
   let text = action === 'depart' ? assignmentDescription(p.assign) : action==='entry_return'?`原任务已${p.taskTimeout?.transferredToName?'转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'进入待转接'}；确认后立即恢复可分配状态，不新增休息时间。原任务尚未转接时，可重新承接。`:'请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
@@ -353,9 +408,17 @@ function confirmRotation(p, action, path, wholeGroup=false) {
     if(!wholeGroup&&RT.me?.employee_no&&RT.me.employee_no!==p.pid){toast('协同上岗请本人在待办确认',true);return;}
     text=wholeGroup?`<p>确认以下人员整组上岗：</p><p>${p.entryGroup.members.map(m=>`${esc(m.name)} · ${esc(m.task||'上岗')} → ${esc(p.entryGroup.line)}线 · ${esc(m.entryPost||'待核实')}`).join('<br>')}</p>`:text+`<p>同组 ${p.entryGroup.members.map(m=>esc(m.name)).join('、')}；${p.entryGroup.confirmed}/${p.entryGroup.members.length}人确认。出发前全员确认后一起前往，现场无需再次操作手机。</p>`;
   }
-  if(action==='depart'){const routes=p.entryGroup?.routes||p.departureRoutes||[];text+=`<h4>现场通知与接替去向</h4><ul>${routes.map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul>${p.task?workflowComparison(p):''}<p>确认接受安排，按方案前往通知并接替。下线人员回休息室后确认休息／吃饭。</p>`;}
-  if(action==='arrive'&&p.mealOptions?.canChoose)text+=`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线，提交时再次核对。</p>`;
-  if(action==='arrive'&&p.mealOptions?.forced)text+='<p>已到原有强制饭点，本次安排吃饭。</p>';
+  if(action==='depart'){
+    const routes=p.entryGroup?.routes||p.departureRoutes||[];
+    const live=p.task?` data-departure-person="${esc(p.pid)}" data-departure-token="${esc(token)}" aria-live="polite"`:'';
+    text+=`<h4>现场通知与接替去向</h4><ul${live}>${departureRouteItems(routes)}</ul>${p.task?workflowComparison(p):''}<p>确认后按以上路线通知并接替。</p>`;
+  }
+  const step = {pid:p.pid,date,token,tokenAction,checkArrival:action==='arrive'&&rotationUsesTasks(p),outcome:p.arrivalOutcome??null};
+  if(action==='arrive'){
+    if(step.checkArrival)text=`<p data-rt-arrival-outcome aria-live="polite">${arrivalConfirmationText(step.outcome)}</p>`;
+    const choices=p.mealOptions?.canChoose?`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线，提交时再次核对。</p>`:p.mealOptions?.forced?'<p>已到原有强制饭点，本次安排吃饭。</p>':'';
+    if(choices)text+=`<div data-rt-arrival-meals ${step.checkArrival&&step.outcome!==null?'hidden':''}>${choices}</div>`;
+  }
   confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : action==='entry_return'?'任务超时确认':'到达休息室'}`, text,
     action === 'depart' ? '确认去轮岗' : action==='entry_return'?'确认知晓，重新领取':'确认已到达', async () => {
       if (RT.data?.clock.date !== date) { toast('轮岗日期已变化，请重新确认', true); return true; }
@@ -363,26 +426,36 @@ function confirmRotation(p, action, path, wholeGroup=false) {
       RT.submitting = true;
       storePendingConfirmation({token, pid:p.pid, date});
       let out;
+      const expectedOutcome = step.outcome;
       try {
         out = await rtPost(path, {action, pid:p.pid, confirmation_token:token,
           ...(wholeGroup?{group_confirm:true,expected_plan:p.entryGroup.id}:{}),
+          ...(step.checkArrival?{expected_arrival_outcome:expectedOutcome}:{}),
           meal_choice:action==='arrive'?document.querySelector('[name=rtMealChoice]:checked')?.value||'rest':undefined});
       } catch (error) {
         if (!error.uncertain) storePendingConfirmation(null);
         RT.submitting = false;
         renderSyncStatus();
         toast(error.message, true);
+        if (step.checkArrival && error.status === 409) {
+          try {
+            await RT.load();
+            if (activeRotationConfirmation === step && step.outcome !== expectedOutcome) return false;
+          } catch (_) { /* Fall through to the normal reconnection path. */ }
+        }
         closeModal();
         scheduleLoad();
         return false;
       }
       RT.submitting = false;
+      if (activeRotationConfirmation === step) activeRotationConfirmation = null;
       storePendingConfirmation(null);
       toast(out.result?.status==='waiting'?'已确认上岗安排，等待同行人':out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : action==='entry_return'?'已恢复可分配状态，不新增休息':'已确认到达休息室');
       // The mutation succeeded even if the subsequent view refresh fails.
       try { await RT.load(); } catch (_) { toast('确认成功，等待画面恢复同步'); }
       return true;
     }, {autoCancel: p.entryGroup ? 30000 : 8000});
+  activeRotationConfirmation = step;
 }
 
 function scheduleLoad() {
@@ -484,6 +557,7 @@ function lineCard(L, n, ops, view = {}) {
   const persons = view.day?.persons || RT.data.day.persons;
   const lookup = pid => persons.find(p => p.pid === pid);
   const daily = !!view.daily, editable = daily && view.editable && !L.standby;
+  const draftPosts = view.draft?.lines.find(line=>line.id===L.id)?.posts;
   const incoming = persons.filter(p => p.assign && p.assign.line === L.id).sort((a, b) => a.assign.departAt - b.assign.departAt);
   const openIdx = L.posts.map((x, i) => (x.open ? i : -1)).filter(i => i >= 0);
   const exitIndex = openIdx.length ? openIdx[openIdx.length - 1] : -1;
@@ -493,9 +567,13 @@ function lineCard(L, n, ops, view = {}) {
       cls+=' rt-daily-slot'+(!x.open?' closed':'');
       const key=L.id+'#'+i,p=lookup(x.occ);
       const label=view.editable?`<button type="button" class="rt-pn rt-daily-post" data-daily-rename="${esc(key)}" ${editable?`draggable="true" data-daily-post="${esc(key)}"`:''} aria-label="${esc(x.name)}，双击改名${editable?'，拖拽交换岗位':''}">${esc(x.name)}</button>`:`<span class="rt-pn">${esc(x.name)}</span>`;
-      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="交换人员 ${esc(key)}">${esc(p?.name||'空岗')}</button>`:`<span class="rt-who-name">${esc(p?.name||'空岗')}</span>`;
+      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(p?.name||'空岗')}，岗位操作" aria-haspopup="dialog">${esc(p?.name||'空岗')}</button>`:`<span class="rt-who-name">${esc(p?.name||'空岗')}</span>`;
       const markedLabel=x.seven?`<span class="rt-daily-post-label">${label}<small class="rt-badge p7">7点岗位</small></span>`:label;
-      return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',markedLabel,person,x.open?(p?'预排':'空岗'):p?'预排 · 未开岗':'未开岗');
+      let status=x.open?(p?'预排':'空岗'):p?'预排 · 未开岗':'未开岗';
+      if(draftPosts?.[i]?.draftHold)status='预予定岗';
+      else if(editable&&x.closeAt)status=`${esc(x.closeAt)} 撤`;
+      else if(editable&&!x.open&&x.openAt)status=`${esc(x.openAt)} 开`;
+      return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',markedLabel,person,status);
     }
     if (!L.active) { cls += ' closed'; who = '待命'; }
     else if(x.prearranged){const p=lookup(x.occ);who=esc(p?.name||x.occ);mins=`${hm(p?.start)} 开始`;}
@@ -505,6 +583,10 @@ function lineCard(L, n, ops, view = {}) {
     else {
       const p = lookup(x.occ);
       who = esc(p ? p.name : x.occ);
+      if (p?.state === 'onpost' && Number.isFinite(p.end)) {
+        const shiftEnd = hm(p.end);
+        who += `<time class="rt-post-shift-end" datetime="${shiftEnd}" title="下班时间">${shiftEnd}</time>`;
+      }
       if (p && p.flags.includes('7点岗') && !p.flags.includes('推7点下来')) who += '<span class="rt-badge p7">7点</span>';
       if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">${preparingText(p.preparing)}</span>`; }
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;

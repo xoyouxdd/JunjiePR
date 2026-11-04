@@ -26,6 +26,57 @@ async function main(){try{
     await page.locator('[data-daily-date-button="2026-10-06"]').click();
     await page.locator('[data-daily-person="A#0"]').waitFor({timeout:10000}).catch(async e=>{console.error(await page.locator('body').innerText(),errors);throw e;});
     async function data(){const r=await context.request.get(base+'/api/rotation/daily/2026-10-06');assert(r.ok());return r.json();}
+    const dialog=page.getByRole('dialog');
+    const firstPost=page.locator('[data-daily-person="A#0"]');
+    await firstPost.click();
+    await dialog.getByRole('button',{name:'人员操作',exact:true}).click();
+    await dialog.getByRole('button',{name:'修改当日角色',exact:true}).waitFor();
+    await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+    await firstPost.click();
+    await dialog.getByRole('button',{name:'设置持续定岗',exact:true}).click();
+    await dialog.locator('[name=reason]').fill('预排测试');
+    await dialog.getByRole('button',{name:'保存定岗预排',exact:true}).click();
+    await page.locator('[data-daily-slot="A#0"]').getByText('预予定岗',{exact:true}).waitFor();
+    assert.equal((await data()).draft.lines[0].posts[0].draftHold.reason,'预排测试');
+    await firstPost.click();
+    await dialog.getByRole('button',{name:'取消预予定岗',exact:true}).click();
+    await dialog.getByRole('button',{name:'确认取消',exact:true}).click();
+    await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading&&!RT.modalOpen);
+    const selected=(await data()).draft.plan.crew['A#0'];
+    await firstPost.click();
+    await dialog.getByRole('button',{name:'人员操作',exact:true}).click();
+    await dialog.getByRole('button',{name:'移回待安排区',exact:true}).click();
+    await dialog.getByRole('button',{name:'确认移除',exact:true}).click();
+    await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading&&!RT.modalOpen);
+    assert.equal((await data()).draft.plan.crew['A#0'],undefined);
+    await firstPost.click();
+    await dialog.getByRole('button',{name:'撤岗 / 修改撤岗时间',exact:true}).click();
+    await dialog.locator('[name=time]').fill('15:00');
+    await dialog.getByRole('button',{name:'保存撤岗预排',exact:true}).click();
+    await page.locator('[data-daily-slot="A#0"]').getByText('15:00 撤',{exact:true}).waitFor();
+    await firstPost.click();
+    await dialog.getByRole('button',{name:'取消待撤岗',exact:true}).click();
+    await dialog.getByRole('button',{name:'确认取消',exact:true}).click();
+    await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading&&!RT.modalOpen);
+    const rightPerson=page.locator(`[data-daily-pid="${selected}"]`);
+    async function openRightPerson(){
+      await rightPerson.evaluate(button=>{const group=button.closest('details');if(group)group.open=true;});
+      await rightPerson.click();
+    }
+    for(const role of ['op','rotation']){
+      await openRightPerson();
+      await dialog.getByRole('button',{name:'修改当日角色',exact:true}).click();
+      await dialog.locator('[name=role]').selectOption(role);
+      await dialog.getByRole('button',{name:'保存角色',exact:true}).click();
+      await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading&&!RT.modalOpen);
+      assert.equal((await data()).draft.persons[selected].role,role);
+    }
+    await openRightPerson();
+    await dialog.getByRole('button',{name:'安排岗位',exact:true}).click();
+    await dialog.locator('[name=target]').selectOption('A#0');
+    await dialog.getByRole('button',{name:'保存岗位安排',exact:true}).click();
+    await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading&&!RT.modalOpen);
+    assert.equal((await data()).draft.plan.crew['A#0'],selected);
     async function choose(a,b){
       await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading&&!RT.modalOpen);
       await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
@@ -89,6 +140,7 @@ async function main(){try{
     const historicalBefore=await context.request.get(base+'/api/rotation/daily/2026-10-04').then(r=>r.json());
     await page.locator('[data-daily-date]').fill('2026-10-04');await page.locator('[data-daily-date]').dispatchEvent('change');await page.getByRole('heading',{name:'2026-10-04 · 开班安排回顾'}).waitFor();
     await page.getByRole('heading',{name:'2026-10-04 · 开班安排回顾'}).waitFor();assert.equal(await page.locator('[data-daily-person]').count(),0);
+    assert.equal(await page.locator('[data-daily-pid]').count(),0);
     const historicalAfter=await context.request.get(base+'/api/rotation/daily/2026-10-04').then(r=>r.json());
     assert.equal(historicalBefore.revision,historicalAfter.revision,'history modified live state');
     // Today's enabled board stays editable until the first shift, then freezes all shifts.

@@ -11,6 +11,45 @@ NODE = shutil.which("node")
 ROOT = Path(__file__).parents[1]
 
 
+@pytest.mark.skipif(not NODE, reason="Node is needed for the real JavaScript renderers")
+def test_formal_arrival_hints_and_log_use_actual_outcomes():
+    script = r"""
+const fs=require('fs'),vm=require('vm');
+const files=JSON.parse(fs.readFileSync(0,'utf8'));
+const ctx=vm.createContext({location:{pathname:'/rotation-board'},localStorage:{getItem:()=>null},
+  document:{body:{classList:{contains:()=>true}},getElementById:()=>({addEventListener:()=>{}}),addEventListener:()=>{}}});
+for(const file of ['common','workflow','manager']){
+  const source=fs.readFileSync(files[file],'utf8');
+  vm.runInContext(file==='manager'?source.slice(0,source.lastIndexOf('(async () => {')):source,ctx);
+}
+vm.runInContext(`
+  const p={pid:'worker',name:'员工',state:'walkback',role:'rotation',end:572,after:'done',flags:[],tags:[]};
+  RT.data={day:{taskWorkflow:true,persons:[p],lines:[]}};
+  const boardHints = [];
+  for (const ops of [true,false]) {
+    p.arrivalOutcome=null;
+    const before=workflowPools(540,ops);
+    p.arrivalOutcome='done';
+    boardHints.push([before,workflowPools(542,ops)]);
+  }
+  const log=(type,outcome)=>detailText({type,detail:{reason:'轮岗',outcome}});
+  output={boardHints, logs:[log('pushed_off','done'),log('pushed_off','walkback'),log('pushed_out','away'),log('pushed_out')]};
+`,ctx);
+process.stdout.write(JSON.stringify(ctx.output));
+"""
+    files = {key: str(ROOT / "app/static/js" / name) for key, name in [
+        ("common", "rotation-common.js"), ("workflow", "rotation-workflow.js"), ("manager", "rotation.js"),
+    ]}
+    result = subprocess.run([NODE, "-e", script], input=json.dumps(files), encoding="utf-8", capture_output=True)
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    for before, after in data["boardHints"]:
+        assert "已下线，到休息室后确认" in before
+        assert "确认到达后结束轮岗" not in before
+        assert "确认到达后结束轮岗" in after
+    assert data["logs"] == ["轮岗，结束当日轮岗", "轮岗，回休息室确认", "轮岗，出圈", "轮岗"]
+
+
 @pytest.mark.skipif(not NODE, reason="Node is needed for the real JavaScript renderer")
 @pytest.mark.parametrize('state,expected',[
     ('future','待加 10:00'),('matching','匹配中'),('preparing','准备加岗'),

@@ -479,6 +479,19 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
         if t >= target:
             break
     state["lastTick"] = t
+    if state.get('taskWorkflow') and not changed:
+        changed = any(eng.preparing_shift_end(p, t) and not eng.preparing_shift_end(p, previous_tick)
+                      for p in eng.P.values())
+        if not changed and not state.get('closed'):
+            changed = any(p['state'] in ('walkback', 'pending', 'op') and p.get('after') != 'closing'
+                          and eng.shift_finishes_on_exit(p, t) and not eng.shift_finishes_on_exit(p, previous_tick)
+                          for p in eng.P.values())
+        if not changed and not state.get('closed'):
+            from app.rotation.workflow import timed_exit
+            changed = any(timed_exit(task, move) and eng.shift_finishes_on_exit(eng.P[move['pid']], t)
+                          and not eng.shift_finishes_on_exit(eng.P[move['pid']], previous_tick)
+                          for task in state['rotationTasks'].values() if task['status'] == 'assigned'
+                          for move in task['moves'])
     if changed:
         sync_notices(db, row.attraction_id, state, eng, t)
     if changed or t != previous_tick:
@@ -610,10 +623,11 @@ def desired_notices(eng: E.Engine, now: float) -> dict:
         elif C.queue_view(eng,p):
             step=('rest','等待前序任务完成','顺接任务已排队；前序完成后刷新路线并重新起算确认期限。')
         elif st == "walkback":
-            if p.get("after") == "done":
-                step = ("arrive", "请确认已到休息室", "在个人待办或大屏确认，今天轮岗即将结束，确认后即可下班。")
-            elif p.get("after") == "closing":
+            outcome = eng._arrive_outcome(p, now)[0] if eng.d.get('taskWorkflow') else p.get('after')
+            if p.get("after") == "closing" or eng.d.get('taskWorkflow') and eng.d.get('closed'):
                 step = ("arrive", "请确认已到休息室", "在个人待办或大屏确认，已闭园，确认后转为闭园后工作。")
+            elif outcome == "done":
+                step = ("arrive", "请确认已到休息室", "在个人待办或大屏确认，今天轮岗即将结束，确认后即可下班。")
             else:
                 reason = p.get("downReason") or "推岗"
                 step = ("arrive", "请确认已到休息室", f"你已下线（{reason}），在个人待办或大屏确认后系统安排休息或吃饭。")
@@ -779,6 +793,12 @@ def _read_projection_cache(db: Session, cfg: RotationConfig, row: RotationDay, n
         return result
 
 
+def arrival_outcome(eng: E.Engine, p: dict, now: float) -> str | None:
+    if p.get('after') == 'closing' or eng.d.get('closed'):
+        return 'away'
+    return eng._arrive_outcome(p, now)[0]
+
+
 def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
     from app.rotation.cooperation import plan, simulate, upcoming, upcoming_shift
     projection = getattr(eng, '_read_projection', None)
@@ -814,8 +834,10 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
     if p["pid"] in taken:
         ra = eng.P[taken[p["pid"]]].get("assign") or {}
         preparing = {"push7": "推7点", "chain": ra.get("why") or "推下班"}.get(ra.get("mode"))
+    if not preparing and eng.d.get('taskWorkflow') and not eng.d.get('closed') and eng.preparing_shift_end(p, now):
+        preparing = '推下班'
     from app.rotation import workflow as W
-    task = W.task_view(eng,p)
+    task = W.task_view(eng,p,now)
     if task:
         routes = task['routes']
         departure_blocked = None if W.valid(eng,W.task_for(eng,p)) else '接替路线已变化，请等待最新安排'
@@ -841,7 +863,7 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "previewAssign": eng._upcoming_routes.get(p['pid']),
         "walkbackSince": p.get("walkbackSince"), "arriveAt": p.get("arriveAt"), "ate": p.get("ate"),
         "lastDeparture": deepcopy(p.get('lastDeparture')),
-        "arrivalOutcome": ('away' if p.get('after')=='closing' or eng.d.get('closed') else eng._arrive_outcome(p,now)[0])
+        "arrivalOutcome": arrival_outcome(eng, p, now)
             if p.get('state') in ('walkback','pending','op') else None,
         "mealEligible": eng.meal_eligible(p), "downReason": p.get("downReason"), "after": p.get("after"),
         "mealOptions": eng.meal_options(p, now),
@@ -1228,6 +1250,9 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             if body.get('notified') is not True:raise ActionError('请先核实或确认可立即通知相关人员')
             H.execute(db,eng,body['line'],body['checkpoint'],now,actor)
         elif act == "arrive":
+            if ('expected_arrival_outcome' in body
+                    and body['expected_arrival_outcome'] != arrival_outcome(eng, eng.P[pid], now)):
+                raise ConfirmationConflict('到达后的安排已变化，请核对最新提示后确认')
             eng.act_arrive(pid, now, actor, meal_choice=body.get('meal_choice'))
         elif act == 'post_hold':
             _require(body, 'line', 'i')
@@ -1551,6 +1576,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 raise ActionError("名单里没有这个人")
             p["role"] = body["role"]
             if p["role"] != "rotation":
+                plan['push7'] = [pid for pid in plan['push7'] if pid != p['pid']]
+                plan.get('push7Targets', {}).pop(p['pid'], None)
                 for k in ("crew", "seven"):
                     for kk in list(plan[k]):
                         if plan[k][kk] == p["pid"]:

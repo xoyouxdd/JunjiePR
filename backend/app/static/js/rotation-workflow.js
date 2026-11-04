@@ -33,8 +33,10 @@ function workflowPools(n,ops,view={}){
   const drag=p=>ops&&['rest','meal','ready','notyet'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:'';
   const card=(p,action,body,cls='')=>{
     if(view.daily){
-      const can=view.editable&&p.role==='rotation';
-      return `<${can?'button type="button" draggable="true" data-daily-person="person:'+esc(p.pid)+'"':'div'} class="rt-chip ${cls}">${rotationName(p)}${body}</${can?'button':'div'}>`;
+      const drag=view.editable&&p.role==='rotation'?` draggable="true" data-daily-person="person:${esc(p.pid)}"`:'';
+      const tag=view.editable?'button':'div';
+      const action=view.editable?` type="button" aria-haspopup="dialog" data-daily-pid="${esc(p.pid)}"${drag}`:'';
+      return `<${tag}${action} class="rt-chip ${cls}">${rotationName(p)}${body}</${tag}>`;
     }
     if(!ops&&!document.body.classList.contains('rotation-screen'))action=null;
     const tag=action?'button':'div',can=action==='depart'?canDepartNow(p,n):action==='arrive'?p.state!=='notyet'||n>=p.start:true;
@@ -56,9 +58,17 @@ function workflowPools(n,ops,view={}){
   }
   html+=section('待出发',ps.filter(p=>!p.entryHold&&poolState(p,n)==='ready'),p=>{
     const a=rotationAssignment(p),task=a?p.task:null;
-    return card(p,a?'depart':null,`${a?`<span class="rt-go">${goText(p)}</span>`:''}<span class="rt-task-summary">${workflowTaskSummary(p)}</span><span class="rt-sub">${task?`${taskTime(task.allowedAt)} 可出发 · ${taskTime(task.deadlineAt)} 前确认`:a?taskTime(a.departAt)+' 出发':'等待安排'}</span>${task&&n<task.allowedAt?`<span class="rt-sub">餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(task.allowedAt-n))} 分钟</span>`:''}${task?.transferredFromName?`<span class="rt-transfer">任务转接自 ${esc(task.transferredFromName)}</span>`:''}`,'wait');
+    if(!a&&rotationUsesTasks(p))return card(p,null,'<span class="rt-sub">等待派发</span>','wait');
+    const breakRemaining=Math.ceil((p.readyAt??n)-n);
+    const departureCountdown=task&&n<task.allowedAt
+      ? `<span class="rt-sub">${breakRemaining>0?`餐休剩 ${breakRemaining} 分钟 · `:''}距允许出发 ${Math.ceil(task.allowedAt-n)} 分钟</span>`
+      : '';
+    return card(p,a?'depart':null,`${a?`<span class="rt-go">${goText(p)}</span>`:''}<span class="rt-task-summary">${workflowTaskSummary(p)}</span><span class="rt-sub">${task?`${taskTime(task.allowedAt)} 可出发 · ${taskTime(task.deadlineAt)} 前确认`:a?taskTime(a.departAt)+' 出发':'等待安排'}</span>${departureCountdown}${task?.transferredFromName?`<span class="rt-transfer">任务转接自 ${esc(task.transferredFromName)}</span>`:''}`,'wait');
   },'rt-ready');
-  html+=section('待确定休息',ps.filter(p=>p.state==='walkback'||p.state==='pending'||opWaiting(p)),p=>card(p,'arrive',`<span class="rt-sub">${opWaiting(p)?'OP · 待确认休息':p.after==='done'?'轮岗结束，回休息室确认':'已下线，到休息室后确认'}</span>`),'rt-arrivals');
+  html+=section('待确定休息',ps.filter(p=>p.state==='walkback'||p.state==='pending'||opWaiting(p)),p=>{
+    const label=p.arrivalOutcome==='done'?'确认到达后结束轮岗':opWaiting(p)?'OP · 待确认休息':'已下线，到休息室后确认';
+    return card(p,'arrive',`<span class="rt-sub">${label}</span>`);
+  },'rt-arrivals');
   html+=section('吃饭区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='meal'),p=>card(p,null,`<span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟</span>`,'meal'),'rt-meals');
   html+=section('休息区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='rest'),p=>card(p,null,`<span class="rt-sub">${waitingInitialRest(p)?'预排休息 · '+hm(p.start)+' 开始计时':'至 '+hm(p.readyAt)+' · 剩 '+Math.max(0,Math.ceil((p.readyAt??n)-n))+' 分钟'}</span>`,'rest'),'rt-resting');
   html+=section('圈外人员',ps.filter(outsideKind),p=>card(p,null,`<span class="rt-sub">${esc(p.leaveReason||p.away?.reason||outsideKind(p))}</span>`,'dim'),'rt-outside');

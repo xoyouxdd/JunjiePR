@@ -317,7 +317,7 @@ function dailyPendingUI(){
   if(error){error.hidden=!!selection||!daily.error;error.textContent=daily.error?daily.error+'，请刷新班表后重试。':'';}
   for(const [el,disabled,draggable] of daily.pendingControls||[]){el.disabled=disabled;el.draggable=draggable;}
   daily.pendingControls=[];
-  if(pending)$app.querySelectorAll('[data-daily-person],[data-daily-post],[data-daily-rename],[data-draft],[data-list],[data-role],[data-d],#draftClose').forEach(el=>{
+  if(pending)$app.querySelectorAll('[data-daily-person],[data-daily-pid],[data-daily-post],[data-daily-rename],[data-draft],[data-list],[data-role],[data-d],#draftClose').forEach(el=>{
     daily.pendingControls.push([el,el.disabled,el.draggable]);el.disabled=true;el.draggable=false;
   });
   $app.getBoundingClientRect(); // Flush layout before restoring browser scroll anchoring.
@@ -339,7 +339,7 @@ async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,pre
 
 function dailyBoard(data,editable=false){
   if(!data.day)return '';
-  return `<div class="rt-workflow-board">${workflowBoardContent(data.day,0,false,{daily:true,editable,frozen:data.frozen})}</div>`;
+  return `<div class="rt-workflow-board">${workflowBoardContent(data.day,0,false,{daily:true,editable,frozen:data.frozen,draft:editable?data.draft:null})}</div>`;
 }
 function dailyHistory(data){
   const note=data.opening_source==='late_publish'?`首班之后才启用轮岗，展示 ${hm(data.as_of)} 启用时固定的开班安排。`:data.opening_source==='unstarted_draft'?'此日期保留了未启用的预排，仅供回顾。':data.opening_source==='opening'?`首班 ${hm(data.as_of)} 开始时已固定，后续看板调整不改变本班表。`:data.opening_source==='initial_draft'?'此日期没有首班固定快照，展示当时保存的初始预排。':data.opening_source==='earliest_record'?'此日期没有首班固定快照，展示最早保存记录，仅供回顾。':'此日期没有开班快照，仅保留末次状态供回顾。';
@@ -395,6 +395,61 @@ function dailyLineMenu(lid){
       return dailySend({action:'draft_line',line:lid,active:!active});
     },{warn:active});
 }
+function dailyMenuSend(){
+  const date=daily.date,{revision,plan_revision}=daily.data;
+  return body=>{
+    if(daily.date!==date||daily.data?.revision!==revision||daily.data?.plan_revision!==plan_revision||!daily.data.can_edit){
+      toast('班表已变化，请重新打开预排操作',true);
+      return;
+    }
+    return dailySend(body);
+  };
+}
+function dailyPostMenu(key){
+  if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
+  const [lid,index]=key.split('#'),draft=daily.data.draft;
+  const line=draft.lines.find(item=>item.id===lid),post=line?.posts[Number(index)];
+  if(!post||line.standby)return;
+  const pid=draft.plan.seven[key]||draft.plan.crew[key],person=draft.persons[pid];
+  const open=daily.data.day.lines.find(item=>item.id===lid)?.posts[Number(index)]?.open;
+  const hold=post.draftHold,send=dailyMenuSend();
+  const change=(value,fields={})=>send({action:'draft_post',post:key,change:value,...fields});
+  openModal(`<h3>${esc(lid)} · ${esc(post.name)}</h3><p>${esc(person?.name||(open?'空岗':'未开放'))} · ${esc(daily.date)} 预排</p>${hold?`<p class="field-hint">上岗后定岗 · ${esc(hold.reason)}</p>`:''}<div class="rt-actions">
+    ${hold||person&&open&&!post.closeAt?`<button type="button" class="secondary" data-daily-hold>${hold?'取消预予定岗':'设置持续定岗'}</button>`:''}
+    ${!hold&&!open?`<button type="button" class="primary" data-daily-open>${post.openAt?'加岗 / 修改加岗时间':'加岗'}</button>`:''}
+    ${!hold&&(open||post.openAt)?'<button type="button" class="danger" data-daily-close>撤岗 / 修改撤岗时间</button>':''}
+    ${!hold&&post.closeAt?'<button type="button" class="secondary" data-daily-cancel-close>取消待撤岗</button>':''}
+    <button type="button" class="secondary" data-daily-stop-line>停用整条线</button>
+    ${person?'<button type="button" class="secondary" data-daily-open-person>人员操作</button>':''}<button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
+    host.querySelector('[data-daily-hold]')?.addEventListener('click',()=>{
+      if(hold){confirmBox('取消预予定岗','取消这一天的定岗安排。','确认取消',()=>change('resume'));return;}
+      formBox('设置持续定岗','<p class="field-hint">预排人员在此岗实际开始上岗后生效。</p><label>定岗说明（选填）<input name="reason" maxlength="100"></label>',values=>change('hold',{reason:values.reason}),{okText:'保存定岗预排'});
+    });
+    host.querySelector('[data-daily-open]')?.addEventListener('click',()=>formBox('预排加岗',`<label>加岗时间（留空则开班即开放）<input name="time" type="time" value="${esc(post.openAt||'')}"></label>`,values=>change('open',values),{okText:'保存加岗预排'}));
+    host.querySelector('[data-daily-close]')?.addEventListener('click',()=>formBox('预排撤岗',`<label>撤岗时间（留空则开班时关闭此岗）<input name="time" type="time" value="${esc(post.closeAt||'')}"></label><p class="field-hint">留空会将此岗位的预排人员移回待安排区。定时撤岗到点直接下线。</p>`,values=>change('close',values),{warn:true,okText:'保存撤岗预排'}));
+    host.querySelector('[data-daily-cancel-close]')?.addEventListener('click',()=>confirmBox('取消待撤岗','保留这一天的岗位开放安排。','确认取消',()=>change('cancel_close')));
+    host.querySelector('[data-daily-stop-line]').onclick=()=>dailyLineMenu(lid);
+    host.querySelector('[data-daily-open-person]')?.addEventListener('click',()=>dailyPersonMenu(pid,key));
+  });
+}
+function dailyPersonMenu(pid,key){
+  if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
+  const draft=daily.data.draft,person=draft.persons[pid];
+  if(!person)return;
+  const send=dailyMenuSend(),roles={rotation:'轮岗',op:'OP',excluded:'不轮岗'};
+  const options=draft.lines.filter(line=>!line.standby).flatMap(line=>line.posts.flatMap((post,index)=>{
+    const target=`${line.id}#${index}`;
+    return target===key||post.draftClosed||post.draftHold?[]:[`<option value="${esc(target)}">${esc(dailyLabel(target,'people'))}${post.seven?'（7点岗位）':''}</option>`];
+  })).join('');
+  openModal(`<h3>${esc(person.name)} · 人员操作</h3><p>${hm(person.start)}–${hm(person.end)} · ${roles[person.role]} · ${esc(daily.date)} 预排</p><div class="rt-actions">
+    ${person.role==='rotation'&&options?`<button type="button" class="secondary" data-daily-place>${key?'换岗 / 交换人员':'安排岗位'}</button>`:''}
+    ${key?'<button type="button" class="secondary" data-daily-unseat>移回待安排区</button>':''}
+    <button type="button" class="secondary" data-daily-role>修改当日角色</button><button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
+    host.querySelector('[data-daily-place]')?.addEventListener('click',()=>formBox('选择预排岗位',`<label>岗位<select name="target" required><option value="">请选择岗位</option>${options}</select></label><p class="field-hint">目标已有人员时，有原岗位则交换，否则原人员回到待安排区。7点岗位按所选人员实际班次生效。</p>`,values=>send({action:'draft_swap_people',source:key||'person:'+pid,target:values.target}),{okText:'保存岗位安排'}));
+    host.querySelector('[data-daily-unseat]')?.addEventListener('click',()=>confirmBox('移回待安排区',`清除 ${esc(person.name)} 的当日岗位预排。`,'确认移除',()=>send({action:'draft_set',kind:draft.plan.seven[key]?'seven':'crew',key,pid:''})));
+    host.querySelector('[data-daily-role]').onclick=()=>formBox('修改当日角色',`<label>角色<select name="role">${Object.entries(roles).map(([value,label])=>`<option value="${value}" ${person.role===value?'selected':''}>${label}</option>`).join('')}</select></label><p class="field-hint">改为 OP 或不轮岗时，原岗位预排会清除。</p>`,values=>send({action:'draft_role',pid,role:values.role}),{okText:'保存角色'});
+  });
+}
 function dailyChoose(key,mode=daily.mode){
   if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
   if(!daily.source||daily.mode!==mode){daily.source=key;daily.mode=mode;$app.querySelectorAll('[data-daily-person],[data-daily-post]').forEach(b=>b.classList.toggle('is-selected',mode==='people'?b.dataset.dailyPerson===key:b.dataset.dailyPost===key));const text=$app.querySelector('[data-daily-selection]');if(text)text.textContent='已选 '+dailyLabel(key,mode)+'，请选择目标';return;}
@@ -442,13 +497,14 @@ function bindDraft(){
   $app.querySelectorAll('[data-daily-person],[data-daily-post]').forEach(b=>{
     const mode=b.dataset.dailyPerson?'people':'posts',key=b.dataset.dailyPerson||b.dataset.dailyPost;
     let touchStart=null;
-    b.onclick=()=>{};
+    b.onclick=()=>{if(mode==='people'&&!key.startsWith('person:'))dailyPostMenu(key);};
     b.onpointerdown=e=>{if(e.pointerType!=='touch'||daily.busy||daily.loading||daily.error)return;touchStart={x:e.clientX,y:e.clientY};RT.dragging=true;b.setPointerCapture(e.pointerId);};
     b.onpointerup=e=>{if(!touchStart)return;const moved=Math.hypot(e.clientX-touchStart.x,e.clientY-touchStart.y)>12;touchStart=null;RT.dragging=false;RT.pressing=false;if(!moved)return;e.preventDefault();const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-daily-slot]');if(target){daily.source=key;daily.mode=mode;dailyChoose(target.dataset.dailySlot,mode);}};
     b.onpointercancel=()=>{touchStart=null;RT.dragging=false;RT.pressing=false;};
     b.ondragstart=e=>{if(daily.busy||daily.loading||daily.error){e.preventDefault();return;}RT.dragging=true;e.dataTransfer.setData('text/plain',JSON.stringify({mode,key}));};
     b.ondragend=()=>{RT.dragging=false;RT.pressing=false;};
   });
+  $app.querySelectorAll('[data-daily-pid]').forEach(button=>button.onclick=()=>dailyPersonMenu(button.dataset.dailyPid));
   $app.querySelectorAll('[data-daily-rename]').forEach(button=>{
     button.ondblclick=event=>{event.preventDefault();event.stopPropagation();dailyRenamePost(button);};
     button.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();dailyRenamePost(button);}};
@@ -573,6 +629,10 @@ function detailText(item) {
   const d = item.detail || {};
   const parts = [];
   if (d.reason) parts.push(d.reason);
+  if (item.type === 'pushed_off' || item.type === 'pushed_out') {
+    const outcome = {walkback:'回休息室确认', done:'结束当日轮岗', away:'出圈'}[d.outcome];
+    if (outcome) parts.push(outcome);
+  }
   if (d.kind) parts.push(d.kind === 'meal' ? '吃饭' : '休息');
   if (d.why) parts.push(d.why);
   if (d.line && item.type === 'depart') parts.push(`去 ${d.line}`);

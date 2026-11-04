@@ -95,17 +95,28 @@ def available_at(post, at):
                 and not post.get('manual') and _m(post['openAt'])<=at+EPS)
 
 
-def route_view(eng, task):
+def timed_exit(task, move):
+    return (task['status'] == 'assigned' and task['template']['mode'] != 'chain'
+            and move['from'] is not None and move['to'] is None)
+
+
+def route_view(eng, task, now=None):
     def label(key, fallback):
         _, _, post = locate(eng, key) if key else (None, None, None)
         return post['name'] if post else fallback
+    def destination(move):
+        outcome = move.get('outcome')
+        if now is not None and timed_exit(task, move):
+            outcome = 'done' if eng.shift_finishes_on_exit(eng.P[move['pid']], now) else 'rest'
+        return label(move['to'], {'rest':'下岗，回休息室确认休息／吃饭', 'done':'下班', 'away':'出圈'}.get(outcome, '下岗'))
+
     return [{'pid': m['pid'], 'name': eng.P[m['pid']]['name'],
              'from': label(m['from'], '待上岗'),
-             'to': label(m['to'], {'rest':'下岗，回休息室确认休息／吃饭', 'done':'下班', 'away':'出圈'}.get(m.get('outcome'), '下岗'))}
+             'to': destination(m)}
             for m in task['moves']]
 
 
-def task_view(eng, p):
+def task_view(eng, p, now=None):
     task = task_for(eng, p)
     if not task:
         return None
@@ -131,7 +142,7 @@ def task_view(eng, p):
             'deadlineAt':task['deadlineAt'], 'status':task['status'],
             'transferredFrom':task.get('transferredFrom'),
             'transferredFromName':eng.P.get(task.get('transferredFrom'),{}).get('name'),
-            'routes':route_view(eng, task), 'mode':task['template']['mode'], 'beforePosts':before,'afterPosts':after}
+            'routes':route_view(eng, task, now), 'mode':task['template']['mode'], 'beforePosts':before,'afterPosts':after}
 
 
 def bind(eng, p, task):
@@ -228,12 +239,14 @@ def tick(eng, now):
     return replan(eng, now) or changed
 
 
-def _outcome(eng, pid, now, special=None):
-    if special in ('chain','push7'):
-        if special == 'push7': return 'rest'
+def _outcome(eng, pid, now, assignment=None):
+    p = eng.P[pid]
+    if assignment and assignment['mode'] == 'chain':
+        if assignment.get('why') == '推下班':
+            return 'done'
         _, kind, _ = eng.leave_at(eng.P[pid], now)
         return 'away' if kind == 'out' else 'done'
-    return 'done' if now >= eng.P[pid]['end'] else 'rest'
+    return 'done' if eng.shift_finishes_on_exit(p, now) else 'rest'
 
 
 def _build_batch(eng, line, people, at, now):
@@ -248,7 +261,16 @@ def _build_batch(eng, line, people, at, now):
     final = dict(initial)
     protected, outcomes, selected = set(), {}, []
     specials = [p for p in people if p['assign']['mode'] in ('push7','chain','opening')]
-    for p in sorted(specials, key=lambda p:({'push7':0,'chain':1,'opening':2}[p['assign']['mode']],p['pid'])):
+    def special_priority(p):
+        a = p['assign']
+        target = eng.P.get(a.get('target'))
+        priority = ()
+        if a['mode'] == 'chain' and target:
+            leave_at, kind, _ = eng.leave_at(target, now)
+            priority = eng.replacement_priority(target, 'off' if a.get('why') == '推下班' else kind, leave_at, now)
+        return ({'push7':0,'chain':1,'opening':2}[a['mode']], priority, p['pid'])
+
+    for p in sorted(specials, key=special_priority):
         a = p['assign']; available = [i for i in indices if i not in protected]
         if not available: continue
         if a['mode'] in ('chain','push7'):
@@ -269,7 +291,7 @@ def _build_batch(eng, line, people, at, now):
         old = [final[i] for i in path if final[i] and final[i]!=target_pid]
         replacement = [p['pid']]+old
         for index,i in enumerate(path): final[i] = replacement[index] if index<len(replacement) else None
-        if target_pid: outcomes[target_pid] = _outcome(eng,target_pid,at,a['mode'])
+        if target_pid: outcomes[target_pid] = _outcome(eng,target_pid,at,a)
         protected.update(path);selected.append(p)
     available = [i for i in indices if i not in protected]
     ordinary = sorted([p for p in people if p not in specials],
@@ -352,6 +374,8 @@ def execute(eng, p, now, actor):
         raise ActionError('任务已超时，请刷新查看转接情况')
     if p['state']!='ready' or p.get('entryHold') or not valid(eng,task):
         raise ActionError('岗位或人员安排已变化，请刷新任务')
+    # Keep the issued route for confirmation and recovery. Only the log uses
+    # the outcome observed at execution time.
     moves=deepcopy(task['moves'])
     for move in moves:
         q=eng.P[move['pid']]
@@ -359,11 +383,13 @@ def execute(eng, p, now, actor):
             line,index,post=locate(eng,move['from'])
             if move['to']:
                 eng._leave_line(q,line,index,now);post['occ']=None
-            elif move.get('outcome') in ('done','away'):
-                eng._remove_leaving(q['pid'],line,index,now,'推出圈' if move['outcome']=='away' else '推下班')
+            elif task['template']['mode'] == 'chain' and move.get('outcome') in ('done','away'):
+                eng._remove_leaving(q['pid'],line,index,now,'推出圈' if move['outcome']=='away' else '推下班',outcome=move['outcome'])
                 post['occ']=None
             else:
                 eng._push_off(q['pid'],line,index,now,'正常轮岗');post['occ']=None
+            if not move['to']:
+                move['outcome'] = 'rest' if q['state'] == 'walkback' else q['state']
     for move in moves:
         if not move['to']: continue
         q=eng.P[move['pid']];line,_,post=locate(eng,move['to'])
@@ -379,7 +405,7 @@ def execute(eng, p, now, actor):
         p['flags']=[flag for flag in p.get('flags',[]) if flag!='推7点']
         eng.h.log('push7',actor,p['pid'],task['line'],None,{'target':task['template'].get('target'),'task':task['id']})
     eng.h.log('depart',actor,p['pid'],task['line'],None,
-              {'task':task['id'],'routes':route_view(eng,task),'batch':task['batch']})
+              {'task':task['id'],'routes':route_view(eng,{**task,'moves':moves}),'batch':task['batch']})
 
 
 def toggle_101(eng, on, now, actor):

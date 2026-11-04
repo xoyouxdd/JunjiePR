@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from test_rotation_formal import seed, seed_today, seed_cohort, seed_cross_line, seed_assignment_window, app
+from test_rotation_formal import seed, seed_today, seed_cohort, seed_cross_line, seed_assignment_window, seed_departure_hint, app
 import pytest
 from rotation_test_clock import install_rotation_test_clock
 clock_patch=pytest.MonkeyPatch();install_rotation_test_clock(clock_patch)
@@ -10,15 +10,49 @@ clock_patch=pytest.MonkeyPatch();install_rotation_test_clock(clock_patch)
 setup=seed.__wrapped__(formal_daytime_runtime=clock_patch)
 next(setup)
 seed_today()
-from app.v2_database import engine
+from app.v2_database import SessionLocal, engine
+from app.rotation import service as S
+
 @app.post('/__fixture/assignment-window')
 def assignment_window(payload: dict):
-    seed_assignment_window(float(payload.get('remaining',2)))
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        # The live ticker must not issue tasks against intermediate fixture data.
+        with S.runtime_for(db).lock:
+            seed_assignment_window(float(payload.get('remaining', 2)))
     return {'ok':True}
+
+@app.post('/__fixture/waiting-dispatch')
+def waiting_dispatch(payload: dict):
+    from datetime import date
+    day = date.today().isoformat()
+    starting = payload.get('start', False)
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        with S.transaction(db):
+            aid = seed_assignment_window(2) if starting else payload['attraction_id']
+            cfg = S.load_config(db, aid)
+            if payload.get('restore'):
+                cfg.clock_json = None
+            elif starting:
+                row = S.day_row(db, aid, day)
+                state = S.day_state(row)
+                now = state['lastTick']
+                state['persons']['9710000']['assign']['departAt'] = now + 8
+                S.save_day(db, row, state)
+                S.set_sim_clock(cfg, day, now, paused=True)
+            else:
+                S.set_sim_clock(cfg, day, float(payload['minute']), paused=True)
+    return {'attraction_id': aid}
 
 @app.get('/__fixture/pool')
 def pool():
     return {'checked_out':engine.pool.checkedout()}
+
+@app.post('/__fixture/departure-hint')
+def departure_hint():
+    aid, minute = seed_departure_hint()
+    return {'attraction_id': aid, 'minute': minute}
 
 @app.post('/__fixture/timeout')
 def timeout_transfer(payload: dict | None = None):
@@ -49,10 +83,10 @@ def room(payload: dict):
     from app.v2_database import SessionLocal
     from app.rotation import service as S
     from datetime import date
-    aid=seed_cohort()
     with SessionLocal() as db:
         db.info['rotation_formal']=True
         with S.transaction(db):
+            aid=seed_cohort()
             cfg=S.load_config(db,aid);settings=S.settings_of(cfg)
             settings.update(mealEarliest='00:00',mealAfterStart=0,mealForceAfterStart=0 if payload.get('forced') else 9999)
             cfg.settings_json=S._dumps(settings)
@@ -61,9 +95,12 @@ def room(payload: dict):
             p.update(state='walkback',start=now-180,end=now+360,line=None,lineStart=None,continuousStart=None,
                      assign=None,ate=False,arriveAnchor=None,breakKind=None,breakStart=None,readyAt=None,
                      walkbackSince=now,lastDeparture={'line':'A1','post':'上客1'},after='rest')
+            if payload.get('near_shift_end'):
+                p['end'] = now + 31
+                S.set_sim_clock(cfg, row.work_date, now, paused=True)
             state['closeAt']='23:59'
             S.save_day(db,row,state)
-    return {'ok':True}
+    return {'ok':True,'attraction_id':aid,'minute':now}
 @app.post('/__fixture/cohort')
 def cohort(payload: dict | None = None):
     if payload and payload.get('cross'):

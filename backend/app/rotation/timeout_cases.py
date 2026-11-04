@@ -372,7 +372,7 @@ def resolve(eng,id,body,actor,now,preview=False):
             eng._leave_line(p,line,index,correction_at)
         else:
             move=next((m for r in c['roots'] for m in r['task']['moves'] if m['pid']==pid and not m['to']),None)
-            if move and move.get('outcome') in {'done','away'}:eng._remove_leaving(pid,line,index,correction_at,'异常核实后确认离岗')
+            if move and move.get('outcome') in {'done','away'}:eng._remove_leaving(pid,line,index,correction_at,'异常核实后确认离岗',outcome=move['outcome'])
             else:eng._push_off(pid,line,index,correction_at,'异常核实后确认下岗')
         line['posts'][index]['occ']=None
     for post in line['posts']:

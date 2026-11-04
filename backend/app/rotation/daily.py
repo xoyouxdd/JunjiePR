@@ -209,7 +209,8 @@ def normalize_seven_assignments(state, previous_slots=None):
     """The slot retains its early-post marker; a later worker remains regular crew."""
     plan=state['plan']
     removed=[key for key,pid in plan['seven'].items() if state['persons'].get(pid,{}).get('start')!=420]
-    if not removed and 'push7Targets' not in plan:return False
+    lost_slot = previous_slots is not None and any(key not in plan['seven'] for key in previous_slots)
+    if not removed and not lost_slot and 'push7Targets' not in plan:return False
     before=deepcopy(plan)
     previous_slots=seven_relief_slots(state) if previous_slots is None else previous_slots
     for key in removed:plan['crew'][key]=plan['seven'].pop(key)
@@ -226,7 +227,7 @@ def set_prestart_line(state,lid,active):
     if not isinstance(lid,str) or type(active) is not bool:raise S.ActionError('线路或启用状态无效')
     line=next((line for line in state['lines'] if line['id']==lid),None)
     if line is None:raise S.ActionError('线路不存在')
-    if not active and any(post.get('hold') or post.get('hold101') for post in line['posts']):
+    if not active and any(post.get('hold') or post.get('hold101') or post.get('draftHold') for post in line['posts']):
         raise S.ActionError('本线还有定岗人员，请先取消定岗再停用')
     if (not line.get('standby',False))==active and line.get('active',active)==active:return False
     previous=seven_relief_slots(state)
@@ -239,7 +240,8 @@ def set_prestart_line(state,lid,active):
         if had_seven:state['plan'].setdefault('push7Targets',{})
         normalize_seven_assignments(state,previous)
     for post in line['posts']:
-        post.update(open=active and not post.get('openAt'),opened=not bool(post.get('openAt')),occ=None,since=None,manual=False)
+        post.update(open=active and not post.get('openAt') and not post.get('draftClosed'),
+                    opened=not bool(post.get('openAt')),occ=None,since=None,manual=bool(post.get('draftClosed')))
     sync_prestart(state);validate_plan(state)
     return True
 
@@ -248,7 +250,9 @@ def validate_plan(state):
     used=[];posts=[]
     for kind in ('seven','crew'):
         for key,pid in state['plan'][kind].items():
-            _,_,actual=slot(state,key)
+            line,index,actual=slot(state,key)
+            if line['posts'][index].get('draftClosed'):
+                raise S.ActionError('该岗位已在预排中撤岗，请先加岗')
             p=state['persons'].get(pid)
             if not p or p['role']!='rotation':raise S.ActionError('只能安排本日轮岗人员')
             if kind=='seven' and p['start']!=420:raise S.ActionError('7点岗位只能安排07:00班次人员')
@@ -257,6 +261,69 @@ def validate_plan(state):
             posts.append(key)
     if len(used)!=len(set(used)):raise S.ActionError('同一人员不能安排两个岗位')
     if len(posts)!=len(set(posts)):raise S.ActionError('同一岗位不能安排两个人员')
+    for line in state['lines']:
+        for index, post in enumerate(line['posts']):
+            hold = post.get('draftHold')
+            if hold:
+                key = f"{line['id']}#{index}"
+                pid = state['plan']['seven'].get(key) or state['plan']['crew'].get(key)
+                if pid != hold['pid']:
+                    raise S.ActionError('该岗位已有预予定岗，请先取消后再调整人员')
+
+
+def configure_post(state, body, now, actor):
+    key = body.get('post')
+    line, index, _ = slot(state, key)
+    if key != f"{line['id']}#{index}":
+        raise S.ActionError('岗位标识格式不正确')
+    post = line['posts'][index]
+    change = body.get('change')
+    pid = state['plan']['seven'].get(key) or state['plan']['crew'].get(key)
+    is_open = not post.get('draftClosed') and (post.get('open') if state['status'] == 'live' else not post.get('openAt'))
+    if change in ('hold', 'resume'):
+        if change == 'resume':
+            post.pop('draftHold', None)
+        else:
+            reason = body.get('reason', '')
+            if not isinstance(reason, str) or len(reason.strip()) > 100:
+                raise S.ActionError('定岗说明须在100字以内')
+            if not pid or not is_open or post.get('closeAt'):
+                raise S.ActionError('请在已有预排人员且无撤岗计划的开放岗位设置定岗')
+            post['draftHold'] = {'pid': pid, 'reason': reason.strip() or '现场任务',
+                                 'by': getattr(actor, 'name', str(actor))}
+    elif change in ('open', 'close', 'cancel_close'):
+        if post.get('draftHold') or post.get('hold') or post.get('hold101'):
+            raise S.ActionError('请先取消定岗再调整开撤岗')
+        if change == 'cancel_close':
+            post.update(closeAt=None, closeMode='direct', closedAuto=False)
+            return line, post
+        at = S.action_time(body['time']) if body.get('time') else None
+        close_at = S.action_time(state['closeAt']) if state.get('closeAt') else 1440
+        if at is not None and (at < now or at >= close_at):
+            raise S.ActionError('计划时间须在当前时间之后、闭园之前')
+        if change == 'open':
+            if at is not None:
+                if pid and at > state['persons'][pid]['start']:
+                    raise S.ActionError('加岗时间不能晚于预排人员的班次开始时间')
+                if post.get('closeAt') and at >= S.action_time(post['closeAt']):
+                    raise S.ActionError('加岗时间须早于撤岗时间')
+            post.update(open=at is None, opened=at is None, openAt=S.E.fmt(at) if at is not None else None,
+                        openRequest=at is not None, manual=False, draftClosed=False)
+        else:
+            if at is not None:
+                if not is_open and (not post.get('openAt') or at <= S.action_time(post['openAt'])):
+                    raise S.ActionError('撤岗时间须晚于加岗时间')
+                post.update(closeAt=S.E.fmt(at), closeMode='direct', closedAuto=False)
+            else:
+                if key in state['plan']['seven']:
+                    state['plan'].setdefault('push7Targets', {})
+                for kind in ('crew', 'seven'):
+                    state['plan'][kind].pop(key, None)
+                post.update(open=False, opened=True, openAt=None, closeAt=None, closeMode='direct',
+                            closedAuto=False, openRequest=False, manual=True, draftClosed=True)
+    else:
+        raise S.ActionError('不支持的预排岗位操作')
+    return line, post
 
 
 @S.transactional
@@ -309,6 +376,17 @@ def edit(db,attraction_id,actor,work_date,body):
             sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'])
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,lid,None,{'active':active})
+        return
+    if action == 'draft_post':
+        line, post = configure_post(state, body, now if work_date == today else 0, actor)
+        normalize_seven_assignments(state, previous_slots)
+        validate_plan(state)
+        if live_edit:
+            sync_prestart(state)
+            S.write_duties(db, attraction_id, work_date, state['plan'])
+        S.save_day(db, row, state)
+        S.DbHooks(db, attraction_id, work_date).log(action, actor, None, line['id'], post['name'],
+                                                   {'change': body['change'], 'post': body['post']})
         return
     if action in ('draft_swap_people','draft_swap_posts'):
         source,target=body.get('source'),body.get('target')

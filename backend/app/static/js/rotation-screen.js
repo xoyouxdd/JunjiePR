@@ -54,11 +54,17 @@ function screenView() {
   return `<div class="rt-board"><section class="rt-line-area" aria-label="轮岗线路"><div class="rt-area-heading"><h1>轮岗线路</h1><span>${day.lines.filter(L=>L.active).length}条启用 <span class="rt-schedule-key"><i class="add"></i>待加 <i class="remove"></i>待撤</span></span></div>${lines}</section><div class="rt-pool" aria-label="休息室人员">${pool}</div></div>`;
 }
 
+let renderedScreen;
 RT.render = () => {
   if (!RT.data||RT.editingPost) return;
   renderClock();
+  const day = RT.data.day;
+  document.body.classList.toggle('rt-screen-flow', !!day?.taskWorkflow && day.status !== 'ended');
+  const html = screenView();
+  if (html === renderedScreen) return;
+  renderedScreen = html;
   const scroll = [...$app.querySelectorAll('.rt-lines,.rt-chips')].map(el => el.scrollTop);
-  $app.innerHTML = screenView();
+  $app.innerHTML = html;
   [...$app.querySelectorAll('.rt-lines,.rt-chips')].forEach((el, i) => { el.scrollTop = scroll[i] || 0; });
 };
 

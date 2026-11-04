@@ -161,7 +161,8 @@ def seed_cohort(three=False, mixed=False):
                 state['persons'][no].update(state='ready',start=int(now)-5,end=1440,readyAt=now-1,visited=[],
                     line=None,lineStart=None,breakKind='rest',assign={'line':'A1','mode':'push','departAt':now-1})
                 state['persons'][no].pop('entryHold',None)
-            state['persons']['9710000']['assign'].update(mode='chain',target='9710020',why='推下班')
+            # These route fixtures explicitly stage a shift-end replacement.
+            state['persons']['9710000']['assign'].update(mode='chain',target='9710020',why='推下班',manual=True)
             if three:
                 p=deepcopy(state['persons']['9710010']);p.update(pid='9710050',name='正式模拟TA_GSM0')
                 state['persons']['9710050']=p
@@ -173,6 +174,55 @@ def seed_cohort(three=False, mixed=False):
                 state['persons']['9710010']['start'] -= 30
             S.save_day(db,row,state)
     return aid
+
+
+def seed_departure_hint():
+    work_date = date.today().isoformat()
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        with S.transaction(db):
+            aid = seed_cohort()
+            row = S.day_row(db, aid, work_date)
+            state = S.day_state(row)
+            now = state['lastTick']
+            state['persons']['9710000']['assign'] = {'line': 'A1', 'mode': 'push', 'departAt': now, 'manual': True}
+            state['persons']['9710010'].update(state='excluded', assign=None)
+            state['persons']['9710030'].update(end=now+32, continuousStart=now-90)
+            S.set_sim_clock(S.load_config(db, aid), work_date, now, paused=True)
+            S.save_day(db, row, state)
+    return aid, now
+
+
+def test_departure_hint_crosses_30_minutes_without_changing_the_issued_task(monkeypatch):
+    aid, now = seed_departure_hint()
+    clock = {'minute': now}
+    work_date = date.today().isoformat()
+    monkeypatch.setattr(S, 'clock_now', lambda cfg: (work_date, clock['minute']))
+    try:
+        with TestClient(app) as member, TestClient(app) as screen:
+            login(member, '9710000')
+            ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
+            before = ok(member.get('/api/rotation-board/me'))
+            first = before['person']
+            assert '回休息室' in first['departureRoutes'][-1]['to']
+            clock['minute'] = now + 2
+            board = ok(screen.get('/api/rotation/screen/state'))
+            assert board['version'] > before['version']
+            current = next(p for p in board['day']['persons'] if p['pid'] == first['pid'])
+            assert current['departureRoutes'][-1]['to'] == '下班'
+            assert ok(member.get('/api/rotation-board/me'))['person']['departureRoutes'] == current['departureRoutes']
+            assert current['confirmationTokens']['depart'] == first['confirmationTokens']['depart']
+            assert current['task']['id'] == first['task']['id']
+            assert current['task']['afterPosts'] == first['task']['afterPosts']
+            body = {'action': 'depart', 'confirmation_token': first['confirmationTokens']['depart']}
+            executed = ok(member.post('/api/rotation-board/me/act', json=body))
+            duplicate = ok(member.post('/api/rotation-board/me/act', json=body))
+            assert duplicate['duplicate'] and duplicate['result'] == executed['result']
+    finally:
+        with SessionLocal() as db:
+            db.info['rotation_formal'] = True
+            with S.transaction(db):
+                S.load_config(db, aid).clock_json = None
 
 
 def test_formal_personal_routes_survive_reload_and_commit_independently():
@@ -692,6 +742,90 @@ def test_timeout_screen_ack_is_immediately_ready_and_reclaims_only_unowned_task(
         assert again['task']==after['task'] and again['readyAt']==now
         ok(cm.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':again['confirmationTokens']['depart']}))
         assert ok(cm.get('/api/rotation-board/me'))['person']['state']=='onpost'
+
+
+def test_shift_end_marker_refreshes_board_and_screen_without_a_new_task(monkeypatch):
+    aid = seed_cohort()
+    work_date = date.today().isoformat()
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        with S.transaction(db):
+            row = S.day_row(db, aid, work_date)
+            state = S.day_state(row)
+            now = state['lastTick']
+            for pid in ('9710000', '9710010'):
+                state['persons'][pid].update(state='excluded', assign=None)
+            state['persons']['9710020']['end'] = now + 26
+            S.save_day(db, row, state)
+
+    clock = {'minute': now}
+    monkeypatch.setattr(S, 'clock_now', lambda cfg: (work_date, clock['minute']))
+    with TestClient(app) as operator, TestClient(app) as screen:
+        login(operator, '9710020')
+        ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
+
+        def snapshot(client, endpoint):
+            data = ok(client.get(endpoint))
+            people = data['day']['persons']
+            return data['version'], next(p for p in people if p['pid'] == '9710020'), people
+
+        before, target, _ = snapshot(operator, '/api/rotation-board/board')
+        assert target['preparing'] is None
+        clock['minute'] = now + 1
+        for client, endpoint in [(operator, '/api/rotation-board/board'), (screen, '/api/rotation/screen/state')]:
+            version, target, people = snapshot(client, endpoint)
+            assert version > before
+            assert target['preparing'] == '推下班' and target['state'] == 'onpost'
+            assert not any(p['task'] for p in people)
+
+
+def test_arrival_hint_refreshes_both_boards_at_actual_30_minute_boundary(monkeypatch):
+    aid = seed_cohort()
+    work_date = date.today().isoformat()
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        with S.transaction(db):
+            row = S.day_row(db, aid, work_date)
+            state = S.day_state(row)
+            now = state['lastTick']
+            state['persons']['9710000'].update(state='walkback', assign=None, end=now+32,
+                                               walkbackSince=now, after='done', arriveAnchor=None)
+            state['persons']['9710010'].update(state='excluded', assign=None)
+            eng, _ = S.engine_for(db, S.load_config(db, aid), row, state)
+            S.sync_notices(db, aid, state, eng, now)
+            S.save_day(db, row, state)
+
+    clock = {'minute': now}
+    monkeypatch.setattr(S, 'clock_now', lambda cfg: (work_date, clock['minute']))
+    with TestClient(app) as operator, TestClient(app) as screen, TestClient(app) as member:
+        login(operator, '9710020')
+        ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
+        readers = [(operator, '/api/rotation-board/board'), (screen, '/api/rotation/screen/state')]
+        login(member, '9710000')
+        versions = []
+        for minute, expected in [(now, None), (now+2, 'done')]:
+            clock['minute'] = minute
+            for client, endpoint in readers:
+                data = ok(client.get(endpoint))
+                versions.append(data['version'])
+                p = next(p for p in data['day']['persons'] if p['pid'] == '9710000')
+                assert p['state'] == 'walkback' and p['after'] == 'done'
+                assert p['arrivalOutcome'] == expected
+            own = ok(member.get('/api/rotation-board/me'))
+            assert own['person']['arrivalOutcome'] == expected
+            notice = next(n for n in own['notices'] if n['status'] == 'open' and n['kind'] == 'arrive')
+            assert ('确认后即可下班' in notice['body']) is (expected == 'done')
+        assert min(versions[2:]) > max(versions[:2])
+        body = {'action': 'arrive', 'pid': p['pid'], 'confirmation_token': p['confirmationTokens']['arrive'],
+                'expected_arrival_outcome': None}
+        stale = member.post('/api/rotation-board/me/act', json=body)
+        assert stale.status_code == 409
+        assert screen.post('/api/rotation/screen/act', json=body).status_code == 409
+        assert ok(member.get('/api/rotation-board/me'))['person']['state'] == 'walkback'
+        confirmed = ok(screen.post('/api/rotation/screen/act', json={**body, 'expected_arrival_outcome': 'done'}))
+        assert confirmed['result']['state'] == 'done'
+        duplicate = ok(member.post('/api/rotation-board/me/act', json=body))
+        assert duplicate['duplicate'] and duplicate['result'] == confirmed['result']
 
 
 def test_screen_666_uses_formal_board_and_has_only_rotation_confirmation_permission():

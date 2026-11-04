@@ -25,11 +25,29 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
    await phone.reload();
   }
   for(const [context,no,pw] of [[screen,'6666666','1243'],[manager,'9710020','formal-fixture-2026'],[mobile,'9710000','formal-fixture-2026']])assert((await context.request.post(base+'/api/login',{data:{employee_no:no,password:pw}})).ok());
+  if(engine==='edge'){
+   const cookie=(await screen.cookies()).map(c=>c.name+'='+c.value).join('; ');
+   const streams=[];
+   try{
+    for(let i=0;i<3;i++){
+     const controller=new AbortController();streams.push(controller);
+     const response=await fetch(base+'/api/rotation/stream',{headers:{cookie},signal:controller.signal});
+     assert(response.ok);
+     assert.equal((await response.body.getReader().read()).done,false);
+    }
+    assert.equal((await manager.request.get(base+'/__fixture/pool').then(r=>r.json())).checked_out,0);
+   }finally{for(const controller of streams)controller.abort();}
+  }
   await manager.request.post(base+'/__fixture/cohort',{data:{three:true}});
   await screenPage.goto(base+'/rotation/screen');await screenPage.locator('.rt-workflow-board').waitFor();
   assert.equal(await screenPage.locator('[data-wf-101],[data-wf-undo],[draggable=true],[data-wf-rename],[data-adjust-login]').count(),0);
   assert(await screenPage.locator('[data-wf-action=depart]').count()>=3);
-  await screenPage.locator('[data-wf-action=depart]').first().click();await screenPage.locator('.rt-task-comparison').waitFor();await screenPage.locator('[data-close]').click();
+  await screenPage.locator('[data-wf-action=depart][data-wf-pid="9710000"]').click();
+  await screenPage.locator('.rt-task-comparison').waitFor();
+  const screenDialog=screenPage.getByRole('dialog');
+  assert.match(await screenDialog.innerText(),/→ 下班/);
+  assert.doesNotMatch(await screenDialog.innerText(),/下线人员回休息室后确认休息/);
+  await screenPage.locator('[data-close]').click();
   await board.goto(base+'/rotation-board');await board.locator('[data-wf-101]').waitFor();
   const label=board.locator('[data-wf-rename]').first(),key=await label.getAttribute('data-wf-rename');await label.dblclick();await board.locator('.rt-inline-post-name').fill('塔台测试改名');await board.locator('.rt-inline-post-name').press('Enter');
   await board.waitForFunction(k=>document.querySelector('[data-wf-rename="'+k+'"]')?.textContent==='塔台测试改名',key);
@@ -127,6 +145,108 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   await phone.locator('[data-rotation-task=arrive]').click();await phone.locator('[data-modal-confirm]').click();
   await phone.getByText('休息已开始',{exact:true}).waitFor();
   assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'rest');
+  for(const modalOpen of [false,true]){
+   assert((await manager.request.post(base+'/__fixture/room',{data:{forced:false}})).ok());
+   await reloadPhone();
+   const mealOption=phone.locator('[name=formalRotationMeal][value=meal]');
+   await mealOption.check();await mealOption.focus();
+   if(modalOpen){
+    await phone.locator('[data-rotation-task=arrive]').click();
+    await phone.getByRole('dialog').getByText(/本次选择吃饭/).waitFor();
+   }else{
+    await phone.waitForTimeout(5500);
+    assert(await mealOption.evaluate(el=>document.activeElement===el&&el.checked));
+   }
+   const own=(await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person;
+   const result=await screen.request.post(base+'/api/rotation/screen/act',{data:{action:'arrive',pid:own.pid,confirmation_token:own.confirmationTokens.arrive,meal_choice:'rest',expected_arrival_outcome:null}});
+   assert(result.ok(),await result.text());
+   await phone.getByText('休息已开始',{exact:true}).waitFor();
+   assert.equal(await phone.locator('[data-rotation-task=arrive]').count(),0);
+   if(modalOpen)await phone.getByRole('dialog').waitFor({state:'hidden'});
+  }
+  for(const crossesDuringSubmit of [false,true]){
+   const nearEnd=await manager.request.post(base+'/__fixture/room',{data:{near_shift_end:true}});
+   assert(nearEnd.ok(),await nearEnd.text());
+   const {attraction_id,minute}=await nearEnd.json();
+   async function crossBoundary(){
+    const clock=await manager.request.post(base+'/__fixture/waiting-dispatch',{data:{attraction_id,minute:minute+1}});
+    assert(clock.ok(),await clock.text());
+   }
+   try{
+    await reloadPhone();await phone.locator('[data-rotation-task=arrive]').click();
+    const dialog=phone.getByRole('dialog');
+    await dialog.getByText(/本次选择休息/).waitFor();
+    if(crossesDuringSubmit){
+     await phone.route('**/api/rotation-board/me/act',async route=>{await crossBoundary();await route.continue();},{times:1});
+     const conflict=phone.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation-board/me/act');
+     await dialog.locator('[data-modal-confirm]').click();
+     assert.equal((await conflict).status(),409);
+    }else{
+     await crossBoundary();
+    }
+    const updatedDialog=dialog.filter({hasText:/安排已更新.*结束当日轮岗/});
+    await updatedDialog.waitFor();
+    assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'walkback');
+    await updatedDialog.locator('[data-modal-confirm]').click();
+    await phone.getByText('当日轮岗已结束',{exact:true}).waitFor();
+    assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'done');
+   }finally{
+    assert((await manager.request.post(base+'/__fixture/waiting-dispatch',{data:{attraction_id,restore:true}})).ok());
+   }
+  }
+  for(const retry of [false,true]){
+   const screenRoom=await manager.request.post(base+'/__fixture/room',{data:{near_shift_end:true}});
+   assert(screenRoom.ok(),await screenRoom.text());
+   const screenClock=await screenRoom.json();
+   try{
+    await screenPage.reload();
+    await screenPage.locator('[data-wf-pid="9710000"][data-wf-action=arrive]').click();
+    const dialog=screenPage.getByRole('dialog');
+    await dialog.getByText(/按餐休安排开始计时/).waitFor();
+    await screenPage.route('**/api/rotation/screen/act',async route=>{
+     const shifted=await manager.request.post(base+'/__fixture/waiting-dispatch',{data:{attraction_id:screenClock.attraction_id,minute:screenClock.minute+1}});
+     assert(shifted.ok(),await shifted.text());
+     await route.continue();
+    },{times:1});
+    const response=screenPage.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation/screen/act');
+    await dialog.locator('[data-ok]').click();
+    assert.equal((await response).status(),409);
+    await dialog.getByText(/确认到达后结束当日轮岗/).waitFor();
+    assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'walkback');
+    const confirm=dialog.locator('[data-ok]:enabled');
+    await confirm.waitFor();
+    if(retry)await confirm.click();
+    await dialog.waitFor({state:'hidden',timeout:12000});
+    assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,retry?'done':'walkback');
+   }finally{
+    assert((await manager.request.post(base+'/__fixture/waiting-dispatch',{data:{attraction_id:screenClock.attraction_id,restore:true}})).ok());
+   }
+  }
+  const departureSetup=await manager.request.post(base+'/__fixture/departure-hint');
+  assert(departureSetup.ok(),await departureSetup.text());
+  const departureClock=await departureSetup.json();
+  const departurePhone=await mobile.newPage();
+  departurePhone.on('pageerror',e=>errors.push('departure phone: '+e.message));
+  try{
+   await departurePhone.goto(base+'/?view=actionCenter');await screenPage.reload();
+   const mobileButton=departurePhone.locator('[data-rotation-task=depart]');
+   await mobileButton.click();
+   const mobileRoutes=departurePhone.getByRole('dialog').locator('[data-departure-routes]');
+   assert.match(await mobileRoutes.innerText(),/回休息室/);
+   await screenPage.locator('[data-wf-action=depart][data-wf-pid="9710000"]').click();
+   const screenRoutes=screenPage.getByRole('dialog').locator('[data-departure-person]');
+   assert.match(await screenRoutes.innerText(),/回休息室/);
+   const shifted=await manager.request.post(base+'/__fixture/waiting-dispatch',{data:{...departureClock,minute:departureClock.minute+2}});
+   assert(shifted.ok(),await shifted.text());
+   await screenRoutes.getByText(/→ 下班/).waitFor();
+   await screenPage.locator('[data-close]').click();
+   await mobileRoutes.getByText(/→ 下班/).waitFor();
+   await departurePhone.getByRole('dialog').locator('[data-modal-confirm]').click();
+   await departurePhone.getByText(/最近安排生效.*已确认上岗安排/).waitFor();
+  }finally{
+   await departurePhone.close();
+   assert((await manager.request.post(base+'/__fixture/waiting-dispatch',{data:{attraction_id:departureClock.attraction_id,restore:true}})).ok());
+  }
   // A timed-out owner acknowledges on the screen; the receiver waits in the
   // normal ready area while their real break and fresh departure deadline remain intact.
   const timeoutSetup=await manager.request.post(base+'/__fixture/timeout');assert(timeoutSetup.ok(),await timeoutSetup.text());

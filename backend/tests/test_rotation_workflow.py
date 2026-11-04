@@ -21,6 +21,162 @@ def fixture(count=3):
     return eng,hooks
 
 
+def test_shift_preparation_appears_at_25_minutes_without_a_replacement():
+    from app.rotation.service import person_view
+
+    eng, _ = fixture(0)
+    p = eng.P['old0']
+    p['end'] = 565
+    assert person_view(eng, p, 539.99, {})['preparing'] is None
+    eng.tick(540)
+    assert person_view(eng, p, 540, {})['preparing'] == '推下班'
+    assert p['state'] == 'onpost' and eng.targeted() == {}
+
+
+def test_new_dispatch_prioritizes_shift_end_over_out_and_ordinary_forecasts():
+    eng, _ = fixture(2)
+    early = eng.P['new0']
+    late = eng.P['new1']
+    eng.P['old0']['end'] = 565
+    eng.P['old1']['absences'] = [{'start': 550, 'end': 610, 'label': '专项'}]
+    early.update(state='rest', readyAt=543, assign=None)
+    late.update(state='rest', readyAt=548, assign=None)
+    eng.tick(539)
+    assert early['assign']['target'] == 'old1'
+    assert W.task_for(eng, early) is None
+
+    eng.tick(540)
+    task = W.task_for(eng, early)
+    assert task['template']['target'] == 'old0'
+    assert task['template']['why'] == '推下班'
+    assert task['allowedAt'] == 543
+    assert late['assign']['target'] == 'old1'
+    assert late['assign']['why'] == '推出圈'
+    assert W.task_for(eng, late) is None
+
+
+@pytest.mark.parametrize('continuous_starts, expected', [((450, 460), 'old1'), ((450, 450), 'old3')])
+def test_simultaneous_shift_ends_use_continuous_time_then_later_post(continuous_starts, expected):
+    eng, _ = fixture(1)
+    eng.P['old1'].update(end=565, continuousStart=continuous_starts[0], lineStart=530)
+    eng.P['old3'].update(end=565, continuousStart=continuous_starts[1], lineStart=490)
+    eng.tick(540)
+    assert W.task_for(eng, eng.P['new0'])['template']['target'] == expected
+
+
+@pytest.mark.parametrize('earlier_line', ['A', 'B'])
+def test_overdue_earlier_shift_is_replaced_before_later_shift(earlier_line):
+    eng, _ = fixture(1)
+    if earlier_line == 'B':
+        seat(eng, 'old1', 'B', 1, '12:50')
+    eng.P['old1'].update(end=795, continuousStart=770)  # 13:15
+    eng.P['old3'].update(end=825, continuousStart=730)  # 13:45, standing longer
+    newcomer = eng.P['new0']
+    newcomer.update(readyAt=800, assign=None)
+    eng.tick(800)  # 13:20, both shifts are eligible for relief.
+    task = W.task_for(eng, newcomer)
+    assert task['template']['target'] == 'old1'
+    assert task['line'] == earlier_line
+
+
+@pytest.mark.parametrize('first_end, expected_owners', [(825, ['new1']), (795, ['new0', 'new1'])])
+def test_same_line_batch_keeps_shift_priority_over_owner_number(first_end, expected_owners):
+    eng, _ = fixture(2)
+    for owner, target, end in [('new0', 'old1', first_end), ('new1', 'old3', 825)]:
+        eng.P[target].update(end=end, continuousStart=730)
+        eng.P[owner]['readyAt'] = 800
+        eng.P[owner]['assign'].update(mode='chain', target=target, why='推下班', departAt=800)
+    assert W.plan(eng, 800)
+    tasks = list(eng.d['rotationTasks'].values())
+    assert [task['owner'] for task in tasks] == expected_owners
+    assert [task['template']['target'] for task in tasks] == [
+        {'new0': 'old1', 'new1': 'old3'}[owner] for owner in expected_owners
+    ]
+    if len(tasks) == 2:
+        assert not W.resources(tasks[0]) & W.resources(tasks[1])
+
+
+def test_shift_end_priority_does_not_redirect_an_issued_task():
+    eng, _ = fixture(2)
+    first = eng.P['new0']
+    second = eng.P['new1']
+    eng.P['old4']['end'] = 565
+    first.update(state='rest', readyAt=542, assign={'line': 'A', 'mode': 'push', 'departAt': 542})
+    second.update(state='rest', readyAt=545, assign=None)
+    assert W.plan(eng, 539)
+    issued = deepcopy(W.task_for(eng, first))
+    eng.tick(540)
+    assert W.task_for(eng, first) == issued
+    assert second['assign']['target'] == 'old4'
+
+
+@pytest.mark.parametrize('remaining, expected', [(30.01, 'rest'), (30, 'done'), (29.99, 'done')])
+def test_arrival_uses_actual_remaining_shift_minutes(remaining, expected):
+    eng, _ = fixture(0)
+    p = eng.P['old0']
+    p['end'] = 540 + remaining
+    eng.act_fix_remove(p['pid'], '现场移出', 537, 'supervisor')
+    assert p['state'] == 'walkback'
+    eng.act_arrive(p['pid'], 540, 'screen')
+    assert p['state'] == expected
+
+
+@pytest.mark.parametrize('remaining, expected', [(30.01, 'walkback'), (30, 'done'), (29.99, 'done')])
+def test_ordinary_task_uses_actual_push_off_time_and_preserves_the_route(remaining, expected):
+    from app.rotation.service import person_view
+
+    eng, hooks = fixture(1)
+    outgoing = eng.P['old2']  # Longest continuous time in the fixture.
+    outgoing['end'] = 542 + remaining
+    incoming = eng.P['new0']
+    assert W.plan(eng, 537)
+    task = W.task_for(eng, incoming)
+    assert task['template']['mode'] == 'push'
+    assert task['moves'][-1]['outcome'] == 'rest'  # Above 30 minutes at issue time and allowed time.
+    issued_moves = deepcopy(task['moves'])
+    earlier = person_view(eng, incoming, 540, eng.targeted())
+    current = person_view(eng, incoming, 542, eng.targeted())
+    assert earlier['confirmationTokens']['depart'] == current['confirmationTokens']['depart']
+    assert earlier['assign'] == current['assign']
+    assert {**earlier['task'], 'routes': current['task']['routes']} == current['task']
+    assert current['departureRoutes'] == current['task']['routes']
+    assert earlier['departureRoutes'][-1]['to'] == '下岗，回休息室确认休息／吃饭'
+    assert current['departureRoutes'][-1]['to'] == ('下班' if expected == 'done' else '下岗，回休息室确认休息／吃饭')
+    eng.act_depart(incoming['pid'], 542, 'screen')
+    assert outgoing['state'] == expected
+    assert outgoing['downReason'] == '正常轮岗'
+    assert task['moves'] == issued_moves
+    pushed_off = next(event for event in hooks.events if event['type'] == 'pushed_off')
+    departure = next(event for event in hooks.events if event['type'] == 'depart')
+    assert pushed_off['detail']['outcome'] == expected
+    actual_route = next(route for route in departure['detail']['routes'] if route['pid'] == outgoing['pid'])
+    assert actual_route['to'] == ('下班' if expected == 'done' else '下岗，回休息室确认休息／吃饭')
+    assert occupants(eng, 'A') == ['new0', 'old0', 'old1', 'old3', 'old4']
+    assert hooks.segments.count((outgoing['pid'], 'A', 480, 542)) == 1
+
+
+@pytest.mark.parametrize('expected, reason, destination', [('done', '推下班', '下班'), ('away', '推出圈', '出圈')])
+def test_chain_departure_logs_the_executed_destination(expected, reason, destination):
+    eng, hooks = fixture(1)
+    outgoing = eng.P['old0']
+    if expected == 'done':
+        outgoing['end'] = 565
+    else:
+        outgoing['absences'] = [{'start': 550, 'end': 610, 'label': '专项'}]
+    incoming = eng.P['new0']
+    eng.tick(540)
+    task = W.task_for(eng, incoming)
+    assert task['template']['why'] == reason
+    outgoing['end'] = 565  # A committed out-of-circle task remains out of circle in the display.
+    assert W.task_view(eng, incoming, 540)['routes'][-1]['to'] == destination
+    eng.act_depart(incoming['pid'], 540, 'screen')
+    pushed_out = next(event for event in hooks.events if event['type'] == 'pushed_out')
+    departure = next(event for event in hooks.events if event['type'] == 'depart')
+    assert outgoing['state'] == expected
+    assert pushed_out['detail'] == {'reason': reason, 'outcome': expected}
+    assert departure['detail']['routes'][-1]['to'] == destination
+
+
 def test_minute_cohort_has_one_deadline_and_independent_longest_first_routes():
     eng,_=fixture();assert W.plan(eng,538)
     assert [W.task_for(eng,eng.P['new'+str(i)])['allowedAt'] for i in range(3)]==[541]*3

@@ -101,6 +101,44 @@ def test_prearranged_line_rejects_invalid_or_stale_changes(rotation,line,active)
         D.edit(db,rotation.attraction_id,'测试',FUTURE,{'action':'draft_line','line':'A','active':False,'revision':0})
 
 
+def test_post_menu_saves_only_the_selected_day_and_activates_at_the_planned_times(rotation):
+    prepare(rotation)
+    original = read(rotation)['draft']
+    pid = original['plan']['crew']['A#0']
+    edit(rotation, action='draft_post', post='A#0', change='hold', reason='现场任务')
+    with pytest.raises(S.ActionError, match='预予定岗'):
+        edit(rotation, action='draft_swap_people', source='A#0', target='B#0')
+    with pytest.raises(S.ActionError, match='取消定岗'):
+        edit(rotation, action='draft_post', post='A#0', change='close')
+    edit(rotation, action='draft_post', post='B#0', change='close')
+    assert 'B#0' not in read(rotation)['draft']['plan']['crew']
+    edit(rotation, action='draft_post', post='B#0', change='open', time='08:00')
+    edit(rotation, action='draft_post', post='B#0', change='close', time='09:00')
+    edit(rotation, action='draft_post', post='B#0', change='cancel_close')
+    assert not read(rotation)['draft']['lines'][1]['posts'][0]['closeAt']
+    edit(rotation, action='draft_post', post='B#0', change='close', time='09:00')
+    edit(rotation, action='draft_post', post='A#1', change='close')
+    planned = read(rotation)['draft']
+    assert planned['lines'][0]['posts'][0]['draftHold']['pid'] == pid
+    with rotation.factory() as db:
+        assert db.query(RotationSegment).count() == 0
+        cfg = S.load_config(db, rotation.attraction_id)
+        assert not S.lines_of(cfg)[0]['posts'][0].get('draftHold')
+        assert not S.lines_of(cfg)[1]['posts'][0].get('openAt')
+    from test_rotation_engine import Hooks
+    engine = S.E.Engine(deepcopy(planned), dict(S.E.DEFAULT_SETTINGS), Hooks())
+    engine.publish(240, 'test')
+    assert not engine.held(pid) and engine.P[pid]['state'] == 'notyet'
+    assert not engine.line('B')['posts'][0]['open']
+    assert not engine.line('A')['posts'][1]['open']
+    engine.tick(435)
+    assert engine.held(pid) and engine.P[pid]['continuousStart'] == 435
+    engine.tick(480)
+    assert engine.line('B')['posts'][0]['open']
+    engine.tick(540)
+    assert not engine.line('B')['posts'][0]['open']
+
+
 def test_five_post_spares_use_existing_rename_flow_without_changing_other_slots(rotation):
     with rotation.factory() as db, S.transaction(db):
         cfg = S.load_config(db, rotation.attraction_id)
