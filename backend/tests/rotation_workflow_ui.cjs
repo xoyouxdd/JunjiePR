@@ -12,6 +12,18 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
   const screen=await browser.newContext({viewport:{width:1440,height:1000}}),manager=await browser.newContext({viewport:{width:1440,height:1000}}),mobile=await browser.newContext({viewport:{width:390,height:844}});
   const errors=[];const screenPage=await screen.newPage(),board=await manager.newPage(),phone=await mobile.newPage();for(const [name,p] of [['screen',screenPage],['board',board],['phone',phone]])p.on('pageerror',e=>errors.push(name+': '+e.message));
+  const phoneReads=new Set();
+  phone.on('request',request=>{if(new URL(request.url()).pathname==='/api/rotation-board/me')phoneReads.add(request);});
+  phone.on('requestfinished',request=>phoneReads.delete(request));
+  phone.on('requestfailed',request=>phoneReads.delete(request));
+  async function reloadPhone(){
+   // Pause the old document's polling and let its current read finish before navigation.
+   await phone.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,get:()=>true}));
+   const deadline=Date.now()+15000;
+   while(phoneReads.size&&Date.now()<deadline)await sleep(20);
+   assert.equal(phoneReads.size,0,'phone polling must drain before reloading');
+   await phone.reload();
+  }
   for(const [context,no,pw] of [[screen,'6666666','1243'],[manager,'9710020','formal-fixture-2026'],[mobile,'9710000','formal-fixture-2026']])assert((await context.request.post(base+'/api/login',{data:{employee_no:no,password:pw}})).ok());
   await manager.request.post(base+'/__fixture/cohort',{data:{three:true}});
   await screenPage.goto(base+'/rotation/screen');await screenPage.locator('.rt-workflow-board').waitFor();
@@ -84,7 +96,7 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   // Real arrival UI, choice eligibility, retained selection, forced meal and idempotent receipt.
   for(const forced of [false,true]){
    const setup=await manager.request.post(base+'/__fixture/room',{data:{forced}});assert(setup.ok(),await setup.text()+'\n'+log);
-   await phone.reload();await phone.locator('[data-confirm-page=room]').waitFor();
+   await reloadPhone();await phone.locator('[data-confirm-page=room]').waitFor();
    assert.match(await phone.locator('.rt-confirm-origin').innerText(),/A1.*上客1/s);
    assert(await phone.locator('.rt-confirm-page h3').evaluate(el=>parseFloat(getComputedStyle(el).fontSize)>=22));
    const own=await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json());
@@ -110,7 +122,7 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
    assert.equal(await phone.locator('[data-rotation-task=arrive]').count(),0);
   }
   assert((await manager.request.post(base+'/__fixture/room',{data:{forced:false}})).ok());
-  await phone.reload();await phone.locator('[data-confirm-page=room]').waitFor();
+  await reloadPhone();await phone.locator('[data-confirm-page=room]').waitFor();
   assert(await phone.locator('[name=formalRotationMeal][value=rest]').isChecked());
   await phone.locator('[data-rotation-task=arrive]').click();await phone.locator('[data-modal-confirm]').click();
   await phone.getByText('休息已开始',{exact:true}).waitFor();
