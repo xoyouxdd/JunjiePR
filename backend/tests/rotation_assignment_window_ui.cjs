@@ -29,7 +29,12 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   assert.match(await board.locator('[data-drag-pid="9710000"]').innerText(),/剩 3 分钟/);assert.match(await board.locator('[data-drag-pid="9710000"]').innerText(),/A1/);
   for(const width of [320,390,430,768,1440]){await board.setViewportSize({width,height:900});assert.equal(await board.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' preview overflow '+width);}
   const shots=process.env.ROTATION_WINDOW_SCREENSHOTS;if(shots){fs.mkdirSync(shots,{recursive:true});await board.setViewportSize({width:390,height:844});await board.evaluate(()=>{RT.dragging=true;document.querySelector('.rt-ready .rt-chip').scrollIntoView({block:'center'});});try{await board.screenshot({path:path.join(shots,engine+'-route-preview.png')});}finally{await board.evaluate(()=>{RT.dragging=false;});}await personal.screenshot({path:path.join(shots,engine+'-fixed-personal.png'),fullPage:true});}
-  assert((await op.request.post(base+'/api/rotation-board/act',{data:{action:'line',line:'A1',active:false}})).ok());
+  await board.locator('[data-post="A1#0"]').click();
+  await board.locator('[data-edit-line]').click();
+  const closed=board.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation-board/act'&&r.request().method()==='POST');
+  await board.getByRole('button',{name:'停用',exact:true}).click();
+  assert((await closed).ok());
+  await board.waitForFunction(()=>!RT.modalOpen&&RT.data.day.lines.find(line=>line.id==='A1')?.active===false);
   await personal.reload();await personal.locator('[data-formal-rotation-todo]').locator('.rt-confirm-destination').filter({hasText:'B1'}).waitFor();
   assert(await personal.locator('[data-rotation-task=depart]').isDisabled());
   data=await cm.request.get(base+'/api/rotation-board/me').then(r=>r.json());assert.equal(data.person.assign.line,'B1');assert(!data.person.assign.blocked);assert(!data.person.canDepart);

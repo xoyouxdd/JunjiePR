@@ -77,6 +77,46 @@ def occupants(eng, line):
     return [x["occ"] for x in eng.line(line)["posts"]]
 
 
+@pytest.mark.parametrize("destination", [("A", 1), ("B", 0)])
+@pytest.mark.parametrize("explicit_targets", [False, True])
+def test_after_first_shift_post_only_swap_keeps_seven_relief_targets(destination, explicit_targets):
+    from copy import deepcopy
+    from app.rotation import daily, manual, workflow
+
+    lines = two_lines()
+    target_line, target_index = destination
+    lines[0]["posts"][0]["seven"] = 1
+    next(line for line in lines if line["id"] == target_line)["posts"][target_index]["seven"] = 2
+    people = [person(pid, start, "16:00") for pid, start in [
+        ("first", "06:00"), ("early-a", "07:00"), ("early-b", "07:00"),
+        ("relief-a", "07:15"), ("relief-b", "07:15"),
+    ]]
+    eng, _ = live_day(people, lines, now="06:30")
+    workflow.initialize(eng)
+    now = hm("06:30")
+    assert not daily.prestart(eng.d, now)
+    target_key = f"{target_line}#{target_index}"
+    plan = eng.d["plan"]
+    plan.update(seven={"A#0": "early-a", target_key: "early-b"}, push7=["relief-a", "relief-b"])
+    if explicit_targets:
+        plan["push7Targets"] = {"relief-a": "early-a", "relief-b": "early-b"}
+    before = eng._push7_pairs()
+    opening = deepcopy(eng.d.get("dailyOpening"))
+    for lid, index, pid in [("A", 0, "early-a"), (target_line, target_index, "early-b")]:
+        eng.post(lid, index)[2]["occ"] = pid
+    manual.apply(eng, {"action": "post_order", "line": "A", "i": 0, "target_line": target_line,
+                       "target_i": target_index, "swapMode": "posts"}, now, "test")
+    assert eng.post("A", 0)[2]["seven"] == 2
+    assert eng.post(target_line, target_index)[2]["seven"] == 1
+    assert eng._push7_pairs() == before
+    assert eng.post("A", 0)[2]["occ"] == "early-a"
+    assert eng.post(target_line, target_index)[2]["occ"] == "early-b"
+    eng.tick(hm("07:00"))
+    assert all(eng.P[pid]["continuousStart"] == 420 for pid in ("early-a", "early-b"))
+    assert eng._push7_pairs() == before
+    assert eng.d.get("dailyOpening") == opening
+
+
 def test_manual_opening_reserves_next_person_after_three_minutes_and_pushes_from_entry():
     eng, _ = live_day([person(p, '07:00', '21:00') for p in ('first', 'second', 'next')], lines=[two_lines()[0]])
     seat(eng, 'first', 'A', 0, '08:00')

@@ -230,11 +230,6 @@ function postScheduleForm(lid, index, post, editingTime = false) {
     f => act('/api/rotation/act', { action: 'post', line: lid, i: index, open: true, openAt: f.openAt }, '加岗时间已保存，系统自动安排人员'));
 }
 
-function lineMenu(lid) {
-  const L = RT.data.day.lines.find(l => l.id === lid);
-  confirmBox(`${L.active ? '停用' : '启用'} ${esc(lid)} 线`, L.active ? '停用后，这条线上的人全部下线，已分配到这条线的人会重新分配。' : '启用后按岗位配置开岗，系统开始往这条线派人。', L.active ? '停用' : '启用', () => act('/api/rotation/act', { action: 'line', line: lid, active: !L.active }), { warn: L.active });
-}
-
 $app.addEventListener('click', event => {
   if (!isManager() || tab !== 'board' || !RT.data.day || RT.data.day.status !== 'live') return;
   const groupButton=event.target.closest('[data-group-depart]');
@@ -331,13 +326,13 @@ function dailyPendingUI(){
 }
 async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,prepare=true,{refreshMonth=true}={}){
   const retained=daily.data?.date===date&&daily.calendar?.month===date.slice(0,7);
-  const liveVersion=RT.data.version;const generation=++daily.request;daily.date=date;daily.month=date.slice(0,7);daily.time=time;daily.source=null;daily.loading=true;daily.error='';
+  const {version:liveVersion,syncEpoch:liveEpoch}=RT.data;const generation=++daily.request;daily.date=date;daily.month=date.slice(0,7);daily.time=time;daily.source=null;daily.loading=true;daily.error='';
   if(retained)dailyPendingUI();else RT.render(false,true);
   try{
     const [month,loaded]=await Promise.all([refreshMonth||!retained?rtApi('/api/rotation/daily?month='+encodeURIComponent(daily.month)):Promise.resolve(daily.calendar),rtApi('/api/rotation/daily/'+date+(time?'?at='+encodeURIComponent(time):''))]);
     if(generation!==daily.request)return;let data=loaded;
     if(prepare&&data.date>data.today&&data.can_generate&&data.revision===0){try{await rtPost('/api/rotation/daily/'+date,{action:'draft_generate',revision:0});}catch(error){const latest=await rtApi('/api/rotation/daily/'+date);if(!latest.revision)throw error;}data=await rtApi('/api/rotation/daily/'+date);}
-    if(generation!==daily.request)return;daily.calendar={...month,days:month.days.map(d=>d.date===date?{...d,status:data.draft?'draft':data.day?.status||null}:d)};daily.data=data;daily.liveVersion=liveVersion;
+    if(generation!==daily.request)return;daily.calendar={...month,days:month.days.map(d=>d.date===date?{...d,status:data.draft?'draft':data.day?.status||null}:d)};daily.data=data;daily.liveVersion=liveVersion;daily.liveEpoch=liveEpoch;
   }catch(error){if(generation===daily.request){daily.error=error.message;if(!retained){daily.data=null;daily.calendar=null;}}}
   finally{if(generation===daily.request){daily.loading=false;if(tab==='draft'&&RT.data){if(retained&&daily.error)dailyPendingUI();else RT.render(false,true);}}}
 }
@@ -392,11 +387,11 @@ function dailyLineMenu(lid){
   if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
   if(formalRotation&&!me?.capabilities?.can_manage)return;
   const line=daily.data.draft?.lines.find(l=>l.id===lid);if(!line)return;
-  const active=!line.standby,date=daily.date,revision=daily.data.revision;
+  const active=!line.standby,date=daily.date,{revision,plan_revision}=daily.data;
   confirmBox(`${active?'停用':'启用'} ${esc(lid)}线预排`,
     `只保存 ${esc(date)} 的线路预排，不提前开始计时。${active?'该线路预排人员将返回待安排区，其他线路保持原安排。':'启用后可继续拖拽安排人员，按岗位配置及实际班次生效。'}`,
     active?'停用线路':'启用线路',()=>{
-      if(daily.date!==date||daily.data?.revision!==revision){toast('班表已变化，请重新打开线路设置',true);return false;}
+      if(daily.date!==date||daily.data?.revision!==revision||daily.data?.plan_revision!==plan_revision){toast('班表已变化，请重新打开线路设置',true);return;}
       return dailySend({action:'draft_line',line:lid,active:!active});
     },{warn:active});
 }
@@ -404,11 +399,11 @@ function dailyChoose(key,mode=daily.mode){
   if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
   if(!daily.source||daily.mode!==mode){daily.source=key;daily.mode=mode;$app.querySelectorAll('[data-daily-person],[data-daily-post]').forEach(b=>b.classList.toggle('is-selected',mode==='people'?b.dataset.dailyPerson===key:b.dataset.dailyPost===key));const text=$app.querySelector('[data-daily-selection]');if(text)text.textContent='已选 '+dailyLabel(key,mode)+'，请选择目标';return;}
   const source=daily.source;daily.source=null;$app.querySelectorAll('.is-selected').forEach(b=>b.classList.remove('is-selected'));if(source===key)return;
-  const revision=daily.data.revision,date=daily.date;
+  const {revision,plan_revision}=daily.data,date=daily.date;
   const sevenPosts=[source,key].filter(k=>!k.startsWith('person:')).map(k=>{const [lid,i]=k.split('#');return daily.data.draft?.lines.find(l=>l.id===lid)?.posts[Number(i)];}).filter(p=>p?.seven);
   const reminder=sevenPosts.length?`<p class="field-hint" role="status">提醒：${sevenPosts.map(p=>esc(p.name)).join('、')}为7点岗位，可安排其他班次人员；按实际班次生效，不提前计时。</p>`:'';
   confirmBox(mode==='posts'?'交换两个岗位':'交换两处人员',`${esc(dailyLabel(source,mode))} ↔ ${esc(dailyLabel(key,mode))}。${reminder}保存这一天的预排；今天首班前同步看板，未到班次不计时。`,'确认交换',()=>{
-    if(daily.date!==date||daily.data?.revision!==revision){toast('班表已变化，请重新选择',true);return;}
+    if(daily.date!==date||daily.data?.revision!==revision||daily.data?.plan_revision!==plan_revision){toast('班表已变化，请重新选择',true);return;}
     return dailySend({action:mode==='posts'?'draft_swap_posts':'draft_swap_people',source,target:key});
   });
 }
@@ -476,16 +471,31 @@ function bindDraft(){
 
 // ---------------------------------------------------------------- 名单
 
+let rosterRequest = 0;
 async function loadRoster(day) {
+  const request = ++rosterRequest;
   view.rosterDate = day;
-  try { view.roster = await rtApi(`/api/rotation/roster?date=${encodeURIComponent(day)}`); } catch (error) { toast(error.message, true); }
-  RT.render();
+  try {
+    const roster = await rtApi(`/api/rotation/roster?date=${encodeURIComponent(day)}`);
+    if (request !== rosterRequest) return;
+    view.roster = roster;
+    if (tab === 'roster') RT.render();
+  } catch (error) {
+    if (request === rosterRequest && tab === 'roster') toast(error.message, true);
+  }
 }
 
-function rosterView() {
+function rosterList() {
   const dates = RT.data.rosterDates || [];
   const r = view.roster;
   const kindName = { rotation: '轮岗', excluded: '不轮岗', off: '不在本区' };
+  return `<h2>已有名单</h2>
+      <div class="rt-row">${dates.length ? dates.map(d => `<button type="button" class="${r && r.date === d ? 'primary' : 'secondary'}" data-rdate="${esc(d)}">${esc(d)}</button>`).join('') : '<span class="field-hint">还没有上传名单</span>'}</div>
+      ${r ? (r.available ? `<p class="field-hint">${esc(r.date)} 使用：${r.scope === 'day' ? '按天' : '按周'}名单「${esc(r.file_name)}」${r.hours ? `，营业时间 ${esc(r.hours.open)}-${esc(r.hours.close)}` : ''}，共 ${r.people.length} 人</p>
+        <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>工号</th><th>姓名</th><th>班次原文</th><th>解析</th></tr></thead><tbody>${r.people.map(p => `<tr><td>${esc(p.employee_no)}</td><td>${esc(p.name)}</td><td>${esc(p.cell)}</td><td>${kindName[p.kind] || ''}${p.label ? `：${esc(p.label)}` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="field-hint">${esc(r.date)} 没有名单。</p>`) : ''}`;
+}
+
+function rosterView() {
   return `<section class="panel"><h2>上传名单</h2>
     <p class="field-hint">支持 ZTP 周班表，或标准模板（列：工号、姓名、日期、班次、备注；班次如 07:15-16:15）。按天上传会覆盖按周上传的同一天。${formalRotation?'以班表为准加入轮岗，跨圈直接识别；账号异常集中确认加入或跳过，未注册人员建立独立轮岗身份。':'名单为模拟数据，只用于轮岗测试。'}</p>
     <form id="rosterForm" class="rt-row">
@@ -495,10 +505,11 @@ function rosterView() {
       <label>日期（按天时）<input type="date" name="date"></label>
       <button type="submit" class="primary">上传</button>
     </form></section>
-    <section class="panel"><h2>已有名单</h2>
-      <div class="rt-row">${dates.length ? dates.map(d => `<button type="button" class="${r && r.date === d ? 'primary' : 'secondary'}" data-rdate="${esc(d)}">${esc(d)}</button>`).join('') : '<span class="field-hint">还没有上传名单</span>'}</div>
-      ${r ? (r.available ? `<p class="field-hint">${esc(r.date)} 使用：${r.scope === 'day' ? '按天' : '按周'}名单「${esc(r.file_name)}」${r.hours ? `，营业时间 ${esc(r.hours.open)}-${esc(r.hours.close)}` : ''}，共 ${r.people.length} 人</p>
-        <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>工号</th><th>姓名</th><th>班次原文</th><th>解析</th></tr></thead><tbody>${r.people.map(p => `<tr><td>${esc(p.employee_no)}</td><td>${esc(p.name)}</td><td>${esc(p.cell)}</td><td>${kindName[p.kind] || ''}${p.label ? `：${esc(p.label)}` : ''}</td></tr>`).join('')}</tbody></table></div>` : `<p class="field-hint">${esc(r.date)} 没有名单。</p>`) : ''}</section>`;
+    <section class="panel" data-roster-list>${rosterList()}</section>`;
+}
+
+function bindRosterDates() {
+  $app.querySelectorAll('[data-rdate]').forEach(button => { button.onclick = () => loadRoster(button.dataset.rdate); });
 }
 
 function bindRoster() {
@@ -541,7 +552,7 @@ function bindRoster() {
     } catch (error) { toast(error.message, true); }
     finally{button.disabled=false;}
   };
-  $app.querySelectorAll('[data-rdate]').forEach(button => { button.onclick = () => loadRoster(button.dataset.rdate); });
+  bindRosterDates();
 }
 
 // ---------------------------------------------------------------- 记录
@@ -712,12 +723,20 @@ RT.render = (fromTicker,forceDaily=false) => {
   if(tab==='draft'&&!forceDaily&&daily.data?.can_edit&&daily.date<=RT.data.clock.date&&!daily.loading&&!daily.busy&&!editing()){
     // Drafts and enabled boards both become read-only at the first shift.
     const boundary=daily.date<RT.data.clock.date||nowMin()>=daily.data.first_start;
-    if(boundary||!daily.source&&!fromTicker&&daily.liveVersion!==RT.data.version){void loadDaily(daily.date,'',false,{refreshMonth:false});return;}
+    if(boundary||!daily.source&&!fromTicker&&(daily.liveVersion!==RT.data.version||daily.liveEpoch!==RT.data.syncEpoch)){void loadDaily(daily.date,'',false,{refreshMonth:false});return;}
   }
   // 每秒刷新只更新看板；表单页在正在输入或由计时器触发时不重绘
   if (fromTicker && tab !== 'board') return;
-  // A delayed roster read must not replace a file the manager has already selected.
-  if(tab==='roster'&&$app.querySelector('#rosterForm [type=file]')?.files?.length)return;
+  const rosterPanel = tab === 'roster' ? $app.querySelector('[data-roster-list]') : null;
+  if (rosterPanel) {
+    // Keep the upload input mounted, including while the file picker is open.
+    const top = rosterPanel.querySelector('.rt-scroll')?.scrollTop ?? 0;
+    rosterPanel.innerHTML = rosterList();
+    const list = rosterPanel.querySelector('.rt-scroll');
+    if (list) list.scrollTop = top;
+    bindRosterDates();
+    return;
+  }
   // Live-board SSE must not replace the calendar or a pending daily-plan selection.
   if(tab==='draft'&&!forceDaily&&$app.querySelector('.rt-daily'))return;
   if (editing()&&!(forceDaily&&tab==='draft')) return;

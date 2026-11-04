@@ -1376,15 +1376,9 @@ class Engine:
         if any((x.get('hold') or x.get('hold101')) for x in L['posts'][min(i,target_i):max(i,target_i)+1]):
             raise ActionError('涉及定岗岗位，请先取消定岗')
         if swap_mode=='posts':
-            left,right=L['posts'][i],L['posts'][target_i]
-            if left.get('open')!=right.get('open') and (left.get('occ') or right.get('occ')):
-                raise ActionError('有人员时不能只交换开放状态不同的岗位')
-            fixed={'occ','since','hold'}
-            configs=[{k:v for k,v in x.items() if k not in fixed} for x in (left,right)]
-            for post,config in ((left,configs[1]),(right,configs[0])):
-                keep={k:v for k,v in post.items() if k in fixed};post.clear();post.update(config);post.update(keep)
+            self._swap_post_configs(L, i, L, target_i, now)
             self._reset_line_plans(lid, now)
-            self.h.log('post_order',actor,None,lid,left['name'],{'from':i,'to':target_i,'mode':swap_mode})
+            self.h.log('post_order',actor,None,lid,L['posts'][i]['name'],{'from':i,'to':target_i,'mode':swap_mode})
             return
         old=list(L['posts'])
         if swap_mode=='with_people':
@@ -1418,13 +1412,7 @@ class Engine:
                 if self.P[incoming['occ']]['state'] not in ('onpost', 'notyet'):
                     raise ActionError('岗位人员状态已变化，请刷新后重试')
         if mode == 'posts':
-            if left.get('open') != right.get('open') and (left.get('occ') or right.get('occ')):
-                raise ActionError('有人员时不能只交换开放状态不同的岗位')
-            fixed = {'occ', 'since', 'hold'}
-            configs = [{k: v for k, v in x.items() if k not in fixed} for x in (left, right)]
-            for post, config in ((left, configs[1]), (right, configs[0])):
-                keep = {k: v for k, v in post.items() if k in fixed}
-                post.clear(); post.update(config); post.update(keep)
+            self._swap_post_configs(L, i, R, target_i, now)
         else:
             for line, index, post in ((L, i, left), (R, target_i, right)):
                 if post.get('occ') and self.P[post['occ']]['state'] == 'onpost':
@@ -1442,6 +1430,36 @@ class Engine:
         self._reset_line_plans(lid, now); self._reset_line_plans(target_lid, now)
         self.h.log('post_order', actor, None, lid, L['posts'][i]['name'],
                    {'from': i, 'to': target_i, 'target_line': target_lid, 'mode': mode})
+
+    def _swap_post_configs(self, left_line, i, right_line, j, now):
+        from app.rotation import daily as D, workflow as W
+        left, right = left_line['posts'][i], right_line['posts'][j]
+        if left.get('open') != right.get('open') and (left.get('occ') or right.get('occ')):
+            raise ActionError('有人员时不能只交换开放状态不同的岗位')
+        seven_order_changes = W.enabled(self) and (left.get('seven') or 0) != (right.get('seven') or 0)
+        reclassify = seven_order_changes and D.prestart(self.d, now)
+        previous_reliefs = D.seven_relief_slots(self.d) if reclassify else None
+        plan = self.d['plan']
+        if seven_order_changes and not reclassify and 'push7Targets' not in plan:
+            # Once the first shift starts, keep the selected people and their duties.
+            plan['push7Targets'] = {relief: target for _, relief, target in self._push7_pairs()}
+        fixed = {'occ', 'since', 'hold'}
+        configs = [{k: v for k, v in post.items() if k not in fixed} for post in (right, left)]
+        for post, config in zip((left, right), configs):
+            keep = {k: v for k, v in post.items() if k in fixed}
+            post.clear()
+            post.update(config, **keep)
+        if reclassify:
+            for line, index in ((left_line, i), (right_line, j)):
+                key = f"{line['id']}#{index}"
+                pid = plan['seven'].pop(key, None) or plan['crew'].pop(key, None)
+                if pid:
+                    seven = line['posts'][index].get('seven') and self.P[pid]['start'] == 420
+                    plan['seven' if seven else 'crew'][key] = pid
+            # A relief follows its early worker. A post-only swap does not move that worker.
+            plan.setdefault('push7Targets', {})
+            D.normalize_seven_assignments(self.d, previous_reliefs)
+            D.validate_plan(self.d)
 
     def act_line(self, lid, active, now, actor):
         from app.rotation import workflow as W, daily as D

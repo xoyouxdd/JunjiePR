@@ -78,18 +78,7 @@ def process_role_expirations(db: Session) -> None:
                         )
                     )
     for duty in db.query(EmployeeActingDuty).filter(EmployeeActingDuty.status == "active", EmployeeActingDuty.ends_on.isnot(None)).all():
-        end = date.fromisoformat(duty.ends_on)
-        days = (end - today).days
-        if days in (30, 7, 1):
-            create_alert(
-                db,
-                "acting_duty_expiring",
-                f"{duty.id}:{days}",
-                f"{duty.employee.name}的代理{duty.role.name}将在{days}天后结束",
-                employee_id=duty.employee_id,
-                due_date=duty.ends_on,
-            )
-        if end < today:
+        if duty.ends_on < today_text:
             duty.status = "ended"
             db.flush()
             current = role_at(db, duty.employee_id, today_text)
@@ -125,6 +114,10 @@ def process_role_expirations(db: Session) -> None:
             employee_id=leader_assignment.leader_employee_id,
             group_id=group.id,
         )
+    db.query(SystemAlert).filter_by(alert_type="acting_duty_expiring", status="open").update(
+        {SystemAlert.status: "handled", SystemAlert.handled_at: datetime.now()},
+        synchronize_session=False,
+    )
     resolve_acting_duty_migration_alerts(db)
     db.commit()
 

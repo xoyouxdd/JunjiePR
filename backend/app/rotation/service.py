@@ -52,6 +52,7 @@ class Runtime:
     def __init__(self):
         self.lock = threading.RLock()
         self.version = 0
+        self.sync_epoch = uuid4().hex
         self.cache: dict[tuple[int, str], tuple[int, dict]] = {}
         self.projections: dict[tuple, tuple[tuple, dict]] = {}
 
@@ -915,8 +916,10 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
     eng._read_projection = projection
     taken = eng.targeted() if state.get("status") == "live" else {}
     from app.rotation import timeout_cases as C
+    from app.rotation import daily as D
     result = {
         "date": state["date"], "status": state["status"],
+        "prestartPlanRevision": D.plan_revision(state) if D.prestart(state, now) else None,
         "timeoutCases":C.view(eng),
         "timeoutWaitingMatch":[{'line':d['line'],'mode':d['template']['mode']} for d in state.get('timeoutDemands',[]) if not d.get('owner')],
         "lines": lines_view(eng),
@@ -973,6 +976,7 @@ def board_payload(db: Session, attraction_id: int) -> dict:
     out = {
         "clock": clock_payload(cfg),
         "version": RUNTIME.version,
+        "syncEpoch": RUNTIME.sync_epoch,
         "settings": settings_of(cfg),
         "lines": lines_of(cfg),
         "roster": roster_summary(db, attraction_id, day),
@@ -995,7 +999,7 @@ def screen_payload(db: Session, attraction_id: int) -> dict:
     day, minute = clock_now(cfg)
     ensure_prearranged_day(db, cfg, attraction_id, day, minute)
     row = day_row(db, attraction_id, day)
-    out = {"clock": clock_payload(cfg), "version": RUNTIME.version, "day": None,
+    out = {"clock": clock_payload(cfg), "version": RUNTIME.version, "syncEpoch": RUNTIME.sync_epoch, "day": None,
            "settings": {"departEarly": settings_of(cfg)["departEarly"]}}
     if row and row.status in ("live", "ended"):
         view = live_view(db, cfg, row, minute)
@@ -1026,6 +1030,7 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
     out = {
         "clock": clock_payload(cfg),
         "version": RUNTIME.version,
+        "syncEpoch": RUNTIME.sync_epoch,
         "employee_no": employee_no,
         "settings": {"departEarly": settings_of(cfg)["departEarly"]},
         "person": None,
@@ -1282,6 +1287,16 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
             apply(eng,body,now,actor)
         elif act == "line":
             _require(body, "line")
+            if "line_context" in body:
+                from app.rotation import daily as D
+                line = eng.line(body["line"])
+                current = {
+                    "date": day,
+                    "active": line["active"],
+                    "planRevision": D.plan_revision(state) if D.prestart(state, now) else None,
+                }
+                if body["line_context"] != current:
+                    raise ConfirmationConflict("日期或线路安排已变化，请刷新后重新确认")
             eng.act_line(body["line"], action_boolean(body, "active"), now, actor)
         elif act == "away":
             eng.act_away(pid, reason or None, now, actor)

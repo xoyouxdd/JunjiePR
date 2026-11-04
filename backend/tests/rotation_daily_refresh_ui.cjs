@@ -38,7 +38,17 @@ let server,browser,log='';
   async function swap(mode,{postFailure=false,readFailure=false}={}){
    faultPost=postFailure;faultRead=readFailure;
    postGate=new Promise(r=>releasePost=r);getGate=new Promise(r=>releaseGet=r);
-   await page.locator(`[data-daily-${mode}="A#0"]`).dragTo(page.locator(`[data-daily-${mode}="B#0"]`));
+   await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.modalOpen);
+   // Drive the actual HTML drag handlers. This test measures the save and
+   // scroll behavior independently of headless browser mouse drag synthesis.
+   await page.evaluate(mode=>{
+    const transfer=new DataTransfer();
+    const source=document.querySelector(`[data-daily-${mode}="A#0"]`);
+    const target=document.querySelector('[data-daily-slot="B#0"]');
+    source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+    target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+    source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:transfer}));
+   },mode);
    await page.getByRole('button',{name:'确认交换',exact:true}).waitFor();
    await page.evaluate(()=>{
     scrollTo({top:700,behavior:'instant'});

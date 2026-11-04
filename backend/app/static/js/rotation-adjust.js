@@ -60,8 +60,33 @@ async function adjustPreview(body){
 function adjustClosePost(line,i){
   formBox('撤岗方式',`<label>处理方式<select name="closeMode"><option value="push">撤岗并顺推</option><option value="direct">撤岗并下线</option></select></label><label>撤岗时间（留空立即执行）<input name="closeAt" type="time"></label>`,values=>adjustPreview({action:'post',line,i,open:false,...(values.closeAt?{closeAt:values.closeAt}:{}),closeMode:values.closeMode}),{warn:true,okText:'预览影响'});
 }
+function lineMenu(lid, day = RT.data?.day) {
+  const line = day?.lines.find(item => item.id === lid);
+  if (!line) return;
+  const { date, prestartPlanRevision } = day;
+  const { active } = line;
+  const label = active ? '停用' : '启用';
+  const message = prestartPlanRevision
+    ? (active ? '停用将清除这条线当天的预排人员。' : '启用后可安排当天预排人员，班次开始前不计时。')
+    : (active ? '停用后，本线人员全部下线，相关安排会重新分配。' : '启用后按岗位配置开岗，系统开始往这条线派人。');
+  const body = { action: 'line', line: lid, active: !active,
+    line_context: { date, active, planRevision: prestartPlanRevision ?? null } };
+  confirmBox(`${label} ${esc(lid)} 线`, message, label, async () => {
+    let saved = false;
+    try {
+      await rtPost('/api/rotation/act', body);
+      saved = true;
+    } catch (error) {
+      toast(error.message, true);
+      if (error.status !== 409 && !error.uncertain) return false;
+    }
+    await RT.load().catch(() => scheduleLoad());
+    if (saved) afterRotationAdjustment();
+    return true;
+  }, { warn: active });
+}
 function adjustPostMenu(line,i){
-  const L=RT.data.day.lines.find(x=>x.id===line),post=L?.posts[i];if(!post)return;
+  const day=RT.data.day,L=day.lines.find(x=>x.id===line),post=L?.posts[i];if(!post)return;
   const held=post.manualHold??(post.hold101?null:post.hold);
   const people=RT.data.day.persons.filter(p=>['onpost','notyet','rest','meal','ready','walkback','pending','away'].includes(p.state));
   openModal(`<h3>${esc(line)} · ${esc(post.name)}</h3><p>${post.occ?esc(personOf(post.occ)?.name):post.open?'空岗':'未开放'}</p>${held?`<p class="field-hint">${hm(Math.floor(held.since))}起持续定岗 · ${esc(held.reason)}<br>手动取消前不参与自动调整，零点自动结束。</p>`:''}<div class="rt-actions">${formalRotation&&!post.hold101&&post.occ&&personOf(post.occ)?.state==='onpost'?`<button type="button" class="${held?'primary':'secondary'}" data-edit-hold>${held?'取消定岗，恢复轮岗':'设置持续定岗'}</button>`:''}${RT.data.day.taskWorkflow?'':'<button type="button" class="secondary" data-edit-move>调整人员</button><button type="button" class="secondary" data-edit-order>调整岗位顺序</button>'}<button type="button" class="${post.open?'danger':'primary'}" data-edit-post>${post.open?'撤岗 / 修改撤岗时间':'加岗 / 修改加岗时间'}</button>${!post.open&&!post.opened&&post.openAt?'<button type="button" class="secondary" data-cancel-add>取消待加岗</button>':''}${post.open&&post.closeAt?'<button type="button" class="secondary" data-cancel-close>取消待撤岗</button>':''}<button type="button" class="secondary" data-edit-line>${L.active?'停用':'启用'}整条线</button>${post.occ?'<button type="button" class="secondary" data-edit-person>人员操作</button>':''}<button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
@@ -75,7 +100,7 @@ function adjustPostMenu(line,i){
     host.querySelector('[data-cancel-close]')?.addEventListener('click',()=>adjustPreview({action:'post',line,i,open:false,cancelClose:true}));
     host.querySelector('[data-edit-order]')?.addEventListener('click',()=>formBox('选择交换岗位',`<label>交换到<select name="target_post">${RT.data.day.lines.map(t=>`<optgroup label="${esc(t.id)}线">${t.posts.map((p,j)=>`<option value="${esc(t.id)}#${j}" ${line===t.id&&i===j?'selected':''}>${esc(t.id)}线 · 第${j+1}岗 · ${esc(p.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>`,v=>{const [target,j]=v.target_post.split('#');setTimeout(()=>postSwapForm(line,i,Number(j),target),0);},{okText:'选择交换方式'}));
     host.querySelector('[data-edit-move]')?.addEventListener('click',()=>formBox('调整人员',`<label>人员<select name="pid">${people.map(p=>`<option value="${esc(p.pid)}">${esc(p.name)} · ${STATE_NAME[p.state]}</option>`).join('')}</select></label><p>在岗人员可交换；休息、吃饭及饭后休息人员需填写强制安排原因，再预览确认。</p>`,v=>personDrop(v.pid,line,i),{okText:'下一步'}));
-    host.querySelector('[data-edit-line]').onclick=()=>confirmBox('调整整条线',L.active?'停用后本线人员全部下线。':'启用后按既有岗位配置派人。','确认调整',()=>act('/api/rotation/act',{action:'line',line,active:!L.active},'线路已调整'));
+    host.querySelector('[data-edit-line]').onclick=()=>lineMenu(line,day);
     host.querySelector('[data-edit-person]')?.addEventListener('click',()=>adjustPersonMenu(personOf(post.occ)));
   });
 }

@@ -393,6 +393,52 @@ def test_same_prestart_person_change_matches_daily_board_and_published_plan(rota
     assert '7点岗' not in board.P[later]['flags']
 
 
+@pytest.mark.parametrize('target',[('A',1),('B',0)])
+@pytest.mark.parametrize('second_seven',[False,True])
+def test_prestart_swap_only_posts_keeps_staff_and_does_not_transfer_seven_duty(rotation,target,second_seven):
+    from test_rotation_engine import Hooks
+    from app.rotation import workflow as W
+    prepare(rotation)
+    state=read(rotation)['draft']
+    target_line,target_index=target
+    target_key=f'{target_line}#{target_index}'
+    other_key='B#1'
+    early,later,unaffected,old_relief,other_relief=list(state['persons'])[:5]
+    for pid in (early,unaffected):state['persons'][pid]['start']=420
+    state['persons'][later]['start']=420 if second_seven else 540
+    state['lines'][0]['posts'][0]['seven']=1
+    state['lines'][1]['posts'][1]['seven']=2
+    state['plan'].update(seven={'A#0':early,other_key:unaffected},
+        crew={target_key:later},push7=[old_relief,other_relief],lost=[])
+    if second_seven:
+        target_post=next(line for line in state['lines'] if line['id']==target_line)['posts'][target_index]
+        target_post['seven']=3
+        state['plan']['seven'][target_key]=state['plan']['crew'].pop(target_key)
+    state['plan'].pop('push7Targets',None)
+    board=S.E.Engine(state,dict(S.E.DEFAULT_SETTINGS),Hooks())
+    W.initialize(board)
+    board.publish(419,'board')
+    board.act_post_order('A',0,target_index,419,'board',swap_mode='posts',target_lid=target_line)
+    if second_seven:
+        assert state['plan']['crew']=={}
+        assert state['plan']['seven']=={'A#0':early,target_key:later,other_key:unaffected}
+        assert state['plan']['push7Targets']=={old_relief:early,other_relief:unaffected}
+        assert state['plan']['push7']==[old_relief,other_relief]
+    else:
+        assert state['plan']['crew']=={'A#0':early,target_key:later}
+        assert state['plan']['seven']=={other_key:unaffected}
+        assert state['plan']['push7Targets']=={other_relief:unaffected}
+        assert state['plan']['push7']==[other_relief]
+    assert board.post('A',0)[2]['occ']==early
+    assert board.post(target_line,target_index)[2]['occ']==later
+    assert board.post(target_line,target_index)[2]['seven']==1
+    assert board.P[later]['continuousStart'] is None
+    start=state['persons'][later]['start']
+    board.tick(start)
+    assert board.P[later]['continuousStart']==start
+    assert ('7点岗' in board.P[later]['flags']) is second_seven
+
+
 def test_seven_post_replacement_preserves_other_eligible_relief_workers(rotation):
     prepare(rotation)
     with rotation.factory() as db,S.transaction(db):

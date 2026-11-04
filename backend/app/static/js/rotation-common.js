@@ -267,10 +267,15 @@ function renderSyncStatus() {
   el.textContent = `${RT.submitting ? '正在提交' : RT.pendingConfirmation ? '正在核实确认结果' : stale ? '正在核实连接' : labels[RT.sync]}${last}`;
 }
 
+const retiredSyncEpochs = new Set();
 function acceptLiveData(data) {
-  // A slow earlier request must not overwrite a newer response. A live-stream
-  // reconnect resets the baseline so a restarted server can start at version 0.
-  if (RT.data && Number(data.version) < Number(RT.data.version)) return false;
+  // Versions are comparable only within one server runtime. A successful poll
+  // can discover a restart even while the event stream remains disconnected.
+  const previousEpoch = RT.data?.syncEpoch;
+  const epochChanged = data.syncEpoch && data.syncEpoch !== previousEpoch;
+  if (retiredSyncEpochs.has(data.syncEpoch)) return false;
+  if (RT.data && !epochChanged && Number(data.version) < Number(RT.data.version)) return false;
+  if (epochChanged && previousEpoch) retiredSyncEpochs.add(previousEpoch);
   if(formalRotation&&typeof me!=='undefined'&&me&&data.capabilities){
     const changed=JSON.stringify(me.capabilities)!==JSON.stringify(data.capabilities);
     Object.assign(me,data.identity||{},{capabilities:data.capabilities});
@@ -290,7 +295,7 @@ let acceptedRequest = 0;
 async function loadLive(path) {
   const request = ++liveRequest;
   const data = await rtApi(path);
-  if (request < acceptedRequest) return;
+  if (request <= acceptedRequest) return;
   if (acceptLiveData(data)) acceptedRequest = request;
 }
 
@@ -310,6 +315,11 @@ function storePendingConfirmation(value) {
 
 async function checkPendingConfirmation() {
   if (!RT.pendingConfirmation || RT.submitting || RT.checkingConfirmation) return;
+  if (RT.data?.clock.date && RT.pendingConfirmation.date !== RT.data.clock.date) {
+    storePendingConfirmation(null);
+    toast('此前轮岗确认已跨日，请联系主管核对当日记录。', true);
+    return;
+  }
   if (RT.data?.person && RT.pendingConfirmation.pid && RT.data.person.pid !== RT.pendingConfirmation.pid) {
     storePendingConfirmation(null);
     return;
@@ -334,6 +344,7 @@ function assignmentDescription(a) {
 
 function confirmRotation(p, action, path, wholeGroup=false) {
   if (confirmationBlocked()) { toast('请等待联网同步或确认结果核实后再操作', true); return; }
+  const date = RT.data.clock.date;
   const token = p.confirmationTokens?.[wholeGroup?'group_depart':action];
   if (!token) { toast('任务已变化，请等待最新画面', true); scheduleLoad(); return; }
   if (action === 'depart' && !(wholeGroup&&p.entryGroup?groupCanDepart(p.entryGroup,nowMin()):canDepartNow(p, nowMin()))) { toast('休息未结束或还没到出发时间', true); return; }
@@ -347,9 +358,10 @@ function confirmRotation(p, action, path, wholeGroup=false) {
   if(action==='arrive'&&p.mealOptions?.forced)text+='<p>已到原有强制饭点，本次安排吃饭。</p>';
   confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : action==='entry_return'?'任务超时确认':'到达休息室'}`, text,
     action === 'depart' ? '确认去轮岗' : action==='entry_return'?'确认知晓，重新领取':'确认已到达', async () => {
+      if (RT.data?.clock.date !== date) { toast('轮岗日期已变化，请重新确认', true); return true; }
       if (confirmationBlocked()) { toast('当前连接不可用，请稍后确认', true); return false; }
       RT.submitting = true;
-      storePendingConfirmation({token, pid:p.pid, date: RT.data.clock.date});
+      storePendingConfirmation({token, pid:p.pid, date});
       let out;
       try {
         out = await rtPost(path, {action, pid:p.pid, confirmation_token:token,
@@ -390,7 +402,14 @@ function connectLive() {
   const startPolling = () => { if (!poll) poll = setInterval(scheduleLoad, 5000); };
   if (!window.EventSource) { RT.sync = 'polling'; startPolling(); renderSyncStatus(); checkPendingConfirmation(); return; }
   const source = new EventSource(portalPath(rotationApiPath('/api/rotation/stream')));
-  source.onopen = () => { RT.sync = 'live'; if (RT.data) RT.data.version = -1; renderSyncStatus(); scheduleLoad(); };
+  source.onopen = () => {
+    // Discard reads started before reconnect, even if their old version is higher.
+    acceptedRequest = liveRequest;
+    RT.sync = 'live';
+    if (RT.data && !RT.data.syncEpoch) RT.data.version = -1;
+    renderSyncStatus();
+    scheduleLoad();
+  };
   source.onmessage = () => { RT.sync = 'live'; scheduleLoad(); if (poll) { clearInterval(poll); poll = null; } };
   source.onerror = () => { RT.sync = 'offline'; renderSyncStatus(); startPolling(); };
   // Check the channel and request result even when no employee changes state.

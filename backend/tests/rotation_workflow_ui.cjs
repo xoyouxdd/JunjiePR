@@ -3,6 +3,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process'),{chromium,webkit,firefox}=require('playwright');
 const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r,ms));let server,browser,log='';
+const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
 (async()=>{try{
  const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
  server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(__dirname,'rotation_formal_fixture.py'),String(port)],{cwd:path.join(root,'backend'),windowsHide:true});server.stderr.on('data',d=>log+=d);server.stdout.on('data',d=>log+=d);
@@ -10,7 +11,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
  for(const engine of (process.env.ROTATION_WORKFLOW_ENGINES||'edge,webkit,firefox').split(',')){
   browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
   const screen=await browser.newContext({viewport:{width:1440,height:1000}}),manager=await browser.newContext({viewport:{width:1440,height:1000}}),mobile=await browser.newContext({viewport:{width:390,height:844}});
-  const errors=[];const screenPage=await screen.newPage(),board=await manager.newPage(),phone=await mobile.newPage();for(const p of [screenPage,board,phone])p.on('pageerror',e=>errors.push(e.message));
+  const errors=[];const screenPage=await screen.newPage(),board=await manager.newPage(),phone=await mobile.newPage();for(const [name,p] of [['screen',screenPage],['board',board],['phone',phone]])p.on('pageerror',e=>errors.push(name+': '+e.message));
   for(const [context,no,pw] of [[screen,'6666666','1243'],[manager,'9710020','formal-fixture-2026'],[mobile,'9710000','formal-fixture-2026']])assert((await context.request.post(base+'/api/login',{data:{employee_no:no,password:pw}})).ok());
   await manager.request.post(base+'/__fixture/cohort',{data:{three:true}});
   await screenPage.goto(base+'/rotation/screen');await screenPage.locator('.rt-workflow-board').waitFor();
@@ -24,7 +25,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   // Shared task details and before/after are rendered in the real mobile inbox.
   const health=await mobile.request.get(base+'/health').then(r=>r.json());await mobile.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}});
   await phone.goto(base+'/?view=actionCenter');await phone.locator('[data-formal-rotation-todo] .rt-task-comparison').waitFor({timeout:15000});
-  const legacy=await mobile.newPage();legacy.on('pageerror',e=>errors.push(e.message));
+  const legacy=await mobile.newPage();legacy.on('pageerror',e=>errors.push('legacy: '+e.message));
   await legacy.goto(base+'/rotation-board?personal=1');await legacy.locator('[data-member-act=depart]').waitFor();
   assert(await legacy.locator('[data-member-act=depart]').isEnabled());
   assert.equal(await legacy.locator('.rotation-test-badge').count(),0);
@@ -36,7 +37,14 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
    for(const p of [screenPage,board,phone])assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' overflow '+width);
   }
   if(engine==='edge'){
-   const shots=path.join(root,'.handover_review/rotation-workflow-20261028');await screenPage.setViewportSize({width:1440,height:1000});await screenPage.screenshot({path:path.join(shots,'screen.png'),fullPage:true});await phone.setViewportSize({width:390,height:844});await phone.screenshot({path:path.join(shots,'phone.png'),fullPage:true});await phone.locator('[data-confirm-page=depart]').screenshot({path:path.join(shots,'phone-depart.png'),style:'.tabs-mobile{visibility:hidden!important}'});
+   await screenPage.setViewportSize({width:1440,height:1000});
+   await phone.setViewportSize({width:390,height:844});
+   if(shots){
+    fs.mkdirSync(shots,{recursive:true});
+    await screenPage.screenshot({path:path.join(shots,'screen.png'),fullPage:true});
+    await phone.screenshot({path:path.join(shots,'phone.png'),fullPage:true});
+    await phone.locator('[data-confirm-page=depart]').screenshot({path:path.join(shots,'phone-depart.png'),style:'.tabs-mobile{visibility:hidden!important}'});
+   }
    // Confirm only this person's task; the other two remain independent.
    await phone.locator('[data-rotation-task=depart]').click();await phone.locator('[data-modal-confirm]').click();
    await screenPage.waitForFunction(()=>RT.data.day.persons.find(p=>p.pid==='9710000').state==='onpost');
@@ -62,6 +70,8 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
    await screenPage.waitForFunction(k=>RT.data.day.lines.find(l=>l.id==='A1')?.posts[1].key===k,key);
   }
   await manager.request.post(base+'/__fixture/cohort',{data:{three:true,hold101:true}});
+  await legacy.waitForFunction(()=>!RT.loading);
+  await legacy.goto('about:blank');
   await legacy.close();
   await board.reload();await board.locator('[data-wf-101]').waitFor();await board.locator('[data-wf-101]').click();
   await screenPage.waitForFunction(()=>document.querySelectorAll('.holding101').length===2);
@@ -69,7 +79,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   await board.locator('[data-wf-101]').click();await screenPage.waitForFunction(()=>document.querySelectorAll('.holding101').length===0);
   if(engine==='edge'){
    await manager.request.post(base+'/__fixture/display');await screenPage.reload();await screenPage.locator('.rt-workflow-board .rt-line').nth(8).waitFor();await screenPage.setViewportSize({width:1440,height:1000});
-   await screenPage.screenshot({path:path.join(root,'.handover_review/rotation-workflow-20261028/screen.png'),fullPage:true});
+   if(shots)await screenPage.screenshot({path:path.join(shots,'screen.png'),fullPage:true});
   }
   // Real arrival UI, choice eligibility, retained selection, forced meal and idempotent receipt.
   for(const forced of [false,true]){
@@ -93,7 +103,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
     await phone.setViewportSize({width,height:900});
     assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' room overflow '+width);
    }
-   if(engine==='edge'&&!forced){await phone.setViewportSize({width:390,height:844});await phone.locator('[data-confirm-page=room]').screenshot({path:path.join(root,'.handover_review/rotation-workflow-20261028/phone-room.png'),style:'.tabs-mobile{visibility:hidden!important}'});}
+   if(engine==='edge'&&!forced){await phone.setViewportSize({width:390,height:844});if(shots)await phone.locator('[data-confirm-page=room]').screenshot({path:path.join(shots,'phone-room.png'),style:'.tabs-mobile{visibility:hidden!important}'});}
    await phone.locator('[data-rotation-task=arrive]').click();await phone.locator('[data-modal-confirm]').click();
    await phone.getByText('吃饭已开始',{exact:true}).waitFor();
    assert.equal((await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json())).person.state,'meal');
@@ -118,7 +128,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   const receiverContext=await browser.newContext({viewport:{width:390,height:844}});
   assert((await receiverContext.request.post(base+'/api/login',{data:{employee_no:'9710010',password:'formal-fixture-2026'}})).ok());
   const release=await receiverContext.request.get(base+'/health').then(r=>r.json());await receiverContext.request.post(base+'/api/changelog/announcement/read',{data:{version:release.version}});
-  const receiverPhone=await receiverContext.newPage();receiverPhone.on('pageerror',e=>errors.push(e.message));
+  const receiverPhone=await receiverContext.newPage();receiverPhone.on('pageerror',e=>errors.push('receiver: '+e.message));
   await receiverPhone.goto(base+'/?view=actionCenter');await receiverPhone.locator('[data-confirm-page=depart]').waitFor();
   assert.match(await receiverPhone.locator('.rt-transfer').innerText(),/任务转接自/);
   assert(await receiverPhone.locator('[data-rotation-task=depart]').isDisabled());

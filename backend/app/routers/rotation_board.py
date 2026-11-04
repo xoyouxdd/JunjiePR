@@ -191,6 +191,8 @@ def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(
         raise HTTPException(400, '请刷新看板后重新确认')
     if payload.get('action') in ('post','move','post_order') and not payload.get('expected_snapshot'):
         raise HTTPException(400,'请先预览当日调整影响')
+    if payload.get('action') == 'line' and not isinstance(payload.get('line_context'), dict):
+        raise HTTPException(409,'请刷新看板后重新确认开停线')
     return call(S.do_live_action, db, user.employee.attraction_id, actor(user), payload)
 
 

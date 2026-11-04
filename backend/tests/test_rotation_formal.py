@@ -484,21 +484,22 @@ def test_formal_cross_line_swap_preview_execution_and_permissions():
 
 def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(monkeypatch):
     aid=seed_cross_line()
-    clock={'minute':240}
-    monkeypatch.setattr(S,'clock_now',lambda cfg:(date.today().isoformat(),clock['minute']))
+    clock={'date':date.today().isoformat(),'minute':240}
+    monkeypatch.setattr(S,'clock_now',lambda cfg:(clock['date'],clock['minute']))
     with SessionLocal() as db:
         db.info['rotation_formal']=True
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             state.pop('dailyOpening',None);state['lastTick']=240
-            state['plan'].update(crew={'A1#0':'9710020','A1#1':'9710030','B1#0':'9710040'},seven={},push7=[])
+            state['plan'].update(crew={'A1#0':'9710020','A1#1':'9710000','B1#0':'9710040'},seven={},push7=[])
             for p in state['persons'].values():p.update(state='notyet',start=435,line=None,lineStart=None,continuousStart=None,assign=None,visited=[])
             for line in state['lines']:
                 for i,post in enumerate(line['posts']):post.update(occ=state['plan']['crew'].get(f"{line['id']}#{i}"),since=None)
             S.save_day(db,row,state)
     path='/api/rotation-board/daily/'+date.today().isoformat()
-    with TestClient(app) as manager,TestClient(app) as tr,TestClient(app) as cm:
+    with TestClient(app) as manager,TestClient(app) as tr,TestClient(app) as cm,TestClient(app) as screen:
         login(manager,'9710020');login(tr,'9710010');login(cm,'9710000')
+        ok(screen.post('/api/login',json={'employee_no':'6666666','password':'1243'}))
         assert tr.get(path).status_code==cm.get(path).status_code==403
         before=ok(manager.get(path));assert before['can_edit'] and before['prestart_live']
         body={'action':'draft_swap_people','source':'A1#0','target':'B1#0','revision':before['revision'],'plan_revision':before['plan_revision']}
@@ -508,6 +509,15 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
         ok(manager.post(path,json=body))
         after=ok(manager.get(path));board=ok(manager.get('/api/rotation-board/board'))['day']
         assert after['day']['lines']==board['lines']
+        assert ok(screen.get('/api/rotation/screen/state'))['day']['lines']==board['lines']
+        live_line={'action':'line','line':'B1','active':False,
+            'line_context':{'date':clock['date'],'active':True,'planRevision':board['prestartPlanRevision']}}
+        assert cm.post('/api/rotation-board/act',json=live_line).status_code==403
+        assert screen.post('/api/rotation/screen/act',json=live_line).status_code==403
+        assert manager.post('/api/rotation-board/act',json={
+            'action':'line','line':'B1','active':False}).status_code==409
+        assert manager.post('/api/rotation-board/act',json={
+            **live_line,'line_context':{**live_line['line_context'],'date':'2000-01-01'}}).status_code==409
         for active in (False,True):
             ok(manager.post(path,json={'action':'draft_line','line':'B1','active':active,
                 'revision':after['revision'],'plan_revision':after['plan_revision']}))
@@ -515,13 +525,41 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
             assert after['day']['lines']==board['lines']
             assert next(line for line in board['lines'] if line['id']=='B1')['active'] is active
             assert all(p.get('continuousStart') is None for p in board['persons'])
+        assert manager.post('/api/rotation-board/act',json=live_line).status_code==409
+        live_line['line_context']['planRevision']=board['prestartPlanRevision']
+        ok(manager.post('/api/rotation-board/act',json=live_line))
+        assert manager.post('/api/rotation-board/act',json=live_line).status_code==409
+        after=ok(manager.get(path))
+        ok(manager.post(path,json={'action':'draft_line','line':'B1','active':True,
+            'revision':after['revision'],'plan_revision':after['plan_revision']}))
+        after=ok(manager.get(path))
+        board=ok(manager.get('/api/rotation-board/board'))['day']
+        assert after['day']['lines']==ok(screen.get('/api/rotation/screen/state'))['day']['lines']==board['lines']
+        live_line['line_context']['planRevision']=board['prestartPlanRevision']
         clock['minute']=435
+        assert manager.post('/api/rotation-board/act',json=live_line).status_code==409
         frozen=ok(manager.get(path))
         assert frozen['frozen'] and frozen['opening_source']=='opening' and not frozen['can_edit']
         assert frozen['day']['lines']==after['day']['lines']
-        body.update(revision=frozen['revision'],plan_revision=frozen['plan_revision'])
+        started_payload=ok(manager.get('/api/rotation-board/board'))
+        started=started_payload['day']
+        personal=ok(cm.get('/api/rotation-board/me'))
+        assert personal['syncEpoch']==started_payload['syncEpoch']==ok(screen.get('/api/rotation/screen/state'))['syncEpoch']
+        assert len(personal['syncEpoch'])==32
+        assert personal['person']['continuousStart']==435
+        assert personal['person']['state']=='onpost'
+        assert personal['person']==next(p for p in started['persons'] if p['pid']=='9710000')
+        assert personal['line']==next(line for line in started['lines'] if line['id']==personal['person']['line'])
+        live_post=next(post for post in personal['line']['posts'] if post['occ']=='9710000')
+        ok(manager.post('/api/rotation-board/act',json={'action':'rename_post','post_key':live_post['key'],'name':'现场测试新岗位'}))
+        assert ok(cm.get('/api/rotation-board/me'))['person']['post']=='现场测试新岗位'
+        shared=ok(screen.get('/api/rotation/screen/state'))['day']
+        assert next(p for p in shared['persons'] if p['pid']=='9710000')['post']=='现场测试新岗位'
+        after_rename=ok(manager.get(path))
+        assert after_rename['day']==frozen['day']
+        body.update(revision=after_rename['revision'],plan_revision=after_rename['plan_revision'])
         assert manager.post(path,json=body).status_code==400
-        assert manager.post(path,json={**line_body,'revision':frozen['revision'],'plan_revision':frozen['plan_revision']}).status_code==400
+        assert manager.post(path,json={**line_body,'revision':after_rename['revision'],'plan_revision':after_rename['plan_revision']}).status_code==400
         clock['minute']=720
         ok(manager.get('/api/rotation-board/board'))
         assert ok(manager.get(path))['day']==frozen['day']
@@ -591,7 +629,8 @@ def test_formal_issued_task_is_locked_but_closed_line_refreshes_destination():
         board=ok(operator.get('/api/rotation-board/board'));people={p['pid']:p for p in board['day']['persons']}
         assert people['9710000']['assign']['line']=='A1' and people['9710010']['assign']['line']=='A1'
         assert not people['9710010']['canDepart']
-        ok(operator.post('/api/rotation-board/act',json={'action':'line','line':'A1','active':False}))
+        ok(operator.post('/api/rotation-board/act',json={'action':'line','line':'A1','active':False,
+            'line_context':{'date':board['day']['date'],'active':True,'planRevision':None}}))
         blocked=ok(cm.get('/api/rotation-board/me'))['person']
         assert blocked['assign']['line']=='B1' and not blocked['assign'].get('blocked') and not blocked['canDepart']
         assert blocked['readyAt']==own['readyAt'], 'refresh must not shorten rest'

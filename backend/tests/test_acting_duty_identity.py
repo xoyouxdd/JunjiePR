@@ -268,14 +268,25 @@ def test_hr_sets_and_ends_a_duty_without_moving_the_group() -> None:
     with TestClient(app) as client:
         login(client, "HR01", "HR123")
         cm_id = employee_id("CMTEST02")
+        end = date.today() + timedelta(days=1)
         with SessionLocal() as db:
             before_group = current_leader_for_employee(db, cm_id).employee_no
-        set_duty = client.put(f"/api/hr/employees/{cm_id}", json={"role_code": "TA_SUPERVISOR", "group_id": None, "leader_id": None, "reason": "代理TA"})
+        set_duty = client.put(f"/api/hr/employees/{cm_id}", json={"role_code": "TA_SUPERVISOR", "role_ends_on": end.isoformat(), "group_id": None, "leader_id": None, "reason": "代理TA"})
         assert set_duty.status_code == 200, set_duty.text
         with SessionLocal() as db:
             assert role_at(db, cm_id).code == "TA_SUPERVISOR"
+            assert role_at(db, cm_id, end).code == "TA_SUPERVISOR"
+            assert role_at(db, cm_id, end + timedelta(days=1)).code == "CM"
             assert base_role_at(db, cm_id).code == "CM"
             assert current_leader_for_employee(db, cm_id).employee_no == before_group
+            db.add(SystemAlert(alert_type="acting_duty_expiring", dedupe_key="old-duty-notice", message="旧代理提醒", status="open"))
+            db.commit()
+
+        alerts = client.get("/api/hr/alerts")
+        assert alerts.status_code == 200, alerts.text
+        with SessionLocal() as db:
+            duty_alerts = db.query(SystemAlert).filter_by(alert_type="acting_duty_expiring").all()
+            assert {alert.dedupe_key: alert.status for alert in duty_alerts} == {"old-duty-notice": "handled"}
 
         bad = client.put(f"/api/hr/employees/{cm_id}", json={"role_code": "TA_GSM", "reason": "本职不符"})
         assert bad.status_code == 400, bad.text

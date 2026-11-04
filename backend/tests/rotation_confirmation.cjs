@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const root = path.join(__dirname, '../app/static/js');
-function context() {
+function context({realScheduling=false}={}) {
   const elements = new Map();
   const element = () => ({textContent:'', className:'', innerHTML:'', addEventListener(){},
     querySelectorAll(){return [];}, classList:{toggle(){},add(){},remove(){}}, setAttribute(){}});
@@ -24,7 +24,7 @@ function context() {
   vm.runInContext(`
     toast=(message,bad)=>messages.push({message,bad});
     closeModal=()=>{RT.modalOpen=false;};
-    scheduleLoad=()=>{};
+    ${realScheduling?'':'scheduleLoad=()=>{};'}
     confirmBox=(title,message,label,fn)=>{run=fn; RT.modalOpen=true;};
     RT.sync='live'; RT.lastSyncedAt=Date.now();
     RT.data={version:2, clock:{date:'2026-10-11',minute:495,paused:true}, settings:{departEarly:0},
@@ -93,6 +93,65 @@ async function main() {
     assert.equal(vm.runInContext('RT.data.marker',c),'new');
     vm.runInContext(`RT.sync='offline';acceptLiveData({version:5,clock:{}});`,c);
     assert.equal(vm.runInContext('RT.sync',c),'polling');
+  }
+  {
+    const c=context();
+    vm.runInContext(`
+      let stream;
+      EventSource=class { constructor(){stream=this;} };window.EventSource=EventSource;
+      setInterval=()=>0;
+      responses=[];rtApi=()=>new Promise(resolve=>responses.push(resolve));RT.render=()=>{};
+      connectLive();
+    `,c);
+    const old=vm.runInContext("loadLive('/state')",c);
+    vm.runInContext('stream.onopen()',c);
+    const current=vm.runInContext("loadLive('/state')",c);
+    c.responses[0]({version:99,clock:{},marker:'before reconnect'});
+    await old;
+    assert.equal(vm.runInContext('RT.data.marker',c),undefined);
+    c.responses[1]({version:0,clock:{},marker:'reconnected'});
+    await current;
+    assert.equal(vm.runInContext('RT.data.marker',c),'reconnected');
+  }
+  {
+    const c=context({realScheduling:true});
+    vm.runInContext(`
+      let stream, poll;
+      EventSource=class { constructor(){stream=this;} };window.EventSource=EventSource;
+      setInterval=(callback, ms)=>{if(ms===5000)poll=callback;return 1;};
+      RT.data.syncEpoch='before-restart';
+      RT.render=()=>{};
+      RT.load=()=>loadLive('/state');
+      rtApi=async()=>({version:0,syncEpoch:'after-restart',clock:{date:'2026-10-12'}});
+      connectLive();
+      stream.onerror();
+      poll();
+    `,c);
+    await new Promise(setImmediate);
+    assert.equal(vm.runInContext('RT.data.clock.date',c),'2026-10-12');
+    assert.equal(vm.runInContext('RT.sync',c),'polling');
+    assert.equal(vm.runInContext('RT.data.version',c),0);
+    vm.runInContext("rtApi=async()=>({version:99,syncEpoch:'before-restart',clock:{date:'2026-10-11'}});poll()",c);
+    await new Promise(setImmediate);
+    assert.equal(vm.runInContext('RT.data.clock.date',c),'2026-10-12');
+    assert.equal(vm.runInContext("acceptLiveData({version:2,syncEpoch:'after-restart',clock:{date:'2026-10-12'}})",c),true);
+    assert.equal(vm.runInContext("acceptLiveData({version:1,syncEpoch:'after-restart',clock:{date:'2026-10-12'}})",c),false);
+  }
+  {
+    const c=context();
+    vm.runInContext(`
+      writes=0;rtApi=async()=>{writes++;};
+      confirmRotation(RT.data.person,'depart','/api/rotation/me/act');
+      RT.data.clock.date='2026-10-12';
+    `,c);
+    assert.equal(await c.run(),true);
+    assert.equal(c.writes,0);
+    assert.equal(vm.runInContext('RT.pendingConfirmation',c),null);
+    vm.runInContext(`storePendingConfirmation({token:'a'.repeat(64),pid:'1',date:'2026-10-11'});`,c);
+    await vm.runInContext('checkPendingConfirmation()',c);
+    assert.equal(c.writes,0,'Yesterday’s receipt must not keep today’s confirmations locked');
+    assert.equal(vm.runInContext('confirmationBlocked()',c),false);
+    assert.ok(c.messages.some(x=>x.message.includes('联系主管核对当日记录')));
   }
   {
     const c=context();
