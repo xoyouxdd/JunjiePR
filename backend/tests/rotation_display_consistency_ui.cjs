@@ -23,7 +23,9 @@ async function boardViews(page,p,minute,extra={}){
   RT.sync='live';RT.lastSyncedAt=Date.now();
   document.body.classList.remove('rotation-screen');const readonly=workflowPools(minute,false);
   document.body.classList.add('rotation-screen');const screen=workflowPools(minute,false);
+  document.body.classList.remove('rotation-screen');
   const board=workflowPools(minute,true),legacy=memberView();
+  document.body.classList.add('rotation-screen');
   document.getElementById('rtApp').innerHTML=screen;
   return {board,screen,readonly,legacy,can:canDepartNow(p,minute),time:hm(585.75),precise:taskTime(585.75)};
  },{p,minute,extra});
@@ -114,7 +116,9 @@ async function phoneView(page,p,minute,extra={}){
   assert.equal(await phone.locator('[data-rotation-retry]').count(),0);
   const hold={...basePerson,state:'ready',assign:null,entryHold:{reason:'任务超时'},taskTimeout:{task:'t'},confirmationTokens:{entry_return:'token'}};
   const v=await boardViews(board,hold,600),f=await phoneView(phone,hold,600);
-  assert(v.screen.includes('data-wf-action="entry_return"'));assert(v.legacy.includes('data-member-act="entry_return"'));
+  assert(v.screen.includes('任务超时'));assert(!v.screen.includes('data-wf-action="entry_return"'));
+  assert(!v.readonly.includes('data-wf-action="entry_return"'));
+  assert(v.board.includes('data-wf-action="entry_return"'));assert(v.legacy.includes('data-member-act="entry_return"'));
   assert(f.html.includes('data-rotation-task="entry_return"'));
   for(const html of [v.screen,v.legacy,f.html])assert(html.includes('不新增休息'));
   const acknowledgement={action:'entry_return',status:'executed',minute:585.75,state:'ready',readyAt:585.75,source:'supervisor'};
