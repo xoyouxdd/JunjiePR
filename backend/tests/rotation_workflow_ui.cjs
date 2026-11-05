@@ -12,16 +12,15 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
   const screen=await browser.newContext({viewport:{width:1440,height:1000}}),manager=await browser.newContext({viewport:{width:1440,height:1000}}),mobile=await browser.newContext({viewport:{width:390,height:844}});
   const errors=[];const screenPage=await screen.newPage(),board=await manager.newPage(),phone=await mobile.newPage();for(const [name,p] of [['screen',screenPage],['board',board],['phone',phone]])p.on('pageerror',e=>errors.push(name+': '+e.message));
-  const phoneReads=new Set();
-  phone.on('request',request=>{if(new URL(request.url()).pathname==='/api/rotation-board/me')phoneReads.add(request);});
-  phone.on('requestfinished',request=>phoneReads.delete(request));
-  phone.on('requestfailed',request=>phoneReads.delete(request));
   async function reloadPhone(){
-   // Pause the old document's polling and let its current read finish before navigation.
-   await phone.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,get:()=>true}));
-   const deadline=Date.now()+15000;
-   while(phoneReads.size&&Date.now()<deadline)await sleep(20);
-   assert.equal(phoneReads.size,0,'phone polling must drain before reloading');
+   // Use the app's view lifecycle to stop polling and cancel reads before reloading.
+   await phone.evaluate(async()=>{
+    const imports=JSON.parse(document.querySelector('[type=importmap]').textContent).imports;
+    const {state}=await import(imports['./static/js/app/state.js']);
+    const {render}=await import(imports['./static/js/app/context.js']);
+    state.tab='home';
+    await render();
+   });
    await phone.reload();
   }
   for(const [context,no,pw] of [[screen,'6666666','1243'],[manager,'9710020','formal-fixture-2026'],[mobile,'9710000','formal-fixture-2026']])assert((await context.request.post(base+'/api/login',{data:{employee_no:no,password:pw}})).ok());
