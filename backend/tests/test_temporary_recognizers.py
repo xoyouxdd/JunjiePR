@@ -252,7 +252,7 @@ def test_cancellation_between_validation_and_write_cannot_create_recognition(set
 
 
 @pytest.mark.parametrize('legacy_snapshot', [False, True])
-def test_temporary_issuer_does_not_enter_leader_ranking_but_real_operator_does(setup, legacy_snapshot):
+def test_temporary_issuer_and_operator_do_not_count_as_leader_signers(setup, legacy_snapshot):
     client, eid, circle, _ = setup
     day = date.today().isoformat()
     assert save(client, eid, [day]).status_code == 200
@@ -268,6 +268,8 @@ def test_temporary_issuer_does_not_enter_leader_ranking_but_real_operator_does(s
     with SessionLocal() as db:
         record = db.get(RecognitionRecord, rid)
         role = db.query(Role).filter_by(code='TA_SUPERVISOR').one()
+        assert record.recognizer_employee_id == eid
+        assert record.operator_employee_id == supervisor
         assert record.fraction == recognition_score_for_role(db, role.id, day, 'CM')
         if legacy_snapshot:
             record.recognizer_role_code_snapshot = 'TA_SUPERVISOR'
@@ -280,7 +282,7 @@ def test_temporary_issuer_does_not_enter_leader_ranking_but_real_operator_does(s
     assert response.status_code == 200, response.text
     rows = response.json()['rows']
     assert eid not in {r['employee_id'] for r in rows}
-    assert next(r for r in rows if r['employee_id']==supervisor)['count'] >= 1
+    assert next(r for r in rows if r['employee_id']==supervisor)['count'] == 0
     exported = client.get('/api/pr-rankings/export', params=params)
     assert exported.status_code == 200, exported.text
     from openpyxl import load_workbook
