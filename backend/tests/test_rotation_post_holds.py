@@ -39,14 +39,14 @@ def test_ordinary_push_skips_fixed_person_and_resumes_without_resetting_standing
     assert h.types().count('post_hold')==1 and h.types().count('post_resume')==1
 
 
-def test_hold_overrides_shift_end_and_closure_until_manual_cancel():
+def test_hold_overrides_own_shift_end_until_manual_cancel():
     e,h=engine();hold(e);e.P['b']['end']=hm('09:15');e.d['closeAt']='09:20'
     e.tick(hm('09:30'))
-    assert e.d['closed'] and e.P['b']['state']=='onpost' and e.held('b')
+    assert not e.d.get('closed') and e.P['b']['state']=='onpost' and e.held('b')
     assert e.line('A')['posts'][1]['occ']=='b' and e.line('A')['posts'][1]['open']
     hold(e,on=False,now=hm('09:31'));e.tick(hm('09:31'))
     assert not e.held('b') and e.P['b']['state']=='done'
-    assert not e.line('A')['posts'][1]['open']
+    assert e.line('A')['posts'][1]['open']
 
 
 def test_absence_waits_for_cancel_then_uses_current_time():
@@ -57,13 +57,13 @@ def test_absence_waits_for_cancel_then_uses_current_time():
     assert e.P['b']['state']=='away' and e.P['b']['away']['reason']=='OJT'
 
 
-def test_scheduled_close_waits_and_zero_ends_hold():
+def test_scheduled_close_waits_and_last_shift_end_releases_hold():
     e,h=engine();hold(e);e.line('A')['posts'][1]['closeAt']='09:15'
     e.tick(hm('09:16'));assert e.line('A')['posts'][1]['open'] and e.held('b')
-    e.end_day(1440)
+    e.tick(hm('18:00'))
     assert not any(x.get('hold') for x in e.line('A')['posts'])
     assert e.d['status']=='ended' and e.P['b']['state']=='done'
-    assert any(event['detail'].get('reason')=='零点定岗自动结束' for event in h.events)
+    assert any(event['detail'].get('reason')=='轮岗结束，定岗自动结束' for event in h.events)
 
 
 def test_relief_chain_skips_fixed_middle_post():

@@ -88,7 +88,8 @@ def room(payload: dict):
         with S.transaction(db):
             aid=seed_cohort()
             cfg=S.load_config(db,aid);settings=S.settings_of(cfg)
-            settings.update(mealEarliest='00:00',mealAfterStart=0,mealForceAfterStart=0 if payload.get('forced') else 9999)
+            settings.update(mealEarliest='00:00',mealAfterStart=0,mealForceAfterStart=0 if payload.get('forced') else 9999,
+                            mealReserveMinPeople=1)
             cfg.settings_json=S._dumps(settings)
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
             p=state['persons']['9710000']

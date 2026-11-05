@@ -7,8 +7,8 @@
   推下班和推出圈从入口岗推进到目标岗位，被替下的人直接结束轮岗或出圈；
 - 推 7 点：07:15 班的人直接在 7 点岗位对换 07:00 班的人，被替下的人照常休息后轮岗；
 - 到出圈时间仍没人替：继续在岗并保持准备出圈，一直找人来推，超过 outWarnAfter 分钟提醒主管；
-- 吃饭：休息中、待出发和吃饭/饭后休息剩余15分钟及以内的人数达到开放线数时，可自选休息或吃饭；默认休息，保留强制饭点；
-  离下班或闭园不到 mealWarnLeft 分钟仍没吃饭的，提醒主管；
+- 吃饭：剩余餐休不超过配置分钟数的可轮岗人数达到配置门槛时，可自选休息或吃饭；默认20分钟内5人，不含本人，保留强制饭点；
+  离下班不到 mealWarnLeft 分钟仍没吃饭的，提醒主管；
 - 到岗时距下班/出圈不超过 noBoardBefore 分钟就不再上岗；
 - 出发只能在计划出发时间前 departEarly 分钟以内点。
 
@@ -31,8 +31,9 @@ DEFAULT_SETTINGS = {
     'mealEarliest': '09:30',
     'mealAfterStart': 150,        # 上班后多久才开始安排吃饭（早班自然优先）
     'mealForceAfterStart': 300,   # 上班超过这么久仍未吃饭，强制安排
-    'mealReserveLeft': 20,        # 吃饭剩不到这么多分钟的人算作“休息中”
-    'mealWarnLeft': 180,          # 离下班或闭园不到这么多分钟仍没吃饭，提醒主管
+    'mealReserveLeft': 20,        # 剩余餐休不超过这么多分钟的人计入吃饭储备
+    'mealReserveMinPeople': 5,    # 达到此储备人数才可自选吃饭（不含本人）
+    'mealWarnLeft': 180,          # 离下班不到这么多分钟仍没吃饭，提醒主管
     'offLead': 20,                # 下班/出圈前多少分钟被替下（替换者到岗时间）
     'noBoardBefore': 30,          # 到岗时距下班/出圈不超过这么多分钟，不再上岗
     'outWarnAfter': 5,            # 过了出圈时间多少分钟仍没人可推，提醒主管
@@ -45,8 +46,7 @@ DEFAULT_SETTINGS = {
     'walkBackWarn': 10,           # 下线后多少分钟未到大屏确认提示
     'unassignedWarn': 10,         # 待出发超过多少分钟仍没有去向提示
     'parkClose': '21:30',         # 周班表里没有营业时间时的默认闭园时间
-    'closeStopPush': 20,          # 闭园前多少分钟起不再派新人进线
-    'closeDelay': 0,              # 闭园后多少分钟自动撤下所有岗位
+    'closeStopPush': 20,          # 当日轮岗结束前多少分钟起不再派新人进线
     'lostCount': 2,
 }
 
@@ -61,6 +61,27 @@ DEFAULT_LINES = [
     {'id': 'D2', 'group': 'D', 'standby': True, 'posts': [{'name': '铁马A'}, {'name': '铁马B'}, {'name': '铁马C'}, {'name': '备用'}, {'name': '备用'}]},
     {'id': 'E', 'group': 'E', 'standby': True, 'posts': [{'name': '城内巡视'}, {'name': '队末'}, {'name': '备用'}, {'name': '备用'}, {'name': '备用'}]},
 ]
+
+STANDARD_POST_COUNT = 6
+
+
+def append_standard_spares(lines, count=STANDARD_POST_COUNT):
+    standard_ids = {line['id'] for line in DEFAULT_LINES}
+    added = {}
+    for line in lines:
+        posts = line['posts']
+        if line['id'] not in standard_ids or len(posts) >= count:
+            continue
+        added[line['id']] = count - len(posts)
+        while len(posts) < count:
+            post = {'name': '备用'}
+            if len(posts) == STANDARD_POST_COUNT - 1:
+                post['draftClosed'] = True
+            posts.append(post)
+    return added
+
+
+append_standard_spares(DEFAULT_LINES)
 
 POOL_STATES = ('walkback', 'pending', 'rest', 'meal', 'ready')
 REST_STATES = ('rest', 'meal', 'ready')
@@ -79,7 +100,16 @@ def _m(v, default=None):
         return default
     if isinstance(v, (int, float)):
         return float(v)
+    if isinstance(v, str) and len(v.split(':')) == 3:
+        h, m, s = v.split(':')
+        return float(h) * 60 + float(m) + float(s) / 60
     return float(hm(v))
+
+
+def rotation_end(day):
+    if day.get('ruleVersion') == 2:
+        return max((p['end'] for p in day['persons'].values()), default=1440)
+    return min(1440, max((p['end'] for p in day['persons'].values()), default=1440))
 
 
 # ---------------------------------------------------------------- 草稿生成
@@ -116,7 +146,8 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes):
             'id': L['id'], 'group': L.get('group', ''), 'standby': bool(L.get('standby')),
             'walk': L.get('walk'),
             'posts': [dict(name=x['name'], openAt=x.get('openAt'), closeAt=x.get('closeAt'),
-                           seven=x.get('seven')) for x in L['posts']],
+                           seven=x.get('seven'), **({'draftClosed': True} if x.get('draftClosed') else {}))
+                      for x in L['posts']],
         })
     rot = [p for p in persons.values() if p['role'] == 'rotation']
     alerts = []
@@ -153,7 +184,7 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes):
     crew_pool.sort(key=lambda p: (-(p['end'] - p['start']), p['name']))
     crew = {}
     slots = [(L['id'], i) for L in lines if not L['standby'] for i, post in enumerate(L['posts'])
-             if not post.get('openAt') and '%s#%d' % (L['id'], i) not in seven]
+             if not post.get('openAt') and not post.get('draftClosed') and '%s#%d' % (L['id'], i) not in seven]
     used = set()
     missing = []
     for lid, i in slots:
@@ -297,10 +328,6 @@ class Engine:
                     return L, i
         return None, None
 
-    def close_min(self):
-        c = self.d.get('closeAt')
-        return _m(c) if c else None
-
     def person(self, pid):
         if not isinstance(pid, str):
             raise ActionError('工号必须是字符串')
@@ -374,12 +401,19 @@ class Engine:
 
     # -------- 每秒推进
     def tick(self, now):
+        if self.d.get('ruleVersion') == 2:
+            from app.rotation.forecast import tick
+            return tick(self, now)
         d = self.d
         if d['status'] != 'live':
             return False
+        if self.should_end(now):
+            self.end_day(now)
+            return True
         from app.rotation import workflow as W
         modern = W.enabled(self)
-        changed = self._freeze_daily_opening(now)
+        changed = self._resume_legacy_closure(now)
+        changed = self._freeze_daily_opening(now) or changed
         if modern:
             changed = W.tick(self, now) or changed
         S = self.S
@@ -399,10 +433,6 @@ class Engine:
                     x['closedAuto'] = True
                     self._close_post(L, i, now, 'system', x.get('closeMode', 'direct'))
                     changed = True
-        cm = self.close_min()
-        if cm is not None and not d.get('closed') and now >= cm + S.get('closeDelay', 0):
-            self._park_close(now)
-            changed = True
         off_lead = S['offLead']
         for p in list(self.P.values()):
             st = p['state']
@@ -501,26 +531,6 @@ class Engine:
                                   'late_publish': 'lastTick' not in self.d and now > first,
                                   'state': state, 'settings': deepcopy(self.S)}
         return True
-
-    def _park_close(self, now):
-        """闭园：撤下所有岗位，线上的人回板面后转为闭园后工作，池子里的人直接转入。"""
-        self.d['closed'] = True
-        for L in self.d['lines']:
-            for i, x in enumerate(L['posts']):
-                if (x.get('hold') or x.get('hold101')):
-                    continue
-                x['openBeforeClose'] = bool(x.get('open'))
-                if x.get('occ'):
-                    self._push_off(x['occ'], L, i, now, '闭园')
-                x['occ'] = None
-                x['open'] = False
-        for p in self.P.values():
-            p['assign'] = None
-            p.pop('entryHold', None)
-            if p['state'] in ('pending', 'rest', 'meal', 'ready') or (p['state'] == 'notyet' and p['role'] in ('rotation', 'op')):
-                p['state'] = 'away'
-                p['away'] = {'reason': CLOSING_WORK, 'until': None}
-        self.h.log('park_close', 'system', None, None, None, {})
 
     def opening_rest_candidate(self, p):
         """Unseated 07:15 crew rest at shift start; push7 and seated crew keep their flow."""
@@ -724,6 +734,8 @@ class Engine:
         return p.get('readyAt') or now
 
     def assignment_locked(self, p, now):
+        if self.d.get('ruleVersion') == 2:
+            return False
         if (p.get('assign') or {}).get('queueId'):return True
         if (p.get('assign') or {}).get('taskId'):
             return True
@@ -814,7 +826,7 @@ class Engine:
     def _replace_needs(self, now):
         needs = []
         taken = self.targeted()
-        cm = self.close_min()
+        end = rotation_end(self.d)
         S = self.S
         modern = self.d.get('taskWorkflow')
         if modern:
@@ -833,8 +845,8 @@ class Engine:
                     kind, need_at = 'off', p['end'] - SHIFT_PREPARE_MINUTES
                 elif kind == 'off':
                     continue
-            if cm is not None and need_at >= cm + S.get('closeDelay', 0):
-                continue  # 闭园时会统一撤下，不用另找替换
+            if need_at >= end:
+                continue
             if now >= need_at - S['endLead']:
                 needs.append((need_at, p, kind))
         needs.sort(key=lambda n: self.replacement_priority(n[1], n[2], n[0], now) if modern else n[0])
@@ -1004,7 +1016,7 @@ class Engine:
         """
         S = self.S
         ready = self._ready_time(p, now)
-        cm = self.close_min()
+        end = rotation_end(self.d)
         best = None
         modern=bool(self.d.get('taskWorkflow'))
         reserved={key for task in self.d.get('rotationTasks',{}).values()
@@ -1052,7 +1064,7 @@ class Engine:
             cls, rank, arrival = option
             if not self.can_board(p, arrival, now):
                 continue
-            if cm is not None and arrival >= cm - S.get('closeStopPush', 20):
+            if arrival >= end - S.get('closeStopPush', 20):
                 continue
             # 最后按已排去这条线的人数分散，避免同时上班的一批人全挤进同一条线
             key = (cls, rank, p.get('lastLine') == L['id'], L['id'] in p.get('visited', []),
@@ -1130,16 +1142,28 @@ class Engine:
         return p['end'] - p['start'] > self.S['mealThreshold']
 
     def meal_deadline(self, p):
-        """还能轮岗吃饭的最后时间：下班和闭园中较早的那个。"""
-        cm = self.close_min()
-        return min(p['end'], cm) if cm is not None else p['end']
+        return p['end']
 
     def _meal_decision(self, p, now):
         return 'meal' if self.meal_options(p, now)['forced'] else 'rest'
 
     def meal_options(self, p, now):
         S = self.S
-        result = {'canChoose': False, 'forced': False, 'supply': 0, 'lines': sum(1 for L in self.d['lines'] if L.get('active') and any(x.get('open') for x in L['posts']))}
+        supply = 0
+        for q in self.P.values():
+            ready = q.get('readyAt')
+            if (q['pid'] == p['pid'] or q['role'] not in ('rotation', 'op')
+                    or q['state'] not in ('rest', 'ready', 'meal') or ready is None
+                    or ready - now > S['mealReserveLeft'] or q.get('exception') or q.get('manualPaused')):
+                continue
+            if not q.get('manualRestored') and (not q['start'] <= now < q['end']
+                                                or not self.can_board(q, max(now, ready), now)):
+                continue
+            supply += 1
+        result = {'canChoose': False, 'forced': False, 'supply': supply,
+                  'required': S.get('mealReserveMinPeople', DEFAULT_SETTINGS['mealReserveMinPeople']), 'reserveWithin': S['mealReserveLeft'],
+                  'lines': sum(1 for L in self.d['lines'] if L.get('active') and any(x.get('open') for x in L['posts']))}
+        result['reserveText'] = f"可选吃饭储备 {supply} / {result['required']} 人（剩余餐休≤{result['reserveWithin']}分钟，不含本人）"
         if not self.meal_eligible(p) or p.get('ate'):
             return result
         if now < max(_m(S['mealEarliest']), p['start'] + S['mealAfterStart']):
@@ -1149,8 +1173,7 @@ class Engine:
         if left < S['mealMin'] + 30:
             return result
         result['forced'] = now >= p['start'] + S['mealForceAfterStart']
-        result['supply'] = sum(1 for q in self.P.values() if q['pid'] != p['pid'] and q['role'] in ('rotation','op') and (q['state'] in ('rest','ready') and (q.get('breakKind')!='meal_rest' or q['readyAt']-now<=15) or q['state']=='meal' and q['readyAt']-now<=15))
-        result['canChoose'] = not result['forced'] and result['supply'] >= result['lines']
+        result['canChoose'] = not result['forced'] and result['supply'] >= result['required']
         return result
 
     def active_line_count(self):
@@ -1270,6 +1293,9 @@ class Engine:
                 self.d['plan'][kinds.get(pid, 'crew')][f"{line['id']}#{index}"] = pid
 
     def _close_post(self, L, i, now, actor, mode='direct'):
+        if self.d.get('ruleVersion') == 2:
+            from app.rotation.forecast import close_post
+            return close_post(self, L, i, now, actor)
         x = L['posts'][i]
         if (x.get('hold') or x.get('hold101')):
             raise ActionError('该岗位正在定岗，请先取消定岗')
@@ -1330,17 +1356,18 @@ class Engine:
             at = math.ceil(now + 3) if open_at is None else open_at
             if at < now - 0.01 or at >= 1440:
                 raise ActionError('加岗时间不得早于当前时间，且须在当天24:00前')
-            if self.d.get('closed') or (self.close_min() is not None and at >= self.close_min()):
-                raise ActionError('加岗时间必须在闭园前')
+            if at >= rotation_end(self.d):
+                raise ActionError('加岗时间必须在轮岗结束前')
             if x.get('closeAt') and hm(x['closeAt'])<=now:x.update(closeAt=None,closedAuto=False)
             x.update(manual=False, opened=at <= now, open=at <= now, openAt=fmt(at), openRequest=True)
+            x.pop('draftClosed', None)
             self.h.log('post_schedule', actor, None, lid, x['name'], {'openAt': fmt(at)})
         else:
             if close_mode not in ('direct','push'):
                 raise ActionError('撤岗方式不正确')
             if close_at is not None and close_at > now:
-                if not x.get('open') or close_at >= 1440 or close_at >= (self.close_min() or 1440):
-                    raise ActionError('撤岗时间应在已开岗后、闭园前')
+                if not x.get('open') or close_at >= rotation_end(self.d):
+                    raise ActionError('撤岗时间应在已开岗后、轮岗结束前')
                 x.update(closeAt=fmt(close_at), closeMode=close_mode, closedAuto=False)
                 self.h.log('post_schedule_close',actor,None,lid,x['name'],{'closeAt':fmt(close_at),'mode':close_mode})
                 return
@@ -1350,10 +1377,12 @@ class Engine:
             self._close_post(L, i, now, actor, close_mode)
         self._reset_line_plans(lid, now)
 
-    def act_move(self, pid, lid, i, now, actor, force=False, reason=''):
+    def act_move(self, pid, lid, i, now, actor, force=False, reason='', replace_unconfirmed=False):
         p=self.person(pid)
         if not isinstance(force, bool):
             raise ActionError('强制安排参数必须为布尔值')
+        if replace_unconfirmed and (not force or p['state'] not in REST_STATES or p.get('entryHold')):
+            raise ActionError('仅可为尚未确认上岗的待出发、休息或吃饭人员指定岗位')
         if p['state']=='notyet':
             if force:
                 raise ActionError('未到班次人员只能调整预排，不能强制提前上岗')
@@ -1364,7 +1393,9 @@ class Engine:
                 from app.rotation.cooperation import plan
                 group = plan(self,p,now)
                 failed = bool(group and group['blocked'])
-            if not (force and str(reason).strip() and failed):
+            task = self.d.get('rotationTasks', {}).get((p.get('assign') or {}).get('taskId'))
+            pending = replace_unconfirmed and task and task['status'] == 'assigned' and task['owner'] == pid
+            if not (force and str(reason).strip() and (failed or pending)):
                 raise ActionError('剩余餐休3分钟及以内或已待出发，原安排已固定，不能调配')
         target, i, slot=self.post(lid,i)
         if (slot.get('hold') or slot.get('hold101')) or self.held(pid):
@@ -1385,8 +1416,11 @@ class Engine:
                     self.P[other].update(readyAt=None,readySince=None,breakStart=None,breakKind=None)
                     slot['occ']=None
                 p['interruptedBreak']={**previous,'at':now,'reason':str(reason).strip()}
+                if replace_unconfirmed and (p.get('assign') or {}).get('mode') == 'push7':
+                    p['flags'] = [flag for flag in p['flags'] if flag != '推7点']
                 p.update(assign=None,breakKind=None,breakStart=None,readyAt=None,readySince=None,arriveAnchor=None)
                 p.pop('entryHold',None)
+                p.pop('_taskRefresh',None)
                 slot.update(occ=pid,since=now)
                 self._enter(p,target,now)
                 self._reset_line_plans(lid, now)
@@ -1523,7 +1557,7 @@ class Engine:
             L['active'] = True
             for x in L['posts']:
                 if not x.get('openAt') or x['opened']:
-                    if not x['manual'] or x['open']:
+                    if not x.get('draftClosed') and (not x['manual'] or x['open']):
                         x['open'] = True
             self.h.log('line_on', actor, None, lid, None, {})
         else:
@@ -1659,35 +1693,31 @@ class Engine:
                    {'start': person['start'], 'end': person['end']})
 
     def act_set_close(self, close, now, actor):
-        cm = _m(close)
         self.d['closeAt'] = close
-        if self.d.get('closed') and now < cm + self.S.get('closeDelay', 0):
-            # 推迟闭园：恢复闭园前开着的岗位，闭园后工作的人回到池子
-            self.d['closed'] = False
-            for L in self.d['lines']:
-                for x in L['posts']:
-                    if x.pop('openBeforeClose', False) and L.get('active'):
-                        x['open'] = True
-            for p in self.P.values():
-                if p['state'] == 'away' and (p.get('away') or {}).get('reason') == CLOSING_WORK:
-                    p['away'] = None
-                    p['state'] = 'ready'
-                    p['readyAt'] = now
-                    p['readySince'] = now
-                elif p['state'] == 'walkback' and p.get('after') == 'closing':
-                    p['after'] = None
         self.h.log('set_close', actor, None, None, None, {'close': close})
+
+    def _resume_legacy_closure(self, now):
+        if not self.d.get('closed'):
+            return False
+        self.d['closed'] = False
+        for line in self.d['lines']:
+            for post in line['posts']:
+                if post.pop('openBeforeClose', False) and line['active']:
+                    post['open'] = True
+        for p in self.P.values():
+            if p['state'] == 'away' and (p.get('away') or {}).get('reason') == CLOSING_WORK:
+                p.update(state='notyet' if now < p['start'] else 'ready',
+                         away=None, readyAt=now, readySince=now)
+            elif p['state'] == 'walkback' and p.get('after') == 'closing':
+                p['after'] = None
+        return True
 
     # -------- 当天收尾
     def should_end(self, now):
-        """所有人都下班（或不轮岗）后，或到 24:00，当天收尾。"""
-        if self.d['status'] != 'live':
-            return False
-        if now >= 24 * 60:
-            return True
-        return all(p['state'] in ('done', 'excluded') for p in self.P.values())
+        return self.d['status'] == 'live' and now >= rotation_end(self.d)
 
     def end_day(self, now):
+        from app.rotation import workflow as W
         self.d['hold101Active']=False
         for L in self.d['lines']:
             for x in L['posts']:
@@ -1695,8 +1725,9 @@ class Engine:
                 hold = x.pop('hold', None)
                 if hold:
                     self.h.log('post_resume', 'system', hold['pid'], L['id'], x['name'],
-                               {'reason': '零点定岗自动结束', 'original_reason': hold['reason'],
+                                {'reason': '轮岗结束，定岗自动结束', 'original_reason': hold['reason'],
                                 'since': hold['since'], 'duration': max(0, now-hold['since'])})
+                x['open'] = False
         for p in self.P.values():
             if p['state'] in ('done', 'excluded'):
                 continue
@@ -1705,10 +1736,13 @@ class Engine:
                 if L is not None:
                     self._leave_line(p, L, i, now)
                     L['posts'][i]['occ'] = None
-            from app.rotation.workflow import finish_continuous
-            finish_continuous(p,now)
+            W.finish_continuous(p,now)
             p['assign'] = None
+            p.pop('entryHold', None)
             p['state'] = 'done'
+        for task in self.d.get('rotationTasks', {}).values():
+            if task['status'] in W.ACTIVE | {'exception_hold'}:
+                task['status'] = 'superseded'
         self.d['status'] = 'ended'
         self.h.log('day_end', 'system', None, None, None, {})
 
@@ -1738,7 +1772,7 @@ class Engine:
                 t, kind, _ = self.leave_at(p, now)
                 if self.held(p['pid']):
                     if self.d.get('closed') or now >= t:
-                        out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 仍在定岗，结束现场任务后请手动取消；零点自动结束' % p['name']})
+                        out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 仍在定岗，结束现场任务后请手动取消；当天轮岗结束时自动解除' % p['name']})
                     continue
                 word = '出圈' if kind == 'out' else '下班'
                 if kind == 'out':
@@ -1752,8 +1786,8 @@ class Engine:
             if p.get('role') in ('rotation', 'op') and st not in ('done', 'excluded', 'notyet', 'meal') and not p.get('ate') \
                     and self.meal_eligible(p) and not self.d.get('closed') \
                     and self.meal_deadline(p) - now < S['mealWarnLeft']:
-                out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 还没吃饭，离%s不到 %d 小时' % (
-                    p['name'], '闭园' if self.meal_deadline(p) < p['end'] else '下班', S['mealWarnLeft'] // 60)})
+                out.append({'level': 'notify', 'pid': p['pid'], 'msg': '%s 还没吃饭，离下班不到 %d 小时' % (
+                    p['name'], S['mealWarnLeft'] // 60)})
         if now >= _m(S['lineOpenAt']) + 2 and not self.d.get('closed'):
             incoming = {q['assign']['line'] for q in self.P.values() if q.get('assign')}
             for L in self.d['lines']:

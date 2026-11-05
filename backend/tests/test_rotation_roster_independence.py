@@ -95,7 +95,7 @@ def test_cross_circle_member_reads_and_confirms_destination_without_owner_change
         assert ok(c.get('/api/me'))['attraction_id']==ids()['矮人迷宫']
         own=ok(c.get('/api/rotation-board/me'));assert own['attraction_id']==aid
         p=own['person'];assert p['name']=='合成员工9730001'
-        result=ok(c.post('/api/rotation-board/me/act',json={'action':'depart','attraction_id':aid,'confirmation_token':p['confirmationTokens']['depart']}))
+        result=ok(c.post('/api/rotation-board/me/act',json={'action':'depart','attraction_id':aid,'confirmation_token':p['confirmationTokens']['depart'],'expected_line':p['assign']['line']}))
         assert result['result']['line']=='A1'
         assert c.get('/api/rotation-board/me',params={'attraction_id':ids()['小熊罐子']}).status_code==403
         assert c.get('/api/rotation-board/config').status_code==403
@@ -111,14 +111,26 @@ def test_multiple_circles_have_independent_receipts_and_actions():
     with TestClient(app) as c:
         ok(login(c,'9730220','rotation-existing'))
         commit(c,rows(('9730001','外圈支援')))
-    aid=ids()['矮人迷宫'];live(aid,'9730001')
+    # Manager routes now target Heat Pursuit. Seed a retained second-circle
+    # roster directly to continue testing personal receipt/storage isolation.
+    aid=ids()['矮人迷宫']
+    with SessionLocal() as db:
+        upload_row=F.RotationRosterUpload(attraction_id=aid,scope='day',
+            start_date=date.today().isoformat(),end_date=date.today().isoformat(),
+            file_name='isolated-retained-roster.xlsx',entry_count=1)
+        db.add(upload_row);db.flush()
+        db.add(F.RotationRosterEntry(upload_id=upload_row.id,attraction_id=aid,
+            work_date=date.today().isoformat(),employee_no='9730001',name='合成员工9730001',
+            cell_raw='00:00-23:59'))
+        db.commit()
+    live(aid,'9730001')
     with TestClient(app) as c:
         ok(login(c,'9730001'));own=ok(c.get('/api/rotation-board/me',params={'attraction_id':aid}))
         assert {r['id'] for r in own['rotation_circles']}=={ids()['热力追踪'],aid}
         token=own['person']['confirmationTokens']['depart']
         bad=c.post('/api/rotation-board/me/act',json={'action':'depart','attraction_id':ids()['热力追踪'],'confirmation_token':token})
         assert bad.status_code in (400,409)
-        ok(c.post('/api/rotation-board/me/act',json={'action':'depart','attraction_id':aid,'confirmation_token':token}))
+        ok(c.post('/api/rotation-board/me/act',json={'action':'depart','attraction_id':aid,'confirmation_token':token,'expected_line':own['person']['assign']['line']}))
         assert ok(c.get('/api/rotation-board/confirmation',params={'token':token,'date':date.today().isoformat(),'attraction_id':aid}))['confirmed']
         assert not ok(c.get('/api/rotation-board/confirmation',params={'token':token,'date':date.today().isoformat(),'attraction_id':ids()['热力追踪']}))['confirmed']
 
@@ -143,7 +155,7 @@ def test_recovery_revokes_abnormal_session_but_does_not_rewrite_history():
         ok(login(manager));commit(manager,rows(('9730200','停用人员')),confirm_exceptions='true')
         live(ids()['热力追踪'],'9730200');ok(login(c,'9730200','rotation-existing'))
         p=ok(c.get('/api/rotation-board/me'))['person']
-        ok(c.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}))
+        ok(c.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart'],'expected_line':p['assign']['line']}))
         with SessionLocal() as db:
             a=db.query(UserAccount).join(Employee).filter(Employee.employee_no=='9730200').one();a.enabled=True;db.commit()
         assert c.get('/api/me').status_code==401
@@ -199,7 +211,7 @@ def test_live_reimport_refreshes_only_identity_facts_and_keeps_old_events():
             db.info['rotation_formal']=True
             with S.transaction(db):
                 state=S.day_state(S.day_row(db,aid,date.today().isoformat()))
-                assert state['persons'][no]['assign']['taskId']
+                assert state['persons'][no]['assign']['forecast'] and state['persons'][no]['assign']['line']
                 before=deepcopy({'person':state['persons'][no],'lines':state['lines'],
                                  'tasks':state['rotationTasks']})
                 S.DbHooks(db,aid,date.today().isoformat()).log('before_identity_change','合成检查',no,None,None,{})

@@ -1,0 +1,12 @@
+.local-clock-status{display:inline-flex;align-items:center;padding:6px 10px;border:2px solid #d88a08;border-radius:6px;background:#fff5d6;color:#603c00;font-size:13px;font-weight:700;white-space:normal}
+body>.local-clock-status{position:sticky;top:0;z-index:15;display:flex;justify-content:center}
+.local-clock-tabrow{display:flex;align-items:flex-start;flex-wrap:wrap;background:var(--panel);border-bottom:1px solid var(--line)}
+.local-clock-tabrow .rt-tabs{flex:0 1 auto;border-bottom:0;min-width:0;max-width:100%}
+.local-clock-tabrow .rt-clockbar{flex:1 1 700px;margin:0 0 0 auto;padding:6px 10px;min-width:0;border:0;justify-content:flex-end;gap:6px;background:#fff9e8}
+.local-clock-tabrow .rt-clockbar[hidden]{display:none}
+.local-clock-inputs,.local-clock-actions{display:flex;align-items:flex-end;justify-content:flex-end;flex-wrap:wrap;gap:6px;max-width:100%}
+.local-clock-tabrow label{display:flex;flex-direction:column;gap:2px;min-width:0}
+.local-clock-tabrow input{width:auto;max-width:155px}
+.local-clock-tabrow small{flex-basis:100%;text-align:right;color:#675423}
+.local-clock-tabrow button{white-space:normal}
+@media(max-width:700px){.local-clock-tabrow .rt-clockbar{flex-basis:100%;justify-content:flex-start}.local-clock-inputs,.local-clock-actions{justify-content:flex-start}.local-clock-tabrow small{text-align:left}.local-clock-tabrow .danger{max-width:100%}}

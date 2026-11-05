@@ -8,6 +8,7 @@ import tempfile
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+import pytest
 
 
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="recognition-rotation-flow-test-"))
@@ -17,6 +18,18 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def legacy_persisted_days(monkeypatch):
+    """Keep old API/task contracts covered for existing v1 days, not new forecasts."""
+    from app.rotation import service as S
+    original = S.E.build_draft
+    def legacy(*args, **kwargs):
+        state = original(*args, **kwargs)
+        state['ruleVersion'] = 1
+        return state
+    monkeypatch.setattr(S.E, 'build_draft', legacy)
 
 
 DAY = "2026-10-04"
@@ -165,11 +178,24 @@ def test_daily_prearrangement_and_full_test_reset_preserve_original_plan():
         assert all(p['continuousStart'] is None for p in after['day']['persons'])
 
 
-def test_closed_day_has_no_pending_departures_and_stops_rotation():
+def test_rotation_dispatches_after_park_close_and_ends_at_last_shift():
     day='2026-10-15'
-    with TestClient(app) as manager:
-        setup(manager,day,[{'name':'入口'}],[('9800001','闭园人员','07:15-23:00')],time='07:15')
+    with TestClient(app) as manager,TestClient(app) as member:
+        setup(manager,day,[{'name':'入口'}],[('9800001','开班人员','07:15-16:00'),
+              ('9800002','晚班人员','07:20-23:00')],time='07:15')
         ok(manager.post('/api/rotation/act',json={'action':'set_close','close':'07:16'}))
-        ok(clock(manager,action='jump',minutes=2))
-        board=ok(manager.get('/api/rotation/board'))
-        assert board['day']['closed'] and not any(p['canDepart'] for p in board['day']['persons'])
+        ok(clock(manager,action='jump',minutes=5))
+        board=ok(manager.get('/api/rotation/board'))['day']
+        assert board['status']=='live' and not board['closed']
+        assert board['closeAt']=='07:16' and board['rotationEnd']==23*60
+        assert board['lines'][0]['posts'][0]['occ']=='9800001'
+        login(member,'TRTEST01');enter(member,'9800002')
+        task=ok(member.get('/api/rotation/me'))['person']['task']
+        assert task and task['status']=='assigned'
+        ok(clock(manager,action='set',date=day,time='22:59'))
+        assert ok(manager.get('/api/rotation/board'))['day']['status']=='live'
+        ok(clock(manager,action='jump',minutes=1))
+        board=ok(manager.get('/api/rotation/board'))['day']
+        assert board['status']=='ended'
+        assert all(not p['canDepart'] and not p['task'] for p in board['persons'])
+        assert not any(post['open'] for line in board['lines'] for post in line['posts'])

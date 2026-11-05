@@ -28,19 +28,25 @@ function workflowComparison(p){
   return `<section class="rt-task-comparison"><h4>执行本任务前后</h4><div class="rt-task-columns"><div><p>执行前 · 当前站位</p>${table(t.beforePosts,false)}</div><div><p>执行后 · 预计站位</p>${table(t.afterPosts,true)}</div></div><small>蓝色仅标出本任务变化，不代表其他任务已经执行。</small></section>`;
 }
 function workflowPools(n,ops,view={}){
+  if(!view.daily&&typeof forecastActive==='function'&&forecastActive())return forecastPools(n);
   const day=view.day||RT.data.day,posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean))),allPeople=day.persons.filter(p=>!posted.has(p.pid)),ps=allPeople.filter(p=>view.daily||!rotationTaskPaused(p)),seen=new Set();
   const section=(title,list,chip,cls='')=>{list.forEach(p=>seen.add(p.pid));const contents=cls==='rt-others'&&list.length?workflowShiftGroups(list,chip,day,view):`<div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(chip).join(''):'暂无'}</div>`;return `<section class="rt-sect ${cls}${list.length?'':' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2>${contents}</section>`;};
   const drag=p=>ops&&['rest','meal','ready','notyet'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:'';
   const card=(p,action,body,cls='')=>{
     if(view.daily){
       const drag=view.editable&&p.role==='rotation'?` draggable="true" data-daily-person="person:${esc(p.pid)}"`:'';
-      const tag=view.editable?'button':'div';
-      const action=view.editable?` type="button" aria-haspopup="dialog" data-daily-pid="${esc(p.pid)}"${drag}`:'';
+      const livePerson=typeof forecastActive==='function'&&forecastActive()&&RT.data.day.status==='live'&&day.date===RT.data.day.date;
+      const tag=view.editable||livePerson?'button':'div';
+      const action=view.editable?` type="button" aria-haspopup="dialog" data-daily-pid="${esc(p.pid)}"${drag}`:livePerson?` type="button" data-f-person="${esc(p.pid)}"`:'';
       return `<${tag}${action} class="rt-chip ${cls}">${rotationName(p)}${body}</${tag}>`;
     }
     if(!ops&&!document.body.classList.contains('rotation-screen'))action=null;
-    const tag=action?'button':'div',can=action==='depart'?canDepartNow(p,n):action==='arrive'?p.state!=='notyet'||n>=p.start:true;
-    return `<${tag}${action?' type="button"':''} class="rt-chip ${cls}"${action?` data-wf-pid="${esc(p.pid)}" data-wf-action="${action}" ${can&&!confirmationBlocked()?'':'aria-disabled="true"'}`:''}${drag(p)}>${rotationName(p)}${body}${badges(p)}</${tag}>`;
+    if(document.body.classList.contains('rotation-screen')&&!['arrive','depart'].includes(action))action=null;
+    const manage=ops&&!rotationTaskPaused(p)&&p.state!=='done';
+    const tag=action||manage?'button':'div',can=action==='depart'?canDepartNow(p,n):action==='arrive'?p.state!=='notyet'||n>=p.start:true;
+    const menu=`data-pid="${esc(p.pid)}" data-pool-person aria-haspopup="dialog"`;
+    const card=`<${tag}${tag==='button'?' type="button"':''} class="rt-chip ${cls}"${action?` data-wf-pid="${esc(p.pid)}" data-wf-action="${action}" ${can&&!confirmationBlocked()?'':'aria-disabled="true"'}`:manage?` ${menu}`:''}${drag(p)}>${rotationName(p)}${body}${badges(p)}</${tag}>`;
+    return manage&&action?`<div class="rt-pool-person">${card}<button type="button" class="secondary rt-pool-person-menu" ${menu} aria-label="${esc(p.name)}，人员操作">人员操作</button></div>`:card;
   };
   let html='';
   if(!view.daily){const paused=allPeople.filter(rotationTaskPaused);if(paused.length)html+=section('关联任务待处理',paused,p=>card(p,null,`<span class="rt-go">${esc(p.timeoutCase?.line||p.timeoutPending?.line||p.task?.line||'')} · ${p.timeoutPending?'等待前序完成':'待负责人核实'}</span><span class="rt-sub">旧详情暂停执行 · 暂不计确认超时</span>`,'late'),'rt-related-paused');}
@@ -82,7 +88,7 @@ function workflowBoardContent(day,n,ops,view={}){
 }
 function workflowBoardView(n,ops){
   const d=RT.data.day,pre=d.persons.length&&n<Math.min(...d.persons.map(p=>p.start));
-  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools"><button type="button" class="secondary ${d.hold101Active?'rt-101-on':''}" data-wf-101>${d.hold101Active?'取消 101 定岗':'101 定岗'}</button><button type="button" class="secondary" data-wf-undo>返回上一步</button></div>`:''}</div>${pre?'<p class="field-hint">只保存预排，不提前计时。岗位名双击修改，人员及岗位通过拖拽交换。</p>':''}${workflowTimeoutBanner(d,ops)}${workflowBoardContent(d,n,ops)}</section>`;
+  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools"><button type="button" class="secondary ${d.hold101Active?'rt-101-on':''}" data-wf-101>${d.hold101Active?'取消 101 定岗':'101 定岗'}</button><button type="button" class="secondary" data-wf-undo>返回上一步</button></div>`:''}</div>${pre?`<p class="field-hint">首班到班前仅展示预排，尚未实际占岗或计时。${ops?'岗位名双击修改，人员及岗位通过拖拽交换。':''}</p>`:''}${rotationEndLabel(d)}${workflowTimeoutBanner(d,ops)}${workflowBoardContent(d,n,ops)}</section>`;
 }
 const workflowTimeoutSeen=new Set();
 function workflowTimeoutBanner(day,ops){

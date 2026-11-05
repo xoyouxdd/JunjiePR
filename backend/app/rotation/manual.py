@@ -10,6 +10,19 @@ def fingerprint(state):
            'tasks':{key:(task['revision'],task['status']) for key,task in state.get('rotationTasks',{}).items()}}
     return hashlib.sha256(json.dumps(value,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
+def check_pool_context(eng, pid, context):
+    from app.rotation import timeout_cases as C, workflow as W
+    from app.rotation.service import ConfirmationConflict
+    p = eng.person(pid)
+    task = W.task_for(eng, p) or {}
+    current = {'date': eng.d['date'], 'state': p['state'], 'task': task.get('id'),
+               'revision': task.get('revision')}
+    if context != current:
+        raise ConfirmationConflict('人员状态或任务已变化，请重新打开人员操作')
+    if C.for_person(eng, pid) or C.queue_view(eng, p) or task.get('status') == 'exception_hold':
+        raise ActionError('此人有关联任务待处理，请先完成异常核实')
+
+
 def apply(eng, body, now, actor):
     from app.employee_numbers import employee_number
     if isinstance(body.get('pid'), str):
@@ -20,8 +33,13 @@ def apply(eng, body, now, actor):
     if not isinstance(body['line'],str):raise ActionError('线路选择不正确')
     if act=='move' and not isinstance(body.get('pid'),str):raise ActionError('工号必须是字符串')
     if act=='move':
-        _require(body,'pid');eng.act_move(body['pid'],body['line'],body['i'],now,actor,
-            force=action_boolean(body,'force') if 'force' in body else False,reason=str(body.get('reason') or '').strip())
+        _require(body,'pid')
+        pool_menu = 'pool_context' in body
+        force = action_boolean(body,'force') if 'force' in body else False
+        if pool_menu:
+            check_pool_context(eng, body['pid'], body['pool_context'])
+        eng.act_move(body['pid'],body['line'],body['i'],now,actor,force=force,
+                     reason=str(body.get('reason') or '').strip(), replace_unconfirmed=pool_menu)
     elif act=='post_order':
         _require(body,'target_i');eng.act_post_order(body['line'],body['i'],body['target_i'],now,actor,swap_mode=body.get('swapMode'),target_lid=body.get('target_line'))
     elif act=='post':
@@ -75,6 +93,7 @@ def preview(db,attraction_id,body):
         if not row or row.status!='live': raise ActionError('今天的轮岗尚未开始')
         state=service.day_state(row)
         service.advance(db,cfg,row,state,now)
+        if state['status'] != 'live': raise ActionError('今天的轮岗已结束')
         token=fingerprint(state);after=deepcopy(state)
         hooks=Hooks(service.week_minutes(db,attraction_id,day));eng=Engine(after,service.settings_of(cfg),hooks)
         apply(eng,body,now,'preview')

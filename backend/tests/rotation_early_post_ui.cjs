@@ -4,7 +4,7 @@ const {spawn}=require('node:child_process'),{chromium,webkit}=require('playwrigh
 const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r,ms));let server,browser,log='';
 (async()=>{try{
  const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
- server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(__dirname,'rotation_daily_fixture.py'),fs.mkdtempSync(path.join(os.tmpdir(),'rotation-early-')),String(port)],{cwd:path.join(root,'backend'),windowsHide:true});
+ server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(__dirname,'rotation_daily_fixture.py'),fs.mkdtempSync(path.join(os.tmpdir(),'rotation-early-')),String(port)],{cwd:path.join(root,'backend'),windowsHide:true,env:{...process.env,ROTATION_EARLY_POST_FIXTURE:'1'}});
  server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);const base='http://127.0.0.1:'+port;
  for(let i=0;;i++){try{if((await fetch(base+'/health')).ok)break;}catch{}assert(i<100&&server.exitCode===null,log);await sleep(300);}
  for(const [name,type,options]of [['edge',chromium,{channel:'msedge'}],['webkit',webkit,{}]]){
@@ -18,6 +18,19 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   await page.goto(base+'/rotation');await page.locator('[data-tab=draft]').click();
   await page.locator(`[data-daily-date-button="${date}"]`).click();await page.waitForFunction(date=>daily.data?.date===date&&!daily.loading,date);
   const initial=await ok(await context.request.get(url)),pid=initial.draft.plan.crew['B#0'];assert(pid);assert.equal(initial.draft.persons[pid].start,435);
+  assert(initial.draft.plan.seven['A#0']);
+  assert.equal(await page.locator('[data-daily-person="A#0"] .rt-badge.p7').innerText(),'7点');
+  const liveBadges=await page.evaluate(()=>{
+    const post={name:'小C',open:true,seven:1,occ:'early'};
+    const line={id:'A',active:true,posts:[post]};
+    const person={pid:'early',name:'早班测试',start:420,end:960,state:'onpost',flags:['7点岗']};
+    const context={day:{persons:[person]}};
+    const before=lineCard(line,435,false,context).includes('rt-badge p7');
+    person.flags=[];
+    const after=lineCard(line,436,false,context).includes('rt-badge p7');
+    return [before,after];
+  });
+  assert.deepEqual(liveBadges,[true,false]);
   await page.locator('[data-daily-person="B#0"]').dragTo(page.locator('[data-daily-person="A#0"]'));
   await page.getByRole('button',{name:'确认交换',exact:true}).waitFor();assert((await page.locator('#rtModal').innerText()).includes('为7点岗位'));
   await page.getByRole('button',{name:'确认交换',exact:true}).click();
@@ -26,7 +39,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   assert.equal(await page.locator('[data-draft=seven][data-key="A#0"]').inputValue(),pid);
   assert(await page.locator('[data-draft=seven][data-key="A#0"] option').count()>2);
   assert.equal(await page.locator('[data-daily-rename="A#0"]').innerText(),'小C');
-  assert.equal(await page.locator('.rt-daily-post-label .rt-badge').first().innerText(),'7点岗位');
+  assert.equal(await page.locator('[data-daily-slot="A#0"] .rt-badge.p7').count(),0);
   await page.locator('[data-daily-line="D2"]').click({button:'right'});
   await page.getByRole('button',{name:'启用线路',exact:true}).waitFor();
   assert((await page.locator('#rtModal').innerText()).includes('不提前开始计时'));
@@ -48,7 +61,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   await page.getByRole('button',{name:'停用线路',exact:true}).waitFor();await page.locator('#rtModal [data-close]').click();
   await page.locator('[data-daily-rename="A#0"]').dblclick();await page.locator('.rt-inline-post-name').fill('小C改名');await page.locator('.rt-inline-post-name').press('Enter');
   await page.waitForFunction(()=>daily.data?.draft?.lines[0].posts[0].name==='小C改名'&&!RT.editingPost);
-  assert.equal(await page.locator('.rt-daily-post-label .rt-badge').first().innerText(),'7点岗位');
+  assert.equal(await page.locator('[data-daily-slot="A#0"] .rt-badge.p7').count(),0);
   for(const width of [320,390,1024]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);}
   assert.deepEqual(errors,[]);console.log(name+': cross-shift early-post swap, reminder, dropdown, rename, right-click/click/keyboard line enable and disable, and narrow layout passed');await browser.close();browser=null;
  }

@@ -81,11 +81,20 @@ def test_hr_queries_and_exports_match_gsm_for_own_circle(client,account):
             login(c,account)
             actual=c.get('/api/pr-rankings',params=params)
             assert actual.status_code==200,actual.text
-            assert actual.json()==expected.json()
+            expected_payload=expected.json()
+            if category in {'leader','gsm_leader'}:
+                expected_payload['circle_scope']='recipient'
+            assert actual.json()==expected_payload
             explicit=c.get('/api/pr-rankings',params={**params,'attraction_id':own})
-            assert explicit.json()==expected.json()
+            assert explicit.json()==expected_payload
             hr_wb=workbook(c.get('/api/pr-rankings/export',params=params))
-            assert [list(s.values) for s in hr_wb]==[list(s.values) for s in gsm_wb]
+            if category in {'leader','gsm_leader'}:
+                # Same synthetic same-circle rows; HR context explicitly restricts
+                # recipients, while the manager context covers all signer venues.
+                assert list(hr_wb.active.values)==list(gsm_wb.active.values)
+                assert any('仅本圈CM/TR' in str(row) for row in hr_wb['导出说明'].values)
+            else:
+                assert [list(s.values) for s in hr_wb]==[list(s.values) for s in gsm_wb]
             assert me['employee_no'] in hr_wb.properties.description
             assert all(me['employee_no'] in s.oddHeader.center.text for s in hr_wb)
             hr_wb.close();gsm_wb.close()
@@ -160,7 +169,7 @@ def test_hr_background_issuer_statistics_keep_counts_and_issued_scores(client,ca
     actual=workbook(c.get(finished['download_url']))
     assert [list(s.values) for s in actual]==[list(s.values) for s in expected]
     headers=[cell.value for cell in actual.active[1]]
-    assert '登记次数' in headers and '累计分值' in headers
+    assert '认可次数（总数）' in headers and '累计加分' in headers
     assert actual.active.max_row>1
     actual.close();expected.close()
 

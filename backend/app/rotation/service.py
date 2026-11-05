@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 STEP = 0.25
 DAY_END = 24 * 60
+PREARRANGE_MINUTE = 3 * 60
 ActionError = E.ActionError
 
 
@@ -163,11 +164,13 @@ def clock_now(cfg: RotationConfig) -> tuple[str, float]:
     state = clock_state(cfg)
     if state.get("mode") != "sim":
         now = datetime.now()
-        return now.date().isoformat(), now.hour * 60 + now.minute + now.second / 60
+        from app.rotation.forecast_service import work_clock
+        return work_clock(cfg, now.date().isoformat(), now.hour * 60 + now.minute + now.second / 60)
     minute = float(state["minute"])
     if not state.get("paused"):
         minute += (time.time() - float(state["real_ts"])) * float(state.get("speed", 1)) / 60
-    return state["date"], min(minute, DAY_END)
+    from app.rotation.forecast_service import work_clock
+    return work_clock(cfg, state['date'], min(minute, 3 * DAY_END))
 
 
 def set_sim_clock(cfg: RotationConfig, day: str, minute: float, *, speed: float | None = None, paused: bool | None = None) -> None:
@@ -175,7 +178,7 @@ def set_sim_clock(cfg: RotationConfig, day: str, minute: float, *, speed: float 
     cfg.clock_json = _dumps({
         "mode": "sim",
         "date": day,
-        "minute": min(float(minute), DAY_END),
+        "minute": min(float(minute), 3 * DAY_END),
         "real_ts": time.time(),
         "speed": float(speed if speed is not None else state.get("speed", 1)),
         "paused": bool(paused if paused is not None else state.get("paused", False)),
@@ -451,14 +454,23 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
     """把运行中的当天推进到 target 分钟。"""
     if state.get("status") != "live":
         return False
+    if state.get('ruleVersion') == 2:
+        from app.rotation.forecast_service import advance as advance_forecast
+        return advance_forecast(db, cfg, row, state, target)
+    from app.rotation import daily as D
+    added_spares = D.fill_prestart_spares(state) if D.prestart(state, target) else {}
     eng, hooks = engine_for(db, cfg, row, state)
+    if added_spares:
+        hooks.now = target
+        hooks.log('draft_fill_spares', 'system', None, None, None, {'added': added_spares})
     previous_tick = float(state.get("lastTick", target))
     t = previous_tick
     if t > target:
         t = target
-    changed = bool(getattr(eng, '_workflow_initialized', False))
+    changed = bool(added_spares or getattr(eng, '_workflow_initialized', False))
+    end = E.rotation_end(state)
     while True:
-        t = min(t + STEP, target) if t < target else target
+        t = min(t + STEP, target, max(t, end)) if t < target else target
         hooks.now = t
         step_changed=eng.tick(t)
         # Forecast boundaries also need a live-board event even when no post moves.
@@ -472,9 +484,7 @@ def advance(db: Session, cfg: RotationConfig, row: RotationDay, state: dict, tar
             from app.rotation.daily import capture_snapshot
             capture_snapshot(db,row.attraction_id,state,settings_of(cfg),t)
         changed = step_changed or changed
-        if eng.should_end(t):
-            eng.end_day(t)
-            changed = True
+        if state['status'] == 'ended':
             break
         if t >= target:
             break
@@ -608,6 +618,9 @@ def _go_text(eng: E.Engine, a: dict) -> str:
 
 
 def desired_notices(eng: E.Engine, now: float) -> dict:
+    if eng.d.get('ruleVersion') == 2:
+        from app.rotation.forecast_service import notices
+        return notices(eng, now)
     """每个人此刻应有的待办：{(工号, slot): (kind, title, body)}。"""
     out = {}
     if eng.d.get("status") != "live":
@@ -747,6 +760,9 @@ def assignment_view(eng: E.Engine, p: dict) -> dict | None:
 
 
 def confirmation_token(eng: E.Engine, p: dict, action: str) -> str:
+    if eng.d.get('ruleVersion') == 2:
+        from app.rotation.forecast import token
+        return token(eng, p, action)
     # Bind to this person's step and the displayed route, not the global clock
     # or version: unrelated people and countdown ticks must not invalidate it.
     context = {"epoch": eng.d.get("confirmationEpoch"), "date": eng.d["date"],
@@ -800,6 +816,9 @@ def arrival_outcome(eng: E.Engine, p: dict, now: float) -> str | None:
 
 
 def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
+    if eng.d.get('ruleVersion') == 2:
+        from app.rotation.forecast_service import person_view as forecast_person
+        return forecast_person(eng, p, now)
     from app.rotation.cooperation import plan, simulate, upcoming, upcoming_shift
     projection = getattr(eng, '_read_projection', None)
     person_key = (p['pid'], float(now))
@@ -842,12 +861,13 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         routes = task['routes']
         departure_blocked = None if W.valid(eng,W.task_for(eng,p)) else '接替路线已变化，请等待最新安排'
     timeout=None
-    if p.get('taskTimeout'):
+    live = eng.d['status'] == 'live'
+    if live and p.get('taskTimeout'):
         _,_,timeout_post=W.locate(eng,p['taskTimeout'].get('entryKey'))
         timeout={**{k:v for k,v in p['taskTimeout'].items() if k!='originalTask'},'entryPost':timeout_post['name'] if timeout_post else '原上岗',
                  'transferredToName':eng.P.get(p['taskTimeout'].get('transferredTo'),{}).get('name')}
     from app.rotation import timeout_cases as C
-    case=C.for_person(eng,p['pid'])
+    case=C.for_person(eng,p['pid']) if live else None
     result = {
         "pid": p["pid"], "name": p["name"], "state": p.get("state"), "role": p.get("role"),
         "label": p.get("label", ""), "note": p.get("note", ""), "start": p["start"], "end": p["end"],
@@ -872,7 +892,7 @@ def person_view(eng: E.Engine, p: dict, now: float, taken: dict) -> dict:
         "continuousStart":p.get('continuousStart'),"continuousMinutes":W.continuous_minutes(p,now),
         "task":task,"taskTimeout":timeout,
         "timeoutCase":{'id':case['id'],'line':case['line'],'status':case['status']} if case else None,
-        "timeoutPending":C.queue_view(eng,p),"timingUnverified":bool(p.get('timingUnverified')),
+        "timeoutPending":C.queue_view(eng,p) if live else None,"timingUnverified":bool(p.get('timingUnverified')),
         "waitingReplacement":p.get('state')=='onpost' and now>=p['end'],
         "scheduledRestStart": p['start'] if p.get('state') == 'notyet' and eng.opening_rest_candidate(p) else None,
         "confirmationTokens": {action: confirmation_token(eng, p, action) for action in
@@ -915,6 +935,7 @@ def lines_view(eng: E.Engine) -> list[dict]:
         return pid if line.get('active') and eng.P.get(pid,{}).get('state')=='notyet' else None
     return [{
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
+        "sortAt": L.get('sortAt', 0), "adding": bool(L.get('adding')),
         "walk": eng.walk(L["id"]),
         "posts": [{"name": x["name"], "open": x.get("open"), "occ": display_occ(L,i,x),
                    "key":x.get('key'),"occName": eng.P.get(display_occ(L,i,x), {}).get("name"), "since": x.get("since"), "hold": x.get("hold") or x.get('hold101'),
@@ -928,6 +949,7 @@ def lines_view(eng: E.Engine) -> list[dict]:
 
 
 def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) -> dict:
+    from app.rotation.manual import fingerprint
     state = day_state(row)
     if "confirmationEpoch" not in state:
         save_day(db, row, state, notify=False)
@@ -941,9 +963,12 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
     from app.rotation import daily as D
     result = {
         "date": state["date"], "status": state["status"],
+        "ruleVersion": state.get('ruleVersion', 1),
+        "forecastSnapshot": fingerprint(state) if state.get('ruleVersion') == 2 else None,
         "prestartPlanRevision": D.plan_revision(state) if D.prestart(state, now) else None,
-        "timeoutCases":C.view(eng),
-        "timeoutWaitingMatch":[{'line':d['line'],'mode':d['template']['mode']} for d in state.get('timeoutDemands',[]) if not d.get('owner')],
+        "timeoutCases":C.view(eng) if state['status'] == 'live' else [],
+        "timeoutWaitingMatch":[{'line':d['line'],'mode':d['template']['mode']} for d in state.get('timeoutDemands',[])
+                               if state['status'] == 'live' and not d.get('owner')],
         "lines": lines_view(eng),
         "persons": [person_view(eng, p, now, taken) for p in state["persons"].values()],
         "off": state.get("off", []),
@@ -952,6 +977,7 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
         "plan": state["plan"],
         "draftAlerts": state.get("draftAlerts", []),
         "openTime": state.get("openTime"), "closeAt": state.get("closeAt"), "closed": state.get("closed", False),
+        "rotationEnd": E.rotation_end(state),
         "taskWorkflow":state.get('taskWorkflow'),"hold101Active":state.get('hold101Active',False),
         "hold101Recent":state.get('hold101Recent',[]),
     }
@@ -962,11 +988,11 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
 
 @transactional
 def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int, day: str, minute: float) -> None:
-    """有班表时04:00生成预排；开始时间前仅展示岗位，不计时。"""
+    """有班表时03:00生成预排；开始时间前仅展示岗位，不计时。"""
     RUNTIME = runtime_for(db)
     with RUNTIME.lock:
         row=day_row(db,attraction_id,day)
-        if minute < 240 or (row and (row.status != 'draft' or not day_state(row).get('dailyAutoStart'))) or not roster_for(db, attraction_id, day):
+        if minute < PREARRANGE_MINUTE or (row and (row.status != 'draft' or not day_state(row).get('dailyAutoStart'))) or not roster_for(db, attraction_id, day):
             return
         if row is None:
             do_draft_action(db, attraction_id, 'system', {"action": "draft_generate", "date": day})
@@ -976,11 +1002,14 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
         if state.get('dailyAutoStart') and upload and state.get('rosterUploadId')!=upload.id:
             # Never run a superseded roster or silently overwrite manual adjustments.
             return
+        from app.rotation import daily as D
+        if D.draft_editable(state, day, day, minute):
+            D.fill_prestart_spares(state)
         remember_initial_draft(state, cfg)
         eng, hooks = engine_for(db, cfg, row, state)
-        hooks.now = 240
-        eng.publish(240, 'system')
-        state["lastTick"] = 240
+        hooks.now = PREARRANGE_MINUTE
+        eng.publish(PREARRANGE_MINUTE, 'system')
+        state["lastTick"] = PREARRANGE_MINUTE
         write_duties(db, attraction_id, day, state["plan"])
         save_day(db, row, state)
         advance(db, cfg, row, state, minute)
@@ -1125,12 +1154,14 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
     return {"confirmed": bool(result) and result.get('status') not in ('reversed','superseded'), "result": result}
 
 SCREEN_ACTIONS = {"arrive", "depart", "entry_return", "entry_adjust"}
+SCREEN_ALLOWED_ACTIONS = {"arrive", "depart"}
 LIVE_ACTIONS = {
     "arrive", "depart", "entry_return", "entry_adjust", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
     "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order", "post_hold",
 }
 LIVE_ACTIONS.update({'rename_post','hold101','restore_line'})
 LIVE_ACTIONS.update({'timeout_claim','timeout_resolve'})
+LIVE_ACTIONS.update({'pool', 'break_time', 'shift', 'sort_time', 'all_close', 'place', 'sick'})
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
 
 
@@ -1170,9 +1201,11 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
     act = body.get("action")
     if not isinstance(act, str) or act not in LIVE_ACTIONS:
         raise ActionError("不支持的操作")
+    if getattr(actor, 'kind', None) == 'screen' and act not in SCREEN_ALLOWED_ACTIONS:
+        raise ActionError('休息室大屏只可确认去休息或去轮岗')
     if act=='move' and body.get('force') is True and not body.get('expected_snapshot'):
         raise ActionError('强制安排必须先预览影响并确认')
-    if act not in {"post", "post_order", "line", "set_close",'rename_post','hold101','restore_line','timeout_claim','timeout_resolve'}:
+    if act not in {"post", "post_order", "line", "set_close",'rename_post','hold101','restore_line','timeout_claim','timeout_resolve','sort_time','all_close','add_person'}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
             raise ActionError("工号必须是字符串")
@@ -1201,15 +1234,23 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         if row.status != "live":
             raise ActionError("今天的轮岗还没有发布")
         advance(db, cfg, row, state, now)
+        if state['status'] != 'live':
+            raise ActionError('今天的轮岗已结束')
         if body.get('expected_snapshot') and body['expected_snapshot'] != fingerprint(state):
             raise ConfirmationConflict('安排已变化，请重新预览后提交')
         eng, hooks = engine_for(db, cfg, row, state)
         hooks.now = now
+        if state.get('ruleVersion') == 2:
+            from app.rotation.forecast_service import action as forecast_action
+            return forecast_action(db, cfg, row, eng, body, now, actor)
         from app.rotation import history as H, workflow as W
         checkpoint_before=H.snapshot(state)
         pid = body.get("pid")
         if pid is not None and pid not in state["persons"] and act != "add_person":
             raise ActionError("今天的名单里没有这个人")
+        if 'pool_context' in body and act in ('away', 'leave', 'fix_place'):
+            from app.rotation.manual import check_pool_context
+            check_pool_context(eng, pid, body['pool_context'])
         before = None
         if token is not None:
             p = eng.P[pid]
@@ -1420,7 +1461,9 @@ def timeout_case_preview(db,attraction_id,actor,body):
     from app.rotation import workflow as W
     cfg=load_config(db,attraction_id);day,now=clock_now(cfg);row=day_row(db,attraction_id,day)
     if not row or row.status!='live':raise ActionError('今天的轮岗尚未运行')
-    state=day_state(row);advance(db,cfg,row,state,now);eng,_=engine_for(db,cfg,row,state)
+    state=day_state(row);advance(db,cfg,row,state,now)
+    if state['status'] != 'live':raise ActionError('今天的轮岗已结束')
+    eng,_=engine_for(db,cfg,row,state)
     expected=C.fingerprint(eng,body.get('case_id'));trial=C.clone(eng)
     data={**body,'action':'timeout_resolve','case_snapshot':expected}
     C.resolve(trial,body.get('case_id'),data,actor,now,preview=True)
@@ -1498,6 +1541,10 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 db.flush()
                 state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
                                       duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
+                state.setdefault('ruleVersion', 2)
+                if state['ruleVersion'] == 2:
+                    from app.rotation.forecast import initialize as initialize_forecast
+                    initialize_forecast(E.Engine(state, settings_of(cfg), None))
             upload=roster_upload_for(db,attraction_id,day)
             state['rosterUploadId']=upload.id if upload else None
             if db.info.get('rotation_formal'):
@@ -1592,6 +1639,9 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 raise ActionError(f"只能发布当天（{clock_day}）的轮岗；测试时请先把测试时钟调到 {day}")
             hooks = DbHooks(db, attraction_id, day)
             hooks.now = now
+            from app.rotation import daily as D
+            if D.draft_editable(state, day, clock_day, now):
+                D.fill_prestart_spares(state)
             remember_initial_draft(state, cfg)
             eng = E.Engine(state, state["initialSettings"], hooks)
             from app.rotation.workflow import initialize
@@ -1750,6 +1800,8 @@ def update_config(cfg: RotationConfig, lines, settings, employee_id: int | None)
                     merged[key] = type(default)(number)
                 except (TypeError, ValueError, OverflowError) as exc:
                     raise ActionError(f"参数 {key} 必须是非负整数") from exc
+        if merged['mealReserveMinPeople'] < 1:
+            raise ActionError('允许自选吃饭所需的储备人数至少为1人')
         cfg.settings_json = _dumps({k: v for k, v in merged.items() if v != E.DEFAULT_SETTINGS[k]})
     cfg.updated_by_id = employee_id
     cfg.updated_at = datetime.now()

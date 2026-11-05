@@ -419,11 +419,12 @@ def test_walkback_person_is_sent_home_at_shift_end_even_without_screen_click():
     assert "shift_end_unconfirmed" in hooks.types("gone")
 
 
-def test_day_ends_when_everyone_is_done():
+def test_day_waits_for_last_shift_end_even_when_everyone_is_done():
     eng, hooks = live_day([person("a0", "07:00", "09:30")], lines=[two_lines()[0]])
     eng.tick(hm("09:20"))
-    assert eng.should_end(hm("09:20"))
-    eng.end_day(hm("09:20"))
+    assert eng.P['a0']['state'] == 'done'
+    assert eng.d['status'] == 'live'
+    eng.tick(hm("09:30"))
     assert eng.d["status"] == "ended"
     assert "day_end" in hooks.types()
 
@@ -601,27 +602,27 @@ def test_late_publication_keeps_initial_rest_anchored_to_0715():
 
 # ---------------------------------------------------------------- 吃饭、闭园
 
-def test_meal_only_when_enough_people_rest_for_every_open_line():
+def test_meal_choice_uses_configured_reserve_instead_of_open_line_count():
     lines = two_lines()
-    people = [person(f"r{i}", "07:00", "21:00") for i in range(3)] + [person("eater", "07:00", "21:00")]
+    people = [person(f"r{i}", "07:00", "21:00") for i in range(5)] + [person("eater", "07:00", "21:00")]
     eng, _ = live_day(people, lines=lines, now="11:00")
-    for i in range(3):
+    for i in range(5):
         eng.P[f"r{i}"]["state"] = "rest"
         eng.P[f"r{i}"]["readyAt"] = hm("11:10")
     eater = eng.P["eater"]
-    # 2 条线开着，休息中 3 人：够了，可以吃饭
+    # 2 条线开着，默认仍须5名符合20分钟条件的储备，不能按线数放宽。
     assert eng.meal_options(eater, hm("11:00"))["canChoose"] is True
     assert eng._meal_decision(eater, hm("11:00")) == "rest"
     eng.P["r0"]["state"] = "meal"
     eng.P["r0"]["readyAt"] = hm("11:40")
     eng.P["r1"]["state"] = "meal"
     eng.P["r1"]["readyAt"] = hm("11:40")
-    # 只剩 1 人休息，不够 2 条线：只休息
+    # 只剩3人符合条件，未达到5人的门槛。
     assert eng._meal_decision(eater, hm("11:00")) == "rest"
-    # 吃饭剩15分钟及以内才计入自选吃饭的储备；默认仍休息
-    assert not eng.meal_options(eater, hm("11:24"))["canChoose"]
-    assert eng.meal_options(eater, hm("11:25"))["canChoose"]
-    assert eng._meal_decision(eater, hm("11:25")) == "rest"
+    # 吃饭剩20分钟及以内才计入储备；允许选择时默认仍休息。
+    assert not eng.meal_options(eater, hm("11:20")-1/60)["canChoose"]
+    assert eng.meal_options(eater, hm("11:20"))["canChoose"]
+    assert eng._meal_decision(eater, hm("11:20")) == "rest"
 
 
 def test_supervisor_is_alerted_when_meal_deadline_is_under_three_hours():
@@ -631,26 +632,25 @@ def test_supervisor_is_alerted_when_meal_deadline_is_under_three_hours():
     eng.P["short"]["state"] = "walkback"
     # 没人在休息：不安排吃饭，也不再有“快吃不上就强制吃”的兜底
     assert eng._meal_decision(late, hm("17:30")) == "rest"
-    # 离闭园 21:00 不到 3 小时还没吃饭：提醒主管；班次不够长的人不提醒
+    # 离下班 21:30 不到 3 小时还没吃饭才提醒。
     def meal_alerts(t):
         return [a["msg"] for a in eng.alerts(hm(t)) if "还没吃饭" in a["msg"]]
 
-    assert meal_alerts("18:00") == []
-    msgs = meal_alerts("18:01")
-    assert msgs == ["late 还没吃饭，离闭园不到 3 小时"]
+    assert meal_alerts("18:30") == []
+    msgs = meal_alerts("18:31")
+    assert msgs == ["late 还没吃饭，离下班不到 3 小时"]
     late["ate"] = True
-    assert meal_alerts("18:01") == []
+    assert meal_alerts("18:31") == []
 
 
-def test_postponed_close_restores_posts_and_closing_work_people():
+def test_existing_live_day_closed_by_old_logic_can_resume():
     people = [person(p, "07:00", "23:00") for p in ("a0", "a1", "a2", "pool")]
     eng, _ = live_day(people, lines=[two_lines()[0]], now="20:00", close="21:00")
-    for i, p in enumerate(("a0", "a1", "a2")):
-        seat(eng, p, "A", i, "20:00")
-    eng.tick(hm("21:00"))
-    assert eng.d["closed"] and eng.P["pool"]["state"] == "away"
-    assert not any(x["open"] for x in eng.line("A")["posts"])
-    eng.act_set_close("22:00", hm("21:05"), "supervisor")
+    eng.d['closed'] = True
+    for post in eng.line("A")["posts"]:
+        post.update(open=False, openBeforeClose=True)
+    eng.P["pool"].update(state='away', away={'reason': '闭园后工作', 'until': None})
+    eng.tick(hm("21:05"))
     assert not eng.d["closed"]
     assert all(x["open"] for x in eng.line("A")["posts"])
     assert eng.P["pool"]["state"] == "ready"

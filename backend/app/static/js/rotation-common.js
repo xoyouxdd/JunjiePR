@@ -21,6 +21,11 @@ function taskTime(minute) {
   const seconds=Math.floor((minute-Math.floor(minute))*60+1e-6);
   return hm(minute)+(seconds?':'+pad2(seconds):'');
 }
+function rotationEndLabel(day) {
+  return Number.isFinite(day.rotationEnd)
+    ? `<p class="field-hint">轮岗结束时间 ${day.rotationEnd === 1440 ? '24:00' : (day.rotationEnd>1440?'次日 ':'')+hm(day.rotationEnd)}</p>` : '';
+}
+
 function hms(minute) {
   const s = Math.max(0, Math.floor(minute * 60));
   return `${pad2(Math.floor(s / 3600) % 24)}:${pad2(Math.floor(s / 60) % 60)}:${pad2(s % 60)}`;
@@ -132,14 +137,15 @@ function postSwapForm(line,from,to,targetLine=line){
   formBox('选择岗位交换方式',`<p>${esc(line)}线 · ${esc(source?.name||'待核实')} ↔ ${esc(targetLine)}线 · ${esc(target?.name||'待核实')}</p><label>交换方式<select name="swapMode"><option value="posts">只交换岗位，人员留在原位置</option><option value="with_people">岗位和人员一起交换</option></select></label><p>累计站岗时间保留；跨线人员在原线的时长记入记录，再从当前时刻计算新线路时长。定岗需先取消。</p>`,
     values=>adjustPreview({action:'post_order',line,i:from,target_line:targetLine,target_i:to,swapMode:values.swapMode}),{okText:'预览影响'});
 }
-function personDrop(pid,line,i){
+function personDrop(pid,line,i,poolContext=null){
   const p=personOf(pid);if(!p)return;
   if(['rest','meal','ready'].includes(p.state)){
     const target=RT.data.day.lines.find(x=>x.id===line)?.posts[i];
     const original=target?.occ?personOf(target.occ):null;
     formBox('确认强制安排上岗',`<p>${esc(p.name)} → ${esc(line)}线 · ${esc(target?.name||'待核实')}</p><p>剩余餐休 ${Math.max(0,Math.ceil((p.readyAt??nowMin())-nowMin()))} 分钟${original?`；${esc(original.name)}将下线，待到大屏确认休息`:''}。</p><label>安排原因（必填）<input name="reason" maxlength="100" required></label><p>按实际时刻中断餐休并开始上岗，不自动补时；全部影响以预览为准。</p>`,
-      values=>adjustPreview({action:'move',pid,line,i,force:true,reason:values.reason}),{warn:true,okText:'预览影响'});
-  }else void adjustPreview({action:'move',pid,line,i});
+      values=>adjustPreview({action:'move',pid,line,i,force:true,reason:values.reason,...(poolContext?{pool_context:poolContext}:{})}),{warn:true,okText:'预览影响'});
+  }else if(poolContext)toast('人员状态已变化，请重新打开人员操作',true);
+  else void adjustPreview({action:'move',pid,line,i});
 }
 
 async function rtApi(path, options = {}) {
@@ -192,7 +198,8 @@ function nowMin() {
   const clock = RT.data && RT.data.clock;
   if (!clock) return 0;
   if (clock.paused) return clock.minute;
-  return Math.min(1440, clock.minute + (Date.now() - RT.fetchedAt) / 60000 * (clock.speed || 1));
+  const minute=clock.minute + (Date.now() - RT.fetchedAt) / 60000 * (clock.speed || 1);
+  return RT.data?.day?.ruleVersion===2?minute:Math.min(1440,minute);
 }
 
 function renderClock() {
@@ -321,6 +328,7 @@ function acceptLiveData(data) {
       const choices = document.querySelector?.('#rtModal [data-rt-arrival-meals]');
       if (choices) choices.hidden = step.outcome !== null;
     }
+    if (RT.modalOpen && activeRotationConfirmation === step) step.refresh?.(person);
   }
   if (RT.modalOpen) {
     const list = document.querySelector?.('#rtModal [data-departure-person]');
@@ -416,7 +424,7 @@ function confirmRotation(p, action, path, wholeGroup=false) {
   const step = {pid:p.pid,date,token,tokenAction,checkArrival:action==='arrive'&&rotationUsesTasks(p),outcome:p.arrivalOutcome??null};
   if(action==='arrive'){
     if(step.checkArrival)text=`<p data-rt-arrival-outcome aria-live="polite">${arrivalConfirmationText(step.outcome)}</p>`;
-    const choices=p.mealOptions?.canChoose?`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线，提交时再次核对。</p>`:p.mealOptions?.forced?'<p>已到原有强制饭点，本次安排吃饭。</p>':'';
+    const choices=p.mealOptions?.canChoose?`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">${esc(p.mealOptions.reserveText||`轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线`)}，提交时再次核对。</p>`:p.mealOptions?.forced?'<p>已到原有强制饭点，本次安排吃饭。</p>':'';
     if(choices)text+=`<div data-rt-arrival-meals ${step.checkArrival&&step.outcome!==null?'hidden':''}>${choices}</div>`;
   }
   confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : action==='entry_return'?'任务超时确认':'到达休息室'}`, text,
@@ -533,7 +541,7 @@ function goText(p) {
 }
 
 function preparingText(kind) {
-  return kind === '推7点' ? '准备休息' : kind === '推出圈' ? '准备出圈' : kind ? '准备下班' : '';
+  return kind === '推7点' ? '准备休息' : kind === '推出圈' ? '准备出圈' : kind === '推病假' ? '准备病假' : kind ? '准备下班' : '';
 }
 
 function badges(p) {
@@ -553,7 +561,18 @@ function badges(p) {
 function rotationPostRow(cls,attrs,label,person,meta){
   return `<div class="${cls}"${attrs}>${label}${person}<span class="rt-mins">${meta}</span></div>`;
 }
+function rotationPostShiftEnd(person){
+  if(!Number.isFinite(person?.end))return '';
+  const end=hm(person.end);
+  return `<time class="rt-post-shift-end" datetime="${end}" title="下班时间">${end}</time>`;
+}
+function rotationSevenBadge(person, planned = false){
+  const flags = person?.flags || [];
+  return (planned || flags.includes('7点岗')) && !flags.includes('推7点下来')
+    ? '<span class="rt-badge p7">7点</span>' : '';
+}
 function lineCard(L, n, ops, view = {}) {
+  if(!view.daily&&typeof forecastActive==='function'&&forecastActive())return forecastLineCard(L,n,ops);
   const persons = view.day?.persons || RT.data.day.persons;
   const lookup = pid => persons.find(p => p.pid === pid);
   const daily = !!view.daily, editable = daily && view.editable && !L.standby;
@@ -567,27 +586,27 @@ function lineCard(L, n, ops, view = {}) {
       cls+=' rt-daily-slot'+(!x.open?' closed':'');
       const key=L.id+'#'+i,p=lookup(x.occ);
       const label=view.editable?`<button type="button" class="rt-pn rt-daily-post" data-daily-rename="${esc(key)}" ${editable?`draggable="true" data-daily-post="${esc(key)}"`:''} aria-label="${esc(x.name)}，双击改名${editable?'，拖拽交换岗位':''}">${esc(x.name)}</button>`:`<span class="rt-pn">${esc(x.name)}</span>`;
-      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(p?.name||'空岗')}，岗位操作" aria-haspopup="dialog">${esc(p?.name||'空岗')}</button>`:`<span class="rt-who-name">${esc(p?.name||'空岗')}</span>`;
-      const markedLabel=x.seven?`<span class="rt-daily-post-label">${label}<small class="rt-badge p7">7点岗位</small></span>`:label;
+      const sevenPlan=view.day?.plan?.seven;
+      const plannedSeven=p?.start===420 && (sevenPlan ? sevenPlan[key]===p.pid : !!x.seven);
+      const personName=esc(p?.name||'空岗')+rotationPostShiftEnd(p)+rotationSevenBadge(p,plannedSeven);
+      const livePerson=p&&typeof forecastActive==='function'&&forecastActive()&&RT.data.day.status==='live'&&view.day?.date===RT.data.day.date;
+      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(p?.name||'空岗')}，岗位操作" aria-haspopup="dialog">${personName}</button>`:livePerson?`<button type="button" class="rt-who-name" data-f-person="${esc(p.pid)}">${personName}</button>`:`<span class="rt-who-name">${personName}</span>`;
       let status=x.open?(p?'预排':'空岗'):p?'预排 · 未开岗':'未开岗';
       if(draftPosts?.[i]?.draftHold)status='预予定岗';
       else if(editable&&x.closeAt)status=`${esc(x.closeAt)} 撤`;
       else if(editable&&!x.open&&x.openAt)status=`${esc(x.openAt)} 开`;
-      return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',markedLabel,person,status);
+      return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',label,person,status);
     }
     if (!L.active) { cls += ' closed'; who = '待命'; }
-    else if(x.prearranged){const p=lookup(x.occ);who=esc(p?.name||x.occ);mins=`${hm(p?.start)} 开始`;}
+    else if(x.prearranged){const p=lookup(x.occ);who=esc(p?.name||x.occ)+rotationPostShiftEnd(p)+rotationSevenBadge(p,!!x.seven&&p?.start===420);mins=`${hm(p?.start)} 开始`;}
     else if (!x.open) { cls += ' closed'; who = x.openAt && !x.opened ? `${esc(x.openAt)} 开` : '未开'; }
     else if (!x.occ && x.openingStatus) { cls += ' pending-add'; who = x.openingStatus==='preparing'?'准备加岗':'匹配中'; }
     else if (!x.occ) { cls += ' vacant'; who = '空岗'; }
     else {
       const p = lookup(x.occ);
       who = esc(p ? p.name : x.occ);
-      if (p?.state === 'onpost' && Number.isFinite(p.end)) {
-        const shiftEnd = hm(p.end);
-        who += `<time class="rt-post-shift-end" datetime="${shiftEnd}" title="下班时间">${shiftEnd}</time>`;
-      }
-      if (p && p.flags.includes('7点岗') && !p.flags.includes('推7点下来')) who += '<span class="rt-badge p7">7点</span>';
+      if (p?.state === 'onpost') who += rotationPostShiftEnd(p);
+      who += rotationSevenBadge(p);
       if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">${preparingText(p.preparing)}</span>`; }
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;
       else if (p && (p.continuousStart??p.lineStart) !== null && (p.continuousStart??p.lineStart) !== undefined) mins = `${Math.max(0, Math.floor(n - (p.continuousStart??p.lineStart)))} 分`;

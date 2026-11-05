@@ -28,7 +28,12 @@ async function main(){try{
     async function data(){const r=await context.request.get(base+'/api/rotation/daily/2026-10-06');assert(r.ok());return r.json();}
     const dialog=page.getByRole('dialog');
     const firstPost=page.locator('[data-daily-person="A#0"]');
-    await firstPost.click();
+    const firstShiftEnd=firstPost.locator('time[title="下班时间"]');
+    const firstPlan=(await data()).draft;
+    const end=firstPlan.persons[firstPlan.plan.crew['A#0']].end;
+    const endText=[Math.floor(end/60),end%60].map(value=>String(value).padStart(2,'0')).join(':');
+    assert.equal(await firstShiftEnd.textContent(),endText);
+    await firstShiftEnd.click();
     await dialog.getByRole('button',{name:'人员操作',exact:true}).click();
     await dialog.getByRole('button',{name:'修改当日角色',exact:true}).waitFor();
     await dialog.getByRole('button',{name:'关闭',exact:true}).click();
@@ -49,6 +54,7 @@ async function main(){try{
     await dialog.getByRole('button',{name:'确认移除',exact:true}).click();
     await page.waitForFunction(()=>!daily.busy&&!daily.loading&&!RT.loading&&!RT.modalOpen);
     assert.equal((await data()).draft.plan.crew['A#0'],undefined);
+    assert.equal(await firstShiftEnd.count(),0);
     await firstPost.click();
     await dialog.getByRole('button',{name:'撤岗 / 修改撤岗时间',exact:true}).click();
     await dialog.locator('[name=time]').fill('15:00');
@@ -153,7 +159,8 @@ async function main(){try{
     const liveBoard=await context.request.get(base+'/api/rotation/board').then(r=>r.json());
     assert.deepEqual(after.day.lines,liveBoard.day.lines);
     await page.locator('[data-tab=board]').click();
-    await page.locator('[data-line="B"]').click();
+    await page.locator('[data-f-head="B"]').click();
+    await page.getByRole('button',{name:'停用线路',exact:true}).click();
     const stop=page.getByRole('button',{name:'停用',exact:true});
     await stop.waitFor();
     assert.match(await page.locator('#rtModal').innerText(),/当天的预排人员/);
@@ -161,7 +168,7 @@ async function main(){try{
     const rejected=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation/act'&&r.request().method()==='POST');
     await stop.click();
     assert.equal((await rejected).status(),409);
-    await stop.waitFor({state:'hidden'});
+    await page.evaluate(()=>closeModal());
     const startedBoard=await context.request.get(base+'/api/rotation/board').then(r=>r.json());
     assert.equal(startedBoard.day.lines.find(l=>l.id==='B').active,true);
     await page.locator('[data-tab=draft]').click();

@@ -10,12 +10,19 @@ ACTOR=SimpleNamespace(kind='supervisor',name='值班主管',actor_id=1)
 OTHER=SimpleNamespace(kind='supervisor',name='另一主管',actor_id=2)
 
 
-def case_fixture():
+def case_fixture(push7_owner=None):
     eng,hooks=fixture(3)
     eng.P['new1']['assign']=None;eng.P['new2']['assign']=None
+    if push7_owner:
+        eng.P['old0']['flags']=['7点岗','送失物']
+        eng.P[push7_owner]['flags']=['推7点']
+    if push7_owner=='new0':
+        eng.P['new0']['assign'].update(mode='push7',target='old0')
     W.plan(eng,540)
     original=W.task_for(eng,eng.P['new0'])
     eng.P['new1'].update(readyAt=544,state='ready',assign={'line':'A','mode':'chain','target':'old0','departAt':544,'why':'推下班'})
+    if push7_owner=='new1':
+        eng.P['new1']['assign'].update(mode='push7',why='推7点')
     eng.P['new2'].update(readyAt=544,state='ready',assign={'line':'B','mode':'push','departAt':544})
     W.plan(eng,541)
     W.tick(eng,544)
@@ -64,6 +71,20 @@ def test_supplemented_execution_is_not_replayed_and_duplicate_is_idempotent():
     assert not C.active(eng)
     assert W.task_for(eng,eng.P['new1'])['allowedAt']>=544
     assert eng.P['old0']['continuousStart']==510
+
+
+@pytest.mark.parametrize('relief_pid', ['new0', 'new1'])
+def test_confirming_push7_in_exception_clears_person_badges(relief_pid):
+    eng, _, case, _ = case_fixture(push7_owner=relief_pid)
+    C.claim(eng, case['id'], ACTOR, 544)
+    data = payload(eng, case, executed=relief_pid=='new0')
+    if relief_pid=='new1':
+        post = eng.line('A')['posts'][0]
+        data['positions'][post['key']] = relief_pid
+    C.resolve(eng, case['id'], data, ACTOR, 544)
+    assert eng.P['old0']['flags'] == ['送失物']
+    assert eng.P['old0']['sevenReplaced']
+    assert '推7点' not in eng.P[relief_pid]['flags']
 
 
 def test_absent_shifts_task_to_next_owner_and_preserves_other_line():

@@ -344,7 +344,9 @@ def resolve(eng,id,body,actor,now,preview=False):
     for t in eng.d['rotationTasks'].values():
         if t['id'] in c['tasks'] and t['status']=='exception_hold':
             t.update(status='executed' if t['id'] in observed_complete else 'superseded',resolvedCase=id)
-            if t['id'] in observed_complete:t.update(executedAt=now,actualExecutedAt=None,verifiedBy=getattr(actor,'name',str(actor)))
+            if t['id'] in observed_complete:
+                t.update(executedAt=now,actualExecutedAt=None,verifiedBy=getattr(actor,'name',str(actor)))
+                W.clear_completed_seven_badges(eng, t, t.get('owner'))
     for pid in c['people']:
         p=eng.P[pid]
         if (p.get('assign') or {}).get('taskId') in c['tasks']:p['assign']=None
@@ -395,6 +397,7 @@ def resolve(eng,id,body,actor,now,preview=False):
             if not already_executed:original.update(status='executed',executedAt=times[pid] if times[pid] is not None else now,
                             actualExecutedAt=times[pid],verifiedAt=now,verifiedBy=getattr(actor,'name',str(actor)))
             else:r['supplement']={'pid':pid,'actualAt':times[pid],'verifiedAt':now,'by':getattr(actor,'name',str(actor))}
+            W.clear_completed_seven_badges(eng, r['task'], pid)
             p['timingUnverified']=times[pid] is None
             if pid in occupied and times[pid] is not None and pid not in current:
                 p.update(continuousStart=times[pid],lineStart=times[pid],departedAt=times[pid])

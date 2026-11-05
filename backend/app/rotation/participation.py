@@ -56,8 +56,14 @@ def _contexts(db,no,day=None):
     day=day or datetime.now().date().isoformat()
     aids={r[0] for r in db.query(F.RotationRosterEntry.attraction_id).filter_by(employee_no=no,work_date=day)}
     live={}
-    for row in db.query(F.RotationDay).filter_by(work_date=day,status='live'):
+    for row in db.query(F.RotationDay).filter(F.RotationDay.work_date <= day, F.RotationDay.status == 'live'):
         state=S.day_state(row)
+        if row.work_date != day:
+            if state.get('ruleVersion') != 2:
+                continue
+            cfg=S.load_config(db,row.attraction_id)
+            if S.clock_now(cfg)[0] != row.work_date:
+                continue
         if no in state.get('persons',{}):
             aids.add(row.attraction_id);live[row.attraction_id]=state.get('rosterIdentities',{}).get(no)
     out=[]

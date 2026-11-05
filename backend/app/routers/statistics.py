@@ -37,7 +37,7 @@ from app.services.monthly_ranks import member_month_rank
 from app.services.honors import honor_records, self_honors
 from app.services.monthly_statistics import dashboard_payload, statistics_hierarchy, statistics_payload
 from app.services.performance_details import member_records_payload, member_score_detail_payload, member_score_summary_payload, statistics_details_payload
-from app.services.performance_rankings import gsm_recognizer_ranking_payload, pr_ranking_payload, pr_ranking_scope, ranking_employees, ranking_group_labels
+from app.services.performance_rankings import pr_ranking_payload, pr_ranking_scope, ranking_employees, ranking_group_labels
 from app.services.statistics_trends import TREND_DEFAULT_MONTHS, TREND_MAX_MONTHS, TREND_SCORE_FIELDS, statistics_trend_payload as _statistics_trend_payload, trend_month_keys
 
 router = APIRouter()

@@ -160,7 +160,7 @@ def test_real_personal_confirmation_board_plain_names_and_backend_markers():
     with TestClient(app) as c,TestClient(app) as manager:
         ok(login(c,'9730100','0100'));ok(login(manager))
         p=ok(c.get('/api/rotation-board/me'))['person'];assert p['name']=='合成临时成员'
-        body={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}
+        body={'action':'depart','confirmation_token':p['confirmationTokens']['depart'],'expected_line':p['assign']['line']}
         r=ok(c.post('/api/rotation-board/me/act',json=body));assert r['result']['line']=='A1'
         assert ok(c.post('/api/rotation-board/me/act',json=body))['duplicate']
         board=ok(manager.get('/api/rotation-board/board'));assert next(p for p in board['day']['persons'] if p['pid']=='9730100')['name']=='合成临时成员'

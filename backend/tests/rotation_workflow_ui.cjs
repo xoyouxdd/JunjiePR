@@ -49,6 +49,18 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   assert.doesNotMatch(await screenDialog.innerText(),/下线人员回休息室后确认休息/);
   await screenPage.locator('[data-close]').click();
   await board.goto(base+'/rotation-board');await board.locator('[data-wf-101]').waitFor();
+  const poolMenu=board.locator('[data-pool-person][data-pid="9710000"]');
+  await poolMenu.click();
+  const poolDialog=board.getByRole('dialog');
+  for(const name of ['安排出圈（暂离）','安排到指定岗位','标记病假 / 早退']){
+   await poolDialog.getByRole('button',{name,exact:true}).waitFor();
+  }
+  await poolDialog.getByRole('button',{name:'安排到指定岗位',exact:true}).click();
+  await poolDialog.locator('[name=post]').selectOption('A1#1');
+  await poolDialog.getByRole('button',{name:'下一步',exact:true}).click();
+  await poolDialog.getByRole('heading',{name:'确认强制安排上岗',exact:true}).waitFor();
+  await poolDialog.getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal(await screenPage.locator('[data-pool-person]').count(),0);
   const label=board.locator('[data-wf-rename]').first(),key=await label.getAttribute('data-wf-rename');await label.dblclick();await board.locator('.rt-inline-post-name').fill('塔台测试改名');await board.locator('.rt-inline-post-name').press('Enter');
   await board.waitForFunction(k=>document.querySelector('[data-wf-rename="'+k+'"]')?.textContent==='塔台测试改名',key);
   await screenPage.waitForFunction(()=>document.querySelector('.rt-lines')?.textContent.includes('塔台测试改名'));
@@ -61,7 +73,8 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   assert.equal(await legacy.locator('.rotation-test-badge').count(),0);
   assert.equal(await phone.locator('.rt-task-columns .rt-task-line').count(),2);
   assert.equal(await phone.locator('[data-confirm-page=depart] .rt-confirm-times strong').count(),2);
-  assert.equal(await phone.locator('.rt-confirm-routes>div').count()>0,true);
+  assert.equal(await phone.locator('.rt-task-columns>div').first().locator('.changed').count(),0);
+  assert((await phone.locator('.rt-task-columns>div').last().locator('.changed').count())>0);
   for(const width of [320,390,800,1024,1440]){
    await screenPage.setViewportSize({width,height:1000});await board.setViewportSize({width,height:1000});await phone.setViewportSize({width,height:900});
    for(const p of [screenPage,board,phone])assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' overflow '+width);
@@ -231,8 +244,10 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
    await departurePhone.goto(base+'/?view=actionCenter');await screenPage.reload();
    const mobileButton=departurePhone.locator('[data-rotation-task=depart]');
    await mobileButton.click();
-   const mobileRoutes=departurePhone.getByRole('dialog').locator('[data-departure-routes]');
-   assert.match(await mobileRoutes.innerText(),/回休息室/);
+   const mobileRoutes=departurePhone.getByRole('dialog').locator('[data-departure-comparison]');
+   await mobileRoutes.waitFor();assert.equal(await mobileRoutes.locator('.rt-task-line').count(),2);
+   const beforeRoute=await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json());
+   assert(beforeRoute.person.departureRoutes.some(r=>r.to.includes('回休息室')));
    await screenPage.locator('[data-wf-action=depart][data-wf-pid="9710000"]').click();
    const screenRoutes=screenPage.getByRole('dialog').locator('[data-departure-person]');
    assert.match(await screenRoutes.innerText(),/回休息室/);
@@ -240,18 +255,22 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
    assert(shifted.ok(),await shifted.text());
    await screenRoutes.getByText(/→ 下班/).waitFor();
    await screenPage.locator('[data-close]').click();
-   await mobileRoutes.getByText(/→ 下班/).waitFor();
+   const updatedRoute=await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json());
+   assert(updatedRoute.person.departureRoutes.some(r=>r.to==='下班'));
+   assert.equal(await mobileRoutes.locator('.rt-task-line').count(),2);
    await departurePhone.getByRole('dialog').locator('[data-modal-confirm]').click();
    await departurePhone.getByText(/最近安排生效.*已确认上岗安排/).waitFor();
   }finally{
    await departurePhone.close();
    assert((await manager.request.post(base+'/__fixture/waiting-dispatch',{data:{attraction_id:departureClock.attraction_id,restore:true}})).ok());
   }
-  // A timed-out owner acknowledges on the screen; the receiver waits in the
+  // A manager handles this persisted legacy timeout; the screen only displays it.
+  // The receiver waits in the
   // normal ready area while their real break and fresh departure deadline remain intact.
   const timeoutSetup=await manager.request.post(base+'/__fixture/timeout');assert(timeoutSetup.ok(),await timeoutSetup.text());
   await screenPage.reload();
-  const timedOut=screenPage.locator('.rt-timeout [data-wf-pid="9710000"]');await timedOut.waitFor();
+  await screenPage.locator('.rt-timeout').waitFor();
+  assert.equal(await screenPage.locator('.rt-timeout [data-wf-action]').count(),0);
   const received=screenPage.locator('.rt-ready [data-wf-pid="9710010"]');await received.waitFor();
   assert.match(await received.innerText(),/任务转接自/);
   assert.equal(await received.getAttribute('data-wf-action'),'depart');
@@ -268,7 +287,7 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   assert.equal(beforeReceive.person.state,'rest');
   assert.equal(beforeReceive.person.task.deadlineAt,beforeReceive.person.task.allowedAt+3);
   assert.equal((await receiverContext.request.post(base+'/api/rotation-board/me/act',{data:{action:'depart',confirmation_token:beforeReceive.person.confirmationTokens.depart}})).status(),400);
-  await timedOut.click();await screenPage.locator('[data-ok]').click();
+  await board.reload();await board.locator('.rt-timeout [data-wf-pid="9710000"]').click();await board.locator('[data-ok]').click();
   await screenPage.waitForFunction(()=>!RT.data.day.persons.find(p=>p.pid==='9710000').entryHold);
   assert(await screenPage.evaluate(()=>{const p=RT.data.day.persons.find(p=>p.pid==='9710000');return p.state==='ready'&&p.canDepart&&p.readyAt===RT.data.clock.minute;}));
   const afterReceive=await receiverContext.request.get(base+'/api/rotation-board/me').then(r=>r.json());
@@ -283,9 +302,10 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   const waitingSetup=await manager.request.post(base+'/__fixture/timeout',{data:{waiting:true,materialize_before_timeout:true}});
   assert(waitingSetup.ok(),await waitingSetup.text());
   assert.equal((await waitingSetup.json()).materialized_before_reset,true);
-  await screenPage.reload();await timedOut.waitFor();
+  await screenPage.reload();await screenPage.locator('.rt-timeout').waitFor();
+  assert.equal(await screenPage.locator('.rt-timeout [data-wf-action]').count(),0);
   const waitingOwner=await mobile.request.get(base+'/api/rotation-board/me').then(r=>r.json());
-  await timedOut.click();await screenPage.locator('[data-ok]').click();
+  await board.reload();await board.locator('.rt-timeout [data-wf-pid="9710000"]').click();await board.locator('[data-ok]').click();
   const reclaimed=screenPage.locator('.rt-ready [data-wf-pid="9710000"]');await reclaimed.waitFor();
   assert.equal(await reclaimed.getAttribute('aria-disabled'),null);
   assert.equal(await reclaimed.locator('.rt-transfer').count(),0);
@@ -302,7 +322,7 @@ const shots=process.env.ROTATION_WORKFLOW_SCREENSHOTS;
   await boardTimeout.click();await board.locator('[data-ok]').click();
   await board.waitForFunction(()=>!RT.data.day.persons.find(p=>p.pid==='9710000').entryHold);
   assert(await board.evaluate(()=>{const p=RT.data.day.persons.find(p=>p.pid==='9710000');return p.canDepart&&p.readyAt===RT.data.clock.minute&&p.task.deadlineAt===RT.data.clock.minute+3;}));
-  assert.deepEqual(errors,[]);console.log(engine+': shared screen, isolated permissions, inline rename, personal routes, undo, room/rest/meal confirmations, timed-out screen acknowledgement, receiver placement and 5 widths passed');
+  assert.deepEqual(errors,[]);console.log(engine+': confirmation-only screen, isolated permissions, inline rename, personal routes, undo, room/rest/meal confirmations, manager handles legacy timeout, receiver placement and 5 widths passed');
   await browser.close();browser=null;
  }
 }finally{if(browser)await browser.close();if(server){server.kill();await Promise.race([new Promise(r=>server.once('exit',r)),sleep(3000)]);}}})().catch(e=>{console.error(e);process.exitCode=1;});

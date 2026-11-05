@@ -155,7 +155,7 @@ def test_scheduled_close_swap_and_post_order():
     eng.tick(hm('10:05'));assert eng.line('A')['posts'][0]['open'] is False
 
 def test_fifteen_minute_boundary_choice_and_force_remain():
-    eng,_=live_day([person(str(i),'07:00','21:00') for i in range(4)],now='10:00')
+    eng,_=live_day([person(str(i),'07:00','21:00') for i in range(4)],now='10:00',mealReserveMinPeople=2,mealReserveLeft=15)
     for p in eng.P.values():p.update(state='walkback',arriveAnchor=None)
     eng.P['1'].update(state='rest',readyAt=hm('10:10'))
     eng.P['2'].update(state='meal',readyAt=hm('10:15')+.1)
@@ -189,7 +189,7 @@ def test_reissue_revokes_old_grant_and_real_expiry_stops_write():
 
 
 def test_cancel_schedule_and_meal_rest_boundary():
-    eng,_=live_day([person(str(i),'07:00','21:00') for i in range(3)],now='10:00')
+    eng,_=live_day([person(str(i),'07:00','21:00') for i in range(3)],now='10:00',mealReserveMinPeople=2,mealReserveLeft=15)
     seat(eng,'0','A',0,'09:30')
     eng.act_post('A',0,False,hm('10:00'),'test',close_at=hm('10:05'),close_mode='push')
     eng.act_post('A',0,False,hm('10:00'),'test',cancel_close=True)

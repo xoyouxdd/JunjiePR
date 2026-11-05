@@ -12,12 +12,12 @@ from sqlalchemy.orm import Session
 
 from app.date_utils import months_between, parse_iso_date
 from app.organization_queries import group_display_metadata_bulk
-from app.record_payloads import effective_recognition_credit
 from app.role_constants import FRONTLINE_CODES, GSM_CODES, LEADER_CODES
 from app.score_policy import loa_month_exclusion
 from app.v2_models import Attraction, AttendanceMonthlyScore, DeductionRecord, DeductionType, Employee, GroupMembership, RecognitionRecord, RecognitionType, Role, SickLeaveRecord
 from app.services.attendance import ensure_month_attendance
-from app.services.identity import acting_period_notes, base_roles_at, identity_labels, role_at, roles_at, TEMPORARY_RECOGNIZER_LABEL
+from app.services.issuer_rankings import issuer_ranking_payload
+from app.services.identity import acting_period_notes, base_roles_at, identity_labels, roles_at
 
 if TYPE_CHECKING:
     from app.v2_auth import V2User
@@ -69,112 +69,6 @@ def ranking_group_labels(db: Session, employee_ids: list[int], on_date: str) -> 
 
 
 
-def gsm_recognizer_ranking_payload(db: Session, start_value: str, end_value: str, subtype_id: int | None, keyword: str, page: int, page_size: int, attraction: Attraction | None) -> dict:
-    subtype = db.get(RecognitionType, subtype_id) if subtype_id else None
-    if subtype_id and (not subtype or not subtype.active):
-        raise HTTPException(400, "请选择有效认可类型")
-    query = db.query(RecognitionRecord).filter(
-        RecognitionRecord.status == "confirmed",
-        RecognitionRecord.recognition_date >= start_value,
-        RecognitionRecord.recognition_date <= end_value,
-    )
-    if attraction:
-        query = query.filter(RecognitionRecord.home_attraction_id == attraction.id)
-    if subtype:
-        query = query.filter(RecognitionRecord.recognition_type_id == subtype.id)
-    sql_conditions = ["status='confirmed'", "recognition_date>=:start", "recognition_date<=:end"]
-    params: dict[str, object] = {"start": start_value, "end": end_value}
-    if attraction:
-        sql_conditions.append("home_attraction_id=:attraction_id")
-        params["attraction_id"] = attraction.id
-    if subtype:
-        sql_conditions.append("recognition_type_id=:subtype_id")
-        params["subtype_id"] = subtype.id
-    snapshot_rows = db.execute(
-        text(
-            f"""
-            WITH filtered AS (
-                SELECT id, recognizer_employee_id, recognizer_role_code_snapshot,
-                       operator_employee_id, operator_role_code_snapshot,
-                       credited_fraction, recognition_date
-                FROM recognition_records WHERE {' AND '.join(sql_conditions)}
-            ), participants AS (
-                SELECT recognizer_employee_id AS employee_id,
-                       recognizer_role_code_snapshot AS role_code,
-                       credited_fraction, recognition_date
-                FROM filtered WHERE recognizer_employee_id != operator_employee_id
-                UNION ALL
-                SELECT operator_employee_id AS employee_id,
-                       operator_role_code_snapshot AS role_code,
-                       credited_fraction, recognition_date
-                FROM filtered
-            )
-            SELECT employee_id, role_code, COUNT(*) AS event_count,
-                   SUM(credited_fraction) AS score, MAX(recognition_date) AS recent_date
-            FROM participants
-            WHERE role_code IN ('TA_GSM','GSM')
-            GROUP BY employee_id, role_code
-            """
-        ),
-        params,
-    ).mappings().all()
-    aggregate: dict[int, dict] = {}
-    for row in snapshot_rows:
-        employee_id = int(row["employee_id"])
-        current = aggregate.setdefault(employee_id, {"count": 0, "score": 0.0, "recent_date": "", "role_code": row["role_code"]})
-        current["count"] += int(row["event_count"] or 0)
-        current["score"] += float(row["score"] or 0)
-        if str(row["recent_date"] or "") >= str(current["recent_date"] or ""):
-            current["recent_date"] = str(row["recent_date"] or "")
-            current["role_code"] = row["role_code"]
-
-    legacy_query = query.filter(
-        or_(
-            RecognitionRecord.recognizer_role_code_snapshot.is_(None),
-            RecognitionRecord.operator_role_code_snapshot.is_(None),
-        )
-    )
-    historical_role_cache: dict[tuple[int, str], Role | None] = {}
-    for row in legacy_query.all():
-        participants: dict[int, str | None] = {
-            row.recognizer_employee_id: row.recognizer_role_code_snapshot,
-            row.operator_employee_id: row.operator_role_code_snapshot,
-        }
-        for participant_id, snap_code in participants.items():
-            if snap_code is not None:
-                continue
-            # Older rows did not have role snapshots. Resolve them by the
-            # recognition date, never by the employee's current role.
-            cache_key = (participant_id, row.recognition_date)
-            if cache_key not in historical_role_cache:
-                historical_role_cache[cache_key] = role_at(db, participant_id, row.recognition_date)
-            historical_role = historical_role_cache[cache_key]
-            code = historical_role.code if historical_role else None
-            if code not in GSM_CODES:
-                continue
-            data = aggregate.setdefault(participant_id, {"count": 0, "score": 0.0, "recent_date": row.recognition_date, "role_code": code})
-            data["count"] += 1
-            data["score"] += float(row.credited_fraction or 0)
-            data["recent_date"] = max(data["recent_date"], row.recognition_date)
-    employee_rows = db.query(Employee).filter(Employee.id.in_(aggregate.keys()) if aggregate else Employee.id == -1).all()
-    role_names = {
-        role.code: role.name
-        for role in db.query(Role).filter(Role.code.in_({item["role_code"] for item in aggregate.values()})).all()
-    } if aggregate else {}
-    value = employee_number(keyword).lower()
-    rows=[]
-    for employee in employee_rows:
-        if value and value not in employee.name.lower() and value not in employee.employee_no.lower():
-            continue
-        data=aggregate[employee.id]
-        rows.append({"employee_id":employee.id,"employee_no":employee.employee_no,"employee_name":employee.name,"role_name":role_names.get(data["role_code"],data["role_code"]),"group_label":"","count":int(data["count"]),"score":round(float(data["score"]),2),"recent_date":data["recent_date"],"leave_days":0,"charged_days":0,"recognition_score":0,"deduction_score":0,"attendance_score":0,"total_score":0})
-    rows.sort(key=lambda item:(-item["count"],-item["score"],item["employee_no"]))
-    for index,item in enumerate(rows,1): item["rank"]=index
-    offset=(page-1)*page_size
-    return {"category":"gsm_leader","subtype_id":subtype_id,"subtype_name":subtype.name if subtype else "全部加分类别","sort_by":"count","start_date":start_value,"end_date":end_value,"attraction_id":attraction.id if attraction else None,"attraction_name":attraction.name if attraction else "全部景点圈","total":len(rows),"page":page,"page_size":page_size,"pages":max(1,ceil(len(rows)/page_size)),"rows":rows[offset:offset+page_size]}
-
-
-
 def pr_ranking_scope(db: Session, user: V2User, attraction_id: int | None, population: str = "frontline", category: str = "overall") -> int | None:
     """Authorize before cache lookup; every ranking and export shares this scope."""
     if user.role.code not in GSM_CODES | {"AM", "OM", "HR_CIRCLE"}:
@@ -207,7 +101,7 @@ def pr_ranking_payload(
     population: str = "frontline",
 ) -> dict:
     attraction_id = pr_ranking_scope(db, user, attraction_id, population, category)
-    if population not in {"frontline", "supervisor"}:
+    if population not in {"frontline", "supervisor", "all"} or (population == "all" and category != "gsm_leader") or (category == "leader" and population != "frontline"):
         raise HTTPException(400, "排名人群无效")
     start = parse_iso_date(start_value, "开始日期")
     end = parse_iso_date(end_value, "结束日期")
@@ -235,8 +129,8 @@ def pr_ranking_payload(
         )
         if not attraction:
             raise HTTPException(400, "请选择有效的员工景点圈")
-    if category == "gsm_leader":
-        return gsm_recognizer_ranking_payload(db, start_value, end_value, subtype_id, keyword, page, page_size, attraction)
+    if category in {"leader", "gsm_leader"}:
+        return issuer_ranking_payload(db, user, start_value, end_value, category, subtype_id, keyword, page, page_size, attraction, population)
     keyword_value = employee_number(keyword).lower()
     end_iso = end.isoformat()
     # Score rankings rank one population: CM/TR, or supervisors (主管绩效排行).
@@ -319,63 +213,6 @@ def pr_ranking_payload(
         for row in attendance_rows:
             if row.attendance_month in selected_months.get(row.employee_id, set()):
                 aggregates[row.employee_id]["score"] = float(aggregates[row.employee_id].get("score", 0)) + float(row.sick_deduction or 0)
-    elif category == "leader":
-        subtype = db.get(RecognitionType, subtype_id) if subtype_id else None
-        if subtype_id and (not subtype or not subtype.active):
-            raise HTTPException(400, "请选择有效认可类型")
-        subtype_name = subtype.name if subtype else "全部加分类别"
-        excluded_issuers: set[int] = set()
-        query = db.query(RecognitionRecord).filter(
-            *([RecognitionRecord.home_attraction_id == attraction_id] if attraction_id is not None else []),
-            RecognitionRecord.status == "confirmed",
-            RecognitionRecord.recognition_date >= start_value,
-            RecognitionRecord.recognition_date <= end_value,
-        )
-        if subtype:
-            query = query.filter(RecognitionRecord.recognition_type_id == subtype.id)
-        historical_role_cache: dict[tuple[int, str], Role | None] = {}
-
-        def acted_as_leader(employee_id: int, snapshot_code: str | None, on_date: str) -> bool:
-            # Records keep the role actually used; older rows resolve it by date.
-            if snapshot_code is None:
-                key = (employee_id, on_date)
-                if key not in historical_role_cache:
-                    historical_role_cache[key] = role_at(db, employee_id, on_date)
-                snapshot_code = historical_role_cache[key].code if historical_role_cache[key] else None
-            return snapshot_code in LEADER_CODES
-
-        for row in query.all():
-            # One confirmed record is one independent scoring event. Attribute it to
-            # the supervisors who issued it in that role, deduplicating only within
-            # it. A leader's own self-submitted record is not an issued recognition,
-            # and a former TA主管 keeps the records issued during the duty.
-            participants: set[int] = set()
-            # Qualification-only issuers are not leaders, including older local
-            # rows that stored the TA score-policy code as their identity.
-            if row.recognizer_role_snapshot != TEMPORARY_RECOGNIZER_LABEL and acted_as_leader(row.recognizer_employee_id, row.recognizer_role_code_snapshot, row.recognition_date):
-                participants.add(row.recognizer_employee_id)
-            if row.source != "self" and acted_as_leader(row.operator_employee_id, row.operator_role_code_snapshot, row.recognition_date):
-                participants.add(row.operator_employee_id)
-            participants.discard(row.employee_id)
-            for employee_id in participants:
-                if employee_id not in aggregates:
-                    if employee_id in excluded_issuers:
-                        continue
-                    issuer = db.get(Employee, employee_id)
-                    if (
-                        not issuer
-                        or (attraction_id is not None and issuer.attraction_id != attraction_id)
-                        or (keyword_value and keyword_value not in issuer.name.lower() and keyword_value not in issuer.employee_no.lower())
-                    ):
-                        excluded_issuers.add(employee_id)
-                        continue
-                    employees.append(issuer)
-                    role_map[employee_id] = role_at(db, employee_id, row.recognition_date)
-                    aggregates[employee_id] = {}
-                data = aggregates[employee_id]
-                data["count"] = int(data.get("count", 0)) + 1
-                data["score"] = float(data.get("score", 0)) + float(effective_recognition_credit(row))
-                data["recent_date"] = max(str(data.get("recent_date") or ""), row.recognition_date)
     else:
         months = months_between(start, end)
         for month in months:

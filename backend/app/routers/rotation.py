@@ -216,20 +216,31 @@ def rotation_screen_state(db: Session = Depends(get_db), actor: RotationActor = 
     return payload
 
 
+@router.get('/people-search')
+def forecast_people_search(q: str = '', db: Session = Depends(get_db), actor: RotationActor = Depends(require_manager)):
+    from app.rotation.forecast_service import search_people
+    return {'people': search_people(db, q)}
+
+
 @router.post("/screen/act")
 def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_screen)):
     """大屏只能点「去休息」（到达）和「去轮岗」（出发）。"""
     if not isinstance(payload.get("action"), str):
         raise HTTPException(400, "操作类型必须是字符串")
-    if payload["action"] not in service.SCREEN_ACTIONS:
+    if payload["action"] not in service.SCREEN_ALLOWED_ACTIONS:
         raise HTTPException(403, "大屏只能点去休息和去轮岗")
-    if not payload.get("confirmation_token"):
+    if payload['action'] in service.SCREEN_ACTIONS and not payload.get("confirmation_token"):
         raise HTTPException(400, "请刷新后重新确认")
     try:
         return service.do_live_action(db, rotation_attraction_id(db), actor,
                                       {"action": payload["action"], "pid": payload.get("pid"),
-                                       "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice"),
+                                       "confirmation_token": payload.get("confirmation_token"), "meal_choice": payload.get("meal_choice"),
                                        "group_confirm": payload.get('group_confirm',False),"expected_plan":payload.get('expected_plan'),
+                                       "expected_line": payload.get('expected_line'), "line": payload.get('line'),
+                                       "i": payload.get('i'), "place_mode": payload.get('place_mode'),
+                                       "pool": payload.get('pool'), "repeat_meal": payload.get('repeat_meal'),
+                                       "person_context": payload.get('person_context'),
+                                       "expected_snapshot": payload.get('expected_snapshot'),
                                        **({'expected_arrival_outcome': payload['expected_arrival_outcome']}
                                           if 'expected_arrival_outcome' in payload else {})})
     except service.ActionError as exc:
@@ -250,7 +261,8 @@ def rotation_member_act(payload: dict, db: Session = Depends(get_db), actor: Rot
     try:
         return service.do_live_action(db, rotation_attraction_id(db), actor,
                                       {"action": payload["action"], "pid": actor.member_employee_no,
-                                       "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice")})
+                                       "confirmation_token": payload["confirmation_token"], "meal_choice": payload.get("meal_choice"),
+                                       "expected_line": payload.get('expected_line'), 'repeat_meal': payload.get('repeat_meal')})
     except service.ActionError as exc:
         raise _action_error(exc) from exc
 

@@ -108,7 +108,7 @@ function boardView() {
   const n = nowMin();
   if(d.taskWorkflow)return workflowBoardView(n,isManager());
   const alerts = d.alerts.map(a => `<div class="rt-alert ${esc(a.level)}">${esc(a.msg)}</div>`).join('') + d.notices.slice(-3).map(x => `<div class="rt-alert">${hm(x.t)} ${esc(x.msg)}</div>`).join('');
-  return `${isManager()&&!me.adjustment&&(!formalRotation||me.capabilities.can_manage)?`<section class="panel"><div class="rt-row"><strong>当天运行 · ${esc(d.date)}</strong><span>闭园 ${esc(d.closeAt||'未设置')}</span><button type="button" class="secondary" data-live-close>调整闭园时间</button></div></section>`:''}${alerts ? `<div class="rt-alerts">${alerts}</div>` : ''}<div class="rt-board"><div class="rt-lines">${d.lines.map(L => lineCard(L, n, isManager())).join('')}</div><div class="rt-pool">${poolView(n)}</div></div>`;
+  return `${isManager()&&!me.adjustment&&(!formalRotation||me.capabilities.can_manage)?`<section class="panel"><div class="rt-row"><strong>当天运行 · ${esc(d.date)}</strong><span>营业闭园 ${esc(d.closeAt||'未设置')}</span><button type="button" class="secondary" data-live-close>调整闭园时间</button></div></section>`:''}${rotationEndLabel(d)}${alerts ? `<div class="rt-alerts">${alerts}</div>` : ''}<div class="rt-board"><div class="rt-lines">${d.lines.map(L => lineCard(L, n, isManager())).join('')}</div><div class="rt-pool">${poolView(n)}</div></div>`;
 }
 
 function poolView(n) {
@@ -138,15 +138,18 @@ function poolView(n) {
   return html;
 }
 
-function personMenu(p) {
+function personMenu(p, fromPool = false) {
   const active = RT.data.day.lines.filter(L => L.active);
+  const poolContext = fromPool ? { date: RT.data.day.date, state: p.state,
+    task: p.task?.id ?? null, revision: p.task?.revision ?? null } : null;
+  const canForcePlace = fromPool && !p.entryHold && ['rest', 'meal', 'ready'].includes(p.state);
   const state = poolState(p, nowMin());
   const assignment=rotationAssignment(p);
   const info = `<dl class="rt-kv">
     <dt>工号</dt><dd>${esc(p.pid)}</dd>
     <dt>班次</dt><dd>${hm(p.start)}-${hm(p.end)}${p.mealEligible ? '（有吃饭）' : '（只休息）'}${p.ate ? '，已吃饭' : ''}</dd>
     <dt>状态</dt><dd>${STATE_NAME[state] || ''}${state === 'rest' ? `至 ${hm(restUntil(p))}` : ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（${preparingText(p.preparing)}）` : ''}</dd>
-    ${p.postHold?`<dt>持续定岗</dt><dd>${hm(Math.floor(p.postHold.since))}起 · ${esc(p.postHold.reason)}；手动取消或零点结束。</dd>`:''}
+    ${p.postHold?`<dt>持续定岗</dt><dd>${hm(Math.floor(p.postHold.since))}起 · ${esc(p.postHold.reason)}；手动取消或在当天轮岗结束时自动解除。</dd>`:''}
     <dt>去向</dt><dd>${assignment ? `${goText(p)}，${taskTime(assignment.departAt)} 出发` : '待正式派发'}</dd>
     ${p.timingUnverified?'<dt>计时状态</dt><dd>历史时间待核实，当前分钟数为核实后已记录时间。</dd>':''}
     <dt>今天去过</dt><dd>${esc(p.visited.join('、') || '无')}</dd>
@@ -157,20 +160,21 @@ function personMenu(p) {
   if (canDepartNow(p, nowMin())&&(!p.entryGroup||me.employee_no===p.pid)) actions.push(['depart', p.entryGroup?'确认上岗安排':'代点去轮岗', 'primary']);
   if (['rest', 'meal', 'ready'].includes(p.state) && p.state !== 'ready') actions.push(['undo', '撤回去休息', 'secondary']);
   if (['rest', 'meal', 'ready'].includes(p.state)) actions.push(['reassign', '改派去向', 'secondary']);
-  if (['walkback', 'pending', 'rest', 'meal', 'ready', 'heading', 'onpost'].includes(p.state)) actions.push(['away', '标记暂离（专项任务）', 'secondary']);
+  if (['walkback', 'pending', 'rest', 'meal', 'ready', 'heading', 'onpost'].includes(p.state)) actions.push(['away', fromPool?'安排出圈（暂离）':'标记暂离（专项任务）', 'secondary']);
   if (p.state === 'away') actions.push(['back', '回池', 'primary']);
   if (p.state === 'heading') actions.push(['fix_undo_depart', '更正：撤销出发', 'secondary']);
   if (p.state === 'onpost') actions.push(['fix_remove', '更正：移出岗位', 'secondary']);
-  if (['walkback', 'pending', 'rest', 'meal', 'ready', 'away', 'onpost'].includes(p.state)) actions.push(['fix_place', '更正：放入指定岗位', 'secondary']);
+  if (['walkback', 'pending', 'rest', 'meal', 'ready', 'away', 'onpost'].includes(p.state) && (!fromPool || !p.entryHold)) actions.push(['fix_place', fromPool?'安排到指定岗位':'更正：放入指定岗位', 'secondary']);
   if (p.state !== 'done' && p.state !== 'excluded') actions.push(['lost', p.flags.includes('送失物') ? '取消送失物' : '标记送失物', 'secondary']);
-  if (p.state !== 'done') actions.push(['leave', '离岗（病假、早退）', 'danger']);
+  if (p.state !== 'done') actions.push(['leave', fromPool?'标记病假 / 早退':'离岗（病假、早退）', 'danger']);
   if(!formalRotation||me.capabilities.can_records)actions.push(['record', '查看轮岗记录', 'secondary']);
   openModal(`<h3>${esc(p.name)}</h3>${info}<div class="rt-actions">${actions.map(([k, t, c]) => `<button type="button" class="${c}" data-a="${k}">${t}</button>`).join('')}<button type="button" class="ghost" data-close>关闭</button></div>`, host => {
     host.querySelectorAll('[data-a]').forEach(btn => {
       btn.onclick = async () => {
         const k = btn.dataset.a;
         if(formalRotation&&['arrive','depart'].includes(k)){confirmRotation(p,k,'/api/rotation/act');return;}
-        const run = body => act('/api/rotation/act', { pid: p.pid, ...body });
+        const run = body => act('/api/rotation/act', { pid: p.pid, ...body,
+          ...(poolContext&&['away','leave','fix_place'].includes(body.action)?{pool_context:poolContext}:{}) });
         if (['arrive', 'depart', 'undo', 'back'].includes(k)) { if (await run({ action: k })) closeModal(); }
         else if (k === 'lost') { if (await run({ action: 'flag', flag: '送失物', on: !p.flags.includes('送失物') })) closeModal(); }
         else if (k === 'record') { closeModal(); tab = 'records'; renderTabs(); view.recordNo = p.pid; await loadRecord(p.pid); openTab(); }
@@ -180,8 +184,20 @@ function personMenu(p) {
         else if (k === 'fix_undo_depart' || k === 'fix_remove') formBox(btn.textContent, '<label>更正原因（必填，记入日志）<input type="text" name="reason" maxlength="100" required></label>', f => run({ action: k, reason: f.reason }));
         else if (k === 'fix_place') {
           const options = [];
-          RT.data.day.lines.forEach(L => L.active && L.posts.forEach((x, i) => { if (x.open && !x.occ) options.push(`<option value="${esc(L.id)}#${i}">${esc(L.id)} ${esc(x.name)}</option>`); }));
-          if (!options.length) { toast('现在没有空岗，请先移出岗位上的人或开岗', true); return; }
+          active.forEach(L => L.posts.forEach((x, i) => {
+            const occupant = x.occ ? personOf(x.occ) : null;
+            if (x.open && !x.hold && (!x.occ || canForcePlace && occupant?.state==='onpost')) {
+              options.push(`<option value="${esc(L.id)}#${i}">${esc(L.id)} ${esc(x.name)}${occupant?' · '+esc(occupant.name):''}</option>`);
+            }
+          }));
+          if (!options.length) { toast('当前没有可安排的岗位', true); return; }
+          if (canForcePlace) {
+            formBox('安排到指定岗位', `<label>岗位<select name="post">${options.join('')}</select></label><p class="field-hint">确认前可预览影响。现场安排会结束本人的餐休或等待，并替代尚未确认的任务。</p>`, values=>{
+              const [line,i]=values.post.split('#');
+              setTimeout(()=>personDrop(p.pid,line,i,poolContext),0);
+            }, {okText:'下一步'});
+            return;
+          }
           formBox('放入岗位', `<label>空岗<select name="post">${options.join('')}</select></label><label>更正原因（必填）<input type="text" name="reason" maxlength="100" required></label>`, f => { const [line, i] = f.post.split('#'); return run({ action: 'fix_place', line, i, reason: f.reason }); });
         }
       };
@@ -236,7 +252,7 @@ $app.addEventListener('click', event => {
   if(groupButton){const p=personOf(groupButton.dataset.groupDepart);if(p)confirmRotation(p,'depart','/api/rotation/act',true);return;}
   if(event.target.closest('[data-live-close]')&&!me.adjustment){formBox('调整当天闭园时间','<label>闭园时间<input type="time" name="close" value="'+esc(RT.data.day.closeAt||'')+'" required></label>',f=>act('/api/rotation/act',{action:'set_close',close:f.close},'闭园时间已更新'));return;}
   const person = event.target.closest('[data-pid]');
-  if (person) { const p = personOf(person.dataset.pid); if (p) personMenu(p); return; }
+  if (person) { const p = personOf(person.dataset.pid); if (p) personMenu(p,person.hasAttribute('data-pool-person')); return; }
   const post = event.target.closest('[data-post]');
   if (post) { postMenu(post.dataset.post); return; }
   const line = event.target.closest('[data-line]');
@@ -289,7 +305,7 @@ function initialDraftView(data) {
     ${dailyBoard(data,true)}
     <details class="rt-daily-settings"><summary>预排设置 · 岗位人员、闭园时间、任务与角色</summary>
       ${draft.draftAlerts.map(a=>`<div class="rt-warn">${esc(a)}</div>`).join('')}
-      <div class="rt-row"><label class="rt-daily-field">闭园时间<input type="time" id="draftClose" value="${esc(draft.closeAt||'')}"></label></div>
+      <div class="rt-row"><label class="rt-daily-field">营业闭园时间<input type="time" id="draftClose" value="${esc(draft.closeAt||'')}"></label></div>
       ${placements}
       <h3>推7点和送失物</h3><p class="field-hint">7点岗位也可选择其他班次，按所选人员实际班次生效，不提前计时。推7点仅针对实际07:00班次人员，保留本周次数推荐。</p>
       <div class="rt-row"><span>推7点</span>${sevenCount?listSelect('push7',sevenCount,early):'今天没有7点岗位'}</div>
@@ -339,7 +355,7 @@ async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,pre
 
 function dailyBoard(data,editable=false){
   if(!data.day)return '';
-  return `<div class="rt-workflow-board">${workflowBoardContent(data.day,0,false,{daily:true,editable,frozen:data.frozen,draft:editable?data.draft:null})}</div>`;
+  return `<div class="rt-workflow-board">${editable?rotationEndLabel(data.day):''}${workflowBoardContent(data.day,0,false,{daily:true,editable,frozen:data.frozen,draft:editable?data.draft:null})}</div>`;
 }
 function dailyHistory(data){
   const note=data.opening_source==='late_publish'?`首班之后才启用轮岗，展示 ${hm(data.as_of)} 启用时固定的开班安排。`:data.opening_source==='unstarted_draft'?'此日期保留了未启用的预排，仅供回顾。':data.opening_source==='opening'?`首班 ${hm(data.as_of)} 开始时已固定，后续看板调整不改变本班表。`:data.opening_source==='initial_draft'?'此日期没有首班固定快照，展示当时保存的初始预排。':data.opening_source==='earliest_record'?'此日期没有首班固定快照，展示最早保存记录，仅供回顾。':'此日期没有开班快照，仅保留末次状态供回顾。';
@@ -442,10 +458,13 @@ function dailyPersonMenu(pid,key){
     return target===key||post.draftClosed||post.draftHold?[]:[`<option value="${esc(target)}">${esc(dailyLabel(target,'people'))}${post.seven?'（7点岗位）':''}</option>`];
   })).join('');
   openModal(`<h3>${esc(person.name)} · 人员操作</h3><p>${hm(person.start)}–${hm(person.end)} · ${roles[person.role]} · ${esc(daily.date)} 预排</p><div class="rt-actions">
+    <button type="button" class="secondary" data-daily-shift>修改当天班次</button><button type="button" class="secondary" data-daily-person-sick>病假</button><button type="button" class="secondary" data-daily-person-away>出圈</button><button type="button" class="secondary" data-daily-person-back>回圈，休息15分钟</button>
     ${person.role==='rotation'&&options?`<button type="button" class="secondary" data-daily-place>${key?'换岗 / 交换人员':'安排岗位'}</button>`:''}
     ${key?'<button type="button" class="secondary" data-daily-unseat>移回待安排区</button>':''}
     <button type="button" class="secondary" data-daily-role>修改当日角色</button><button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
     host.querySelector('[data-daily-place]')?.addEventListener('click',()=>formBox('选择预排岗位',`<label>岗位<select name="target" required><option value="">请选择岗位</option>${options}</select></label><p class="field-hint">目标已有人员时，有原岗位则交换，否则原人员回到待安排区。7点岗位按所选人员实际班次生效。</p>`,values=>send({action:'draft_swap_people',source:key||'person:'+pid,target:values.target}),{okText:'保存岗位安排'}));
+    host.querySelector('[data-daily-shift]').onclick=()=>formBox('修改当天班次',forecastShiftFields(person.start,person.end),v=>send({action:'draft_person',operation:'shift',pid,...v,start_day_offset:Number(v.start_day_offset)}));
+    for(const op of ['sick','away','back'])host.querySelector('[data-daily-person-'+op+']').onclick=()=>send({action:'draft_person',operation:op,pid});
     host.querySelector('[data-daily-unseat]')?.addEventListener('click',()=>confirmBox('移回待安排区',`清除 ${esc(person.name)} 的当日岗位预排。`,'确认移除',()=>send({action:'draft_set',kind:draft.plan.seven[key]?'seven':'crew',key,pid:''})));
     host.querySelector('[data-daily-role]').onclick=()=>formBox('修改当日角色',`<label>角色<select name="role">${Object.entries(roles).map(([value,label])=>`<option value="${value}" ${person.role===value?'selected':''}>${label}</option>`).join('')}</select></label><p class="field-hint">改为 OP 或不轮岗时，原岗位预排会清除。</p>`,values=>send({action:'draft_role',pid,role:values.role}),{okText:'保存角色'});
   });
@@ -680,11 +699,11 @@ function bindRecords() {
 const SETTING_LABELS = [
   ['walkMin', '默认路程（分钟）'], ['breakMin', '休息时长（分钟）'], ['mealMin', '吃饭时长（分钟）'], ['mealThreshold', '班次超过多少分钟才有吃饭'],
   ['mealEarliest', '最早安排吃饭时间'], ['mealAfterStart', '上班满多少分钟才开始安排吃饭'], ['mealForceAfterStart', '上班满多少分钟仍未吃饭强制安排'],
-  ['mealReserveLeft', '吃饭剩余多少分钟转入饭后休息区（仍需等倒计时）'], ['mealWarnLeft', '离下班或闭园不到多少分钟未吃饭提醒'], ['offLead', '下班/出圈前多少分钟被推'],
+  ['mealReserveLeft', '计入吃饭储备的剩余餐休时间（分钟）'], ['mealReserveMinPeople', '允许自选吃饭所需的储备人数（不含本人）'], ['mealWarnLeft', '离下班不到多少分钟未吃饭提醒'], ['offLead', '下班/出圈前多少分钟被推'],
   ['noBoardBefore', '到岗时距下班/出圈不超过多少分钟不再上岗'], ['endLead', '提前多少分钟开始安排推下班/出圈的人'], ['outWarnAfter', '过了出圈时间多少分钟没人可推提醒'],
   ['departEarly', '可提前几分钟点去轮岗'], ['futureWait', '等定时开岗最多等多少分钟'], ['readyNotify', '超过出发时间多少分钟提醒'],
   ['walkBackWarn', '下线多少分钟未点去休息提醒'], ['unassignedWarn', '待出发多少分钟没有去向提醒'], ['lineOpenAt', '开园岗位开始时间'],
-  ['opReleaseAt', 'OP 转待定时间'], ['parkClose', '默认闭园时间'], ['closeStopPush', '闭园前多少分钟起不再派人'], ['lostCount', '每天送失物人数'],
+  ['opReleaseAt', 'OP 转待定时间'], ['parkClose', '默认闭园时间'], ['closeStopPush', '轮岗结束前多少分钟停止普通派发'], ['lostCount', '每天送失物人数'],
 ];
 
 async function loadSettings() {
@@ -701,7 +720,7 @@ function settingsView() {
   const field = ([key, label]) => {
     const value = cfg.settings[key];
     const isTime = typeof cfg.defaults[key] === 'string';
-    return `<label>${label}<input name="${key}" ${isTime ? 'type="time"' : 'type="number" step="1" min="0"'} value="${esc(value)}" required></label>`;
+    return `<label>${label}<input name="${key}" ${isTime ? 'type="time"' : `type="number" step="1" min="${key==='mealReserveMinPeople'?1:0}"`} value="${esc(value)}" required></label>`;
   };
   return `<section class="panel"><h2>轮岗参数</h2><form id="settingsForm" class="rt-form-grid">${SETTING_LABELS.map(field).join('')}<div class="rt-row"><button type="submit" class="primary">保存参数</button></div></form></section>
     <section class="panel"><h2>线和岗位</h2><p class="field-hint">每条线按顺序列出岗位，第一个是入口岗，最后一个是出口岗。可选：openAt 定时开岗、closeAt 定时撤岗、seven 7 点岗位顺序、standby 待命线、walk 路程分钟。</p>

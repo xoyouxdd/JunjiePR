@@ -55,9 +55,17 @@ def rotation(monkeypatch):
     test_dir.rmdir()
 
 
-def draft(rotation):
+def draft(rotation, rule_version=1):
     with rotation.factory() as db:
         S.do_draft_action(db, rotation.attraction_id, "test", {"action": "draft_generate", "date": DAY})
+        # These tests retain coverage for persisted v1 days. V2 transaction and
+        # concurrency coverage lives in test_rotation_forecast_api.py.
+        with S.transaction(db):
+            row = S.day_row(db, rotation.attraction_id, DAY)
+            state = S.day_state(row)
+            state['ruleVersion'] = rule_version
+            state.pop('taskWorkflow', None)
+            S.save_day(db, row, state)
 
 
 def live(rotation):

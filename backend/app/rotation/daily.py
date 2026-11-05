@@ -56,7 +56,7 @@ def present(db,cfg,attraction_id,work_date,state,minute,settings=None):
     persons=[S.person_view(eng,p,minute,taken) for p in state['persons'].values()]
     for p in persons:
         p.pop('confirmationTokens',None);p['canDepart']=False;p['canArrive']=False
-    return {'date':work_date,'status':state['status'],'lines':S.lines_view(eng),'persons':persons,'off':state.get('off',[]),'closeAt':state.get('closeAt'),'plan':state.get('plan',{})}
+    return {'date':work_date,'status':state['status'],'lines':S.lines_view(eng),'persons':persons,'off':state.get('off',[]),'closeAt':state.get('closeAt'),'rotationEnd':S.E.rotation_end(state),'plan':state.get('plan',{})}
 
 
 def first_start(state):
@@ -86,21 +86,19 @@ def planned_view(db, cfg, attraction_id, work_date, state, settings=None):
     settings = settings or S.settings_of(cfg)
     eng = S.E.Engine(view, settings, Hooks({}))
     # Project only a pre-shift board. No writes, clock advance or confirmations.
-    eng.publish(min(240, first_start(view) - 1), 'preview')
-    return present(db, cfg, attraction_id, work_date, view, min(240, first_start(view) - 1), settings)
+    eng.publish(min(S.PREARRANGE_MINUTE, first_start(view) - 1), 'preview')
+    return present(db, cfg, attraction_id, work_date, view, min(S.PREARRANGE_MINUTE, first_start(view) - 1), settings)
 
 
 def fill_prestart_spares(state):
     """Append missing standard slots without moving any planned people/posts."""
-    standard = {line['id'] for line in S.E.DEFAULT_LINES}
-    added = {}
+    added = S.E.append_standard_spares(state['lines'])
     for line in state['lines']:
-        if line['id'] not in standard or len(line['posts']) >= 5:
-            continue
-        added[line['id']] = 5 - len(line['posts'])
-        for _ in range(added[line['id']]):
-            line['posts'].append(dict(name='备用',openAt=None,closeAt=None,seven=None,
-                key=uuid4().hex,hold101Role=None,open=False,opened=True,manual=False,occ=None,since=None))
+        count = added.get(line['id'], 0)
+        if count:
+            for post in line['posts'][-count:]:
+                post.update(openAt=None, closeAt=None, seven=None, key=uuid4().hex, hold101Role=None,
+                            open=False, opened=True, manual=bool(post.get('draftClosed')), occ=None, since=None)
     return added
 
 
@@ -298,9 +296,8 @@ def configure_post(state, body, now, actor):
             post.update(closeAt=None, closeMode='direct', closedAuto=False)
             return line, post
         at = S.action_time(body['time']) if body.get('time') else None
-        close_at = S.action_time(state['closeAt']) if state.get('closeAt') else 1440
-        if at is not None and (at < now or at >= close_at):
-            raise S.ActionError('计划时间须在当前时间之后、闭园之前')
+        if at is not None and (at < now or at >= S.E.rotation_end(state)):
+            raise S.ActionError('计划时间须在当前时间之后、轮岗结束之前')
         if change == 'open':
             if at is not None:
                 if pid and at > state['persons'][pid]['start']:
@@ -350,6 +347,33 @@ def edit(db,attraction_id,actor,work_date,body):
     upload=S.roster_upload_for(db,attraction_id,work_date)
     if action=='publish' and upload and state.get('rosterUploadId') and state['rosterUploadId']!=upload.id:
         raise S.ActionError('上传班表已更新，请重新生成并核对预排后启用')
+    if action == 'draft_person':
+        from app.rotation.forecast_service import shift_values
+        pid = body.get('pid')
+        if pid not in state['persons']:
+            raise S.ActionError('班表中没有此人')
+        p = state['persons'][pid]
+        operation = body.get('operation')
+        if operation == 'shift':
+            start, end = shift_values(body)
+            p.update(start=start, end=end)
+        elif operation in ('sick', 'away', 'back'):
+            p['initialPool'] = {'sick': 'sick', 'away': 'away', 'back': 'rest'}[operation]
+            for kind in ('crew', 'seven'):
+                state['plan'][kind] = {key: value for key, value in state['plan'][kind].items() if value != pid}
+            state['plan']['push7'] = [value for value in state['plan']['push7'] if value != pid]
+        else:
+            raise S.ActionError('不支持的人员调整')
+        normalize_seven_assignments(state, previous_slots)
+        validate_plan(state)
+        if live_edit:
+            sync_prestart(state)
+        S.save_day(db, row, state)
+        hooks = S.DbHooks(db, attraction_id, work_date)
+        hooks.now = now
+        hooks.log('draft_person', actor, pid, None, None,
+                  {'operation': operation, 'start': p['start'], 'end': p['end']})
+        return
     if action=='draft_rename_post':
         engine=S.E.Engine(state,S.settings_of(cfg),None)
         line,index,post=engine.plan_post(body.get('post'))

@@ -453,8 +453,18 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
         ws.append(headers)
         for row in data["rows"]:
             ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["group_label"], data["subtype_name"], row["count"], row["leave_days"], row["charged_days"], row["score"], row["recent_date"]]))
+    elif category in {"leader", "gsm_leader"}:
+        venue_columns = data.get("venue_columns", [])
+        person_label = "GSM/TA GSM" if category == "gsm_leader" else "LEAD/TA LEAD"
+        ws.append(["排名", "员工号", "工号状态", person_label, "角色", "类型", "认可次数（总数）",
+                   *[c["name"] for c in venue_columns], "累计加分", "最近一次认可"])
+        for row in data["rows"]:
+            ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"],
+                                 row["employee_name"], row["role_name"], data["subtype_name"], row["count"],
+                                 *[row["venue_counts"].get(c["key"], 0) for c in venue_columns],
+                                 row["score"], row["recent_date"]]))
     else:
-        person_label = "GSM/TA GSM" if category == "gsm_leader" else ("组长" if category == "leader" else "员工")
+        person_label = "员工"
         headers = ["排名", "员工号", "工号状态", person_label, "角色", "小组", "类型", "登记次数", "累计分值", "最近一次登记"]
         ws.append(headers)
         for row in data["rows"]:
@@ -477,6 +487,9 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
     elif category == "absence":
         apply_score_format(ws, (11,))
         apply_date_format(ws, (12,))
+    elif category in {"leader", "gsm_leader"}:
+        apply_score_format(ws, (8 + len(venue_columns),))
+        apply_date_format(ws, (9 + len(venue_columns),))
     else:
         apply_score_format(ws, (9,))
         apply_date_format(ws, (10,))
@@ -485,9 +498,14 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
     context = wb.create_sheet("导出说明")
     context.append(["项目", "内容"])
     append_export_context(context, [("统计日期", f"{data.get('start_date', '')} 至 {data.get('end_date', '')}"),
-                                    ("景点圈", data.get("attraction_name", "")),
+                                    ("签卡人所属圈" if data.get("circle_scope") == "issuer" else "景点圈", data.get("attraction_name", "")),
                                     ("排名类别", category), ("排序方式", data.get("sort_by", "")),
                                     ("导出人数", len(data["rows"]))])
+    if category in {"leader", "gsm_leader"}:
+        append_export_context(context, [("被认可人群", data["population_name"]),
+                                        ("统计口径", "仅签卡人；代录不计；已确认且未撤回的有效认可，每条计一次。"),
+                                        ("景点明细", "按签卡发生景点归入景点圈，各列合计等于认可总数。"),
+                                        ("范围说明", "签卡人向所有景点发放的认可" if data["circle_scope"] == "issuer" else "仅本圈CM/TR收到的认可，不包含其他圈记录")])
     context.column_dimensions["A"].width = 24
     context.column_dimensions["B"].width = 64
     configure_sheet(context)

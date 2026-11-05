@@ -68,7 +68,7 @@ def user_payload(db: Session, user: V2User) -> dict:
         "announcement_counts": announcement_counts,
         "member_count": len(direct_member_ids(db, user.id)),
         "must_change_password": user.account.must_change_password,
-        # 「轮岗（测试）」入口：热力追踪的 TR 和 GSM。
+        # 正式轮岗入口按当前有效角色及班表参与资格判断。
         "rotation_entry": can_enter_formal_rotation(user, db),
     }
 

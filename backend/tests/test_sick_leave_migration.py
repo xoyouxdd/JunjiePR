@@ -211,9 +211,10 @@ def test_index_repair_precedes_appended_employment_history_step() -> None:
     about_system = ('2026-11-about-system-credit-columns', 'ensure_about_system_credit_columns')
     rotation_posts = ('2026-11-rotation-five-posts', 'ensure_rotation_five_posts')
     scoring_snapshots = ('2026-11-scoring-policy-snapshots', 'ensure_scoring_policy_snapshots')
-    assert SCHEMA_MIGRATION_STEPS[-7:] == [
+    rotation_six_posts = ('2026-11-rotation-six-posts', 'ensure_rotation_six_posts')
+    assert SCHEMA_MIGRATION_STEPS[-8:] == [
         repair, employment, employee_type, learning_categories,
-        about_system, rotation_posts, scoring_snapshots,
+        about_system, rotation_posts, scoring_snapshots, rotation_six_posts,
     ]
     assert SCHEMA_MIGRATION_STEPS.count(repair) == 1
     assert SCHEMA_MIGRATION_STEPS.count(employment) == 1

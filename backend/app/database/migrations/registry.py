@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from app.database.migrations.rotation import ensure_rotation_five_posts
+from app.database.migrations.rotation import ensure_rotation_five_posts, ensure_rotation_six_posts
 
 from app.database.migrations.schema import (
     ensure_scoring_policy_snapshots,
@@ -82,6 +82,7 @@ MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-11-about-system-credit-columns', ensure_about_system_credit_columns),
     ('2026-11-rotation-five-posts', ensure_rotation_five_posts),
     ('2026-11-scoring-policy-snapshots', ensure_scoring_policy_snapshots),
+    ('2026-11-rotation-six-posts', ensure_rotation_six_posts),
 )
 SCHEMA_MIGRATION_STEPS = [(key, runner.__name__) for key, runner in MIGRATION_RUNNERS]
 

@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.06.1", "date": "2026-11-06", "status": "candidate",
+     "items": [{"summary": "动态轮岗预排与签卡发放排名更新", "detail": "新增轮岗规则版本2，按实际状态动态计算预计去向，支持独立确认、排序时间、餐休储备和跨夜处理；统一管理角色的热力追踪看板范围，大屏限制为本人步骤确认。标准线路配置扩至六岗。主管及GSM发放榜按签卡人统计并增加景点明细，景点圈HR沿用本圈人员范围。", "audiences": ["all"]}]},
     {"version": "2026.11.04.3", "date": "2026-11-04", "status": "candidate",
      "items": [{"summary": "轮岗预排与下班交接优化", "detail": "完善预排加撤岗和定岗操作，调整轮岗接替与下班去向，并同步更新个人确认和大屏展示。", "audiences": ["all"]}]},
     {"version": "2026.11.04.2", "date": "2026-11-04", "status": "candidate",

@@ -11,10 +11,13 @@ ACTIVE = {'assigned', 'waiting_transfer'}
 
 
 def enabled(eng):
-    return eng.d.get('taskWorkflow') == 1
+    return eng.d.get('taskWorkflow') in (1, 2)
 
 
 def initialize(eng):
+    from app.rotation import forecast as F
+    if F.enabled(eng):
+        return F.initialize(eng)
     changed = eng.d.get('taskWorkflow') != 1
     eng.d['taskWorkflow'] = 1
     eng.d['cooperativeEntry'] = False
@@ -53,6 +56,8 @@ def locate(eng, key):
 
 
 def task_for(eng, p):
+    if eng.d.get('ruleVersion') == 2:
+        return None
     return eng.d.get('rotationTasks', {}).get((p.get('assign') or {}).get('taskId'))
 
 
@@ -108,7 +113,7 @@ def route_view(eng, task, now=None):
         outcome = move.get('outcome')
         if now is not None and timed_exit(task, move):
             outcome = 'done' if eng.shift_finishes_on_exit(eng.P[move['pid']], now) else 'rest'
-        return label(move['to'], {'rest':'下岗，回休息室确认休息／吃饭', 'done':'下班', 'away':'出圈'}.get(outcome, '下岗'))
+        return label(move['to'], {'rest':'下岗，回休息室确认休息／吃饭', 'done':'下班', 'away':'出圈', 'sick':'病假'}.get(outcome, '下岗'))
 
     return [{'pid': m['pid'], 'name': eng.P[m['pid']]['name'],
              'from': label(m['from'], '待上岗'),
@@ -117,6 +122,9 @@ def route_view(eng, task, now=None):
 
 
 def task_view(eng, p, now=None):
+    if eng.d.get('ruleVersion') == 2:
+        from app.rotation.forecast import task_view as view
+        return view(eng, p, float(now if now is not None else eng.d.get('lastTick', p['start'])))
     task = task_for(eng, p)
     if not task:
         return None
@@ -152,6 +160,9 @@ def bind(eng, p, task):
 
 def replan(eng, now, lines=None, reason='现场调整', affected=None):
     """Invalidate only affected pending routes; preserve their original deadline."""
+    if eng.d.get('ruleVersion') == 2:
+        from app.rotation.forecast import plan
+        return plan(eng, now)
     changed = False
     for task in list(eng.d.get('rotationTasks', {}).values()):
         if task['status'] not in ACTIVE or lines is not None and task['line'] not in lines:
@@ -363,6 +374,18 @@ def plan(eng, now):
     return changed
 
 
+def clear_completed_seven_badges(eng, task, relief_pid):
+    if task['template']['mode'] != 'push7':
+        return
+    target = eng.P.get(task['template'].get('target'))
+    if target:
+        target['flags'] = [flag for flag in target.get('flags', []) if flag not in ('7点岗', '推7点下来')]
+        target['sevenReplaced'] = True
+    relief = eng.P.get(relief_pid)
+    if relief:
+        relief['flags'] = [flag for flag in relief.get('flags', []) if flag != '推7点']
+
+
 def execute(eng, p, now, actor):
     from app.rotation.engine import ActionError
     task=task_for(eng,p)
@@ -398,11 +421,7 @@ def execute(eng, p, now, actor):
         eng._enter(q,line,now)
     task.update(status='executed',executedAt=now)
     if task['template']['mode']=='push7':
-        target=eng.P.get(task['template'].get('target'))
-        if target:
-            target['flags']=[flag for flag in target.get('flags',[]) if flag not in ('7点岗','推7点下来')]
-            target['sevenReplaced']=True
-        p['flags']=[flag for flag in p.get('flags',[]) if flag!='推7点']
+        clear_completed_seven_badges(eng, task, p['pid'])
         eng.h.log('push7',actor,p['pid'],task['line'],None,{'target':task['template'].get('target'),'task':task['id']})
     eng.h.log('depart',actor,p['pid'],task['line'],None,
               {'task':task['id'],'routes':route_view(eng,{**task,'moves':moves}),'batch':task['batch']})

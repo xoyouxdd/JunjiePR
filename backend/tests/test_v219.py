@@ -595,15 +595,15 @@ def test_pr_leader_ranking_counts_each_confirmed_record_once_per_supervisor() ->
         response = client.get("/api/pr-rankings", params=base_params)
         assert response.status_code == 200, response.text
         row = next(item for item in response.json()["rows"] if item["employee_id"] == supervisor_id)
-        assert row["count"] == 4
-        assert row["score"] == 5.0
+        assert row["count"] == 2
+        assert row["score"] == 2.5
 
         filtered = client.get("/api/pr-rankings", params={**base_params, "subtype_id": primary_type_id})
         assert filtered.status_code == 200, filtered.text
         filtered_row = next(item for item in filtered.json()["rows"] if item["employee_id"] == supervisor_id)
         assert filtered.json()["subtype_name"] == primary_type_name
-        assert filtered_row["count"] == 3
-        assert filtered_row["score"] == 4.5
+        assert filtered_row["count"] == 2
+        assert filtered_row["score"] == 2.5
 
 
 def test_circle_hr_transfer_acceptance_is_immediate_and_migrates_current_data() -> None:

@@ -56,6 +56,7 @@ EXPECTED_STEPS = (
     ("2026-11-about-system-credit-columns", "ensure_about_system_credit_columns"),
     ("2026-11-rotation-five-posts", "ensure_rotation_five_posts"),
     ("2026-11-scoring-policy-snapshots", "ensure_scoring_policy_snapshots"),
+    ("2026-11-rotation-six-posts", "ensure_rotation_six_posts"),
 )
 
 

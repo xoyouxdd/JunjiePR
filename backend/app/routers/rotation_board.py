@@ -14,7 +14,7 @@ from app.v2_database import SessionLocal, get_db
 from app.v2_models import Employee
 from app.rotation import service as S
 from app.rotation import daily as D
-from app.rotation.access import RotationActor
+from app.rotation.access import RotationActor, ROTATION_ATTRACTION_NAME, rotation_attraction_id
 from app.rotation.namespace import runtime_for
 from app.rotation.roster import parse_any
 from app.date_utils import parse_iso_date
@@ -46,12 +46,19 @@ def capabilities(user):
         return dict.fromkeys(('can_operate','can_manage','can_records','can_settings'),False)
     codes = set(user.role_codes)
     manage = bool(codes & MANAGERS)
-    return {'can_operate': manage or 'TR' in codes, 'can_manage': manage,
+    local_tr = 'TR' in codes and getattr(user.employee.attraction, 'name', None) == ROTATION_ATTRACTION_NAME
+    return {'can_operate': manage or local_tr, 'can_manage': manage,
             'can_records': manage, 'can_settings': manage}
+
+
+def board_attraction_id(db, user):
+    """All managers and local TR operate the same Heat Pursuit board."""
+    return rotation_attraction_id(db) if capabilities(user)['can_operate'] else user.employee.attraction_id
 
 
 def can_enter(user, db=None):
     if getattr(user,'rotation_temporary',False): return True
+    if set(user.role_codes) & MANAGERS: return True
     if db is not None:
         from app.rotation.participation import contexts
         if contexts(db,user.employee.employee_no):return True
@@ -99,7 +106,7 @@ def actor(user, *, personal=False):
 def identity(user):
     return {'kind':'supervisor' if capabilities(user)['can_operate'] else 'member',
             'kind_label':user.display_role_name,'name':user.name,'employee_no':user.employee.employee_no,
-            'attraction_name':user.employee.attraction.name}
+            'attraction_name':ROTATION_ATTRACTION_NAME if capabilities(user)['can_operate'] else user.employee.attraction.name}
 
 
 def call(fn, *args, **kwargs):
@@ -113,19 +120,19 @@ def whoami(user: V2User = Depends(staff)):
     if not set(user.role_codes)&ROLES:raise HTTPException(403,'此身份只可使用本人轮岗待办')
     return {'kind': 'supervisor' if capabilities(user)['can_operate'] else 'member',
             'kind_label': user.display_role_name, 'name': user.name, 'employee_no': user.employee.employee_no,
-            'attraction_name': user.employee.attraction.name, 'test_mode': False, 'formal': True,
+            'attraction_name': identity(user)['attraction_name'], 'test_mode': False, 'formal': True,
             'adjustment': False, 'can_authorize': False, 'capabilities': capabilities(user)}
 
 
 @router.get('/board')
 def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     if not set(user.role_codes)&ROLES:raise HTTPException(403,'此身份只可使用本人轮岗待办')
-    aid = user.employee.attraction_id
+    aid = board_attraction_id(db,user)
     # No pending writes here: release the authorization/read snapshot before
     # the ticker opens its separate short transaction and acquires its lock.
     db.rollback()
     S.tick_attraction(aid, formal=True)
-    data = call(S.board_payload, db, user.employee.attraction_id)
+    data = call(S.board_payload, db, aid)
     data.update(capabilities=capabilities(user),identity=identity(user))
     if not capabilities(user)['can_manage']:
         for key in ('roster','rosterDates','days','draft'): data.pop(key, None)
@@ -185,7 +192,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
 
 @router.post('/act')
 def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(operator)):
-    if not capabilities(user)['can_manage'] and payload.get('action') in ('add_person','set_close'):
+    if not capabilities(user)['can_manage'] and payload.get('action') in ('set_close',):
         raise HTTPException(403, '此操作需要主管或经理权限')
     if payload.get('action') in ('arrive','depart','entry_return','entry_adjust') and not payload.get('confirmation_token'):
         raise HTTPException(400, '请刷新看板后重新确认')
@@ -193,12 +200,18 @@ def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(
         raise HTTPException(400,'请先预览当日调整影响')
     if payload.get('action') == 'line' and not isinstance(payload.get('line_context'), dict):
         raise HTTPException(409,'请刷新看板后重新确认开停线')
-    return call(S.do_live_action, db, user.employee.attraction_id, actor(user), payload)
+    return call(S.do_live_action, db, board_attraction_id(db,user), actor(user), payload)
 
 
 @router.post('/timeout/preview')
 def timeout_preview(payload: dict,db: Session=Depends(formal_db),user: V2User=Depends(operator)):
-    return call(S.timeout_case_preview,db,user.employee.attraction_id,actor(user),payload)
+    return call(S.timeout_case_preview,db,board_attraction_id(db,user),actor(user),payload)
+
+
+@router.get('/people-search')
+def people_search(q: str = '', db: Session = Depends(formal_db), user: V2User = Depends(operator)):
+    from app.rotation.forecast_service import search_people
+    return {'people': search_people(db, q)}
 
 
 @router.post('/me/entry-preview')
@@ -226,46 +239,51 @@ def entry_preview(payload: dict, db: Session = Depends(formal_db), user: V2User 
 @router.post('/adjust/preview')
 def preview(payload: dict,db: Session = Depends(formal_db),user: V2User = Depends(operator)):
     from app.rotation.manual import preview as preview_change
-    return call(preview_change,db,user.employee.attraction_id,payload)
+    return call(preview_change,db,board_attraction_id(db,user),payload)
 
 
 @router.post('/adjust/act')
 def execute_preview(payload: dict,db: Session = Depends(formal_db),user: V2User = Depends(operator)):
     if not payload.get('expected_snapshot') or payload.get('action') not in ('post','move','post_order'):
         raise HTTPException(400,'请先预览当日调整影响')
-    call(S.do_live_action,db,user.employee.attraction_id,actor(user),payload)
+    call(S.do_live_action,db,board_attraction_id(db,user),actor(user),payload)
     return {'ok':True}
 
 
 @router.get('/confirmation')
 def confirmation(token: str, date: str, attraction_id: int | None = None, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     from app.rotation.participation import personal_scope
-    aid,_=personal_scope(db,user,attraction_id)
+    board_aid=board_attraction_id(db,user)
+    if capabilities(user)['can_operate'] and attraction_id in (None,board_aid):
+        aid=board_aid
+    else:
+        aid,_=personal_scope(db,user,attraction_id)
     if len(token)!=64: raise HTTPException(400, '确认标识无效')
-    if parse_iso_date(date).isoformat()!=datetime.now().date().isoformat(): raise HTTPException(400, '仅可核对当日确认')
+    work_day,_=S.clock_now(S.load_config(db,aid))
+    if parse_iso_date(date).isoformat()!=work_day: raise HTTPException(400, '仅可核对当前工作日确认')
     return call(S.confirmation_status, db, aid, date, token,
-                None if capabilities(user)['can_operate'] and aid==user.employee.attraction_id else user.employee.employee_no)
+                None if capabilities(user)['can_operate'] and aid==board_aid else user.employee.employee_no)
 
 
 @router.post('/undo/preview')
 def undo_preview(payload:dict,db:Session=Depends(formal_db),user:V2User=Depends(operator)):
     from app.rotation.history import preview
-    return call(preview,db,user.employee.attraction_id,payload.get('line'))
+    return call(preview,db,board_attraction_id(db,user),payload.get('line'))
 
 
 @router.get('/daily')
 def month(month: str, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
-    return call(D.month_payload, db, user.employee.attraction_id, month)
+    return call(D.month_payload, db, board_attraction_id(db,user), month)
 
 
 @router.get('/daily/{day}')
 def daily(day: str, at: str | None = None, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
-    return call(D.day_payload, db, user.employee.attraction_id, parse_iso_date(day).isoformat(), at)
+    return call(D.day_payload, db, board_attraction_id(db,user), parse_iso_date(day).isoformat(), at)
 
 
 @router.post('/daily/{day}')
 def daily_edit(day: str, payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
-    call(D.edit, db, user.employee.attraction_id, actor(user), parse_iso_date(day).isoformat(), payload)
+    call(D.edit, db, board_attraction_id(db,user), actor(user), parse_iso_date(day).isoformat(), payload)
     return {'ok': True}
 
 
@@ -278,7 +296,7 @@ def draft(payload: dict, db: Session = Depends(formal_db), user: V2User = Depend
 @router.get('/config')
 def config(db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     with S.transaction(db):
-        cfg=S.load_config(db,user.employee.attraction_id)
+        cfg=S.load_config(db,board_attraction_id(db,user))
         return {'lines':S.lines_of(cfg),'settings':S.settings_of(cfg),'defaults':S.E.DEFAULT_SETTINGS}
 
 
@@ -286,7 +304,7 @@ def config(db: Session = Depends(formal_db), user: V2User = Depends(manager)):
 def save_config(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     try:
         with S.transaction(db):
-            cfg=S.load_config(db,user.employee.attraction_id)
+            cfg=S.load_config(db,board_attraction_id(db,user))
             S.update_config(cfg,payload.get('lines'),payload.get('settings'),user.id)
             S.mark_changed(db)
     except S.ActionError as exc: raise HTTPException(400,str(exc)) from exc
@@ -295,7 +313,7 @@ def save_config(payload: dict, db: Session = Depends(formal_db), user: V2User = 
 
 @router.get('/roster')
 def roster(date: str, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
-    return S.roster_summary(db,user.employee.attraction_id,parse_iso_date(date).isoformat())
+    return S.roster_summary(db,board_attraction_id(db,user),parse_iso_date(date).isoformat())
 
 
 @router.post('/roster/upload')
@@ -322,7 +340,8 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
     from app.rotation.temporary import preflight, provision
     from app.rotation.participation import save_metadata
     from app.v2_crypto import hash_password
-    preliminary=preflight(db,parsed,user.employee.attraction_id,scope,date or None,skip)
+    aid=board_attraction_id(db,user)
+    preliminary=preflight(db,parsed,aid,scope,date or None,skip)
     if preview: return {'ok':True,'preview':True,**preliminary}
     if expected_digest and expected_digest!=preliminary['digest']:
         raise HTTPException(409,'班表或人员身份已变化，请重新预检')
@@ -340,23 +359,23 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
             # A writer reservation serializes roster provisioning against HR registration.
             db.rollback()
             db.execute(text('BEGIN IMMEDIATE'))
-            batch=preflight(db,parsed,user.employee.attraction_id,scope,date or None,skip)
+            batch=preflight(db,parsed,aid,scope,date or None,skip)
             if preliminary['digest']!=batch['digest']:
                 raise HTTPException(409,'班表或人员身份已变化，请重新预检')
             with S.transaction(db):
-                provision(db,parsed,user.employee.attraction_id,batch,passwords)
+                provision(db,parsed,aid,batch,passwords)
                 from copy import deepcopy
                 selected=deepcopy(parsed)
                 for day in batch['dates']:
                     selected['days'][day]={no:cell for no,cell in selected['days'][day].items() if no not in batch['skipped']}
                 if not any(selected['days'][day] for day in batch['dates']):raise HTTPException(400,'跳过后没有可导入人员')
-                row=call(S.save_roster,db,user.employee.attraction_id,selected,scope=scope,file_name=filename,
+                row=call(S.save_roster,db,aid,selected,scope=scope,file_name=filename,
                          uploader_id=user.id,uploader_name=user.name,only_date=date or None)
                 save_metadata(db,row,batch)
                 # Refresh only identity facts for an already-running participant.
                 # Imported rosters never silently move posts or restart live shifts.
                 for day in batch['dates']:
-                    running=S.day_row(db,user.employee.attraction_id,day)
+                    running=S.day_row(db,aid,day)
                     if running and running.status=='live':
                         state=S.day_state(running)
                         facts={no:metadata for no,metadata in batch['identities'].items()
@@ -376,12 +395,12 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
 
 @router.get('/log')
 def log(date: str, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
-    return {'items':S.day_log(db,user.employee.attraction_id,parse_iso_date(date).isoformat())}
+    return {'items':S.day_log(db,board_attraction_id(db,user),parse_iso_date(date).isoformat())}
 
 
 @router.get('/person')
 def person(employee_no: str,date: str,db: Session = Depends(formal_db),user: V2User = Depends(manager)):
-    return S.person_record(db,user.employee.attraction_id,employee_number(employee_no),parse_iso_date(date).isoformat())
+    return S.person_record(db,board_attraction_id(db,user),employee_number(employee_no),parse_iso_date(date).isoformat())
 
 
 @router.get('/stream')
@@ -392,8 +411,8 @@ async def stream(request: Request):
         # Release each short authentication session before yielding a long-lived stream.
         with SessionLocal() as db:
             fresh=current_user(request,db)
-            if not can_enter(fresh): raise HTTPException(403,'没有轮岗权限')
-            return fresh.id,fresh.employee.attraction_id
+            if not can_enter(fresh,db): raise HTTPException(403,'没有轮岗权限')
+            return fresh.id,board_attraction_id(db,fresh)
 
     identity=await run_in_threadpool(check_access)
     async def events():

@@ -11,6 +11,40 @@ from app.rotation.models import RotationDay, RotationDuty, RotationSegment, Rota
 FUTURE = '2026-10-05'
 
 
+def test_board_and_screen_prearrange_at_exactly_0300_without_early_staffing(rotation):
+    with rotation.factory() as db,S.transaction(db):
+        cfg=S.load_config(db,rotation.attraction_id)
+        S.set_sim_clock(cfg,DAY,180-1/60,paused=True)
+    with rotation.factory() as db:
+        assert S.board_payload(db,rotation.attraction_id)['day'] is None
+        assert S.screen_payload(db,rotation.attraction_id)['day'] is None
+        assert S.day_row(db,rotation.attraction_id,DAY) is None
+    with rotation.factory() as db,S.transaction(db):
+        S.set_sim_clock(S.load_config(db,rotation.attraction_id),DAY,180,paused=True)
+    with rotation.factory() as db:
+        board=S.board_payload(db,rotation.attraction_id)['day']
+        screen=S.screen_payload(db,rotation.attraction_id)['day']
+        assert board['status']=='live' and board['lines']==screen['lines']
+        assert all(p['state']=='notyet' and p.get('continuousStart') is None for p in board['persons'])
+        assert all(line['sortAt']==0 for line in board['lines'])
+        assert db.query(RotationSegment).count()==0
+        row=S.day_row(db,rotation.attraction_id,DAY)
+        assert S.day_state(row)['lastTick']==180
+
+
+def test_0300_future_prearrangement_preserves_manual_plan(rotation):
+    prepare(rotation)
+    edit(rotation,action='draft_swap_people',source='A#0',target='B#0')
+    expected=deepcopy(read(rotation)['draft']['plan'])
+    with rotation.factory() as db,S.transaction(db):
+        cfg=S.load_config(db,rotation.attraction_id);S.set_sim_clock(cfg,FUTURE,180,paused=True)
+    with rotation.factory() as db:
+        data=S.screen_payload(db,rotation.attraction_id)['day']
+        assert data['status']=='live'
+        assert S.day_state(S.day_row(db,rotation.attraction_id,FUTURE))['plan']==expected
+        assert all(p['state']=='notyet' for p in data['persons'])
+
+
 def prepare(rotation):
     with rotation.factory() as db:
         parsed = {'people': {str(i): {'name': f'测试员工{i}', 'type': '', 'mark': ''} for i in range(1, 6)},
@@ -27,6 +61,33 @@ def read(rotation, day=FUTURE, at=None):
         return D.day_payload(db, rotation.attraction_id, day, at)
 
 
+def test_v2_daily_person_shift_sick_and_return_preserve_import_and_configuration(rotation):
+    prepare(rotation)
+    before = read(rotation)
+    pid = next(iter(before['draft']['persons']))
+    with rotation.factory() as db:
+        cfg = S.load_config(db, rotation.attraction_id)
+        config = (cfg.lines_json, cfg.settings_json)
+    edit(rotation, action='draft_person', pid=pid, operation='shift', start='08:00', end='00:30')
+    changed = read(rotation)['draft']
+    assert changed['persons'][pid]['start'] == 480 and changed['persons'][pid]['end'] == 1470
+    edit(rotation, action='draft_person', pid=pid, operation='sick')
+    changed = read(rotation)['draft']
+    assert changed['persons'][pid]['initialPool'] == 'sick'
+    assert all(pid not in changed['plan'][kind].values() for kind in ('crew', 'seven'))
+    edit(rotation, action='draft_person', pid=pid, operation='back')
+    state = deepcopy(read(rotation)['draft'])
+    from test_rotation_engine import Hooks
+    engine = S.E.Engine(state, dict(S.E.DEFAULT_SETTINGS), Hooks())
+    engine.publish(240, 'test')
+    engine.tick(480)
+    assert engine.P[pid]['state'] == 'rest' and engine.P[pid]['readyAt'] == 495
+    with rotation.factory() as db:
+        cfg = S.load_config(db, rotation.attraction_id)
+        assert (cfg.lines_json, cfg.settings_json) == config
+    assert before['roster'] == read(rotation)['roster']
+
+
 @pytest.mark.parametrize('lid',['D2','E'])
 def test_future_standby_line_can_enable_assign_and_disable_without_starting_timers(rotation,lid):
     with rotation.factory() as db,S.transaction(db):
@@ -40,7 +101,8 @@ def test_future_standby_line_can_enable_assign_and_disable_without_starting_time
     board.act_line(lid,True,240,'board')
     edit(rotation,action='draft_line',line=lid,active=True)
     opened=read(rotation);line=next(l for l in opened['draft']['lines'] if l['id']==lid)
-    assert not line['standby'] and all(post['open'] for post in line['posts'])
+    assert not line['standby'] and all(post['open'] for post in line['posts'][:5])
+    assert not line['posts'][5]['open']
     assert next(l for l in opened['day']['lines'] if l['id']==lid)['active']
     assigned=set(original['crew'].values())|set(original['seven'].values())
     pid=next(pid for pid in opened['draft']['persons'] if pid not in assigned)
@@ -139,23 +201,24 @@ def test_post_menu_saves_only_the_selected_day_and_activates_at_the_planned_time
     assert not engine.line('B')['posts'][0]['open']
 
 
-def test_five_post_spares_use_existing_rename_flow_without_changing_other_slots(rotation):
+def test_spares_use_existing_rename_flow_without_changing_other_slots(rotation):
     with rotation.factory() as db, S.transaction(db):
         cfg = S.load_config(db, rotation.attraction_id)
         cfg.lines_json = S._dumps(S.E.DEFAULT_LINES)
     prepare(rotation)
     before = read(rotation)
-    assert all(len(line['posts']) == 5 for line in before['draft']['lines'])
+    assert all(len(line['posts']) == 6 for line in before['draft']['lines'])
     plan = deepcopy(before['draft']['plan'])
     original = deepcopy(before['draft']['lines'])
     identities = None
     for key, name in [('D2#3', '备用改名甲'), ('D2#4', '备用改名乙'),
-                      ('E#2', '备用改名丙'), ('E#3', '备用改名丁'), ('E#4', '备用改名戊')]:
+                      ('E#2', '备用改名丙'), ('E#3', '备用改名丁'), ('E#4', '备用改名戊'),
+                      ('A1#5', '备用改名己')]:
         edit(rotation, action='draft_rename_post', post=key, expected_name='备用', name=name)
         current_keys = [post['key'] for line in read(rotation)['draft']['lines'] for post in line['posts']]
         if identities is None:
             identities = current_keys  # Existing rename flow initializes workflow identities once.
-            assert len(set(identities)) == 45
+            assert len(set(identities)) == 54
         assert current_keys == identities
         line_id, index = key.split('#')
         next(line for line in original if line['id'] == line_id)['posts'][int(index)]['name'] = name
@@ -257,7 +320,7 @@ def test_future_plan_starts_only_on_its_day_preserving_edits(rotation):
     after = read(rotation)
     assert after['day']['status'] == 'live' and after['can_edit'] and after['prestart_live']
     assert after['day']['plan'] == plan
-    assert after['times'] and after['as_of'] == 240
+    assert after['times'] and after['as_of'] == S.PREARRANGE_MINUTE
 
 
 def test_historical_reads_are_readonly_and_quiet_ticks_do_not_add_snapshots(rotation):
@@ -704,7 +767,10 @@ def legacy_standard_day(rotation,formal=False,work_date=FUTURE):
     from app.rotation.namespace import tables_for
     with rotation.factory() as db:
         cfg=S.load_config(db,rotation.attraction_id)
-        old=deepcopy(S.E.DEFAULT_LINES);old[-2]['posts']=old[-2]['posts'][:3];old[-1]['posts']=old[-1]['posts'][:2]
+        old=deepcopy(S.E.DEFAULT_LINES)
+        for line in old:
+            line['posts'].pop()
+        old[-2]['posts']=old[-2]['posts'][:3];old[-1]['posts']=old[-1]['posts'][:2]
         cfg.lines_json=S._dumps(old);db.commit()
     prepare(rotation)
     with rotation.factory() as db,S.transaction(db):
@@ -730,13 +796,13 @@ def test_existing_unstarted_plans_fill_spares_without_resetting_arrangement(rota
             db.info['rotation_formal']=formal
             return D.day_payload(db,rotation.attraction_id,FUTURE)
     after=load();lines={l['id']:l for l in after['draft']['lines']}
-    assert len(lines['D2']['posts'])==len(lines['E']['posts'])==5
-    assert [p['name'] for p in lines['D2']['posts'][3:]]==['备用']*2
-    assert [p['name'] for p in lines['E']['posts'][2:]]==['备用']*3
+    assert all(len(line['posts']) == 6 and line['posts'][5]['draftClosed'] for line in lines.values())
+    assert [p['name'] for p in lines['D2']['posts'][3:]]==['备用']*3
+    assert [p['name'] for p in lines['E']['posts'][2:]]==['备用']*4
     assert after['draft']['plan']==before['plan'] and after['draft']['persons']==before['persons']
     for a,b in zip(after['draft']['lines'],before['lines']):assert a['posts'][:len(b['posts'])]==b['posts']
     keys=[p['key'] for line in after['draft']['lines'] for p in line['posts'] if p.get('name')=='备用']
-    assert len(set(keys))==5
+    assert len(set(keys))==14
     assert after['revision']==version+1
     again=load();assert again['draft']==after['draft'] and again['revision']==after['revision']
     with rotation.factory() as db:
@@ -757,7 +823,7 @@ def test_fill_only_before_first_shift_never_rewrites_frozen_or_past_day(rotation
     with rotation.factory() as db:
         row=S.day_row(db,rotation.attraction_id,work_date);stored=S.day_state(row)
         if work_date==DAY and minute<435:
-            assert len(stored['lines'][-1]['posts'])==5 and row.version==version+1
+            assert len(stored['lines'][-1]['posts'])==6 and row.version==version+1
         else:
             assert stored==before and row.version==version
 
@@ -769,10 +835,18 @@ def test_spare_fill_keeps_custom_lines_and_does_not_trim_extra_posts():
 
 def test_enabled_today_before_first_shift_adds_only_closed_empty_spares(rotation):
     legacy_standard_day(rotation,work_date=DAY)
-    with rotation.factory() as db:
-        S.do_draft_action(db,rotation.attraction_id,'test',{'action':'publish','date':DAY})
-        before=deepcopy(S.day_state(S.day_row(db,rotation.attraction_id,DAY)))
+    with rotation.factory() as db,S.transaction(db):
+        cfg=S.load_config(db,rotation.attraction_id)
+        row=S.day_row(db,rotation.attraction_id,DAY)
+        state=S.day_state(row)
+        engine,_=S.engine_for(db,cfg,row,state)
+        engine.publish(240,'test')  # Simulate a day already published by the earlier code.
+        S.save_day(db,row,state)
+        before=deepcopy(state)
         snapshots={r.id:r.payload for r in db.query(RotationSnapshot).all()}
+    S.tick_attraction(rotation.attraction_id)
+    with rotation.factory() as db:
+        assert len(S.board_payload(db,rotation.attraction_id)['day']['lines'][-1]['posts'])==6
     after=read(rotation,DAY)
     assert after['prestart_live'] and after['draft']['plan']==before['plan']
     for line in after['draft']['lines']:
@@ -782,7 +856,6 @@ def test_enabled_today_before_first_shift_adds_only_closed_empty_spares(rotation
             assert post['name']=='备用' and not post['open'] and post['occ'] is None
     with rotation.factory() as db:
         assert all(db.get(RotationSnapshot,key).payload==payload for key,payload in snapshots.items())
-        assert len(S.board_payload(db,rotation.attraction_id)['day']['lines'][-1]['posts'])==5
 
 
 def test_legacy_spare_fill_commit_failure_rolls_back_and_can_retry(rotation,monkeypatch):
@@ -796,4 +869,36 @@ def test_legacy_spare_fill_commit_failure_rolls_back_and_can_retry(rotation,monk
         assert row.version==version and S.day_state(row)==before
         from app.rotation.models import RotationEvent
         assert db.query(RotationEvent).filter_by(event_type='draft_fill_spares').count()==0
-    assert len(read(rotation)['draft']['lines'][-1]['posts'])==5
+    assert len(read(rotation)['draft']['lines'][-1]['posts'])==6
+
+
+@pytest.mark.parametrize('automatic', [False, True])
+def test_legacy_draft_opens_with_closed_spares_without_daily_page_visit(rotation, automatic):
+    before, _ = legacy_standard_day(rotation, work_date=DAY)
+    with rotation.factory() as db:
+        cfg = S.load_config(db, rotation.attraction_id)
+        if automatic:
+            with S.transaction(db):
+                row = S.day_row(db, rotation.attraction_id, DAY)
+                state = S.day_state(row)
+                state.update(dailyAutoStart=True, rosterUploadId=S.roster_upload_for(db, rotation.attraction_id, DAY).id)
+                S.save_day(db, row, state)
+            S.ensure_prearranged_day(db, cfg, rotation.attraction_id, DAY, 240)
+        else:
+            S.do_draft_action(db, rotation.attraction_id, 'test', {'action': 'publish', 'date': DAY})
+        row = S.day_row(db, rotation.attraction_id, DAY)
+        state = S.day_state(row)
+        assert row.status == 'live' and state['plan'] == before['plan']
+        assert all(len(line['posts']) == 6 and not line['posts'][5]['open'] for line in state['lines'])
+        from test_rotation_engine import Hooks
+        engine = S.E.Engine(state, S.settings_of(cfg), Hooks())
+        engine.tick(435)
+        engine.act_line('D2', True, 436, 'test')
+        assert all(post['open'] for post in engine.line('D2')['posts'][:5])
+        assert not engine.line('D2')['posts'][5]['open']
+        assert 5 not in engine.rotation_posts(engine.line('D2'))
+        engine.act_post('D2', 5, True, 436, 'test', open_at=440)
+        engine.tick(439)
+        assert not engine.line('D2')['posts'][5]['open']
+        engine.tick(440)
+        assert engine.line('D2')['posts'][5]['open']

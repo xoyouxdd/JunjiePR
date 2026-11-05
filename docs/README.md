@@ -4,6 +4,7 @@
 
 | 文件 | 内容 |
 |---|---|
+| [rotation-forecast-v2.md](rotation-forecast-v2.md) | 动态轮岗预排、访问范围与跨夜规则 |
 | [rotation-early-post-shifts.md](rotation-early-post-shifts.md) | 7点岗位跨班次预排与接替关系 |
 | [rotation-prearranged-lines.md](rotation-prearranged-lines.md) | 每日预排线路启停与权限 |
 | [rotation-display-consistency.md](rotation-display-consistency.md) | 轮岗跨页面任务和时间显示 |
