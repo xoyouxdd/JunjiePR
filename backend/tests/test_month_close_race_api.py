@@ -16,12 +16,18 @@ def test_close_wins_against_delayed_recognition_without_partial_records(monkeypa
         login(client,'TATEST01');payload=recognition_form(client)
         activate_circle_hr();login(closer,'HR-HEAT')
         circle=next(r['id'] for r in closer.get('/api/options').json()['employee_circles'] if r['name']=='热力追踪')
-        original=recognitions.ensure_month_open
-        def close_between_check_and_write(db,month,attraction_id,operation):
-            original(db,month,attraction_id,operation)
-            response=closer.post(f'/api/month-closes/{month}/close',json={'attraction_id':circle,'reason':'并发回归'})
-            assert response.status_code==200,response.text
-        monkeypatch.setattr(recognitions,'ensure_month_open',close_between_check_and_write)
+        from sqlalchemy.orm import Session
+        original = Session.flush
+        intercepted = False
+        def close_before_first_record_write(db, *args, **kwargs):
+            nonlocal intercepted
+            if not intercepted and any(isinstance(row, RecognitionRecord) for row in db.new):
+                intercepted = True
+                response = closer.post(f"/api/month-closes/{payload['recognition_date'][:7]}/close",
+                                       json={'attraction_id': circle, 'reason': '并发回归'})
+                assert response.status_code == 200, response.text
+            return original(db, *args, **kwargs)
+        monkeypatch.setattr(Session, 'flush', close_before_first_record_write)
         response=client.post('/api/recognitions',data=payload)
         assert response.status_code==423,response.text
         with SessionLocal() as db:
