@@ -177,7 +177,7 @@ def test_void_filter_export_and_security_watermarks() -> None:
         exported = client.get("/api/statistics/export", params={"month": month, "attraction_id": circle_id, "title": "CM"})
         assert exported.status_code == 200, exported.text
         workbook = load_workbook(BytesIO(exported.content))
-        assert workbook.sheetnames == ["导出说明", "月度综合分明细", "月度综合分", "主管月度综合分明细", "主管月度综合分", "签卡明细", "扣分明细", "病假明细", "LOA明细", "层级绩效明细", "作废操作记录", "员工号变更对照"]
+        assert workbook.sheetnames == ["导出说明", "月度综合分明细", "月度综合分", "主管月度综合分明细", "主管月度综合分", "签卡明细", "扣分明细", "病假明细", "LOA明细", "层级绩效明细", "作废操作记录", "员工号变更对照", "管理层认可次数"]
         assert workbook.active.title == "导出说明"
         assert "认可数据" in str(workbook["导出说明"]["A1"].value)
         export_context = {row[0].value: row[1].value for row in workbook["导出说明"].iter_rows(min_row=2)}
@@ -1231,7 +1231,7 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
 
     script = read_frontend_source()
     assert "const r=state.me.role_code, items=[];" in script
-    assert "if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记']);" in script
+    assert "if (['CM','TR'].includes(r)) items.push(['home','个人中心'],['register','登记']);" in script
     assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);" in script
     assert "items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','小组管理']" in script
     assert "async function renderMonthClose" in script
