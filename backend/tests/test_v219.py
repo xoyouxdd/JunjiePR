@@ -1241,7 +1241,8 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
     assert '<h2>账号姓名修改</h2>' in script
     assert 'id="passwordBtn"' not in script
     assert "function recognizerGroups(rows)" in script
-    assert "recognitionSubmissionData(e.target,selfMode)" in script
+    assert "const imageRequired=selfMode||managerRecognition;" in script
+    assert "recognitionSubmissionData(e.target,imageRequired)" in script
     assert "data-hr-group-select" in script
     assert "canEdit=initial.can_edit" in script
     assert "/api/hr/scoring-config" in script
