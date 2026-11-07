@@ -19,6 +19,7 @@ from openpyxl.worksheet.pagebreak import Break
 
 from app.v2_database import FILE_DIR, SessionLocal
 from app.v2_models import StoredFile
+from app.branding import BRAND_EN
 
 STATUS = {"pending": "待查收", "completed": "已查收", "suspended": "暂缓", "exited": "退出范围",
           "superseded": "已替换", "withdrawn": "已撤下", "expired": "已过期"}
@@ -168,6 +169,8 @@ def spreadsheet(data, user, followup=False):
     signatures = signature_previews(data)
     announcement, groups = data["announcement"], report_groups(data)
     workbook = Workbook()
+    workbook.properties.creator = BRAND_EN
+    workbook.properties.subject = BRAND_EN
     overview = workbook.active
     overview.title = "公告与总览"
     label = f"ANN-{announcement['id']:06d} / V{announcement['version']}"
@@ -197,7 +200,7 @@ def spreadsheet(data, user, followup=False):
         return row
 
     setup(overview,[18,22,16,18,20,22,24,24])
-    merged(overview,"FZ团队工作台 / 公告签收总览",30,True)
+    merged(overview,f"{BRAND_EN} / 公告签收总览",30,True)
     merged(overview,announcement["title"],max(32,math.ceil(len(announcement["title"])/70)*20),True)
     merged(overview,f"{label} · {announcement['category']} · {scope_note(data)}")
     merged(overview,f"本版发布人：{announcement.get('author') or '未记录'} · 首次发布：{text(announcement.get('published_at'))} · 本版更新：{text(announcement.get('updated_at'))}")
@@ -332,6 +335,9 @@ def spreadsheet(data, user, followup=False):
                     cell.font = Font(name="微软雅黑",size=10,bold=True,color=color)
     if followup and groups:
         workbook.active = 1
+    for sheet in workbook:
+        sheet.oddFooter.left.text = BRAND_EN
+        sheet.oddFooter.left.size = 8
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
@@ -377,7 +383,7 @@ def pdf(data, user):
 
     def page(title, landscape=False):
         p = document.new_page(width=842 if landscape else 595,height=595 if landscape else 842)
-        draw(p,f"FZ团队工作台 / {title}",32,20,p.rect.width-280,10)
+        draw(p,f"{BRAND_EN} / {title}",32,20,p.rect.width-280,10)
         draw(p,label,p.rect.width-210,20,178,9,muted)
         p.draw_line((32,45),(p.rect.width-32,45),color=teal,width=1)
         return p
@@ -473,7 +479,7 @@ def pdf(data, user):
     proof = {"announcement_id":announcement["id"],"version":announcement["version"],"scope":scope_note(data),
              "note":"SHA256校验对应系统原始签名；页面图片为报表副本。","records":evidence_rows(data,signatures)}
     document.embfile_add("signature-evidence.json",json.dumps(proof,ensure_ascii=False,default=str).encode("utf-8"),filename="signature-evidence.json",ufilename="签字凭据核对.json")
-    document.set_metadata({"title":announcement["title"],"author":"FZ团队工作台","subject":label})
+    document.set_metadata({"title":announcement["title"],"author":BRAND_EN,"subject":label})
     for index,p in enumerate(document):
         draw(p,stamp,32,p.rect.height-33,p.rect.width-190,7,muted)
         draw(p,f"受控签收记录 | {index+1} / {document.page_count}",p.rect.width-158,p.rect.height-33,126,7,muted)

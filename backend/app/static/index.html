@@ -11,8 +11,11 @@
   <link rel="apple-touch-icon" href="static/images/fzpr-icon.png?v=__STATIC_CACHE_VERSION__">
   <title>FZ团队工作台</title>
   <script src="static/js/appearance-boot.js?v=__STATIC_CACHE_VERSION__"></script>
+  <link rel="stylesheet" href="static/css/activity-points.css?v=__STATIC_CACHE_VERSION__">
+  <link rel="stylesheet" href="static/css/activities.css?v=__STATIC_CACHE_VERSION__">
   <link rel="stylesheet" href="static/css/score-settings.css?v=__STATIC_CACHE_VERSION__">
   <link rel="stylesheet" href="static/css/style.css?v=__STATIC_CACHE_VERSION__">
+  <link rel="stylesheet" href="static/css/attendance-medals.css?v=__STATIC_CACHE_VERSION__">
   <link rel="stylesheet" href="static/css/workspace-ui.css?v=__STATIC_CACHE_VERSION__">
   <link rel="stylesheet" href="static/css/workbench.css?v=__STATIC_CACHE_VERSION__">
   <link rel="stylesheet" href="static/css/announcements.css?v=__STATIC_CACHE_VERSION__">
@@ -20,11 +23,13 @@
   <link rel="stylesheet" href="static/css/avatars.css?v=__STATIC_CACHE_VERSION__">
   <link rel="stylesheet" href="static/css/appearance.css?v=__STATIC_CACHE_VERSION__">
   <link rel="stylesheet" href="static/css/monthly-memory.css?v=__STATIC_CACHE_VERSION__">
+  <link rel="stylesheet" href="static/css/personal-center.css?v=__STATIC_CACHE_VERSION__">
+  <link rel="stylesheet" href="static/css/legacy-points.css?v=__STATIC_CACHE_VERSION__">
 </head>
 <body>
   <div class="app-frame">
     <header class="topbar app-topbar">
-      <div class="app-brand"><img class="app-brand-logo" src="static/images/fzpr-icon.png?v=__STATIC_CACHE_VERSION__" alt="" width="30" height="30"><strong><span class="brand-full">FZ工作台</span><span class="brand-short">FZ工作台</span><small>TEAM WORKSPACE</small></strong></div>
+      <div class="app-brand"><img class="app-brand-logo" src="static/images/fzpr-icon.png?v=__STATIC_CACHE_VERSION__" alt="" width="30" height="30"><strong><span class="brand-full">FZ工作台</span><span class="brand-short">FZ工作台</span><small lang="en">FZ TEAM WORKBENCH</small></strong></div>
       <div class="app-identity"><span id="userBadge"></span><span id="pageBindHint" hidden></span></div>
       <div class="app-topbar-actions"><button id="appearanceBtn" type="button" class="topbar-appearance" hidden><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1-3.7 1.5 1.5 0 0 1 1-2.7h2a4 4 0 0 0 4-4C21 6.3 17 3 12 3Z"/><circle cx="7.5" cy="10" r=".7"/><circle cx="10" cy="6.5" r=".7"/><circle cx="14.5" cy="6.5" r=".7"/><circle cx="17" cy="10" r=".7"/></svg><span>外观</span></button><button id="logoutBtn" class="ghost">退出</button></div>
     </header>
@@ -50,6 +55,12 @@
         "./static/js/app/learning-shares.js": "./static/js/app/learning-shares.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/learning-reader.js": "./static/js/app/learning-reader.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/absence.js": "./static/js/app/absence.js?v=__STATIC_CACHE_VERSION__",
+        "./static/js/app/attendance-medals.js": "./static/js/app/attendance-medals.js?v=__STATIC_CACHE_VERSION__",
+        "./static/js/app/activity-points.js": "./static/js/app/activity-points.js?v=__STATIC_CACHE_VERSION__",
+        "./static/js/app/legacy-points.js": "./static/js/app/legacy-points.js?v=__STATIC_CACHE_VERSION__",
+        "./static/js/app/activities.js": "./static/js/app/activities.js?v=__STATIC_CACHE_VERSION__",
+        "./static/js/app/activity-photo.js": "./static/js/app/activity-photo.js?v=__STATIC_CACHE_VERSION__",
+        "./static/js/app/activity-signature.js": "./static/js/app/activity-signature.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/accounts.js": "./static/js/app/accounts.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/announcement.js": "./static/js/app/announcement.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/api.js": "./static/js/app/api.js?v=__STATIC_CACHE_VERSION__",
@@ -82,6 +93,7 @@
         "./static/js/app/rankings.js": "./static/js/app/rankings.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/records.js": "./static/js/app/records.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/recognition-grid.js": "./static/js/app/recognition-grid.js?v=__STATIC_CACHE_VERSION__",
+        "./static/js/app/recognition-inbox.js": "./static/js/app/recognition-inbox.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/registration.js": "./static/js/app/registration.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/recognition-photo.js": "./static/js/app/recognition-photo.js?v=__STATIC_CACHE_VERSION__",
         "./static/js/app/reviews.js": "./static/js/app/reviews.js?v=__STATIC_CACHE_VERSION__",

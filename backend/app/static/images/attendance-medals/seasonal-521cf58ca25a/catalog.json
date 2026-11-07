@@ -1,0 +1,219 @@
+{
+  "version": "seasonal-521cf58ca25a",
+  "source_crop": [
+    145,
+    190,
+    875,
+    1055
+  ],
+  "shared_across_years": true,
+  "runtime_generation": false,
+  "months": [
+    {
+      "month": "01",
+      "thumb": {
+        "file": "01-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 13682,
+        "sha256": "9d8b6c32b0672474ddb87978d22163433e722924cb9cd37a5d200a359c8e98ae"
+      },
+      "detail": {
+        "file": "01-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 85360,
+        "sha256": "7c514c1bb0b90a36158dd6f36e3f43a57915cf7dbde80ef59fa6955d71abb003"
+      }
+    },
+    {
+      "month": "02",
+      "thumb": {
+        "file": "02-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 13100,
+        "sha256": "5d245ed1d07754b1cc0af39203ad18017fdb2cf43a64a8cdad5b9ff045439540"
+      },
+      "detail": {
+        "file": "02-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 79528,
+        "sha256": "c4734c67dc72f318c79fbac18a123c40d30f49aa6a4d31f3a9b208e8abb989a7"
+      }
+    },
+    {
+      "month": "03",
+      "thumb": {
+        "file": "03-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 14432,
+        "sha256": "275c9ed976ce4f09aada2237323cc61fe082c0cc5da993ef95d01606a1d67dc5"
+      },
+      "detail": {
+        "file": "03-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 89568,
+        "sha256": "55eb663f78af942a2e1b665419093753c3ffc7f954a154b1d12861123398fd41"
+      }
+    },
+    {
+      "month": "04",
+      "thumb": {
+        "file": "04-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 13368,
+        "sha256": "e310fda16d2df762d79467a8e12c5d7e0bf7153468b8d9bd6e1ffb7b074dee71"
+      },
+      "detail": {
+        "file": "04-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 79682,
+        "sha256": "fa9ce27ba283db72b1565ba672a5c1315398181c9a01d8ed08d22ec81c24939f"
+      }
+    },
+    {
+      "month": "05",
+      "thumb": {
+        "file": "05-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 14362,
+        "sha256": "a6530abafc551bb71e78332ca13851e2601900e6cda0305d4618a6412408c44e"
+      },
+      "detail": {
+        "file": "05-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 88906,
+        "sha256": "8c87da67f6fc99e0f7687c3513feba068c7d664413139b79747894ccac577077"
+      }
+    },
+    {
+      "month": "06",
+      "thumb": {
+        "file": "06-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 14796,
+        "sha256": "4196fb4b886d8cdf8ff69abec70b8f2528beb991c1c51cd1a9651733d077caeb"
+      },
+      "detail": {
+        "file": "06-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 94302,
+        "sha256": "26ae3cbdc7eccd484c0421870cb2809e44a74be5407425fbb7cc7212265a3ced"
+      }
+    },
+    {
+      "month": "07",
+      "thumb": {
+        "file": "07-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 15314,
+        "sha256": "39f77689af195b387f6c83234e2619bfaed7595fab363fbf4c855f0b8630730f"
+      },
+      "detail": {
+        "file": "07-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 95278,
+        "sha256": "640a1a24980f6378108fe835041e23555b7f1e95487b0ddc871584c1982579d5"
+      }
+    },
+    {
+      "month": "08",
+      "thumb": {
+        "file": "08-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 14092,
+        "sha256": "c9222afd8abfb1f8c9b437db3eb66cc19946b0c5d51785de3553571171bc59f7"
+      },
+      "detail": {
+        "file": "08-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 91472,
+        "sha256": "32b4eb410c49ccc1b2794c4c9b29aa358300c109b0459939f63323fe5fcb37c4"
+      }
+    },
+    {
+      "month": "09",
+      "thumb": {
+        "file": "09-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 12664,
+        "sha256": "09177844f245da8e62684599acdafbae8b095d2286667730c623fb40ec97e39f"
+      },
+      "detail": {
+        "file": "09-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 80360,
+        "sha256": "4a8302123a6263bd4ba7c5e5e2ba7f3832e4f744807af52450cb903f61038d1e"
+      }
+    },
+    {
+      "month": "10",
+      "thumb": {
+        "file": "10-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 13468,
+        "sha256": "6ec4e4adc392d4e6a2297b1a2bc32139775331cd62576e0c5e912b4ea0eb60f6"
+      },
+      "detail": {
+        "file": "10-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 82686,
+        "sha256": "6ecd6b9492d06728ea353b224203fcad620014070decd6335de6a73beae64196"
+      }
+    },
+    {
+      "month": "11",
+      "thumb": {
+        "file": "11-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 12536,
+        "sha256": "19e84c169b4465f089050150c4fe4ec36f45d4872cf78eb93e234a9fa9926ddc"
+      },
+      "detail": {
+        "file": "11-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 76294,
+        "sha256": "8609ab8e051c0e2a4ed3fdd357ffafecf778b3db11fa930cfcba98453951b140"
+      }
+    },
+    {
+      "month": "12",
+      "thumb": {
+        "file": "12-thumb.webp",
+        "width": 240,
+        "height": 284,
+        "bytes": 13610,
+        "sha256": "83dd956e08670546a9926625a30617af8a2e32ee44e0bac8338fd0adf87f7e9d"
+      },
+      "detail": {
+        "file": "12-detail.webp",
+        "width": 640,
+        "height": 758,
+        "bytes": 83762,
+        "sha256": "081c4f8492700c4d0eb500d06512b0b15032572c2b4f8f4ff4138f418488b794"
+      }
+    }
+  ],
+  "total_bytes": 1192622,
+  "all_thumbnails_bytes": 165424
+}

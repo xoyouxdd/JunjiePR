@@ -1,0 +1,52 @@
+.legacy-points-panel{padding:24px!important;border:1px solid var(--line)!important;border-radius:20px!important;background:var(--panel);min-width:0}
+.legacy-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:22px}
+.legacy-eyebrow{display:block;font-size:11px;letter-spacing:1px;color:var(--muted);margin-bottom:5px}
+#app .legacy-heading h2{margin:0;font-size:21px;line-height:1.4;color:var(--text-strong)}
+.legacy-access{padding:5px 10px;border:1px solid var(--line);border-radius:20px;font-size:11px;white-space:nowrap;color:var(--primary);background:var(--surface-tint)}
+.legacy-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;padding:18px;border-radius:14px;background:var(--surface-soft);margin-bottom:20px}
+.legacy-toolbar>label{display:grid;gap:7px;min-width:150px;font-size:12px;color:var(--muted)}
+.legacy-toolbar select{min-height:44px;font-size:16px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:8px 30px 8px 12px;color:var(--text)}
+.legacy-actions{display:flex;gap:9px}
+.legacy-actions button{min-height:44px;padding:10px 18px;font-size:13px;border-radius:9px;white-space:nowrap}
+.legacy-roster-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;color:var(--muted);font-size:12px}
+.legacy-roster-heading>label{display:flex;align-items:center;gap:6px;font-size:11px}
+.legacy-roster-heading input{width:15px;height:15px}
+.legacy-table-wrap{overflow-x:auto;min-width:0;border:1px solid var(--line);border-radius:12px}
+.legacy-table{width:100%;min-width:0;border-collapse:collapse;table-layout:fixed;font-size:12px}
+.legacy-table th{padding:11px 12px;background:var(--surface-soft);color:var(--muted);font-weight:500;text-align:left;font-size:11px}
+.legacy-table th:first-child{width:35%}
+.legacy-table td{padding:13px 12px;border-top:1px solid var(--line);vertical-align:top;color:var(--text);overflow-wrap:anywhere}
+.legacy-table td strong{display:block;font-size:13px;font-weight:500}
+.legacy-table small{display:block;font-size:10px;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.legacy-table details{margin-top:4px;color:var(--muted);font-size:10px}
+.legacy-table details>summary{cursor:pointer;min-height:22px}
+.legacy-table details p{margin:5px 0 0;line-height:1.7;font-size:10px}
+.legacy-table .legacy-number{font-variant-numeric:tabular-nums;font-size:16px;color:var(--primary)}
+.legacy-row-state{font-size:10px;white-space:nowrap;color:var(--muted)}
+.legacy-review{display:inline-block;font-size:10px;color:var(--warn-text);margin-top:5px}
+.legacy-help{font-size:11px;color:var(--muted);line-height:1.75;margin:13px 0 0}
+.legacy-status{font-size:12px;color:var(--primary);line-height:1.7;overflow-wrap:anywhere;margin:12px 0 0}
+.legacy-status:empty{display:none}
+.legacy-pagination{display:flex;justify-content:center;align-items:center;gap:14px;margin-top:12px;font-size:11px;color:var(--muted)}
+.legacy-pagination button{font-size:11px;min-height:36px;padding:6px 12px}
+.legacy-preview{margin-top:22px;padding:20px;border:1px solid var(--line);border-radius:15px;background:var(--surface-raised)}
+.legacy-preview>header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:18px}
+#app .legacy-preview h3{margin:0;font-size:16px}
+.legacy-preview-tag{font-size:10px;color:var(--primary);padding:5px 8px;border-radius:6px;background:var(--surface-tint);white-space:nowrap}
+.legacy-preview-tag.has-errors{background:var(--danger-bg);color:var(--danger-text)}
+.legacy-preview-counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.legacy-preview-counts>div>span{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}
+.legacy-preview-counts strong{font-size:26px;line-height:1.2;font-weight:500;color:var(--text-strong);font-variant-numeric:tabular-nums}
+.legacy-preview-counts strong small{font-size:10px;font-weight:400;color:var(--muted)}
+.legacy-deltas{display:flex;gap:20px;flex-wrap:wrap;padding:13px 0;margin:15px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+.legacy-deltas b{font-size:17px;font-weight:500;color:var(--primary);font-variant-numeric:tabular-nums}
+.legacy-preview-table{max-height:380px;overflow:auto;background:var(--panel)}
+.legacy-table .legacy-positive{color:var(--primary);font-variant-numeric:tabular-nums}
+.legacy-table .legacy-negative{color:var(--danger-text);font-variant-numeric:tabular-nums}
+.legacy-errors{max-height:240px;overflow:auto;background:var(--danger-bg);padding:12px;border-radius:9px}
+.legacy-errors p{font-size:11px;line-height:1.8;color:var(--danger-text);margin:0 0 8px}
+.legacy-errors p:last-child{margin-bottom:0}
+.legacy-apply{display:block;width:100%;min-height:44px;border-radius:9px;margin-top:16px;font-size:13px}
+.legacy-preview-filters{display:flex;gap:7px;flex-wrap:wrap;margin:15px 0}.legacy-preview-filters button{min-height:40px;padding:8px 10px;font-size:11px}.legacy-preview-filters span{margin-left:4px;opacity:.75}.legacy-error-notice{color:var(--danger-text);margin-bottom:12px}
+@media(max-width:600px){.legacy-preview-filters{display:grid;grid-template-columns:1fr 1fr}.legacy-preview-filters button{white-space:normal;min-width:0}}
+@media(max-width:600px){.legacy-points-panel{padding:17px!important;border-radius:17px!important}.legacy-heading{margin-bottom:16px}#app .legacy-heading h2{font-size:19px}.legacy-toolbar{align-items:stretch;flex-direction:column;gap:12px;padding:13px;margin-bottom:16px}.legacy-toolbar>label{min-width:0;gap:5px}.legacy-actions{display:grid;grid-template-columns:1fr 1fr}.legacy-actions button{padding:10px 7px;font-size:12px}.legacy-table th{padding:9px 7px;font-size:10px}.legacy-table td{padding:11px 7px;font-size:11px}.legacy-table td strong{font-size:12px}.legacy-table th:first-child{width:35%}.legacy-preview{padding:14px;margin-top:18px}.legacy-preview-counts{gap:7px}.legacy-preview-counts strong{font-size:24px}.legacy-deltas{gap:18px}.legacy-table details>summary{min-height:28px!important}.legacy-roster-heading{font-size:11px}}

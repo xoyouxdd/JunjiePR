@@ -14,13 +14,14 @@ function sourceCard(record){
   return `<article class="honor-source"><p>${esc(record.date)} · ${esc(record.category)} · 已确认</p><blockquote>${esc(record.content)}</blockquote>${record.poc_reason?`<p class="honor-poc">${esc(record.poc_reason)}</p>`:''}<small>认可人：${esc(record.recognizer)} · 记录 #${esc(record.id)}</small>${record.cap_reason?`<p class="field-hint">已确认未全部计分：${esc(record.cap_reason)}</p>`:''}</article>`;
 }
 
-function mountHonors(host,{month,cardHTML,rank,bindCeremony,onMonth,isCurrent}){
+function mountHonors(host,{month,cardHTML,rank,bindCeremony,onMonth,isCurrent,compact=false}){
   let disposed=false,cleanup=null,data=null,view='collection',mode='letter',all=false,saving=false,loadToken=0;
   const valid=()=>!disposed&&host.isConnected&&isCurrent();
-  const frame=()=>`<section class="honor-hub" aria-label="我的荣誉"><header class="honor-heading"><div><h3>我的荣誉</h3><p>留住每个月，也留住被认可的那一刻。</p></div><span>仅自己可见</span></header><div class="honor-tabs" role="tablist" aria-label="荣誉内容">${[['collection','荣誉典藏'],['memory','高光回顾'],['skins','自由装扮']].map(([id,label])=>`<button type="button" role="tab" id="honor-tab-${id}" data-honor-tab="${id}" aria-selected="${id===view}" aria-controls="honor-view" tabindex="${id===view?0:-1}">${label}</button>`).join('')}</div><div class="honor-content" id="honor-view" role="tabpanel" aria-labelledby="honor-tab-${view}"></div><p class="honor-feedback" role="status" aria-live="polite"></p></section>`;
+  const frame=()=>compact?`<section class="honor-hub honor-hub-compact" aria-label="月度勋章"><div class="honor-content" id="honor-view"></div><div class="honor-compact-tools"><button type="button" class="secondary" data-honor-tab="${view==='collection'?'skins':'collection'}">${view==='collection'?'换装扮':'返回勋章'}</button><details class="honor-more"><summary>更多</summary>${[["collection","月度勋章"],["memory","高光回顾"],["skins","换装扮"]].filter(([id])=>id!==view&&id!==(view==='collection'?'skins':'collection')).map(([id,label])=>`<button type="button" class="secondary" data-honor-tab="${id}">${label}</button>`).join('')}</details></div><p class="honor-feedback" role="status" aria-live="polite"></p></section>`:`<section class="honor-hub" aria-label="我的荣誉"><header class="honor-heading"><div><h3>我的荣誉</h3><p>留住每个月，也留住被认可的那一刻。</p></div><span>仅自己可见</span></header><div class="honor-tabs" role="tablist" aria-label="荣誉内容">${[['collection','荣誉典藏'],['memory','高光回顾'],['skins','自由装扮']].map(([id,label])=>`<button type="button" role="tab" id="honor-tab-${id}" data-honor-tab="${id}" aria-selected="${id===view}" aria-controls="honor-view" tabindex="${id===view?0:-1}">${label}</button>`).join('')}</div><div class="honor-content" id="honor-view" role="tabpanel" aria-labelledby="honor-tab-${view}"></div><p class="honor-feedback" role="status" aria-live="polite"></p></section>`;
   function feedback(message){const node=host.querySelector('.honor-feedback');if(node)node.textContent=message;}
   function collection(){
     const history=(data?.history||[]).map(item=>`<button type="button" class="honor-history-item" data-honor-month="${esc(item.month)}"${item.month===month?' aria-current="date"':''}><span>${esc(memberHomeMonthLabel(item.month))}</span><strong>${esc(item.status==='ranked'?item.label:'等待留影')}</strong></button>`).join('');
+    if(compact)return `<div class="honor-layout"><div class="honor-display" data-honor-skin="${esc(data?.skin||'sea')}">${cardHTML}</div><details class="honor-history-fold"><summary>历史勋章</summary><aside class="honor-history">${history||`<p class="field-hint">${data?'暂无历史勋章':'正在读取…'}</p>`}</aside></details></div>`;
     return `<div class="honor-layout"><div class="honor-display" data-honor-skin="${esc(data?.skin||'sea')}">${cardHTML}</div><aside class="honor-history"><h4>每个月，都有自己的留影</h4>${history||'<p class="field-hint">正在整理本人历史…</p>'}<p class="field-hint">显示最近12个月，其他月份可通过首页月份选择查看。</p><button type="button" class="secondary" data-honor-open-memory>看看本月回顾</button></aside></div>`;
   }
   function memory(){
@@ -40,9 +41,19 @@ function mountHonors(host,{month,cardHTML,rank,bindCeremony,onMonth,isCurrent}){
     host.innerHTML=frame();
     const target=host.querySelector('.honor-content');
     target.innerHTML=view==='memory'?memory():view==='skins'?wardrobe():collection();
+    if(compact){
+      const hero=target.querySelector('.member-rank-hero');
+      if(hero){
+        const controls=document.createElement('details');controls.className='honor-motion-fold';
+        controls.innerHTML='<summary>动画与说明</summary>';
+        for(const selector of ['.member-rank-motion','.member-rank-audio-status','audio']){const node=hero.querySelector(selector);if(node)controls.append(node);}
+        for(const selector of ['.member-rank-reference','.member-rank-rules']){const node=target.querySelector('.honor-display>'+selector);if(node)controls.append(node);}
+        hero.append(controls);
+      }
+    }
     if(saving)host.querySelectorAll('[data-honor-record],[data-honor-favorite],[data-honor-skin-choice]').forEach(button=>button.disabled=true);
     if(view!=='memory'&&rank.status==='ranked'){
-      const button=document.createElement('button');button.type='button';button.className='secondary';button.dataset.celebrate='';button.textContent='庆祝一下 · 随机';target.querySelector('.honor-display')?.append(button);
+      const button=document.createElement('button');button.type='button';button.className='secondary';button.dataset.celebrate='';button.textContent=compact?'庆祝一下':'庆祝一下 · 随机';(compact?target.querySelector('.honor-motion-fold'):target.querySelector('.honor-display'))?.append(button);
       const ceremony=bindCeremony(target,{autoplay}),celebration=bindCelebration(target);cleanup=()=>{ceremony?.();celebration();};
     }
   }
@@ -69,7 +80,7 @@ function mountHonors(host,{month,cardHTML,rank,bindCeremony,onMonth,isCurrent}){
   }
   function click(event){
     const button=event.target.closest('button');if(!button||!host.contains(button))return;
-    if(button.dataset.honorTab){view=button.dataset.honorTab;paint();host.querySelector(`[data-honor-tab="${view}"]`).focus({preventScroll:true});}
+    if(button.dataset.honorTab){view=button.dataset.honorTab;paint();host.querySelector(`[data-honor-tab="${view}"]`)?.focus({preventScroll:true});}
     else if(button.hasAttribute('data-honor-open-memory')){view='memory';paint();}
     else if(button.dataset.honorSkinChoice)save({skin:button.dataset.honorSkinChoice});
     else if(button.dataset.honorRecord)save({selected_record_id:Number(button.dataset.honorRecord)});
@@ -79,9 +90,9 @@ function mountHonors(host,{month,cardHTML,rank,bindCeremony,onMonth,isCurrent}){
     else if(button.dataset.honorMonth&&button.dataset.honorMonth!==month)onMonth(button.dataset.honorMonth);
     else if(button.hasAttribute('data-honor-retry'))load();
   }
-  function keydown(event){if(!event.target.matches('[data-honor-tab]')||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const tabs=[...host.querySelectorAll('[data-honor-tab]')],index=tabs.indexOf(event.target),next=event.key==='Home'?0:event.key==='End'?2:(index+(event.key==='ArrowRight'?1:2))%3;tabs[next].click();}
+  function keydown(event){if(!event.target.matches('[data-honor-tab]')||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const tabs=[...host.querySelectorAll('[data-honor-tab]')],index=tabs.indexOf(event.target),next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length;tabs[next].click();}
   host.addEventListener('click',click);host.addEventListener('keydown',keydown);
-  paint({autoplay:true});load();
+  paint({autoplay:!compact});load();
   return ()=>{disposed=true;++loadToken;cleanup?.();host.removeEventListener('click',click);host.removeEventListener('keydown',keydown);};
 }
 

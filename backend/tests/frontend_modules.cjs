@@ -106,6 +106,9 @@ async function fixtureRequest(request, response) {
   else if (route === '/api/about-system') sendJson(response, {maintainers:'赵君杰',feedback:'张森',can_edit:false,revision:1});
   else if (route === '/api/export-tasks') sendJson(response, {items: []});
   else if (route === '/api/action-center') sendJson(response, {month: '2026-10', items: [], total: 0});
+  else if (route === '/api/recognition-inbox') sendJson(response, {items:[],unread_count:0,total:0,page:1,page_size:20});
+  else if (route === '/api/activity-points/me') sendJson(response, {eligible:false,items:[],total:0,page:1,page_size:20});
+  else if (/^\/api\/attendance-medals\/employees\/\d+$/.test(route)) sendJson(response, {visible:false,items:[],count:0});
   else if (/^\/api\/month-closes\/\d{4}-\d{2}$/.test(route)) {
     const month = route.split('/').pop(), allowed = month <= '2026-09';
     sendJson(response, {month, attraction_name: '全部景点圈', is_closed: false, can_close: allowed,
@@ -349,7 +352,7 @@ async function main() {
         await taskPage.locator('.workbench-shortcuts').waitFor();
         const personalNavigation=await taskPage.evaluate(async()=>{const nav=await import('./static/js/app/navigation.js');const items=nav.menuItems();return {items,primary:nav.mobilePrimaryIds(items)};});
         if(['HR_CIRCLE','HR_ADMIN'].includes(role))assert(!personalNavigation.items.some(([id])=>['home','profile'].includes(id)));
-        else if(['CM','TR','TA_SUPERVISOR','SUPERVISOR'].includes(role)){assert(personalNavigation.items.some(([id])=>id==='home'));assert(personalNavigation.primary.includes('home'));assert.equal(personalNavigation.items.find(([id])=>id==='home')[1],'首页');}
+        else if(['CM','TR','TA_SUPERVISOR','SUPERVISOR'].includes(role)){assert(personalNavigation.items.some(([id])=>id==='home'));assert(personalNavigation.primary.includes('home'));assert.equal(personalNavigation.items.find(([id])=>id==='home')[1],'个人中心');}
         else{assert(!personalNavigation.items.some(([id])=>id==='profile'));assert(await taskPage.locator('#appearanceBtn[data-avatar-settings]').count());if(['TA_GSM','GSM','AM','OM'].includes(role))assert(personalNavigation.primary.includes('register'));if(role==='SYSTEM_ADMIN')assert(personalNavigation.primary.includes('monthClose'));}
         const shortcutIds=await taskPage.locator('[data-workbench-tab]').evaluateAll(nodes=>nodes.map(node=>node.dataset.workbenchTab));
         if(['CM','TR','TA_GSM','HR_CIRCLE','HR_ADMIN'].includes(role))assert(!shortcutIds.includes('hrMonthlyReport'));

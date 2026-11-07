@@ -16,7 +16,6 @@ from app.v2_database import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, GroupLeaderAssignment, GroupMembership, GroupTransfer, GroupTransferMember, RecognitionRecord, Role, SickLeaveRecord, SystemAlert, WorkGroup
 from app.v2_services import (
     FRONTLINE_CODES,
-    active_group_memberships,
     active_group_memberships_bulk,
     base_role_at,
     base_roles_at,
@@ -515,7 +514,7 @@ def hr_groups(db: Session = Depends(get_db), user: V2User = Depends(require_perm
     gsm_names = circle_gsm_names(db, circle_ids, today_value)
     staff = (
         db.query(Employee)
-        .filter(Employee.is_active.is_(True), Employee.attraction_id.in_(circle_ids))
+        .filter(Employee.is_active.is_(True), Employee.account_deleted_at.is_(None), Employee.attraction_id.in_(circle_ids))
         .order_by(Employee.name, Employee.employee_no)
         .all()
         if circle_ids
@@ -605,7 +604,7 @@ def optional_employee_id(value) -> int | None:
 def apply_group_leaders(db: Session, group: WorkGroup, supervisor_id: int | None, acting_id: int | None, operator: Employee, reason: str, ip_address: str | None) -> dict:
     """Set the group's 主管 and 代理主管 from today; members never move."""
     today_value = date.today().isoformat()
-    members = active_group_memberships(db, group.id)
+    members = active_group_memberships_bulk(db, [group.id], today_value)[group.id]
     member_ids = {member.employee_id for member in members}
     plan = {"formal": supervisor_id, "acting": acting_id}
     changes: dict[str, tuple[GroupLeaderAssignment | None, Employee | None]] = {}
@@ -679,7 +678,7 @@ def apply_group_leaders(db: Session, group: WorkGroup, supervisor_id: int | None
 
 def group_leader_warnings(db: Session, group: WorkGroup) -> list[str]:
     """Hints for a group allowed to run without a full set of leaders."""
-    member_ids = {member.employee_id for member in active_group_memberships(db, group.id)}
+    member_ids = {member.employee_id for member in active_group_memberships_bulk(db, [group.id])[group.id]}
     if not member_ids:
         return []
     formal = group_leader_of_type(db, group.id, "formal")
@@ -778,7 +777,7 @@ def close_empty_group(group_id: int, payload: dict, request: Request, db: Sessio
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "关闭原因必填")
-    if active_group_memberships(db, group.id):
+    if active_group_memberships_bulk(db, [group.id])[group.id]:
         raise HTTPException(400, "该组仍有组员，只能关闭没有组员的小组")
     today_value = date.today().isoformat()
     ended_leaders = []

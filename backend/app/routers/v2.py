@@ -8,6 +8,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.routers import (
+    activities,
+    activity_points,
+    attendance_medals,
     scoring_config,
     about_system,
     accounts,
@@ -40,6 +43,9 @@ from app.routers._shared import is_previewable_image, preview_kind  # noqa: F401
 router = APIRouter(prefix="/api", tags=["v2"])
 
 for _module in (
+    activities,
+    activity_points,
+    attendance_medals,
     scoring_config,
     about_system,
     accounts,

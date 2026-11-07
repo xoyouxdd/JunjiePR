@@ -33,6 +33,50 @@ def login(client: TestClient, account: str, password: str = "1234") -> None:
     assert response.status_code == 200, response.text
 
 
+def test_trial_medal_messages_do_not_reach_employee_action_center(monkeypatch):
+    from datetime import date
+    from app.services import attendance_medals
+    from app.v2_models import MedalNotice
+    class February(date):
+        @classmethod
+        def today(cls): return cls(2027,2,2)
+    monkeypatch.setattr(attendance_medals,'date',February)
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            person=db.query(Employee).filter_by(employee_no='CMTEST01').one()
+            for month in ('2026-11','2026-12','2027-01','2027-02'):
+                db.add(MedalNotice(employee_id=person.id,month=month,message='合成消息 '+month,reason=''))
+            db.commit()
+        login(client,'CMTEST01')
+        response=client.get('/api/action-center')
+        assert response.status_code==200,response.text
+        notices=[i for i in response.json()['items'] if i['type']=='attendance_medal_notice']
+        assert len(notices)==1 and notices[0]['count']==1
+
+
+def test_attendance_medal_pending_tasks_follow_circle_permissions() -> None:
+    from app.v2_models import Attraction, MedalLeaveMonth, MedalLeaveBatch
+    with TestClient(app) as client:
+        enable_circle_hr_test_login()
+        with SessionLocal() as db:
+            month = '2026-11'
+            expected = db.query(Attraction).filter_by(employee_circle=True, active=True).count()
+            state = MedalLeaveMonth(month=month, revision=1, confirmed_revision=1,
+                roster=json.dumps({str(e.id):e.attraction_id for e in db.query(Employee)}))
+            db.add(state)
+            db.add(MedalLeaveBatch(month=month, revision=1, filename='synthetic.xls', digest='x'*64,
+                leaves='[]', issues='[]', ignored_codes='[]', imported_by='合成导入员'))
+            db.commit()
+        login(client, 'CMTEST01')
+        assert not any(r['type']=='attendance_medals' for r in client.get('/api/action-center').json()['items'])
+        client.post('/api/logout');login(client,'HR-HEAT')
+        own=[r for r in client.get('/api/action-center').json()['items'] if r['type']=='attendance_medals']
+        assert len(own)==1 and own[0]['count']==1 and own[0]['tab']=='sickLeaveImport'
+        client.post('/api/logout');login(client,'HR01','HR123')
+        all_circles=[r for r in client.get('/api/action-center').json()['items'] if r['type']=='attendance_medals']
+        assert len(all_circles)==1 and all_circles[0]['count']==expected
+
+
 def prepare_health_report() -> None:
     HEALTH_FILE.write_text(
         json.dumps(

@@ -1,4 +1,5 @@
 from pathlib import Path
+from app.branding import BRAND_EN
 
 
 ROOT = Path(__file__).parents[1]
@@ -30,3 +31,9 @@ def test_home_screen_identity_is_consistent_on_login_and_app_pages():
         assert '<meta name="apple-mobile-web-app-title" content="FZ工作台">' in page
         assert 'href="static/manifest.json?v=__STATIC_CACHE_VERSION__"' in page
         assert 'href="static/images/fzpr-icon.png?v=__STATIC_CACHE_VERSION__"' in page
+        assert BRAND_EN in page
+        assert "TEAM WORKSPACE" not in page
+    for page_name in ("rotation.html", "rotation-board.html", "rotation-screen.html"):
+        page = (static / page_name).read_text(encoding="utf-8")
+        assert f'lang="en">{BRAND_EN}</small>' in page
+        assert f" · {BRAND_EN}</title>" in page

@@ -51,7 +51,7 @@ def set_text(node, text):
         values[0].text = str(text)
         for t in values[1:]:
             t.text = ""
-TEMPLATE_VERSION = "2"
+TEMPLATE_VERSION = "3"
 
 
 def pack_report(parts, slides, overrides, content_types):

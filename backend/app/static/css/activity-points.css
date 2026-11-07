@@ -1,0 +1,44 @@
+.activity-points-card{--points-ink:var(--text-strong);--points-base:var(--skin-top,var(--surface-dark));--points-light:color-mix(in srgb,var(--primary) 13%,#fff1d5);min-width:0;padding:24px!important;border:1px solid var(--line)!important;border-radius:24px!important;background:var(--panel)!important;box-shadow:0 8px 30px #18332f08!important}
+.activity-points-hero{display:block}
+.points-pass{max-width:640px;margin:0 auto;position:relative;isolation:isolate;overflow:hidden;min-width:0;padding:25px 28px 20px;border:1px solid #ffffff20;border-radius:21px;color:var(--text-on-dark);background:radial-gradient(ellipse at 0 0,color-mix(in srgb,var(--primary) 42%,var(--points-base)) 0,transparent 65%),linear-gradient(120deg,color-mix(in srgb,var(--primary) 12%,var(--points-base)),var(--points-base) 75%);box-shadow:0 14px 25px -13px #0b302e70}
+.points-pass:before,.points-pass:after{content:"";position:absolute;z-index:-1;pointer-events:none;width:310px;height:310px;border:1px solid #e9d4a324;border-radius:50%;right:-145px;top:-160px;box-shadow:0 0 0 30px #e9d4a308,0 0 0 60px #e9d4a308,0 0 0 90px #e9d4a306}
+.points-pass:after{width:190px;height:190px;right:-130px;top:120px;box-shadow:0 0 0 22px #e9d4a308,0 0 0 44px #e9d4a308}
+.activity-points-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.points-pass-brand{display:block;color:var(--points-light);font-size:10px;letter-spacing:2px;font-weight:600;margin-bottom:7px}
+.activity-points-card .points-pass h2{margin:0;color:var(--text-on-dark)!important;font-size:20px;line-height:1.45;font-weight:600;letter-spacing:1px}
+.points-lifetime{flex-shrink:0;border:1px solid #efdab047;border-radius:20px;padding:5px 9px;color:var(--points-light);font-size:11px;background:#f1ddb70a;line-height:1.4}
+.points-pass-main{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:29px 0 24px}
+.points-available>span{color:var(--text-on-dark-secondary);font-size:12px;letter-spacing:1px}
+.points-amount{display:flex;align-items:baseline;gap:10px;margin-top:4px}
+.points-amount strong{color:var(--points-light)!important;font-size:58px;line-height:1.08;font-weight:500;letter-spacing:-1px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.points-amount>span{font-size:12px;color:var(--points-light)}
+.points-pass-mark{flex:0 0 58px;width:58px;opacity:.7}
+.points-pass-mark svg{display:block;width:100%;stroke:var(--points-light);stroke-width:1.1}
+.points-pass-mark svg path:last-child{stroke-width:2}
+.activity-points-balances{display:flex;align-items:center;gap:30px;padding-top:17px;border-top:1px solid #e9d4a32a}
+.activity-points-balances>div{min-width:0}
+.activity-points-balances>div>span{display:block;font-size:11px;color:var(--text-on-dark-secondary);margin-bottom:5px}
+.activity-points-balances strong{display:block;font-size:21px;line-height:1.3;color:var(--text-on-dark)!important;font-weight:500;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.activity-points-balances strong small{font-size:10px;font-weight:400;color:var(--text-on-dark-secondary)}
+.activity-points-card .points-detail{margin-top:24px;border-top:1px solid var(--line)}
+.activity-points-card .points-detail>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;cursor:pointer;list-style:none;font-size:14px;font-weight:600;color:var(--points-ink)}
+.points-detail>summary::-webkit-details-marker{display:none}
+.points-detail>summary:focus-visible{outline:2px solid var(--focus-ring);outline-offset:3px;border-radius:4px}
+.points-detail-count{display:inline-block;margin-left:10px;padding:2px 7px;border-radius:6px;background:var(--surface-soft);color:var(--muted);font-size:10px;font-weight:400}
+.points-detail-chevron{width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(45deg);margin-right:4px}
+.points-detail[open] .points-detail-chevron{transform:rotate(225deg)}
+.activity-points-list article{display:flex;align-items:center;gap:12px;padding:15px 0;border-top:1px solid var(--surface-soft)}
+.points-entry-icon{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:11px;background:var(--surface-tint);color:var(--primary);font-size:20px;font-weight:400}
+.points-entry-icon.is-negative{background:var(--danger-bg);color:var(--danger-text)}
+.activity-points-list article>div{min-width:0;flex:1;overflow-wrap:anywhere}
+.activity-points-list article>div>strong{font-size:13px;font-weight:500;color:var(--text)}
+.activity-points-list article>div>small{display:block;color:var(--muted);font-size:11px;margin-top:5px}
+.activity-points-list article>b{white-space:nowrap;color:var(--primary);font-size:18px;font-weight:500;font-variant-numeric:tabular-nums}
+.activity-points-list article>b>small{font-size:11px;font-weight:400}
+.activity-points-list article>b.points-negative{color:var(--danger-text)}
+.activity-points-pages{display:flex;justify-content:center;align-items:center;gap:12px;margin-top:12px}
+
+.points-note{display:flex;justify-content:center;align-items:center;gap:14px;flex-wrap:wrap;margin-top:19px;color:var(--muted);font-size:12px;line-height:1.7}
+.points-note small{font-size:11px;color:var(--muted);padding-left:14px;border-left:1px solid var(--line)}
+@media(max-width:760px){.activity-points-card{padding:16px!important;border-radius:20px!important}.points-pass{padding:22px;border-radius:17px}.points-pass-main{margin:26px 0 22px}.activity-points-card .points-detail{margin-top:18px}.activity-points-balances{gap:38px}.points-note{flex-direction:column;gap:2px;margin-top:16px;font-size:11px}.points-note small{padding-left:0;border:0}}
+@media(max-width:360px){.activity-points-card{padding:12px!important}.points-pass{padding:18px}.activity-points-card .points-pass h2{font-size:17px;letter-spacing:.5px}.points-lifetime{font-size:10px;padding:4px 7px}.points-pass-brand{font-size:8px;letter-spacing:1.6px}.points-amount strong{font-size:50px}.points-pass-mark{flex-basis:46px;width:46px}.activity-points-balances{gap:30px}.activity-points-list article{gap:9px}.points-entry-icon{flex-basis:29px;height:29px;border-radius:9px}}

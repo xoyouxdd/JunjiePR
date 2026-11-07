@@ -27,7 +27,8 @@
   background: var(--surface-dark);
   color: var(--text-on-dark);
 }
-.rt-title { display: flex; align-items: center; gap: 10px; font-size: 18px; }
+.rt-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 18px; }
+.rt-brand-en { flex-basis: 100%; font-size: 9px; font-weight: 400; letter-spacing: .08em; opacity: .75; }
 .rt-who { font-size: 14px; opacity: .85; }
 .rt-clock { margin-left: auto; display: flex; align-items: baseline; gap: 8px; }
 .rt-clock b { font-size: 24px; letter-spacing: .02em; }

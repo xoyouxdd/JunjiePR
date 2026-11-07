@@ -235,9 +235,7 @@ def write_organization_score_sheet(ws, data: dict, export_roles: dict[int, Role]
             for cell in ws[row_number]:
                 cell.fill = loa_fill
 
-    for column in (5, 6, 7, 8):
-        for cell in ws.iter_cols(min_col=column, max_col=column, min_row=2):
-            cell[0].number_format = "0.00"
+    apply_score_format(ws, (5, 6, 7, 8))
     ws.sheet_properties.outlinePr.summaryBelow = False
     ws.sheet_view.showOutlineSymbols = True
     style_sheet(ws, landscape=True)
@@ -268,9 +266,7 @@ def write_monthly_score_detail_sheet(ws, rows: list[dict], loa_rows: list[dict],
         write_monthly_score_row(ws, row, export_roles.get(int(row["employee_id"])))
     for row in loa_rows:
         write_monthly_score_row(ws, row, loa_roles.get(int(row["employee_id"])), "LOA（当月不参与计分）")
-    for col in (5, 6, 7, 8):
-        for cell in ws.iter_cols(min_col=col, max_col=col, min_row=2):
-            cell[0].number_format = "0.00"
+    apply_score_format(ws, (5, 6, 7, 8))
     style_sheet(ws, landscape=True)
 
 
@@ -413,9 +409,7 @@ def write_hierarchical_performance_sheet(ws, data: dict) -> None:
                     elif item.get("upgrade_state") in {"pending", "rejected"}:
                         for cell in ws[detail_row]: cell.fill = PatternFill("solid", fgColor="FCE4D6" if item.get("upgrade_state") == "pending" else "E7E6E6")
 
-    for column in range(6, 10):
-        for cell in ws.iter_cols(min_col=column, max_col=column, min_row=2):
-            cell[0].number_format = "0.00"
+    apply_score_format(ws, range(6, 10))
     for column in ("J", "K", "L", "M", "N", "O"):
         ws.column_dimensions[column].hidden = True
     ws.freeze_panes = "A2"
@@ -455,7 +449,7 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
             ws.append(excel_row([row["rank"], row["employee_no"], row["employee_number_status"], row["employee_name"], row["role_name"], row["group_label"], data["subtype_name"], row["count"], row["leave_days"], row["charged_days"], row["score"], row["recent_date"]]))
     elif category in {"leader", "gsm_leader"}:
         venue_columns = data.get("venue_columns", [])
-        person_label = "GSM/TA GSM" if category == "gsm_leader" else "LEAD/TA LEAD"
+        person_label = "GSM/TA GSM/AM/OM" if category == "gsm_leader" else "LEAD/TA LEAD"
         ws.append(["排名", "员工号", "工号状态", person_label, "角色", "类型", "认可次数（总数）",
                    *[c["name"] for c in venue_columns], "累计加分", "最近一次认可"])
         for row in data["rows"]:
@@ -505,7 +499,7 @@ def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbo
         append_export_context(context, [("被认可人群", data["population_name"]),
                                         ("统计口径", "仅签卡人；代录不计；已确认且未撤回的有效认可，每条计一次。"),
                                         ("景点明细", "按签卡发生景点归入景点圈，各列合计等于认可总数。"),
-                                        ("范围说明", "签卡人向所有景点发放的认可" if data["circle_scope"] == "issuer" else "仅本圈CM/TR收到的认可，不包含其他圈记录")])
+                                        ("范围说明", "按签卡人所属圈筛选；无所属圈的AM/OM按接收人所属圈筛选。" if data["circle_scope"] == "issuer" else "仅本圈CM/TR收到的认可，不包含其他圈记录")])
     context.column_dimensions["A"].width = 24
     context.column_dimensions["B"].width = 64
     configure_sheet(context)
@@ -717,6 +711,23 @@ def build_statistics_workbook(
             detail_sheet.cell(detail_row_number, 1).font = link_font
             ws5.cell(void_row_number, 3).hyperlink = f"#'{detail_sheet_name}'!A{detail_row_number}"
             ws5.cell(void_row_number, 3).font = link_font
+    if "issuer_counts" in data:
+        issuers = data["issuer_counts"]
+        ws = wb.create_sheet("管理层认可次数")
+        ws.append(["员工号", "签卡人", "角色", "认可次数（总数）",
+                   *[column["name"] for column in issuers["venue_columns"]], "累计加分"])
+        for row in issuers["rows"]:
+            ws.append(excel_row([
+                row["employee_no"], row["employee_name"], row["role_name"], row["count"],
+                *[row["venue_counts"].get(column["key"], 0) for column in issuers["venue_columns"]],
+                row["score"],
+            ]))
+        ws.append(["统计日期", f"{issuers['start_date']} 至 {issuers['end_date']}"])
+        ws.append(["被认可人群", issuers["population_name"]])
+        ws.append(["签卡人所属圈", issuers["attraction_name"]])
+        ws.append(excel_row(["签卡人搜索", data.get("issuer_keyword") or "全部"]))
+        ws.append(["统计口径", "仅统计已确认认可，按GSM/TA GSM/AM/OM签卡人汇总；无所属圈的AM/OM按接收人所属圈筛选。"])
+        style_sheet(ws, landscape=True)
     finalize_statistics_workbook(wb)
     return wb, attraction_label, title_label
 

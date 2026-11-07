@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.v2_database import EMPLOYEE_CIRCLES, FILE_DIR, LEGACY_CIRCLE_BY_VENUE, RECOGNITION_VENUES, get_db
-from app.v2_models import AnnouncementAsset, AnnouncementDelivery, AnnouncementMedia, Attraction, DeductionLevel, DeductionRecord, DeductionType, Employee, RecognitionRecord, RecognitionAttachment, RecognitionType, Role, SickLeaveRecord, StoredFile
+from app.v2_models import AnnouncementAsset, AnnouncementDelivery, AnnouncementMedia, Attraction, DeductionLevel, DeductionRecord, DeductionType, Employee, RecognitionRecord, RecognitionAttachment, RecognitionInboxItem, RecognitionType, Role, SickLeaveRecord, StoredFile
 from app.v2_services import direct_member_ids, write_audit
 from app.v2_watermark import watermark_image, watermark_pdf
 from app.v2_preview_cache import watermarked_preview_cache
@@ -124,6 +124,14 @@ def download_file(file_id: int, preview: bool = False, db: Session = Depends(get
     recognition_link = recognition_links[0] if recognition_links else None
     for link in recognition_links:
         recognition = db.get(RecognitionRecord, link.recognition_id)
+        if recognition and recognition.status == "void" and db.get(RecognitionInboxItem, recognition.id):
+            scoped_archive_admin = (
+                user.id != recognition.employee_id
+                and user.role.code == SCOPED_HR_ROLE_CODE
+                and recognition.home_attraction_id in managed_attractions
+            )
+            authorized = authorized or user.id == recognition.operator_employee_id or scoped_archive_admin
+            continue
         authorized = authorized or bool(
             recognition
             and (

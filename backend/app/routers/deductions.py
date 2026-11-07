@@ -747,7 +747,7 @@ async def retry_deduction_material(
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
-    """Re-stage photos for a failed material job without creating another deduction."""
+    """Claim and supplement an existing declaration without creating another deduction."""
     row = db.get(DeductionRecord, record_id)
     if not row:
         raise HTTPException(404, "扣分记录不存在")
@@ -755,59 +755,75 @@ async def retry_deduction_material(
     if row.submitter_id != user.id and "SYSTEM_ADMIN" not in user.permissions and not can_collaborate:
         raise HTTPException(403, "仅原登记人、主管或管理员可以补充材料")
     if row.status not in {"pending_material", "material_failed"}:
-        raise HTTPException(400, "该记录当前不需要补充材料")
+        raise HTTPException(409, "该声明已被处理，请刷新待办")
+    expected_status = row.status
+    expected_revision = row.material_revision
     ensure_month_open(db, row.deduction_month, row.attraction_id_snapshot, "重新提交扣分材料")
-    old_job = db.get(DeductionMaterialJob, row.material_job_id) if row.material_job_id else None
-    upgrade_request = db.get(DeductionUpgradeRequest, row.upgrade_request_id) if row.upgrade_request_id else None
-    first = None
-    reviewer = None
-    upgrade_material = False
-    if upgrade_request and upgrade_request.status == "awaiting_material":
-        first = db.get(DeductionRecord, upgrade_request.first_deduction_id)
-        reviewer = db.get(Employee, upgrade_request.reviewer_id)
-        if not first or not reviewer or first.upgrade_request_id != upgrade_request.id or row.upgrade_request_id != upgrade_request.id or first.status != "active":
-            raise HTTPException(409, "关联升级声明状态已变化，无法重新提交材料")
-        first.upgrade_state, first.upgrade_role = "material_processing", "source_first"
-        row.upgrade_state, row.upgrade_role = "material_processing", "source_second"
-        upgrade_material = True
-    elif old_job and old_job.mode in {"upgrade", "upgrade_pdf_compress"}:
-        first = db.get(DeductionRecord, old_job.first_deduction_id) if old_job.first_deduction_id else None
-        reviewer = db.get(Employee, old_job.reviewer_id) if old_job.reviewer_id else None
-        if not first or not reviewer or first.upgrade_request_id or first.status != "active":
-            raise HTTPException(409, "关联升级声明状态已变化，无法重新提交材料")
-        claimed = db.execute(
-            update(DeductionRecord)
-            .where(DeductionRecord.id == first.id, or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"))
-            .values(upgrade_state="material_processing", upgrade_role="source_first")
-            .execution_options(synchronize_session=False)
-        )
-        if claimed.rowcount != 1:
-            db.rollback()
-            raise HTTPException(409, "关联历史声明正在被其他工单使用，请刷新后重试")
-        upgrade_material = True
     photo_mode = bool([item for item in (document_images or []) if item and item.filename])
     pdf_mode = bool(document and document.filename)
     if pdf_mode == photo_mode:
         raise HTTPException(400, "请上传一个PDF，或选择1至6张照片材料")
-    if not upgrade_material:
-        scoring_config.validate_material_repeat(db, row)
     source_rows: list[StoredFile] = []
     output = None
     try:
         source_rows = [await stage_pdf_material(db, document, user.id)] if pdf_mode else await stage_photo_materials(db, list(document_images or []), user.id)
+        # The status and revision can change while files are read. Claim the
+        # row before touching its upgrade or queuing a job in this transaction.
+        claimed = db.execute(
+            update(DeductionRecord)
+            .where(
+                DeductionRecord.id == record_id,
+                DeductionRecord.status == expected_status,
+                DeductionRecord.material_revision == expected_revision,
+            )
+            .values(status="material_processing", material_revision=int(expected_revision or 0) + 1)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(409, "该声明已被处理，请刷新待办")
+        db.refresh(row)
+        ensure_month_open(db, row.deduction_month, row.attraction_id_snapshot, "重新提交扣分材料")
+        old_job = db.get(DeductionMaterialJob, row.material_job_id) if row.material_job_id else None
+        upgrade_request = db.get(DeductionUpgradeRequest, row.upgrade_request_id) if row.upgrade_request_id else None
+        first = None
+        reviewer = None
+        upgrade_material = False
+        if upgrade_request and upgrade_request.status == "awaiting_material":
+            first = db.get(DeductionRecord, upgrade_request.first_deduction_id)
+            reviewer = db.get(Employee, upgrade_request.reviewer_id)
+            if not first or not reviewer or first.upgrade_request_id != upgrade_request.id or row.upgrade_request_id != upgrade_request.id or first.status != "active":
+                raise HTTPException(409, "关联升级声明状态已变化，无法重新提交材料")
+            first.upgrade_state, first.upgrade_role = "material_processing", "source_first"
+            row.upgrade_state, row.upgrade_role = "material_processing", "source_second"
+            upgrade_material = True
+        elif old_job and old_job.mode in {"upgrade", "upgrade_pdf_compress"}:
+            first = db.get(DeductionRecord, old_job.first_deduction_id) if old_job.first_deduction_id else None
+            reviewer = db.get(Employee, old_job.reviewer_id) if old_job.reviewer_id else None
+            if not first or not reviewer or first.upgrade_request_id or first.status != "active":
+                raise HTTPException(409, "关联升级声明状态已变化，无法重新提交材料")
+            claimed = db.execute(
+                update(DeductionRecord)
+                .where(DeductionRecord.id == first.id, or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"))
+                .values(upgrade_state="material_processing", upgrade_role="source_first")
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                db.rollback()
+                raise HTTPException(409, "关联历史声明正在被其他工单使用，请刷新后重试")
+            upgrade_material = True
+        if not upgrade_material:
+            scoring_config.validate_material_repeat(db, row)
         output = create_pdf_placeholder(db, user.id)
         old_output = db.get(StoredFile, row.document_file_id)
         if old_output and old_output.status == "pending_conversion":
             old_output.status = "superseded"
         row.document_file_id = output.id
-        row.status = "material_processing"
         row.material_status = "processing"
         row.material_error = None
         row.material_source_type = "pdf" if pdf_mode else "photos"
         row.material_uploaded_by = user.id
         row.material_uploaded_by_name = user.name
         row.material_uploaded_at = datetime.now()
-        row.material_revision = int(row.material_revision or 0) + 1
         # Records originally submitted without material have no job yet.  They
         # may be supplemented later, so never dereference a missing old job.
         row.upgrade_state = "material_processing" if upgrade_material else row.upgrade_state

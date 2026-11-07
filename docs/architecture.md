@@ -1,5 +1,7 @@
 # 架构
 
+活动中心由 `routers/activities.py` 与对应服务模块处理参与、奖项、签收和导出，`activity_worker.py` 负责活动到期处理。`activity_points.py` 与 `legacy_points.py` 管理积分流水和历史补录。认可收件箱沿用认可接口与本人记录权限。全勤勋章由独立模型及服务处理，复用缺勤导入同步请假数据，试用与正式展示规则见 [全勤勋章](attendance-medals.md)。
+
 ## 现用系统
 
 `backend/` 是唯一业务系统：

@@ -1,5 +1,7 @@
 # SQLite 表、键、索引
 
+2026-11-08新增模型通过启动建表注册。`recognition_inbox_items`以认可记录外键为主键保存已读时刻，`recognition_reissues`以原认可外键为主键、替代认可外键唯一。`activities_models.py`注册活动、批次、奖品与照片、竞价、奖项、操作、发放和签收表；`activity_points_models.py`注册认可积点状态、积分流水及历史余额、导出和预览表。`attendance_medals_models.py`注册原账号身份、请假月份与批次、工资代码分类、圈发放、勋章及通知表，原账号身份在启动时补齐留档。全勤勋章规则见 `attendance-medals.md`。
+
 2026-11-06追加 `2026-11-rotation-six-posts` 幂等迁移，仅对标准轮岗配置模板补齐六岗，不截断更长或自定义线路，不重写历史运行日。动态预排通过原轮岗日状态JSON的 `ruleVersion` 区分，已运行旧日沿用原版本。规则见 `rotation-forecast-v2.md`。
 
 2026-11-02新增：`scoring_policies`以id为主键，kind/scope/code/effective_date组合唯一，保存policy_json和version；`recognition_records`、`deduction_records`追加可空scoring_policy_json快照，旧记录保留NULL及原数值。`about_system_settings`为id=1的单行配置，保存maintainers、feedback、revision，旧contributors仅归档保留。启动迁移幂等补列。轮岗五岗位迁移仅扩充标准配置模板，不重写每日班表和历史运行状态。规则见 `scoring-rule-center.md` 与 `about-system-credits.md`。

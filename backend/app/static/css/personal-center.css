@@ -1,0 +1,174 @@
+/* Compact personal center; all color comes from the selected system theme. */
+.personal-center{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;min-width:0}
+.personal-center #homeRecognitionContext{display:contents}
+.personal-center #homeRecognitionContext[hidden]{display:none!important}
+.personal-center .personal-profile,.personal-center .personal-month-panel{margin:0;padding:18px 22px!important;min-width:0;border:1px solid var(--line);border-radius:18px;box-shadow:none;background:var(--panel)}
+.personal-center .personal-profile{background:linear-gradient(110deg,var(--surface-tint),var(--panel));align-self:start}
+.personal-profile-main{display:flex;align-items:center;gap:12px;min-width:0}
+.personal-profile-avatar{display:grid;place-items:center;flex:0 0 46px;width:46px;height:46px;border:1px solid var(--line);border-radius:15px;overflow:hidden;color:var(--primary);background:var(--panel);font-size:20px;font-weight:600}
+.personal-profile-avatar img.employee-avatar-small{width:44px;height:44px;object-fit:cover;border-radius:0}
+.personal-center .personal-profile h2{font-size:19px;line-height:1.35;margin:0 0 5px;color:var(--text-strong);overflow-wrap:anywhere}
+.personal-profile-main p{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;line-height:1.6;color:var(--muted);margin:0}
+.personal-profile-details{margin-top:10px;font-size:11px;color:var(--muted)}
+.personal-profile-details>summary,.personal-avatar-settings>summary{cursor:pointer;width:fit-content;min-height:20px}
+.personal-profile-meta{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.personal-profile-meta>span{font-size:11px;padding:4px 8px;border-radius:6px;background:var(--surface-soft);color:var(--text-secondary)}
+.personal-avatar-settings{margin-top:10px;font-size:11px}
+.personal-month-summary{display:flex;justify-content:space-between;align-items:center;gap:18px}
+.personal-score-main{min-width:0}
+.personal-center .personal-score-main h2{font-size:11px;color:var(--muted);font-weight:500;line-height:1.4;margin:0 0 3px}
+.personal-score-main>strong{display:block;font-size:32px;font-weight:600;line-height:1.1;color:var(--primary);letter-spacing:-.8px;font-variant-numeric:tabular-nums}
+.personal-month-tools{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:7px;max-width:245px}
+.personal-center .home-month-control{margin:0;font-size:0;gap:0}
+.personal-center .home-month-control select{width:auto;min-height:38px;max-width:180px;padding:6px 25px 6px 10px;font-size:13px;border-radius:9px;background:var(--surface-soft)}
+.personal-month-tools>.badge{font-size:10px;white-space:nowrap}
+.personal-month-organization{margin:10px 0 0;font-size:11px;color:var(--muted)}
+.personal-score-breakdown{margin-top:9px;font-size:11px;color:var(--muted)}
+.personal-score-breakdown>summary{cursor:pointer;width:fit-content;min-height:20px}
+.personal-score-parts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;padding:14px 0 10px}
+.personal-score-parts span{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}
+.personal-score-parts strong{font-size:20px;color:var(--text-strong);font-weight:500;font-variant-numeric:tabular-nums}
+.personal-score-breakdown .member-score-items{margin-top:8px;grid-template-columns:repeat(5,minmax(0,1fr))}
+.personal-content-grid{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start;gap:28px;padding:22px;min-width:0;border:1px solid var(--line);border-radius:20px;background:var(--panel);box-shadow:0 6px 24px #14283f04}
+.personal-content-grid>*{min-width:0}
+.personal-center .personal-content-grid .personal-keepsakes{margin:0;padding:0!important;background:transparent;border:0!important;box-shadow:none;border-radius:0;overflow:hidden}
+.personal-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.personal-section-heading h2{margin:0;font-size:15px;line-height:1.4;color:var(--text-strong)}
+.personal-section-heading>span{font-size:11px;color:var(--muted)}
+.personal-honor-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.personal-center .personal-honor-tabs>button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;min-width:0;min-height:100px;margin:0;padding:12px 5px!important;border:1px solid var(--line);border-radius:14px;background:var(--surface-soft);color:var(--text);box-shadow:none;white-space:normal}
+.personal-center .personal-honor-tabs>button[aria-selected=true]{border-color:var(--primary);background:var(--surface-tint)}
+.personal-center .personal-honor-tabs>button:hover{border-color:var(--primary)}
+.personal-tile-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:var(--panel);color:var(--primary);font-size:24px;font-weight:400}
+.personal-honor-tabs strong{font-size:12px;font-weight:500}
+.personal-center .personal-honor-tabs>button small,.personal-honor-placeholder{display:none}
+.personal-keepsakes [role=tabpanel]:not([hidden]){margin-top:16px}
+.personal-keepsakes .personal-rank-content{padding:12px;border-radius:14px}
+.personal-keepsakes .personal-rank-content[hidden]{display:none}
+.personal-keepsakes .honor-layout,.personal-keepsakes .honor-memory-layout{grid-template-columns:minmax(0,1fr)}
+.personal-center .personal-points .activity-points-card{margin:0;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important}
+.personal-points .points-pass{max-width:none;padding:20px 22px;border-radius:16px}
+.personal-points .points-pass h2{font-size:17px;letter-spacing:0}
+.personal-points .points-pass-brand{font-size:9px;letter-spacing:1.5px}
+.personal-points .points-pass-main{margin:20px 0 17px}
+.personal-points .points-amount strong{font-size:44px}
+.personal-points .points-pass-mark{flex-basis:46px;width:46px}
+.personal-points .activity-points-balances{padding-top:12px;gap:30px}
+.personal-points .activity-points-balances strong{font-size:18px}
+.personal-points .points-note{display:none}
+.personal-points .activity-points-card .points-detail{margin-top:12px}
+.personal-points .activity-points-card .points-detail>summary{min-height:36px;font-size:12px}
+.personal-center .personal-records{grid-column:1/-1;padding:13px 18px;margin:0;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:none}
+.personal-records>details>summary{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500;cursor:pointer;list-style:none;color:var(--text-strong)}
+.personal-records>details>summary:after{content:'⌄';margin-left:auto;color:var(--muted)}
+.personal-record-count{font-size:10px;color:var(--muted);background:var(--surface-soft);padding:2px 6px;border-radius:5px}
+.personal-records .home-recognition-summary{margin-top:14px}
+.personal-center #recognitionInbox{grid-column:1/-1;min-width:0}
+.personal-center #recognitionInbox:empty{display:none}
+.personal-center #recognitionInbox .recognition-mail-entry{padding:10px 16px;min-height:48px;border-radius:14px;border:1px solid var(--line);background:var(--panel);color:var(--text);box-shadow:none}
+.personal-center #recognitionInbox .recognition-mail-entry:before,.personal-center #recognitionInbox .recognition-mail-entry:after{display:none}
+.personal-center #recognitionInbox .recognition-mail-copy strong{font-size:12px;font-weight:500}
+.personal-center #recognitionInbox .recognition-mail-copy small{display:none}
+.personal-center #recognitionInbox .recognition-mail-icon{width:26px;height:22px;transform:scale(.65);margin-right:0}
+.personal-center #recognitionInbox .recognition-mail-count{background:var(--surface-soft);color:var(--muted);font-size:10px;padding:3px 7px}
+.personal-center #recognitionInbox .recognition-mail-arrow{color:var(--muted)}
+@media(max-width:1000px){.personal-center{grid-template-columns:minmax(0,1fr)}.personal-content-grid{grid-template-columns:minmax(0,1fr);gap:18px}.personal-points{padding-top:18px;border-top:1px solid var(--line)}}
+@media(max-width:600px){.personal-center{gap:10px}.personal-center .personal-profile,.personal-center .personal-month-panel{padding:14px 16px!important;border-radius:16px}.personal-profile-avatar{flex-basis:40px;width:40px;height:40px;border-radius:13px}.personal-profile-avatar img.employee-avatar-small{width:38px;height:38px}.personal-center .personal-profile h2{font-size:18px;margin-bottom:3px}.personal-profile-main p{font-size:10px;gap:5px}.personal-profile-details{margin-top:7px;font-size:10px}.personal-score-main>strong{font-size:30px}.personal-month-tools{gap:6px;max-width:225px}.personal-center .home-month-control select{font-size:16px;min-height:44px;max-width:165px}.personal-month-tools>.badge{font-size:9px;padding:4px 6px}.personal-score-breakdown{margin-top:5px;font-size:10px}.personal-content-grid{padding:16px;gap:16px;border-radius:18px}.personal-section-heading{margin-bottom:11px}.personal-section-heading h2{font-size:14px}.personal-section-heading>span{font-size:10px}.personal-honor-tabs{gap:8px}.personal-center .personal-honor-tabs>button{min-height:82px;padding:11px 3px!important;gap:7px;border-radius:12px}.personal-tile-icon{width:29px;height:29px;border-radius:9px;font-size:21px}.personal-honor-tabs strong{font-size:11px}.personal-points{padding-top:16px}.personal-points .points-pass{padding:17px 20px}.personal-points .points-pass h2{font-size:16px}.personal-points .points-pass-main{margin:16px 0 14px}.personal-points .points-amount strong{font-size:40px}.personal-points .points-lifetime{font-size:10px;padding:4px 7px}.personal-score-breakdown .member-score-items{grid-template-columns:repeat(3,minmax(0,1fr))}.personal-center .personal-records{padding:12px 16px}}
+@media(max-width:360px){.personal-month-summary{gap:8px}.personal-month-tools{max-width:175px;gap:4px}.personal-center .home-month-control select{max-width:135px;padding-left:7px;padding-right:20px}.personal-month-tools>.badge{font-size:8px;padding:4px}.personal-center .personal-profile h2{font-size:17px}.personal-points .points-pass{padding:16px}.personal-points .points-pass h2{font-size:15px}.personal-points .points-pass-brand{font-size:8px}.personal-content-grid{padding:13px}}
+/* Keep the personal layout compact against the shared workspace defaults. */
+#app .personal-center.section-gap{gap:14px}
+#app .personal-profile h2{font-size:19px;line-height:1.35}
+#app .personal-score-main h2{font-size:11px;line-height:1.4;font-weight:500}
+#app .personal-section-heading h2{font-size:15px;line-height:1.4}
+#app .personal-points .points-pass h2{font-size:17px;line-height:1.4}
+.personal-content-grid{grid-template-columns:minmax(220px,.72fr) minmax(0,1.28fr)}
+.personal-honor-tabs{grid-template-columns:minmax(0,1fr);gap:10px}
+.personal-center .personal-honor-tabs>button{flex-direction:row;justify-content:flex-start;min-height:64px;gap:12px;padding:12px 15px!important}
+.personal-month-tools{flex-wrap:nowrap;max-width:none;min-width:0}
+.personal-month-tools:has(.home-read-only)>.badge:not(.home-read-only){display:none}
+#app .personal-center .personal-records{padding:6px 16px!important}
+@media(max-width:1000px){.personal-content-grid{grid-template-columns:minmax(0,1fr)}.personal-honor-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}.personal-center .personal-honor-tabs>button{flex-direction:column;justify-content:center;min-height:82px;gap:7px;padding:11px 3px!important}.personal-profile-main{padding-right:60px}.personal-profile-details{margin-top:0}.personal-profile-details>summary{position:absolute;right:14px;top:16px;display:flex;align-items:center;min-height:44px;max-width:58px}.personal-profile-details[open]{margin-top:10px}.personal-center .personal-profile{position:relative}.personal-profile-details>summary:before{content:'⌄';margin-right:4px}.personal-profile-details>summary::-webkit-details-marker{display:none}}
+@media(max-width:600px){#app .personal-center.section-gap{gap:10px}#app .personal-profile h2{font-size:18px}#app .personal-section-heading h2{font-size:14px}#app .personal-points .points-pass h2{font-size:16px}.personal-center .home-month-control select{width:155px}.personal-month-tools{gap:5px}.personal-profile-details>summary{top:12px}.personal-profile-main{padding-right:57px}}
+@media(max-width:360px){#app .personal-profile h2{font-size:17px}#app .personal-points .points-pass h2{font-size:15px}.personal-center .home-month-control select{width:130px}.personal-month-tools{gap:4px}}
+@media(min-width:1001px){.personal-content-grid:has(.personal-honor-tabs [aria-expanded=true]){grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}}
+@media(max-width:1000px){.personal-profile-details:not([open]){height:0;min-height:0;line-height:0}.personal-profile-details>summary{line-height:1.5}}
+/* Expanded keepsakes share one compact frame; full records and exports remain available. */
+.personal-keepsakes .personal-rank-content{padding:0!important;border:0;background:transparent!important;color:var(--text);box-shadow:none}
+.personal-keepsakes .personal-rank-content:before,.personal-keepsakes .personal-rank-content:after{display:none}
+.personal-keepsakes .honor-hub-compact{border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible}
+.honor-hub-compact .honor-content{padding:0;background:transparent}
+.honor-hub-compact .honor-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+.honor-hub-compact .honor-display{padding:16px 14px 12px;border-radius:16px;border:1px solid var(--line);overflow:hidden}
+.honor-hub-compact .member-rank-hero{padding:0;margin:0}
+.honor-hub-compact .member-rank-month{font-size:11px;margin-bottom:6px}
+.honor-hub-compact .member-rank-stage{margin:0 0 4px}
+.honor-hub-compact .member-rank-emblem{width:166px;height:166px}
+.honor-hub-compact .member-rank-copy h3{font-size:18px;line-height:1.4;margin:0 0 3px}
+.honor-hub-compact .member-rank-band{font-size:12px;margin:0}
+.honor-hub-compact .member-rank-reference{margin:8px 0 0;font-size:10px}
+.honor-hub-compact .member-rank-rules{font-size:11px;margin:10px 0 0;padding:0;border:0;border-top:1px solid #ffffff25;border-radius:0}
+.honor-hub-compact .member-rank-rules>summary{min-height:32px;display:flex;align-items:center;font-size:10px}
+.honor-hub-compact .member-rank-motion{margin-top:6px;gap:5px;flex-wrap:wrap}
+.honor-hub-compact .member-rank-motion button{padding:5px 9px;font-size:10px;min-height:36px}
+.honor-hub-compact .honor-motion-fold{width:100%;margin-top:10px;font-size:10px}
+.honor-motion-fold>summary{cursor:pointer;min-height:32px;line-height:32px;color:var(--rank-muted);list-style:none}
+.honor-hub-compact .honor-history-fold{font-size:11px;color:var(--muted)}
+.honor-history-fold>summary{cursor:pointer;min-height:36px;line-height:36px}
+.honor-hub-compact .honor-history{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:7px 0 0}
+.honor-hub-compact .honor-history-item{min-width:0;padding:8px;gap:5px;flex-direction:column;align-items:flex-start}
+.honor-hub-compact .honor-history-item span,.honor-hub-compact .honor-history-item strong{font-size:11px}
+.honor-compact-tools{display:flex;align-items:flex-start;gap:8px;border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+.honor-compact-tools>button,.honor-more>summary{min-height:38px;font-size:11px;padding:8px 13px;border-radius:9px}
+.honor-more>summary{cursor:pointer;border:1px solid var(--line);background:var(--surface-soft);color:var(--text);list-style:none;box-sizing:border-box}
+.honor-more[open]>button{display:block;margin-top:7px;font-size:11px}
+.honor-hub-compact .honor-feedback:empty{display:none}
+.honor-hub-compact .honor-feedback{font-size:11px;margin:8px 0 0}
+.honor-hub-compact [data-celebrate]{display:block;margin:8px auto 0;min-height:36px;font-size:11px;padding:6px 12px}
+.honor-hub-compact .honor-skin-grid{grid-template-columns:1fr 1fr}
+.personal-keepsakes .monthly-memory-compact{margin:0;padding:0;border:0;border-radius:0;background:transparent}
+.monthly-memory-compact .mm-heading{display:none}
+.monthly-memory-compact .monthly-memory-card{margin:0;border-radius:16px;overflow:hidden;box-shadow:0 4px 14px #1722370c}
+.monthly-memory-compact .mm-top{font-size:10px;padding:12px 16px}
+.monthly-memory-compact .mm-cover{padding:16px;min-height:0;gap:18px;grid-template-columns:80px minmax(0,1fr)}
+.monthly-memory-compact .mm-cover figure{width:80px;margin:0;padding:5px}
+.monthly-memory-compact .mm-cover img{width:70px;height:70px;object-fit:cover}
+.monthly-memory-compact .mm-cover h3{font-size:19px;line-height:1.45;white-space:pre-line}
+.monthly-memory-compact .mm-cover small,.monthly-memory-compact .mm-name{display:none}
+.monthly-memory-compact .mm-body{padding:16px}
+.monthly-memory-compact .mm-body p{font-size:12px;line-height:1.85;margin:0}
+.mm-compact-card:not(.mm-is-expanded) .mm-opening,.mm-compact-card:not(.mm-is-expanded) .mm-closing,.mm-compact-card:not(.mm-is-expanded) .mm-sign,.mm-compact-card:not(.mm-is-expanded) .mm-body footer{display:none}
+.mm-compact-card:not(.mm-is-expanded) .mm-facts{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;margin:0;padding:0 0 0 11px;max-height:5.55em;background:transparent}
+.monthly-memory-compact .mm-is-expanded .mm-body p{margin-bottom:12px}
+.monthly-memory-compact .mm-sign,.monthly-memory-compact .mm-body footer{font-size:10px}
+.monthly-memory-compact .mm-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin:12px 0 0}
+.monthly-memory-compact .mm-actions button{min-width:0;min-height:40px;padding:8px 4px;font-size:11px;border-radius:9px}
+.monthly-memory-compact .mm-originals{margin:10px 0 0;font-size:11px}
+.monthly-memory-compact .mm-originals>summary{min-height:36px;line-height:36px}
+.monthly-memory-compact [data-memory-status]:empty{display:none}
+.monthly-memory-compact [data-memory-status]{font-size:11px;margin-top:8px}
+.personal-keepsakes .medal-collection-compact{margin:0}
+.medal-collection-compact>h3{display:none}
+.medal-collection-compact .medal-items{grid-template-columns:minmax(0,1fr)}
+.medal-collection-compact .medal-item-compact{padding:16px;border-radius:16px}
+.medal-collection-compact .medal-item-compact>summary{gap:6px}
+.medal-collection-compact .medal-item-compact>summary .medal-art{width:166px}
+.medal-collection-compact .medal-item-compact>summary .medal-card-eyebrow{font-size:11px;letter-spacing:0}
+.medal-collection-compact .medal-item-compact>summary>strong{font-size:17px}
+.medal-collection-compact .medal-item-compact>summary>.medal-reveal{font-size:10px}
+.medal-collection-compact .medal-item-compact[open]>summary:after{display:none}
+.medal-compact-detail{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:9px;margin-top:10px;color:#c0cadb;font-size:10px}
+.medal-compact-detail .medal-count-pill{font-size:10px;padding:3px 8px}
+.medal-collection-compact .medal-rule-details{padding-top:5px;border-top:1px solid #ffffff25;margin-top:10px!important}
+.medal-collection-compact .medal-rule-details>summary{min-height:32px;font-size:10px;line-height:32px}
+.medal-collection-compact>details{font-size:11px;margin:10px 0 0}
+#app .personal-keepsakes .monthly-memory-compact .mm-cover h3{font-size:19px;line-height:1.45}
+#app .personal-keepsakes .honor-hub-compact .member-rank-copy h3{font-size:18px}
+@media(max-width:600px){.honor-hub-compact .honor-display{padding:12px}.honor-hub-compact .member-rank-emblem{width:150px;height:150px}.medal-collection-compact .medal-item-compact>summary .medal-art{width:150px}.monthly-memory-compact .mm-cover{gap:12px}.honor-hub-compact .member-rank-rules>summary,.honor-motion-fold>summary{min-height:36px;line-height:36px}.monthly-memory-compact .mm-actions button{min-height:44px}.monthly-memory-compact .mm-body{padding:14px}}
+.honor-compact-tools{display:grid;grid-template-columns:1fr 1fr}
+.honor-compact-tools>button,.honor-more>summary{width:100%;white-space:nowrap;text-align:center;font-size:12px;min-height:40px}
+#app .personal-keepsakes .honor-hub-compact .member-rank-copy{text-align:center;width:100%}
+.honor-hub-compact .member-rank-copy h3{text-align:center}
+.honor-hub-compact .honor-motion-fold{margin-top:6px}
+.honor-hub-compact .honor-motion-fold>summary{font-size:11px}
+.honor-hub-compact .honor-history-fold{margin:0}
+#app .personal-keepsakes .honor-hub-compact .member-rank-copy h3{margin:0 auto 3px;text-align:center}

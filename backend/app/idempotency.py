@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from app.v2_models import SubmissionRequest
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -29,6 +30,8 @@ def existing_submission(
     request_key: str | None,
     model,
     payload_digest: str | None = None,
+    *,
+    compatible_match: Callable[[str, object], bool] | None = None,
 ):
     if not request_key:
         return None
@@ -40,7 +43,10 @@ def existing_submission(
     if not request_row:
         return None
     stored = (request_row.payload_digest or "").strip()
-    if payload_digest and stored and stored != payload_digest:
+    record = db.get(model, request_row.entity_id)
+    if payload_digest and stored != payload_digest and (stored or compatible_match is not None) and not (
+        compatible_match is not None and record is not None and compatible_match(stored, record)
+    ):
         raise HTTPException(
             409,
             {
@@ -48,7 +54,7 @@ def existing_submission(
                 "message": "同一提交键不能用于不同内容，请刷新页面后重新提交。",
             },
         )
-    return db.get(model, request_row.entity_id)
+    return record
 
 
 def remember_submission(

@@ -68,12 +68,13 @@ def test_render_navigation_cancels_stale_read_requests_without_recursive_redraw(
     assert "res.json().catch(() => ({}))" not in script
 
 
-def test_manager_recognition_can_submit_without_a_self_evidence_control() -> None:
+def test_active_manager_recognition_reuses_the_self_evidence_control() -> None:
     script = read_frontend_source()
 
     assert "function recognitionSubmissionData(form,imageRequired=true)" in script
     assert "if(imageRequired&&!file)" in script
-    assert "recognitionSubmissionData(e.target,selfMode)" in script
+    assert "const imageRequired=selfMode||managerRecognition;" in script
+    assert "recognitionSubmissionData(e.target,imageRequired)" in script
 
 
 def test_hr_member_group_is_the_only_inline_control() -> None:

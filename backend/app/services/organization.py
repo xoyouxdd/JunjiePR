@@ -312,14 +312,17 @@ def active_group_leaders_bulk(db: Session, group_ids: list[int] | set[int], on_d
 
 
 def active_group_memberships_bulk(db: Session, group_ids: list[int] | set[int], on_date: str | None = None) -> dict[int, list[GroupMembership]]:
+    """Current HR group rosters exclude archived personnel and retain membership history."""
     ids = list(dict.fromkeys(int(group_id) for group_id in group_ids))
     if not ids:
         return {}
     value = on_date or date.today().isoformat()
     rows = (
         db.query(GroupMembership)
+        .join(Employee, Employee.id == GroupMembership.employee_id)
         .filter(
             GroupMembership.group_id.in_(ids),
+            Employee.account_deleted_at.is_(None),
             GroupMembership.status == "active",
             GroupMembership.starts_on <= value,
             or_(GroupMembership.ends_on.is_(None), GroupMembership.ends_on >= value),

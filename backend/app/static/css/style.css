@@ -2264,6 +2264,109 @@ details.hr-block:not([open]) > summary { border-bottom: 0; }
 .member-rank-awaiting .member-info-grid>div { background:#f8fbffcc;backdrop-filter:blur(4px); }
 .home-recognition-summary { display:flex;flex-wrap:wrap;gap:8px 16px;margin:0 0 16px;color:var(--muted);font-size:14px; }
 .home-recognition-summary strong { margin:0 4px;color:var(--text); }
+#recognitionInbox {
+  color-scheme:light dark;
+  --rf-paper:light-dark(#fff9ed,#30291e);
+  --rf-ink:light-dark(#17352c,#edf5ef);
+  --rf-mute:light-dark(#4f6a5e,#b8ccc0);
+  --rf-line:light-dark(#cedbd3,#42594d);
+  --rf-accent:light-dark(#e1efe6,#28483a);
+  --rf-green:light-dark(#176248,#a5e4c8);
+  --rf-gold:light-dark(#8c601f,#efc984);
+  --rf-seal:#d7ae66;
+  --rf-fold-dark:#174335;
+  --rf-ease:cubic-bezier(.22,.7,.2,1);
+}
+#recognitionInbox .recognition-mail-entry {
+  display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center;
+  width:100%; gap:12px; min-height:80px; position:relative; isolation:isolate; overflow:hidden; padding:12px 16px; border-radius:12px;
+  background:linear-gradient(116deg,light-dark(#145a46,#235c49),light-dark(#24765a,#34735c));
+  color:#f7fff9; border:1px solid light-dark(#11563e,#73a08c);
+  box-shadow:0 4px 10px light-dark(#1c4d3d33,#07171172); text-align:left;
+}
+#recognitionInbox .recognition-mail-entry::before,#recognitionInbox .recognition-mail-entry::after { content:""; position:absolute; pointer-events:none; z-index:-1; border:1px solid #deefc84d; border-radius:50%; width:176px; aspect-ratio:1; right:-58px; top:-108px; }
+#recognitionInbox .recognition-mail-entry::after { width:144px; right:-42px; top:-94px; }
+#recognitionInbox .recognition-mail-icon { width:43px; aspect-ratio:1.38; display:grid; place-items:center; position:relative; background:#dbeadd; border-radius:5px; box-shadow:0 4px 6px #143d3273; transform:rotate(-8deg); }
+#recognitionInbox .recognition-mail-icon::before { content:""; position:absolute; inset:0; border-radius:5px; clip-path:polygon(0 0,100% 0,50% 65%); background:#f6f4db; }
+#recognitionInbox .recognition-mail-icon::after { content:""; position:absolute; inset:0; border-radius:5px; clip-path:polygon(0 12%,50% 62%,100% 12%,100% 100%,0 100%); background:linear-gradient(145deg,#b5d3bf,#dbeadd); }
+#recognitionInbox .recognition-mail-icon i { width:11px; aspect-ratio:1; border-radius:50%; background:#d3a75d; border:1px solid #f7d7a0; z-index:1; box-shadow:0 1px 2px #4d381780; margin-top:6px; }
+#recognitionInbox .recognition-mail-copy { display:grid; gap:2px; min-width:0; }
+#recognitionInbox .recognition-mail-copy strong { font-size:16px; line-height:1.35; }
+#recognitionInbox .recognition-mail-copy small { color:#def3e6; }
+#recognitionInbox .recognition-mail-count { background:#fae4ae; color:#4b3513; font-size:12px; font-weight:700; padding:4px 7px; border-radius:20px; white-space:nowrap; }
+#recognitionInbox .recognition-mail-tail { display:grid; justify-items:end; gap:4px; }
+#recognitionInbox .recognition-mail-arrow { line-height:1; color:#e3f6eb; font-size:19px; }
+#recognitionInbox .recognition-inbox-list { display:grid; gap:7px; }
+#recognitionInbox .recognition-inbox-list button { display:grid; grid-template-columns:minmax(0,1fr) auto; text-align:left; gap:3px 6px; min-height:52px; padding:8px; }
+#recognitionInbox .recognition-inbox-list button[data-unread="true"] { border-color:var(--rf-green); background:var(--rf-accent); }
+#homeRecognitionContext[hidden],#recognitionInbox [hidden] { display:none !important; }
+#recognitionInbox:empty { display:none; }
+#recognitionInbox .recognition-inbox-panel { display:grid; gap:12px; }
+#recognitionInbox .recognition-inbox-panel > header,#recognitionInbox .recognition-inbox-pages { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+#recognitionInbox .recognition-inbox-panel :is(h2,p,figure,blockquote) { margin:0; }
+#recognitionInbox .recognition-inbox-item { width:100%; border:1px solid var(--border); border-radius:10px; color:var(--text); background:var(--panel); }
+#recognitionInbox .recognition-inbox-item small { grid-column:1/-1; color:var(--muted); overflow-wrap:anywhere; }
+#recognitionInbox .recognition-letter-view .rf-stage { width:min(100%,420px); margin-inline:auto; }
+#recognitionInbox .rf-caption,#recognitionInbox .rf-paper small,#recognitionInbox figcaption { color:var(--rf-mute); font-size:13px; }
+#recognitionInbox .rf-score-note { flex-basis:100%; }
+#recognitionInbox .rf-paper { overflow-wrap:anywhere; }
+#recognitionInbox .rf-open { color:var(--rf-ink); }
+#recognitionInbox .rf-replay { justify-self:center; }
+#recognitionInbox .rf-paper figcaption { text-align:right; }
+#recognitionInbox .rf-stage { display:grid; position:relative; isolation:isolate; }
+#recognitionInbox .rf-stage > * { grid-area:1/1; min-width:0; }
+#recognitionInbox .rf-curtain { z-index:2; align-self:start; display:grid; gap:6px; justify-items:center; text-align:center; padding:22px 0 9px; }
+#recognitionInbox .rf-eyebrow { color:var(--rf-gold); font-size:12px; font-weight:700; letter-spacing:.12em; }
+#recognitionInbox .rf-open { display:grid; justify-items:center; gap:14px; width:min(88%,288px); margin-top:14px; padding:12px 5px 6px; background:transparent; border:0; border-radius:12px; }
+#recognitionInbox .rf-envelope { display:block; position:relative; width:100%; aspect-ratio:1.65; perspective:750px; isolation:isolate; transition:transform .18s var(--rf-ease); }
+#recognitionInbox .rf-open:active .rf-envelope { transform:scale(.974); }
+#recognitionInbox .rf-envelope > span,#recognitionInbox .rf-hinge > span { position:absolute; display:block; }
+#recognitionInbox .rf-base { inset:0; background:var(--rf-fold-dark); border-radius:8px; box-shadow:0 15px 25px color-mix(in srgb,var(--rf-fold-dark) 27%,transparent); }
+#recognitionInbox .rf-hinge { inset:0 0 31%; z-index:4; transform-origin:top center; transform-style:preserve-3d; }
+#recognitionInbox :is(.rf-flap,.rf-lining) { inset:0; backface-visibility:hidden; clip-path:polygon(0 0,100% 0,50% 94%); border-radius:8px; }
+#recognitionInbox .rf-flap { background:linear-gradient(166deg,#40846a 0%,#215442 92%); }
+#recognitionInbox .rf-lining { transform:rotateX(180deg); background:repeating-linear-gradient(130deg,#bc9f67 0 1px,#e9d6ab 1px 7px); }
+#recognitionInbox .rf-pocket { z-index:3; inset:0; border-radius:8px; clip-path:polygon(0 12%,50% 65%,100% 12%,100% 100%,0 100%); background:linear-gradient(30deg,#2f7058 0 50%,transparent 50.5%),linear-gradient(153deg,#3a7c62,#255542); }
+#recognitionInbox .rf-pocket::after { content:""; position:absolute; inset:0; opacity:.5; background:linear-gradient(145deg,transparent 49.65%,#9cb7a4 50%,transparent 50.35%); }
+#recognitionInbox .rf-insert { inset:9% 11% 11%; z-index:2; opacity:0; border-radius:5px; border:1px solid var(--rf-line); padding:12px; color:var(--rf-ink); background:var(--rf-paper); text-align:left; }
+#recognitionInbox .rf-insert strong { display:block; font-size:19px; }
+#recognitionInbox .rf-insert > span { font-size:12px; }
+#recognitionInbox .rf-rule { display:block; width:60%; height:1px; margin-top:7px; background:var(--rf-line); }
+#recognitionInbox .rf-front-name { z-index:4; inset:auto 13px 9px auto; color:#edf4dd; letter-spacing:.08em; font-size:12px; }
+#recognitionInbox .rf-seal { z-index:5; top:63%; left:50%; width:42px; aspect-ratio:1; transform:translate(-50%,-50%) rotate(-9deg); border-radius:47% 51% 46% 53%; border:2px solid #e4bd75; box-shadow:0 3px 7px #132d24a8,inset 0 0 0 3px #ba8946; color:#4a2c0e; background:radial-gradient(circle at 35% 30%,#f7d99a,var(--rf-seal) 65%,#bd8a4e); font-weight:750; line-height:38px; }
+#recognitionInbox .rf-tap { color:var(--rf-green); font-weight:650; }
+#recognitionInbox .rf-paper { align-self:start; display:grid; gap:12px; padding:14px; border:1px solid var(--rf-line); border-radius:11px; background:var(--rf-paper); color:var(--rf-ink); transform-origin:50% 16%; }
+#recognitionInbox .rf-letterhead { display:grid; gap:4px; padding-bottom:8px; border-bottom:1px solid var(--rf-line); }
+#recognitionInbox .rf-paper blockquote { padding-left:10px; border-left:2px solid var(--rf-gold); }
+#recognitionInbox .rf-paper img { display:block; width:100%; aspect-ratio:2/1; max-height:250px; object-fit:contain; border-radius:7px; }
+#recognitionInbox figcaption { padding-top:3px; }
+#recognitionInbox .rf-credit { display:flex; gap:6px; flex-wrap:wrap; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:8px; background:var(--rf-accent); color:var(--rf-green); }
+#recognitionInbox .rf-credit > strong { font-size:20px; font-variant-numeric:tabular-nums; }
+#recognitionInbox .rf-replay { display:block; margin:3px auto 0; }
+#recognitionInbox .rf-moving .rf-seal { animation:rf-seal .3s var(--rf-ease) both; }
+#recognitionInbox .rf-moving .rf-hinge { animation:rf-hinge .47s var(--rf-ease) .10s both; }
+#recognitionInbox .rf-moving .rf-insert { animation:rf-insert .59s var(--rf-ease) .27s both; }
+#recognitionInbox .rf-moving .rf-curtain > :is(p,h2),#recognitionInbox .rf-moving .rf-tap { animation:rf-label-out .23s ease both; }
+#recognitionInbox .rf-moving .rf-curtain { pointer-events:none; animation:rf-curtain .42s var(--rf-ease) .58s both; }
+#recognitionInbox .rf-moving .rf-paper { animation:rf-paper .49s var(--rf-ease) .52s both; }
+#recognitionInbox .rf-moving .rf-paper > :nth-child(2) { animation:rf-detail .29s var(--rf-ease) .79s both; }
+#recognitionInbox .rf-moving .rf-paper > :nth-child(3) { animation:rf-detail .31s var(--rf-ease) .94s both; }
+#recognitionInbox .rf-moving .rf-paper > :nth-child(4) { animation:rf-detail .31s var(--rf-ease) 1.08s both; }
+#recognitionInbox .rf-moving .rf-paper > :nth-child(5) { animation:rf-detail .32s var(--rf-ease) 1.23s both; }
+@keyframes rf-seal { 0% { transform:translate(-50%,-50%) rotate(-9deg); } 35% { opacity:1; transform:translate(-50%,-60%) rotate(2deg) scale(1.08); } 100% { opacity:0; transform:translate(-12%,-100%) rotate(18deg) scale(.86); } }
+@keyframes rf-hinge { 0% { transform:rotateX(0); z-index:4; } 47% { z-index:4; } 50% { z-index:1; } 100% { transform:rotateX(166deg); z-index:1; } }
+@keyframes rf-insert { 0% { opacity:0; } 18% { opacity:1; } 78% { opacity:1; } 100% { opacity:0; transform:translateY(-80%) rotate(-2deg) scale(1.08); } }
+@keyframes rf-curtain { to { opacity:0; transform:translateY(12px) scale(.97); visibility:hidden; } }
+@keyframes rf-label-out { to { opacity:0; } }
+@keyframes rf-paper { from { opacity:0; transform:translateY(38px) scale(.8); } to { opacity:1; transform:none; } }
+@keyframes rf-detail { from { opacity:0; transform:translateY(8px); } }
+@media(prefers-reduced-motion:reduce) { #recognitionInbox *,#recognitionInbox *::before,#recognitionInbox *::after { animation:none !important; transition:none !important; } }
+@media(max-width:360px) {
+  #recognitionInbox .recognition-mail-entry { padding:10px; gap:7px; }
+  #recognitionInbox .recognition-mail-icon { width:32px; }
+  #recognitionInbox .recognition-mail-copy strong { font-size:14px; }
+  #recognitionInbox .recognition-mail-count { padding:3px 6px; }
+}
 .home-recognition-pending { color:var(--primary); }
 .member-history-rank { display:inline-block;margin-top:6px;padding:3px 7px;border:1px solid var(--border);border-radius:6px;color:var(--primary);font-size:12px; }
 .member-history-rank-empty { color:var(--muted); }

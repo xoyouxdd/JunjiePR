@@ -28,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 PYTHON = sys.executable
 BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "deduction_type_picker_ui.cjs", "frontend_modules.cjs", "mobile_filter_layout_ui.cjs", "monthly_rank_ui.cjs", "recognition_upload_ui.cjs", "rotation_confirmation_ui.cjs", "rotation_adjustment_ui.cjs", "rotation_tablet_ui.cjs", "rotation_daily_ui.cjs", "rotation_formal_ui.cjs", "rotation_post_holds_ui.cjs", "rotation_cooperation_ui.cjs", "rotation_temporary_ui.cjs", "rotation_roster_independence_ui.cjs", "employee_types_ui.cjs", "video_learning_ui.cjs"}
-BROWSER_TESTS.update({"rotation_assignment_window_ui.cjs", "month_close_scope_ui.cjs", "recognition_photo_ui.cjs"})
+BROWSER_TESTS.update({"rotation_assignment_window_ui.cjs", "month_close_scope_ui.cjs", "recognition_photo_ui.cjs", "recognition_inbox_ui.cjs"})
 BROWSER_TESTS.add("workspace_compact_ui.cjs")
 BROWSER_TESTS.add("rotation_workflow_ui.cjs")
 BROWSER_TESTS.add("rotation_forecast_ui.cjs")
@@ -46,6 +46,13 @@ BROWSER_TESTS.add("rotation_display_consistency_ui.cjs")
 BROWSER_TESTS.add("rotation_early_post_ui.cjs")
 BROWSER_TESTS.update({"rotation_break_window_ui.cjs", "rotation_waiting_notice_ui.cjs"})
 BROWSER_TESTS.add("avatar_ui.cjs")
+BROWSER_TESTS.add("attendance_medals_ui.cjs")
+BROWSER_TESTS.add("attendance_medal_art_ui.cjs")
+BROWSER_TESTS.add("activity_points_ui.cjs")
+BROWSER_TESTS.add("activities_ui.cjs")
+BROWSER_TESTS.add("activities_read_ui.cjs")
+BROWSER_TESTS.add("personal_center_ui.cjs")
+BROWSER_TESTS.add("legacy_points_ui.cjs")
 BROWSER_TESTS.add("avatar_integration_ui.cjs")
 BROWSER_TESTS.add("announcement_all_leads_ui.cjs")
 BROWSER_TESTS.add("learning_shares_ui.cjs")

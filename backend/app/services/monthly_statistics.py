@@ -20,6 +20,7 @@ from app.score_queries import employee_month_scores
 from app.v2_models import Attraction, AttendanceMonthlyScore, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupMembership, ManagementScope, RecognitionAttachment, RecognitionRecord, Role, SickLeaveRecord, WorkGroup
 from app.services.attendance import ensure_month_attendance, recalculate_attendance
 from app.services.identity import acting_period_notes, base_roles_at, identity_labels, roles_at
+from app.services.issuer_rankings import issuer_ranking_payload
 from app.services.performance_details import load_monthly_records
 from app.services.monthly_ranks import member_month_query_context, sealed_self_score
 
@@ -317,6 +318,8 @@ def statistics_payload(
     *,
     include_records: bool = False,
     include_hierarchy: bool = True,
+    issuer_keyword: str = "",
+    issuer_population: str = "frontline",
 ) -> dict:
     try:
         month_start = date.fromisoformat(f"{month}-01")
@@ -540,6 +543,20 @@ def statistics_payload(
         "loa_periods": loa_period_payloads,
         "by_attraction": sorted(attraction_totals.values(), key=lambda item: str(item["attraction_name"])),
     }
+    if user and user.role.code in GSM_CODES | {"AM", "OM", "SYSTEM_ADMIN"} and (include_hierarchy or include_records):
+        if issuer_population not in {"frontline", "supervisor", "all"}:
+            raise HTTPException(400, "管理层认可次数的被认可人群无效")
+        issuer_attraction = db.get(Attraction, attraction_id) if attraction_id is not None else None
+        if attraction_id is not None and (
+            not issuer_attraction or not issuer_attraction.active or not issuer_attraction.employee_circle
+        ):
+            raise HTTPException(400, "请选择有效的员工景点圈")
+        payload["issuer_counts"] = issuer_ranking_payload(
+            db, user, month_start.isoformat(), min(month_end, date.today().isoformat()),
+            "gsm_leader", None, issuer_keyword,
+            1, max(1, db.query(func.count(Employee.id)).scalar()), issuer_attraction, issuer_population,
+        )
+        payload["issuer_keyword"] = issuer_keyword.strip()
     if include_records:
         payload.update(
             {

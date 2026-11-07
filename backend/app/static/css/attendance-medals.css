@@ -1,0 +1,57 @@
+.attendance-medals { overflow-wrap:anywhere; }
+.attendance-medals label { display:block; margin:12px 0; }
+.attendance-medals details { margin:12px 0; }
+.attendance-medals summary { cursor:pointer; }
+.medal-circle-list { display:grid; gap:16px; margin-top:16px; }
+.medal-circle { border:1px solid var(--border,#dce4ee); border-radius:14px; padding:16px; min-width:0; }
+.medal-circle h3 .badge { margin-left:8px; }
+.medal-person-list { max-height:460px; overflow:auto; }
+.medal-person { padding:10px 0; border-bottom:1px solid var(--border,#dce4ee); }
+.medal-person .badge { margin-left:8px; }
+.medal-person p { margin:6px 0; }
+.medal-items { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,158px),1fr)); align-items:start; gap:12px; }
+.medal-item,.medal-design-preview { --medal-accent:#e4c789; color:#edf1f7; border:1px solid #46516a; border-top-color:var(--medal-accent); border-radius:18px; background:radial-gradient(ellipse at 50% 18%,#24344b,#101725 80%); min-width:0; }
+.medal-item { margin:0!important; padding:16px; max-width:100%; text-align:center; }
+.medal-item>summary { display:flex; flex-direction:column; align-items:center; gap:7px; list-style:none; font-weight:600; }
+.medal-item>summary::-webkit-details-marker { display:none; }
+.medal-card-eyebrow { color:#d6c5a2; font-size:12px; letter-spacing:.1em; }
+.medal-item>summary>strong { color:var(--medal-accent); font-size:15px; line-height:1.5; }
+.medal-reveal { font-size:11px; color:#a7b4c8; }
+.medal-art { display:block; position:relative; width:120px; max-width:100%; aspect-ratio:240/284; flex-shrink:0; color:var(--medal-accent); }
+.medal-art>img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; border-radius:12px; }
+.medal-art>img[hidden] { display:none; }
+.medal-art-fallback { position:absolute; inset:10% 12%; width:76%; height:80%; }
+.medal-art.is-ready>.medal-art-fallback { visibility:hidden; }
+.medal-item[open] { grid-column:1/-1; }
+.medal-item[open]>summary .medal-art { width:252px; }
+.medal-item[open]>summary>.medal-reveal { display:none; }
+.medal-item[open]>summary::after { content:'收起详情'; font-size:11px; color:#a7b4c8; }
+.medal-detail-card { display:grid; grid-template-columns:78px minmax(0,1fr); gap:12px 16px; align-items:center; padding:16px; margin-top:16px; border:1px solid #596171; border-radius:14px; background:#202a3b; text-align:left; }
+.medal-art.medal-art-small { width:78px; }
+.medal-detail-copy { min-width:0; }
+.medal-detail-copy h4 { margin:0 0 8px; color:#f0e6d1; font-size:17px; line-height:1.5; }
+.medal-count-pill { display:inline-block; padding:4px 12px; border:1px solid var(--medal-accent); border-radius:30px; color:var(--medal-accent); font-size:12px; }
+.medal-detail-copy p { margin:9px 0 0; color:#c0cadb; font-size:12px; line-height:1.7; }
+.medal-sentiment { grid-column:1/-1; padding-top:12px; margin:0; border-top:1px solid #4c576a; color:#f1e6d0; font-size:14px; line-height:1.7; }
+.medal-rule-details { margin:14px 0 0!important; text-align:left; }
+.medal-rule-details>summary { font-size:12px; color:#bac8dc; }
+.medal-rule-details>p { color:#bac8dc; font-size:12px; line-height:1.8; }
+.medal-design-preview { display:flex; align-items:center; gap:20px; padding:16px 24px; margin:14px 0; max-width:480px; }
+.medal-design-preview .medal-art { width:86px; }
+.medal-design-preview span:not(.medal-art) { display:block; color:#c0cadb; font-size:12px; }
+.medal-design-preview strong { display:block; margin:6px 0; font-size:20px; color:var(--medal-accent); }
+.medal-design-preview small { color:#c0cadb; }
+[data-medal-art-month="01"] { --medal-accent:#c8e2f5; }
+[data-medal-art-month="02"] { --medal-accent:#c9dfb8; }
+[data-medal-art-month="03"] { --medal-accent:#a8dfb4; }
+[data-medal-art-month="04"] { --medal-accent:#9cdfe0; }
+[data-medal-art-month="05"] { --medal-accent:#d6db8e; }
+[data-medal-art-month="06"] { --medal-accent:#f0b185; }
+[data-medal-art-month="07"] { --medal-accent:#f5cf7b; }
+[data-medal-art-month="08"] { --medal-accent:#deb28a; }
+[data-medal-art-month="09"] { --medal-accent:#f1dfbf; }
+[data-medal-art-month="10"] { --medal-accent:#e9afa8; }
+[data-medal-art-month="11"] { --medal-accent:#b6c9e3; }
+[data-medal-art-month="12"] { --medal-accent:#d4c0ee; }
+.medal-collection { margin:16px 0; }
+@media(max-width:600px) { .medal-circle { padding:12px; } .attendance-medals .actions { flex-wrap:wrap; } .attendance-medals input,.attendance-medals select { max-width:100%; min-width:0; } }

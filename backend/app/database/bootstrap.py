@@ -27,6 +27,8 @@ def init_db() -> None:
 def _init_db_unlocked() -> None:
     ensure_directories()
     from app import v2_models  # noqa: F401
+    from app import activity_points_models  # noqa: F401
+    from app import activities_models  # noqa: F401
     from app import video_models  # noqa: F401
     from app import learning_models  # noqa: F401
     from app.rotation import models as rotation_models  # noqa: F401
@@ -46,6 +48,9 @@ def _init_db_unlocked() -> None:
         disable_test_accounts(db)
         ensure_highest_admin_account(db)
         ensure_circle_hr_accounts(db)
+        from app.attendance_medals_models import backfill_account_identities
+        backfill_account_identities(db)
+        db.commit()
         from app.services.monthly_ranks import backfill_closed_rankings
 
         backfill_closed_rankings(db)

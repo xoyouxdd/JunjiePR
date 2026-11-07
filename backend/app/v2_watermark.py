@@ -8,6 +8,7 @@ import fitz
 from openpyxl.drawing.image import Image as WorksheetImage
 from PIL import Image, ImageDraw, ImageFont
 from pillow_heif import register_heif_opener
+from app.branding import BRAND_EN
 
 
 register_heif_opener()
@@ -53,11 +54,13 @@ def watermark_workbook(workbook, employee_no: str, timestamp: datetime | None = 
     manage filters, and change/remove drawing objects in their own copy.
     """
     label = watermark_label(employee_no, timestamp)
-    workbook.properties.creator = label
+    workbook.properties.creator = f"{BRAND_EN} | {label}"
     workbook.properties.lastModifiedBy = label
-    workbook.properties.description = f"受控数据导出；账号水印：{employee_no}"
+    workbook.properties.description = f"{BRAND_EN} · 受控数据导出；账号水印：{employee_no}"
     tile = _watermark_tile(label)
     for worksheet in workbook.worksheets:
+        worksheet.oddFooter.left.text = BRAND_EN
+        worksheet.oddFooter.left.size = 8
         worksheet.oddHeader.center.text = label
         worksheet.oddHeader.center.size = 10
         worksheet.oddHeader.center.color = "B7BEC8"

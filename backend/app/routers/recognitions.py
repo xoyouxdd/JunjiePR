@@ -7,17 +7,22 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from typing import Literal
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from sqlalchemy import func, or_, update, text
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
+from sqlalchemy import func, or_, select, update, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
-from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionMonthlyQuota, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
+from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionInboxItem, RecognitionMonthlyQuota, RecognitionReissue, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
 from app.services import scoring_policies as scoring_config
 from app.recognition_encouragement import encouragement_options
 from app.recognition_timing import identify, stage
+from app.role_constants import GSM_CODES
+from app.services.attachments import BUSINESS_ATTACHMENT_MAX_BYTES
+from app.services.attendance import loa_excludes_month
 from app.services.identity import TEMPORARY_RECOGNIZER_LABEL, temporary_recognizer_ids
+from app.services.activity_points import sync_recognition as sync_activity_points
+from app.services.monthly_ranks import sealed_self_score
 from app.v2_services import ACTING_TA_GSM_RECOGNIZER_CODES, FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, SENIOR_RECOGNIZER_CODES, base_role_at, scoring_category, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
 from app.routers._shared import (
     ATTENDANCE_FILTER_STATUSES,
@@ -51,6 +56,112 @@ from app.routers._shared import (
 )
 
 router = APIRouter()
+
+
+def recognition_inbox_query(db: Session, employee_id: int):
+    return db.query(RecognitionInboxItem, RecognitionRecord).join(
+        RecognitionRecord, RecognitionInboxItem.recognition_id == RecognitionRecord.id,
+    ).filter(RecognitionRecord.employee_id == employee_id, RecognitionRecord.status.in_(("confirmed", "void")))
+
+
+def reissue_original(db: Session, user: V2User, record_id: int) -> RecognitionRecord:
+    row = db.get(RecognitionRecord, record_id)
+    if not row or row.operator_employee_id != user.id or not db.get(RecognitionInboxItem, record_id):
+        raise HTTPException(404, "这封主动认可来信不存在")
+    if row.status != "void":
+        raise HTTPException(409, "请先撤回原签卡，再重新发卡")
+    if db.get(RecognitionReissue, record_id):
+        raise HTTPException(409, "原签卡已重新发卡")
+    return row
+
+
+@router.get("/recognitions/{record_id}/reissue")
+def recognition_reissue_draft(record_id: int, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    row = reissue_original(db, user, record_id)
+    recognizer_id = row.recognizer_employee_id
+    if row.recognizer_role_snapshot == "系统固定分值":
+        recognizer_id = f"special:{db.get(RecognitionType, row.recognition_type_id).code}"
+    return {
+        "id": row.id, "employee_no": row.employee_no, "employee_name": row.employee_name,
+        "supervisor_target": row.employee_role_code_snapshot == "SUPERVISOR",
+        "recognition_date": row.recognition_date, "recognition_type_id": row.recognition_type_id,
+        "occurred_attraction_id": row.occurred_attraction_id, "content": row.content,
+        "recognizer_employee_id": recognizer_id,
+        "poc_period_type": row.poc_period_type, "poc_reason": row.poc_reason,
+        "points": float(row.fraction),
+    }
+
+
+@router.get("/recognition-inbox")
+def recognition_inbox(
+    response: Response, page: int = Query(1, ge=1, le=100000),
+    db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    query = recognition_inbox_query(db, user.id)
+    unread_count = query.filter(RecognitionInboxItem.read_at.is_(None)).count()
+    total = query.count()
+    page_size = 20
+    page = min(page, max(1, (total + page_size - 1) // page_size))
+    rows = query.outerjoin(RecognitionReissue, RecognitionReissue.replacement_id == RecognitionRecord.id).add_columns(
+        RecognitionReissue.original_id
+    ).order_by(
+        RecognitionInboxItem.read_at.is_not(None),
+        func.coalesce(RecognitionRecord.voided_at, RecognitionRecord.submitted_at).desc(), RecognitionRecord.id.desc(),
+    ).offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        "unread_count": unread_count, "total": total, "page": page, "page_size": page_size,
+        "items": [
+            {"id": row.id, "recognition_type": row.recognition_type_name, "sender": row.operator_name,
+             "sender_role": row.operator_role_snapshot,
+             "submitted_at": (row.voided_at or row.submitted_at).isoformat(timespec="minutes"),
+             "unread": item.read_at is None, "cancelled": row.status == "void", "reissued": original_id is not None}
+            for item, row, original_id in rows
+        ],
+    }
+
+
+@router.post("/recognition-inbox/{record_id}/read")
+def read_recognition_inbox(
+    record_id: int, response: Response, db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
+    response.headers["Cache-Control"] = "private, no-store"
+    eligible = select(RecognitionRecord.id).where(
+        RecognitionRecord.id == record_id, RecognitionRecord.employee_id == user.id,
+        RecognitionRecord.status.in_(("confirmed", "void")),
+    )
+    db.execute(update(RecognitionInboxItem).where(
+        RecognitionInboxItem.recognition_id.in_(eligible), RecognitionInboxItem.read_at.is_(None),
+    ).values(read_at=datetime.now()))
+    result = recognition_inbox_query(db, user.id).filter(RecognitionInboxItem.recognition_id == record_id).first()
+    if not result:
+        raise HTTPException(404, "这条认可来信不存在")
+    _, row = result
+    if row.status == "void":
+        payload = {"cancelled": True, "recognition_type": row.recognition_type_name,
+                   "sender": row.operator_name, "sender_role": row.operator_role_snapshot,
+                   "cancelled_at": row.voided_at.isoformat(timespec="minutes") if row.voided_at else "",
+                   "cancel_reason": row.void_reason or ""}
+        db.commit()
+        return payload
+    record = recognition_payload(row)
+    frozen = sealed_self_score(db, row.recognition_month, user.id)
+    excluded = frozen.status == "excluded" if frozen else loa_excludes_month(db, user.id, row.recognition_month)
+    venue = db.get(Attraction, row.occurred_attraction_id)
+    payload = {
+        "recognition_type": row.recognition_type_name, "sender": row.operator_name,
+        "sender_role": row.operator_role_snapshot, "signer": row.recognizer_name,
+        "recognition_date": row.recognition_date, "recognition_month": row.recognition_month,
+        "venue": venue.name if venue else "", "content": row.poc_reason or row.content,
+        "poc_period": row.poc_period_key or "", "image_url": record["image_url"],
+        "image_preview_kind": record["image_preview_kind"],
+        "credited_score": 0 if excluded else record["credited_fraction"],
+        "score_note": "该月不参与计分" if excluded else record["monthly_cap_reason"],
+        "thanks": "谢谢你在工作中的用心，这份认可记录了你的付出。",
+        "reissued": db.query(RecognitionReissue).filter_by(replacement_id=row.id).first() is not None,
+    }
+    db.commit()
+    return payload
 
 
 def ensure_enabled_poc_target(db: Session, employee_id: int) -> tuple[Employee, Role]:
@@ -137,6 +248,8 @@ async def create_recognition(
     employee_id: int | None = Form(None),
     idempotency_key: str | None = Form(None),
     same_day_duplicate_confirmed: bool = Form(False),
+    active_recognition: bool = Form(False),
+    reissue_of_id: int | None = Form(None, gt=0),
     image: UploadFile | None = File(None),
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
@@ -145,16 +258,19 @@ async def create_recognition(
     with stage('record_ms'):
         return await _create_recognition(request, recognition_date, occurred_attraction_id,
             recognition_type_id, recognizer_employee_id, content, employee_id,
-            idempotency_key, same_day_duplicate_confirmed, image, db, user)
+            idempotency_key, same_day_duplicate_confirmed, image, db, user,
+            active_recognition=active_recognition, reissue_of_id=reissue_of_id)
 
 
 async def _create_recognition(request, recognition_date, occurred_attraction_id,
     recognition_type_id, recognizer_employee_id, content, employee_id,
     idempotency_key, same_day_duplicate_confirmed, image, db, user,
-    *, shared_file=None, commit=True):
+    *, shared_file=None, commit=True, active_recognition=False, reissue_of_id=None):
     request_key = normalize_request_key(idempotency_key)
-    payload_digest = submission_payload_digest(
-        {
+    payload_digest = None
+    compatible_match = None
+    if request_key:
+        fields = {
             "employee_id": int(employee_id or 0),
             "recognition_date": str(recognition_date or "").strip(),
             "occurred_attraction_id": int(occurred_attraction_id or 0),
@@ -162,9 +278,45 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
             "recognizer_employee_id": str(recognizer_employee_id or "").strip(),
             "content": str(content or "").strip(),
             "same_day_duplicate_confirmed": bool(same_day_duplicate_confirmed),
+            **({"active_recognition": True} if active_recognition else {}),
+            **({"reissue_of_id": reissue_of_id} if reissue_of_id is not None else {}),
         }
-    )
-    duplicate_row = existing_submission(db, user.id, "recognition", request_key, RecognitionRecord, payload_digest)
+        image_sha256 = None
+        if image and image.filename:
+            digest = hashlib.sha256()
+            size = 0
+            while chunk := await image.read(1024 * 1024):
+                size += len(chunk)
+                if size > BUSINESS_ATTACHMENT_MAX_BYTES:
+                    raise HTTPException(400, "认可图片不能超过100MB")
+                digest.update(chunk)
+            await image.seek(0)
+            image_sha256 = digest.hexdigest()
+        payload_digest = submission_payload_digest({**fields, "image_sha256": image_sha256})
+        legacy_digests = {submission_payload_digest(fields)}
+        confirmed_digest = None
+        if not same_day_duplicate_confirmed:
+            # A retry may omit the confirmation after the confirmed response was lost.
+            # Match only an existing receipt, so fresh submissions still need confirmation.
+            confirmed_fields = {**fields, "same_day_duplicate_confirmed": True}
+            confirmed_digest = submission_payload_digest({**confirmed_fields, "image_sha256": image_sha256})
+            legacy_digests.add(submission_payload_digest(confirmed_fields))
+
+        def compatible_match(stored_digest: str, record: RecognitionRecord) -> bool:
+            if stored_digest == confirmed_digest:
+                return True
+            # Older receipts omitted the photo. Verify it against the original stored bytes.
+            if stored_digest not in legacy_digests:
+                return False
+            evidence = next((item.file for item in record.attachments if item.attachment_type == "evidence"), None)
+            return (evidence.sha256 if evidence else None) == image_sha256
+
+    def find_previous():
+        return existing_submission(
+            db, user.id, "recognition", request_key, RecognitionRecord, payload_digest, compatible_match=compatible_match,
+        )
+
+    duplicate_row = find_previous()
     if duplicate_row:
         return {"ok": True, "record": recognition_payload(duplicate_row), "duplicate": True}
     recognition_date = str(recognition_date or "")
@@ -178,6 +330,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     target_category = scoring_category(target_role)
     target_duty_code = duty_code_at(db, target.id, recognition_date)
     is_self = target.id == user.id
+    manager_entry = not is_self and user.role.code in (LEADER_CODES | GSM_CODES)
     if not is_self:
         if target_category == "supervisor":
             ensure_supervisor_target_allowed(db, user, target, recognition_date, "加分")
@@ -189,7 +342,6 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.active or not target_circle.employee_circle:
         raise HTTPException(400, "被加分员工未配置有效景点圈")
-    ensure_month_open(db, recognition_date[:7], target_circle.id, "新增签卡")
     if user.role.code == SCOPED_HR_ROLE_CODE and LEGACY_CIRCLE_BY_VENUE.get(attraction.name, attraction.name) != target_circle.name:
         raise HTTPException(403, "景点圈HR只能登记所属景点圈发生的认可")
     recognition_type = db.get(RecognitionType, int(recognition_type_id or 0))
@@ -239,57 +391,14 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     if not is_self and not special_rule and target_duty_code == "TA_SUPERVISOR" and user.role.code in LEADER_CODES:
         raise HTTPException(403, "该员工认可日期处于代理TA主管期间，主管和TA主管不能为其代录加分")
     quota_code = recognition_type.code if special_rule and score_policy["count"] == 1 and score_policy["overflow"] == "block" else None
-    active_same_day_rows = (
-        db.query(RecognitionRecord)
-        .filter(
-            RecognitionRecord.employee_id == target.id,
-            RecognitionRecord.recognition_date == recognition_date,
-            RecognitionRecord.recognition_type_id == recognition_type.id,
-            RecognitionRecord.recognizer_employee_id == recognizer.id,
-            RecognitionRecord.status.in_(("pending", "confirmed")),
-        )
-        .order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc())
-        .all()
-    )
-    duplicate_group = None
-    duplicate_sequence = None
-    if active_same_day_rows:
-        duplicate_group = f"{recognition_date}:{target.id}:{recognition_type.id}:{recognizer.id}"
-        if not same_day_duplicate_confirmed:
-            # A concurrent retry can reach the same-day reminder after the
-            # first request has committed.  Re-check the idempotency receipt so
-            # the caller receives its original record rather than a false
-            # duplicate warning.
-            duplicate_row = existing_submission(db, user.id, "recognition", request_key, RecognitionRecord)
-            if duplicate_row:
-                return {"ok": True, "record": recognition_payload(duplicate_row), "duplicate": True}
-            raise HTTPException(
-                409,
-                {
-                    "code": "SAME_DAY_RECOGNITION_DUPLICATE",
-                    "message": "该员工今日已由该认可人登记过同类认可，请确认是否为另一项独立表现。",
-                    "previous_records": [
-                        {
-                            "id": item.id,
-                            "submitted_at": item.submitted_at.strftime("%Y-%m-%d %H:%M"),
-                            "status": item.status,
-                            "content": item.content,
-                        }
-                        for item in active_same_day_rows
-                    ],
-                },
-            )
-        for index, item in enumerate(active_same_day_rows, start=1):
-            item.same_day_duplicate_group = duplicate_group
-            item.same_day_duplicate_sequence = index
-        duplicate_sequence = len(active_same_day_rows) + 1
-    if quota_code and db.query(RecognitionMonthlyQuota).filter_by(
-        employee_id=target.id, quota_code=quota_code, quota_month=recognition_date[:7]
-    ).first():
-        raise HTTPException(409, ("该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分" if recognition_type.code == "COMMENDATION_LETTER" else "本类别每名员工每月只能计分一次"))
     reviewer = current_leader_for_employee(db, target.id) if is_self else None
-    if is_self and not shared_file and (not image or not image.filename):
-        raise HTTPException(400, "CM/TR本人登记必须上传1张认可图片")
+    if active_recognition and not manager_entry:
+        raise HTTPException(403, "当前登记不能主动发送认可")
+    if reissue_of_id is not None and not active_recognition:
+        raise HTTPException(400, "请使用原签卡对应的主动认可入口重新发卡")
+    if (is_self or active_recognition) and not shared_file and (not image or not image.filename):
+        message = "主动认可必须上传1张认可图片" if active_recognition else "CM/TR本人登记必须上传1张认可图片"
+        raise HTTPException(400, message)
     file_row = None
     row = RecognitionRecord(
         employee_id=target.id,
@@ -324,19 +433,80 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         fraction=fraction,
         scoring_policy_json=scoring_config.dump(score_policy),
         status="pending" if is_self else "confirmed",
-        same_day_duplicate_group=duplicate_group,
-        same_day_duplicate_sequence=duplicate_sequence,
         assigned_reviewer_id=reviewer.id if reviewer else None,
     )
     try:
+        image_error = None
+        if (is_self or active_recognition) and shared_file is None:
+            # Finish image IO before reserving SQLite's writer.
+            try:
+                file_row = await save_image_upload(db, image, user.id, persist=False)
+            except HTTPException as exc:
+                # Let an existing receipt or same-day warning take precedence.
+                image_error = exc
         db.add(row)
         db.flush()
+        # Resolve concurrent retries before applying rules for a new card.
+        remember_submission(db, user.id, "recognition", request_key, row.id, payload_digest)
+        ensure_month_open(db, row.recognition_month, target_circle.id, "新增签卡")
+        if reissue_of_id is not None and reissue_original(db, user, reissue_of_id).poc_period_type:
+            raise HTTPException(400, "请使用原签卡对应的主动认可入口重新发卡")
+        # The insert holds the writer, so another submission cannot pass the
+        # same-day check against the same set of records.
+        active_same_day_rows = (
+            db.query(RecognitionRecord)
+            .filter(
+                RecognitionRecord.id != row.id,
+                RecognitionRecord.employee_id == target.id,
+                RecognitionRecord.recognition_date == recognition_date,
+                RecognitionRecord.recognition_type_id == recognition_type.id,
+                RecognitionRecord.recognizer_employee_id == recognizer.id,
+                RecognitionRecord.status.in_(("pending", "confirmed")),
+            )
+            .order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc())
+            .all()
+        )
+        if active_same_day_rows:
+            duplicate_group = f"{recognition_date}:{target.id}:{recognition_type.id}:{recognizer.id}"
+            if not same_day_duplicate_confirmed:
+                raise HTTPException(
+                    409,
+                    {
+                        "code": "SAME_DAY_RECOGNITION_DUPLICATE",
+                        "message": "该员工今日已由该认可人登记过同类认可，请确认是否为另一项独立表现。",
+                        "previous_records": [
+                            {
+                                "id": item.id,
+                                "submitted_at": item.submitted_at.strftime("%Y-%m-%d %H:%M"),
+                                "status": item.status,
+                                "content": item.content,
+                            }
+                            for item in active_same_day_rows
+                        ],
+                    },
+                )
+            for index, item in enumerate(active_same_day_rows, start=1):
+                item.same_day_duplicate_group = duplicate_group
+                item.same_day_duplicate_sequence = index
+            row.same_day_duplicate_group = duplicate_group
+            row.same_day_duplicate_sequence = len(active_same_day_rows) + 1
+        if quota_code and db.query(RecognitionMonthlyQuota).filter_by(
+            employee_id=target.id, quota_code=quota_code, quota_month=recognition_date[:7]
+        ).first():
+            message = "该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分" if recognition_type.code == "COMMENDATION_LETTER" else "本类别每名员工每月只能计分一次"
+            raise HTTPException(409, message)
+        if image_error is not None:
+            raise image_error
         # The write lock acquired by flush serializes this check with qualification cancellation.
         if recognizer_role_name == TEMPORARY_RECOGNIZER_LABEL and recognizer.id not in temporary_recognizer_ids(db, recognition_date):
             raise HTTPException(409, "临时主管认可资格已变更，请刷新后重新选择认可人")
         scoring_config.reserve_count(db, row, score_policy)
         if row.status == "confirmed":
             apply_monthly_category_cap(db, row, recognition_type)
+            if active_recognition:
+                db.add(RecognitionInboxItem(recognition_id=row.id))
+            if reissue_of_id is not None:
+                db.add(RecognitionReissue(original_id=reissue_of_id, replacement_id=row.id))
             db.flush()
         if quota_code:
             db.add(
@@ -348,15 +518,18 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
                 )
             )
             db.flush()
-        if is_self and (image or shared_file):
-            file_row = shared_file or await save_image_upload(db, image, user.id)
-            row.attachments.append(RecognitionAttachment(file_id=file_row.id, attachment_type="evidence", sort_order=1))
+        if file_row is not None:
+            db.add(file_row)
             db.flush()
-        remember_submission(db, user.id, "recognition", request_key, row.id, payload_digest)
+        evidence = shared_file or file_row
+        if evidence is not None:
+            row.attachments.append(RecognitionAttachment(file_id=evidence.id, attachment_type="evidence", sort_order=1))
+            db.flush()
         audit_payload = recognition_payload(row)
-        if file_row:
-            audit_payload["image"] = {"sha256": file_row.sha256, "size": file_row.file_size, "type": file_row.mime_type}
+        if evidence is not None:
+            audit_payload["image"] = {"sha256": evidence.sha256, "size": evidence.file_size, "type": evidence.mime_type}
         write_audit(db, user.employee, "登记签卡", "recognition", row.id, after=audit_payload, ip_address=client_ip(request))
+        sync_activity_points(db, row)
         if commit:
             with stage('commit_ms'):
                 db.commit()
@@ -368,9 +541,11 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
             path = (FILE_DIR / file_row.storage_key).resolve()
             if FILE_DIR.resolve() in path.parents:
                 path.unlink(missing_ok=True)
-        duplicate_row = existing_submission(db, user.id, "recognition", request_key, RecognitionRecord, payload_digest)
+        duplicate_row = find_previous()
         if duplicate_row:
             return {"ok": True, "record": recognition_payload(duplicate_row), "duplicate": True}
+        if reissue_of_id is not None and db.get(RecognitionReissue, reissue_of_id):
+            raise HTTPException(409, "原签卡已重新发卡") from exc
         if quota_code:
             raise HTTPException(409, ("该员工本月已经登记过表扬信，每名员工每月只能获得一次表扬信加分" if recognition_type.code == "COMMENDATION_LETTER" else "本类别每名员工每月只能计分一次")) from exc
         raise
@@ -496,6 +671,7 @@ def create_poc_recognition(
     poc_period_type: str = Form(...),
     poc_reason: str = Form(...),
     idempotency_key: str | None = Form(None),
+    reissue_of_id: int | None = Form(None, gt=0),
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("POC_ISSUE")),
 ):
@@ -509,6 +685,7 @@ def create_poc_recognition(
             "points": str(points or "").strip(),
             "poc_period_type": str(poc_period_type or "").strip(),
             "poc_reason": str(poc_reason or "").strip(),
+            **({"reissue_of_id": reissue_of_id} if reissue_of_id is not None else {}),
         }
     )
     duplicate_row = existing_submission(db, user.id, "poc", request_key, RecognitionRecord, payload_digest)
@@ -535,7 +712,6 @@ def create_poc_recognition(
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.employee_circle:
         raise HTTPException(400, "被认可员工未配置有效景点圈")
-    ensure_month_open(db, recognition_date[:7], target_circle.id, "新增POC特别贡献")
     recognition_type = db.query(RecognitionType).filter_by(code="POC", active=True).first()
     if not recognition_type:
         raise HTTPException(500, "POC认可类型尚未初始化")
@@ -559,20 +735,37 @@ def create_poc_recognition(
         db.add(row)
         db.flush()
         remember_submission(db, user.id, "poc", request_key, row.id, payload_digest)
+        ensure_month_open(db, row.recognition_month, target_circle.id, "新增POC特别贡献")
+        if reissue_of_id is not None:
+            if not reissue_original(db, user, reissue_of_id).poc_period_type:
+                raise HTTPException(400, "请使用原签卡对应的主动认可入口重新发卡")
+            db.add(RecognitionReissue(original_id=reissue_of_id, replacement_id=row.id))
+        db.add(RecognitionInboxItem(recognition_id=row.id))
         write_audit(db, user.employee, "登记POC特别贡献", "recognition", row.id, after=recognition_payload(row), ip_address=client_ip(request))
+        sync_activity_points(db, row)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
         duplicate_row = existing_submission(db, user.id, "poc", request_key, RecognitionRecord, payload_digest)
         if duplicate_row:
             return {"ok": True, "record": recognition_payload(duplicate_row), "duplicate": True}
+        if reissue_of_id is not None and db.get(RecognitionReissue, reissue_of_id):
+            raise HTTPException(409, "原签卡已重新发卡") from exc
         raise HTTPException(409, "POC特别贡献提交冲突，请刷新后重试") from exc
+    except HTTPException:
+        db.rollback()
+        raise
     invalidate_data_caches()
     return {"ok": True, "record": recognition_payload(row)}
 
 
 @router.delete("/recognitions/{record_id}")
-def withdraw_recognition(record_id: int, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+def withdraw_recognition(
+    record_id: int, request: Request, reason: str | None = Body(None, embed=True, max_length=200),
+    db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
+    db.rollback()
+    db.execute(text("BEGIN IMMEDIATE"))
     row = db.get(RecognitionRecord, record_id)
     if not row:
         raise HTTPException(404, "签卡记录不存在")
@@ -592,7 +785,10 @@ def withdraw_recognition(record_id: int, request: Request, db: Session = Depends
     row.voided_by_role_name = role_name
     row.void_permission_scope_snapshot = permission_scope
     row.voided_at = datetime.now()
-    row.void_reason = "用户撤回"
+    inbox_item = db.get(RecognitionInboxItem, row.id)
+    row.void_reason = (reason or "").strip() or "用户撤回"
+    if inbox_item:
+        inbox_item.read_at = None
     db.query(RecognitionMonthlyQuota).filter(RecognitionMonthlyQuota.recognition_id == row.id).delete(synchronize_session=False)
     db.flush()
     write_audit(
@@ -606,6 +802,7 @@ def withdraw_recognition(record_id: int, request: Request, db: Session = Depends
         reason=row.void_reason,
         ip_address=client_ip(request),
     )
+    sync_activity_points(db, row)
     db.commit()
     invalidate_data_caches()
     return {"ok": True, "deducted_score": before["credited_fraction"] if before["status"] == "confirmed" else 0}
@@ -643,13 +840,19 @@ def reviews(
         query = query.filter(RecognitionRecord.status.in_(("confirmed", "rejected")))
         query = query.order_by(RecognitionRecord.submitted_at.desc(), RecognitionRecord.id.desc())
     else:
-        query = query.filter(RecognitionRecord.status == "pending")
+        query = query.filter(
+            RecognitionRecord.status == "pending",
+            ~select(RecognitionInboxItem.recognition_id).where(RecognitionInboxItem.recognition_id == RecognitionRecord.id).exists(),
+        )
         query = query.order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc())
     total = query.count()
     rows = query.offset(offset).limit(limit).all()
+    readonly_ids = set(db.scalars(select(RecognitionInboxItem.recognition_id).where(
+        RecognitionInboxItem.recognition_id.in_([row.id for row in rows]),
+    )).all()) if view == "history" and rows else set()
     return {
         "view": view,
-        "items": [recognition_payload(row) for row in rows],
+        "items": [{**recognition_payload(row), "review_read_only": row.id in readonly_ids} for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -715,6 +918,8 @@ def review_recognition(record_id: int, payload: dict, request: Request, db: Sess
     row = db.get(RecognitionRecord, record_id)
     if not row or row.employee_id not in direct_member_ids(db, user.id):
         raise HTTPException(404, "直属组员签卡不存在")
+    if db.get(RecognitionInboxItem, row.id):
+        raise HTTPException(403, "上级主动发出的认可仅供查看，不能复核或还原")
     return apply_recognition_review(db, row, payload, request, user)
 
 
@@ -802,6 +1007,7 @@ def apply_recognition_review(db: Session, row: RecognitionRecord, payload: dict,
         )
     )
     write_audit(db, user.employee, "复核签卡", "recognition", row.id, before={"status": before}, after={"status": after}, reason=row.review_note, ip_address=client_ip(request))
+    sync_activity_points(db, row)
     try:
         db.commit()
     except IntegrityError as exc:
@@ -825,12 +1031,18 @@ def my_entries(
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
-    if not ({"EMPLOYEE_ADD", "SICK_REGISTER", "DEDUCTION_DIRECT", "DEDUCTION_ALL", "SYSTEM_ADMIN"} & user.permissions):
+    can_view_entries = bool({"EMPLOYEE_ADD", "SICK_REGISTER", "DEDUCTION_DIRECT", "DEDUCTION_ALL", "SYSTEM_ADMIN"} & user.permissions)
+    poc_only = not can_view_entries and "POC_ISSUE" in user.permissions
+    if not can_view_entries and not poc_only:
         raise HTTPException(403, "没有登记记录查询权限")
     if record_type not in {"all", "recognition", "deduction", "sick_leave", "follow_up"}:
         raise HTTPException(400, "记录类型无效")
     if scope not in {"mine", "supervisors"}:
         raise HTTPException(400, "查询范围无效")
+    if poc_only:
+        if scope != "mine" or record_type not in {"all", "recognition"}:
+            raise HTTPException(403, "仅可查看本人发出的POC特别贡献")
+        record_type = "recognition"
     is_supervisor_entry_view = user.role.code in LEADER_CODES
     if scope == "supervisors" and not is_supervisor_entry_view:
         raise HTTPException(403, "仅TA主管或主管可查看全部主管登记记录")
@@ -865,7 +1077,16 @@ def my_entries(
             name for (name,) in db.query(Role.name).filter(Role.code.in_(LEADER_CODES), Role.active.is_(True)).all()
         }
     if scope != "supervisors" and record_type in {"all", "recognition"}:
-        query = db.query(RecognitionRecord).filter(RecognitionRecord.operator_employee_id == user.id)
+        original_id = select(RecognitionReissue.original_id).where(
+            RecognitionReissue.replacement_id == RecognitionRecord.id,
+        ).correlate(RecognitionRecord).scalar_subquery()
+        query = db.query(RecognitionRecord, RecognitionInboxItem.recognition_id, RecognitionReissue.replacement_id, original_id).outerjoin(
+            RecognitionInboxItem, RecognitionInboxItem.recognition_id == RecognitionRecord.id,
+        ).outerjoin(
+            RecognitionReissue, RecognitionReissue.original_id == RecognitionRecord.id,
+        ).filter(RecognitionRecord.operator_employee_id == user.id)
+        if poc_only:
+            query = query.filter(RecognitionRecord.poc_period_type.is_not(None))
         if start_date:
             query = query.filter(RecognitionRecord.recognition_date >= start_date)
         if end_date:
@@ -877,11 +1098,21 @@ def my_entries(
             query = query.filter(or_(RecognitionRecord.employee_name.like(value, escape="\\"), RecognitionRecord.employee_no.like(value, escape="\\")))
         if status in RECOGNITION_FILTER_STATUSES:
             query = query.filter(RecognitionRecord.status == status)
+        elif status == "void":
+            query = query.filter(RecognitionRecord.status == "void", RecognitionInboxItem.recognition_id.is_not(None))
         elif status in ATTENDANCE_FILTER_STATUSES:
             query = query.filter(RecognitionRecord.id == -1)
         else:
-            query = query.filter(RecognitionRecord.status != "void")
-        items.extend(recognition_payload(row) for row in query.order_by(RecognitionRecord.submitted_at.desc()).all())
+            query = query.filter(or_(RecognitionRecord.status != "void", RecognitionInboxItem.recognition_id.is_not(None)))
+        for row, inbox_id, replacement_id, previous_id in query.order_by(RecognitionRecord.submitted_at.desc()).all():
+            payload = recognition_payload(row)
+            if inbox_id is not None:
+                payload["active_recognition"] = True
+                if row.status == "void" and replacement_id is None:
+                    payload["available_actions"].append("reissue")
+                payload["replacement_id"] = replacement_id
+                payload["reissued"] = previous_id is not None
+            items.append(payload)
     if record_type in {"all", "deduction"}:
         query = db.query(DeductionRecord)
         if scope == "supervisors":
@@ -965,7 +1196,7 @@ def my_entries(
         "page_size": page_size,
         "scope": scope,
         "summary": {
-            "recognition_count": sum(row["record_type"] == "recognition" for row in items),
+            "recognition_count": sum(row["record_type"] == "recognition" and row["status"] != "void" for row in items),
             "recognition_score": round(recognition_score, 2),
             "deduction_count": sum(row["record_type"] == "deduction" for row in items),
             "deduction_score": round(active_deductions, 2),

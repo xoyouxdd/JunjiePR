@@ -46,8 +46,9 @@ def fixture():
                 ('gsm', 'GSM', heat), ('other_gsm', 'GSM', dwarf),
                 ('ta', 'CM', heat), ('tagsm', 'SUPERVISOR', heat),
                 ('cm', 'CM', dwarf), ('own_cm', 'TR', heat), ('recipient_lead', 'SUPERVISOR', dwarf),
+                ('am', 'AM', None), ('om', 'OM', None),
             ]):
-                p = Employee(employee_no=f'97000{i:02}', name='签卡测试' + key, attraction_id=circle.id, is_active=True)
+                p = Employee(employee_no=f'97000{i:02}', name='签卡测试' + key, attraction_id=circle.id if circle else None, is_active=True)
                 db.add(p); db.flush()
                 db.add(EmployeeRoleAssignment(employee_id=p.id, role_id=roles[code].id,
                                               starts_on='2020-01-01', assignment_type='permanent', status='active'))
@@ -89,6 +90,14 @@ def fixture():
             add('custom_fixed', code=None, role_label='系统固定分值')
             add('qualification_only', signer='ta', code='TA_SUPERVISOR', role_label='临时主管认可资格')
             add('legacy', signer='lead', code=None, day=(date.today()-timedelta(days=1)).isoformat())
+            add('am_frontline', signer='am', code='AM', target='own_cm', venue=heat)
+            add('am_legacy', signer='am', code=None, target='own_cm', venue=heat)
+            add('am_lead', signer='am', code='AM', target='recipient_lead')
+            add('om_frontline_zero', signer='om', code='OM', score='0')
+            add('om_poc', signer='om', code='OM', target='recipient_lead', kind='POC')
+            add('am_pending', signer='am', code='AM', status='pending')
+            add('om_void', signer='om', code='OM', status='void')
+            add('om_rejected', signer='om', code='OM', status='rejected')
             db.commit()
             data = {'people': {k: p.id for k, p in people.items()}, 'numbers': {k: p.employee_no for k,p in people.items()},
                     'circles': [heat.id, dwarf.id, bear.id], 'records': ids, 'types': {k:v.id for k,v in kinds.items()}}
@@ -108,6 +117,213 @@ def payload(fixture, category='gsm_leader', **params):
 
 def selected(result, employee_id):
     return next(r for r in result['rows'] if r['employee_id'] == employee_id)
+
+
+@pytest.mark.parametrize('viewer', ['GSMTEST01', 'AMTEST01', 'OMTEST01'])
+def test_am_om_issuers_are_visible_to_management_and_exported(fixture, viewer):
+    c, d = fixture
+    login(c, viewer)
+    try:
+        out = payload(fixture, population='all')
+        assert selected(out, d['people']['am'])['count'] == 3
+        om = selected(out, d['people']['om'])
+        assert om['count'] == 2 and om['score'] == 1
+        heat = payload(fixture, population='all', attraction_id=d['circles'][0])
+        assert selected(heat, d['people']['am'])['count'] == 2
+        assert all(row['employee_id'] != d['people']['om'] for row in heat['rows'])
+        dwarf = payload(fixture, population='all', attraction_id=d['circles'][1])
+        assert selected(dwarf, d['people']['am'])['count'] == 1
+        assert selected(dwarf, d['people']['om'])['count'] == 2
+        params = {**BASE, 'category': 'gsm_leader', 'population': 'all', 'keyword': d['numbers']['am']}
+        response = c.get('/api/pr-rankings/export', params=params)
+        assert response.status_code == 200, response.text
+        sheet = load_workbook(BytesIO(response.content)).active
+        headers = list(next(sheet.values))
+        row = list(list(sheet.values)[1])
+        assert headers[3] == 'GSM/TA GSM/AM/OM'
+        assert row[headers.index('认可次数（总数）')] == 3
+    finally:
+        login(c)
+
+
+@pytest.mark.parametrize('title,am_count,om_count', [('', 2, 1), ('SUPERVISOR', 1, 1)])
+def test_statistics_and_monthly_export_include_management_counts(fixture, title, am_count, om_count):
+    c, d = fixture
+    params = {'month': DAY[:7], 'title': title, 'issuer_population': 'supervisor' if title else 'frontline'}
+    response = c.get('/api/statistics', params=params)
+    assert response.status_code == 200, response.text
+    counts = response.json()['issuer_counts']
+    assert selected(counts, d['people']['am'])['count'] == am_count
+    assert selected(counts, d['people']['om'])['count'] == om_count
+    response = c.get('/api/statistics/export', params=params)
+    assert response.status_code == 200, response.text
+    sheet = load_workbook(BytesIO(response.content))['管理层认可次数']
+    values = list(sheet.values)
+    headers = list(values[0])
+    for key, count in [('am', am_count), ('om', om_count)]:
+        row = next(row for row in values[1:] if row[0] == d['numbers'][key])
+        assert row[headers.index('认可次数（总数）')] == count
+    if not title:
+        filtered = c.get('/api/statistics', params={**params, 'attraction_id': d['circles'][0], 'keyword': d['numbers']['own_cm']})
+        assert filtered.status_code == 200, filtered.text
+        counts = filtered.json()['issuer_counts']
+        assert selected(counts, d['people']['am'])['count'] == 2
+        assert all(row['employee_id'] != d['people']['om'] for row in counts['rows'])
+
+
+def assert_issuer_exports_match(client, pr_params, stats_params, expected_rows):
+    expected = {row['employee_no']: row['count'] for row in expected_rows}
+    for path, params, sheet_name in [
+        ('/api/pr-rankings/export', pr_params, 'PR排名数据'),
+        ('/api/statistics/export', stats_params, '管理层认可次数'),
+    ]:
+        response = client.get(path, params=params)
+        assert response.status_code == 200, response.text
+        values = list(load_workbook(BytesIO(response.content))[sheet_name].values)
+        headers = list(values[0])
+        number_column = headers.index('员工号')
+        count_column = headers.index('认可次数（总数）')
+        actual = {row[number_column]: row[count_column] for row in values[1:] if isinstance(row[count_column], (int, float))}
+        assert actual == expected
+
+
+@pytest.mark.parametrize('signer,bound', [('am', False), ('am', True), ('om', False), ('om', True)])
+def test_cross_circle_issuer_scope_search_and_exports_match(fixture, signer, bound):
+    from app.data_cache import invalidate_data_caches
+    c, d = fixture
+    employee_id = d['people'][signer]
+    with SessionLocal() as db:
+        person = db.get(Employee, employee_id)
+        old_circle = person.attraction_id
+        person.attraction_id = d['circles'][0] if bound else None
+        db.commit()
+    invalidate_data_caches()
+    try:
+        for circle in [None, *d['circles']]:
+            for population in ['frontline', 'supervisor', 'all']:
+                for keyword in [d['numbers'][signer], '签卡测试' + signer]:
+                    pr_params = {**BASE, 'start_date': DAY[:7] + '-01', 'category': 'gsm_leader',
+                                 'population': population, 'keyword': keyword}
+                    stats_params = {'month': DAY[:7], 'issuer_population': population, 'issuer_keyword': keyword}
+                    if circle is not None:
+                        pr_params['attraction_id'] = stats_params['attraction_id'] = circle
+                    pr = c.get('/api/pr-rankings', params=pr_params)
+                    stats = c.get('/api/statistics', params=stats_params)
+                    assert pr.status_code == stats.status_code == 200, (pr.text, stats.text)
+                    assert pr.json()['rows'] == stats.json()['issuer_counts']['rows']
+                if population == 'all':
+                    assert_issuer_exports_match(c, pr_params, stats_params, pr.json()['rows'])
+        baseline = c.get('/api/statistics', params={'month': DAY[:7], 'title': 'SUPERVISOR', 'keyword': '不存在的员工'}).json()
+        filtered = c.get('/api/statistics', params={
+            'month': DAY[:7], 'title': 'SUPERVISOR', 'keyword': '不存在的员工',
+            'issuer_keyword': d['numbers'][signer], 'issuer_population': 'all',
+        }).json()
+        for field in ['summary', 'hierarchy', 'loa_rows', 'filters']:
+            assert baseline[field] == filtered[field]
+        assert filtered['summary']['employee_count'] == 0
+        assert selected(filtered['issuer_counts'], employee_id)['count'] == (3 if signer == 'am' else 2)
+    finally:
+        with SessionLocal() as db:
+            db.get(Employee, employee_id).attraction_id = old_circle
+            db.commit()
+        invalidate_data_caches()
+
+
+@pytest.mark.parametrize('sender', ['AMTEST01', 'OMTEST01'])
+def test_poc_withdraw_reissue_updates_all_issuer_views_and_exports(fixture, sender):
+    c, d = fixture
+    login(c, sender)
+    try:
+        me = c.get('/api/me').json()
+        with SessionLocal() as db:
+            target = db.query(Employee).filter_by(employee_no='SUPTEST01').one().id
+        pr_params = {**BASE, 'start_date': DAY[:7] + '-01', 'category': 'gsm_leader',
+                     'population': 'supervisor', 'keyword': sender}
+        stats_params = {'month': DAY[:7], 'issuer_population': 'supervisor', 'issuer_keyword': sender}
+
+        def counts():
+            pr = c.get('/api/pr-rankings', params=pr_params)
+            stats = c.get('/api/statistics', params=stats_params)
+            assert pr.status_code == stats.status_code == 200, (pr.text, stats.text)
+            rows = pr.json()['rows']
+            assert rows == stats.json()['issuer_counts']['rows']
+            assert_issuer_exports_match(c, pr_params, stats_params, rows)
+            return next((row['count'] for row in rows if row['employee_id'] == me['id']), 0)
+
+        before = counts()
+        form = {'employee_id': target, 'recognition_date': DAY, 'points': 2, 'poc_period_type': 'month',
+                'poc_reason': '跨入口次数回归', 'idempotency_key': 'issuer-original-' + sender}
+        created = c.post('/api/recognitions/poc', data=form)
+        assert created.status_code == 200, created.text
+        rid = created.json()['record']['id']
+        assert counts() == before + 1
+        assert c.delete(f'/api/recognitions/{rid}').status_code == 200
+        assert counts() == before
+        corrected = {**form, 'reissue_of_id': rid, 'idempotency_key': 'issuer-reissued-' + sender}
+        sent = c.post('/api/recognitions/poc', data=corrected)
+        assert sent.status_code == 200, sent.text
+        assert counts() == before + 1
+        replay = c.post('/api/recognitions/poc', data=corrected)
+        assert replay.status_code == 200 and replay.json()['duplicate'], replay.text
+        assert counts() == before + 1
+    finally:
+        login(c)
+
+
+@pytest.mark.parametrize('keyword', ['=1+1', '+SUM(1,1)', '-1+1', '@SUM(1,1)', '签卡测试am', ''])
+def test_issuer_search_condition_is_plain_text_in_statistics_export(fixture, keyword):
+    c, _ = fixture
+    params = {'month': DAY[:7], 'issuer_population': 'all', 'issuer_keyword': keyword}
+    baseline = c.get('/api/statistics', params={'month': DAY[:7]})
+    stats = c.get('/api/statistics', params=params)
+    assert baseline.status_code == stats.status_code == 200, (baseline.text, stats.text)
+    for field in ['summary', 'hierarchy', 'loa_rows', 'filters']:
+        assert stats.json()[field] == baseline.json()[field]
+    assert stats.json()['issuer_keyword'] == keyword
+    pr_params = {**BASE, 'start_date': DAY[:7] + '-01', 'category': 'gsm_leader',
+                 'population': 'all', 'keyword': keyword}
+    pr = c.get('/api/pr-rankings', params=pr_params)
+    assert pr.status_code == 200, pr.text
+    assert pr.json()['rows'] == stats.json()['issuer_counts']['rows']
+    assert_issuer_exports_match(c, pr_params, params, pr.json()['rows'])
+    response = c.get('/api/statistics/export', params=params)
+    assert response.status_code == 200, response.text
+    sheet = load_workbook(BytesIO(response.content), data_only=False)['管理层认可次数']
+    cell = next(row[1] for row in sheet if row[0].value == '签卡人搜索')
+    expected = "'" + keyword if keyword.startswith(('=', '+', '-', '@')) else keyword or '全部'
+    assert cell.data_type == 's'
+    assert cell.value == expected
+
+
+@pytest.mark.parametrize('formula_like', [False, True])
+def test_statistics_background_export_preserves_separate_issuer_filters(fixture, formula_like):
+    c, d = fixture
+    keyword = '=1+1' if formula_like else d['numbers']['am']
+    params = {'month': DAY[:7], 'attraction_id': d['circles'][0], 'keyword': '不存在的员工',
+              'issuer_population': 'all', 'issuer_keyword': keyword}
+    response = c.post('/api/export-tasks', params={'target': '/api/statistics/export?' + urlencode(params)})
+    assert response.status_code == 202, response.text
+    job_id = response.json()['id']
+    for _ in range(200):
+        job = next(row for row in c.get('/api/export-tasks').json()['items'] if row['id'] == job_id)
+        if job['status'] in {'completed', 'failed'}:
+            break
+        time.sleep(.05)
+    assert job['status'] == 'completed', job
+    response = c.get(job['download_url'])
+    assert response.status_code == 200, response.text
+    values = list(load_workbook(BytesIO(response.content))['管理层认可次数'].values)
+    headers = list(values[0])
+    rows = [row for row in values[1:] if isinstance(row[headers.index('认可次数（总数）')], (int, float))]
+    if formula_like:
+        assert rows == []
+        sheet = load_workbook(BytesIO(response.content), data_only=False)['管理层认可次数']
+        cell = next(row[1] for row in sheet if row[0].value == '签卡人搜索')
+        assert cell.data_type == 's' and cell.value == "'=1+1"
+    else:
+        assert len(rows) == 1
+        assert rows[0][headers.index('员工号')] == d['numbers']['am']
+        assert rows[0][headers.index('认可次数（总数）')] == 2
 
 
 def test_lead_scope_includes_all_recipient_circles_and_actual_venues(fixture):

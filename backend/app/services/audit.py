@@ -56,6 +56,8 @@ def audit_attraction_id(db: Session, entity_type: str, entity_id) -> int | None:
         employee = db.get(Employee, employee_id) if employee_id else None
         return employee.attraction_id if employee else None
 
+    if entity_type == "attendance_medal_circle":
+        return key
     if entity_type == "recognition":
         row = db.get(RecognitionRecord, key)
         return row.home_attraction_id if row else None

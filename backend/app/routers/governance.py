@@ -148,6 +148,24 @@ def action_center_recognition_details(db: Session, rows: list[RecognitionRecord]
 def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     """A read-only queue built from existing workflow records and role scopes."""
     items: list[dict] = []
+    from app.services import attendance_medals as medal_service
+    from app.attendance_medals_models import MedalLeaveMonth, MedalNotice
+    if medal_service.can_manage(user):
+        medal_circles = db.query(Attraction).filter_by(employee_circle=True, active=True).all()
+        if not medal_service.is_admin(user):
+            medal_circles = [c for c in medal_circles if c.id == user.employee.attraction_id]
+        pending_medals = 0
+        for medal_month in db.query(MedalLeaveMonth).filter(MedalLeaveMonth.confirmed_revision == MedalLeaveMonth.revision).all():
+            for circle in medal_circles:
+                status = medal_service.preview(db, user, medal_month.month, circle.id)
+                if status['status'] in {'待确认发放', '待调整'}:
+                    pending_medals += 1
+        if pending_medals:
+            items.append(action_center_item('attendance_medals', '全勤勋章待确认', pending_medals, 'sickLeaveImport', 'info', '请在缺勤登记核对各月名单，确认发放或调整。'))
+    if medal_service.employee_content_visible():
+        unread_medals = medal_service.visible_notices(db, user.id).filter_by(read_at=None).count()
+        if unread_medals:
+            items.append(action_center_item('attendance_medal_notice', '全勤勋章消息', unread_medals, 'home', 'info', '请在本人首页查看勋章消息。'))
     rotation_timeout_cases = []
     # Count only materialized formal steps; this read does not advance the engine.
     from app.routers.rotation_board import can_enter as rotation_allowed

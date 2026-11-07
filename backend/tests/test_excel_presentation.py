@@ -12,6 +12,7 @@ from app.excel_export import write_organization_score_sheet
 from app.excel_export_utils import style_sheet
 from app.excel_presentation import finalize_statistics_workbook, present_detail, save_export_workbook
 from app.v2_watermark import watermark_workbook
+from app.branding import BRAND_EN
 
 
 def values(ws):
@@ -103,6 +104,9 @@ def test_identical_watermark_media_is_shared_but_all_anchors_and_cells_remain():
             if name.startswith("xl/worksheets/") and name.endswith(".xml"):
                 assert before.read(name) == after.read(name)
     restored = load_workbook(BytesIO(output.getvalue()))
+    assert restored.properties.subject == BRAND_EN
+    assert BRAND_EN in restored.properties.creator
+    assert all(ws.oddFooter.left.text == BRAND_EN for ws in restored)
     assert all(len(ws._images) == 1 for ws in restored)
     assert values(restored["明细0"]) == values(wb["明细0"])
     assert restored["明细0"]["B2"].value == -0.5

@@ -7,6 +7,8 @@ from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, In
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.connection import Base
+from app.attendance_medals_models import (AttendanceMedal, MedalAccountIdentity, MedalCircleRun,
+    MedalLeaveBatch, MedalLeaveMonth, MedalNotice, install_account_identity_events)
 
 
 class AboutSystemSettings(Base):
@@ -245,6 +247,9 @@ class UserAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     employee = relationship("Employee")
+
+
+install_account_identity_events(UserAccount)
 
 
 class AnnouncementProject(Base):
@@ -738,6 +743,26 @@ class RecognitionRecord(Base):
 
     employee = relationship("Employee", foreign_keys=[employee_id])
     attachments = relationship("RecognitionAttachment", cascade="all, delete-orphan", passive_deletes=True)
+
+
+class RecognitionInboxItem(Base):
+    __tablename__ = "recognition_inbox_items"
+
+    recognition_id: Mapped[int] = mapped_column(
+        ForeignKey("recognition_records.id", ondelete="CASCADE"), primary_key=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class RecognitionReissue(Base):
+    __tablename__ = "recognition_reissues"
+
+    original_id: Mapped[int] = mapped_column(
+        ForeignKey("recognition_records.id", ondelete="CASCADE"), primary_key=True
+    )
+    replacement_id: Mapped[int] = mapped_column(
+        ForeignKey("recognition_records.id", ondelete="CASCADE"), unique=True
+    )
 
 
 class RecognitionAttachment(Base):

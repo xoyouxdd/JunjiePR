@@ -1,5 +1,6 @@
 // Member scores, attachments and expandable score details.
 import { api } from './api.js';
+import { mountMedalCollection } from './attendance-medals.js';
 import { beginViewRequest, captureViewContext } from './context.js';
 import { attachmentControl, bindFilePreviews } from './files.js';
 import { esc, fmt, fmtDeduction, monthNow, prefersReducedMotion } from './format.js';
@@ -40,7 +41,7 @@ function memberScoreDetailHtml(row,kind){
 function bindMemberScoreDetails(data){
   const host=document.getElementById('memberDetail'),rowMap=new Map(data.rows.map(row=>[String(row.employee_id),row]));let activeButton=null;
   const close=()=>{if(activeButton){activeButton.setAttribute('aria-expanded','false');activeButton.closest('tr').classList.remove('is-selected')}activeButton=null;host.innerHTML='';};
-  document.querySelectorAll('[data-member-detail]').forEach(button=>button.onclick=()=>{const wasActive=activeButton===button;close();if(wasActive)return;const row=rowMap.get(button.dataset.employeeId);if(!row)return;activeButton=button;button.setAttribute('aria-expanded','true');button.closest('tr').classList.add('is-selected');host.innerHTML=memberScoreDetailHtml(row,button.dataset.memberDetail);bindFilePreviews(host);host.querySelector('[data-close-member-detail]').onclick=close;host.scrollIntoView({behavior:prefersReducedMotion()?'auto':'smooth',block:'nearest'});});
+  document.querySelectorAll('[data-member-detail]').forEach(button=>button.onclick=()=>{const wasActive=activeButton===button;close();if(wasActive)return;const row=rowMap.get(button.dataset.employeeId);if(!row)return;activeButton=button;button.setAttribute('aria-expanded','true');button.closest('tr').classList.add('is-selected');host.innerHTML=memberScoreDetailHtml(row,button.dataset.memberDetail);bindFilePreviews(host);const medalHost=document.createElement('div');host.querySelector('section').append(medalHost);mountMedalCollection(medalHost,row.employee_id,{isCurrent:()=>activeButton===button});host.querySelector('[data-close-member-detail]').onclick=close;host.scrollIntoView({behavior:prefersReducedMotion()?'auto':'smooth',block:'nearest'});});
 }
 
 async function renderMembers(){

@@ -9,6 +9,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from xml.etree import ElementTree as ET
 
 from openpyxl.styles import Alignment, Font
+from app.branding import BRAND_EN
 
 from app.excel_export_utils import configure_sheet, excel_safe_value, fit_row_heights, fold_columns
 
@@ -120,6 +121,9 @@ def save_export_workbook(wb, output) -> None:
     All drawing anchors remain. Only relationship targets and redundant media
     package entries change; cell XML, formulas and styles are copied verbatim.
     """
+    wb.properties.subject = BRAND_EN
+    if wb.properties.creator in (None, "openpyxl"):
+        wb.properties.creator = BRAND_EN
     source = BytesIO()
     wb.save(source)
     source.seek(0)

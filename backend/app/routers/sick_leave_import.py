@@ -694,6 +694,11 @@ def commit_sick_leave_import(payload: dict, request: Request, db: Session = Depe
         db.flush()
         for employee in affected_employees.values():
             recalculate_attendance(db, employee, month)
+        # All leave codes are captured for honors without changing sick-score rules.
+        # A circle-scoped import can never certify the global monthly dataset.
+        if scope is None and preview.get("content") and month >= "2026-11":
+            from app.services.attendance_medals import store_import
+            store_import(db, user, month, preview["content"], preview["filename"], "replace")
         write_audit(db, user.employee, "覆盖月度病假事务", "sick_leave_import", 0, after={"month": month, "file": preview["filename"], "employees": len(employees), "records": len(preview["matched"]), "replaced_records": replaced_record_count, "replaced_manual_records": replaced_manual_count, "absent_employees": absent_employee_count, "unmatched": len(preview["unmatched"]), "unmatched_reviewed_by": user.name if preview["unmatched"] else None, "unmatched_reasons": [{"row": row["row"], "employee_no": row["employee_no"], "reason": row["reason"]} for row in preview["unmatched"]], "loa_protected": len(preview["loa_protected"])})
         db.commit()
         _drop_preview(token)

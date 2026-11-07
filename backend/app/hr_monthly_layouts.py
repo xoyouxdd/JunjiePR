@@ -10,6 +10,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from openpyxl import Workbook
+from app.branding import BRAND_EN
 from app.hr_monthly_pptx import NS, ROOT, tag, xml, set_text, pack_report
 
 EMU = 9525
@@ -77,7 +78,7 @@ class LayoutReport:
         self.types = ET.fromstring(self.parts["[Content_Types].xml"])
         self.overrides = {r.get("PartName").lstrip("/"): r.get("ContentType") for r in self.types if r.tag == tag("ct", "Override")}
         self.slides, self.media = [], {}
-        self.footer, self.month = footer, month
+        self.footer, self.month = f"{BRAND_EN} · {footer}", month
 
     def add(self, layout, title, subtitle="", context="", section=""):
         source = f'ppt/slides/slide{self.layouts[layout]}.xml'
@@ -91,6 +92,8 @@ class LayoutReport:
                 rel.set("Target", "/" + posixpath.normpath(posixpath.join(posixpath.dirname(source), rel.get("Target"))).lstrip("/"))
         root.find("p:cSld/p:spTree", NS).remove(shape(root, "layout-key"))
         title_width = int(shape(root, "title").find("p:spPr/a:xfrm/a:ext", NS).get("cx")) / EMU
+        if layout == "cover":
+            put(root, "brand", BRAND_EN)
         chapter = "小组积分" if layout.startswith('group-') else "活动记录" if layout.startswith('photo') else "人员数据" if title.startswith(('PR排名', '优秀员工', '认可发放')) else "数据明细" if layout.startswith('table') else "月度数据" if layout in {'overview', 'trend', 'classification'} else "团队记录"
         for name, value in {"title": "\n".join(wrap(title, title_width, 48 if layout == "cover" else 33)), "subtitle": "\n".join(wrap(subtitle, 1140, 18)), "context": "\n".join(wrap(context, 1140, 11)), "section": section or chapter, "footer": self.footer, "month": self.month, "page": str(len(self.slides) + 1).zfill(2)}.items():
             put(root, name, value)

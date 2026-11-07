@@ -7,7 +7,7 @@ import { opt } from './records.js';
 import { app, state } from './state.js';
 import { toast } from './toast.js';
 
-const prCategoryNames={overall:'综合分',recognition:'加分类型',deduction:'扣分类型',absence:'缺勤',leader:'主管发放排行',gsm_leader:'GSM/TA GSM认可次数'};
+const prCategoryNames={overall:'综合分',recognition:'加分类型',deduction:'扣分类型',absence:'缺勤',leader:'主管发放排行',gsm_leader:'管理层认可次数'};
 
 function prRankBadge(rank){return `<span class="pr-rank-badge ${rank<=3?`top-${rank}`:''}">${rank}</span>`;}
 
@@ -38,7 +38,7 @@ function prRankingTable(data){
     head=`${commonHead}<th>小组</th><th>登记次数</th><th>缺勤天数</th><th>扣减全勤分</th><th>最近一次缺勤</th>`;
     rows=data.rows.map(row=>`<tr class="${row.rank<=3?'pr-top-row':''}"><td>${prRankBadge(row.rank)}</td><td>${prEmployeeCell(row)}</td><td>${esc(row.role_name)}</td><td>${esc(row.group_label||'未分组')}</td><td>${row.count}</td><td>${Number(row.leave_days||0).toFixed(1)}</td><td class="score-negative">${fmtDeduction(row.score)}</td><td>${esc(row.recent_date||'—')}</td></tr>`).join('');
   }else if(['leader','gsm_leader'].includes(data.category)){
-    const personLabel=data.category==='gsm_leader'?'GSM / TA GSM':'LEAD / TA LEAD',venues=data.venue_columns||[];
+    const personLabel=data.category==='gsm_leader'?'GSM / TA GSM / AM / OM':'LEAD / TA LEAD',venues=data.venue_columns||[];
     head=`<th>排名</th><th>${personLabel}</th><th>角色</th><th>认可次数（总数）</th>${venues.map(c=>`<th>${esc(c.name)}</th>`).join('')}<th>累计加分</th><th>最近一次认可</th>`;
     rows=data.rows.map(row=>`<tr class="${row.rank<=3?'pr-top-row':''}"><td>${prRankBadge(row.rank)}</td><td>${prEmployeeCell(row,personLabel)}</td><td>${esc(row.role_name)}</td><td>${row.count}</td>${venues.map(c=>`<td>${esc(row.venue_counts?.[c.key]||0)}</td>`).join('')}<td class="score-positive">+${fmt(row.score)}</td><td>${esc(row.recent_date||'—')}</td></tr>`).join('');
   }else{
@@ -77,7 +77,7 @@ async function renderPrRankings(){
     if(category==='absence')selector='<label>缺勤类型<select name="subtype_id"><option value="">全部缺勤类型</option><option value="1">病假</option><option value="2">违规病假</option></select></label>';
     if(category==='leader'||category==='gsm_leader')selector=`<label>加分类别<select name="subtype_id"><option value="">全部加分类别</option>${opt(recognitionTypes)}</select></label>`;
     const sortControl=['recognition','deduction','absence'].includes(category)?`<div class="pr-sort-control"><span>排名依据</span><button type="button" data-pr-sort="score" class="${sortBy==='score'?'active':''}">累计分值</button><button type="button" data-pr-sort="count" class="${sortBy==='count'?'active':''}">登记次数</button></div>`:'';
-    const hint=isIssuer()?(scopedHr?'仅统计本圈CM/TR收到的已确认认可，次数只归签卡人；景点明细按发生景点归圈。':'仅统计签卡人的已确认认可，代录不计；按签卡人所属圈筛选，汇总所有景点签卡，明细按发生景点归圈。'):'切换类型后仅加载当前榜单';
+    const hint=isIssuer()?(scopedHr?'仅统计本圈CM/TR收到的已确认认可，次数只归签卡人；景点明细按发生景点归圈。':'仅统计签卡人的已确认认可，代录不计；按签卡人所属圈筛选，无所属圈的AM/OM按接收人所属圈筛选；明细按发生景点归圈。'):'切换类型后仅加载当前榜单';
     subfilters.innerHTML=`${selector}${sortControl}<span class="field-hint">${hint}</span>`;
     subfilters.querySelector('select')?.addEventListener('change',()=>{page=1;load()});
     subfilters.querySelectorAll('[data-pr-sort]').forEach(button=>button.onclick=()=>{const subtype=subfilters.querySelector('[name=subtype_id]')?.value;sortBy=button.dataset.prSort;page=1;renderSubfilters();const selector=subfilters.querySelector('[name=subtype_id]');if(selector&&subtype)selector.value=subtype;load()});

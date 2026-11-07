@@ -68,6 +68,7 @@ def test_preview_and_export_all_templates():
                 assert "示例" not in text and "9000001" not in text
                 assert "960 条" not in text
                 assert "CONFIDENTIAL" in text
+                assert all("FZ TEAM WORKBENCH" in archive.read(n).decode() for n in slide_names)
                 assert not any("notesSlide" in n for n in archive.namelist())
                 assert not any(n.startswith("ppt/slides/slide") and n.endswith(".xml") for n in archive.namelist())
                 assert str(data["summary"]["employee_count"]) + " 人" in text

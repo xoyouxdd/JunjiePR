@@ -5,6 +5,7 @@ import { openDeductionMaterialRetry } from './deduction-materials.js';
 import { confirmModal, promptModal } from './dialogs.js';
 import { bindFilePreviews } from './files.js';
 import { esc, monthStart, today } from './format.js';
+import { gotoTab } from './navigation.js';
 import { coveredSickDisclosure, entryCard, entryRow, splitCoveredSickRecords, statusBadge } from './records.js';
 import { mountRecognitionGrid } from './recognition-grid.js';
 import { app, state } from './state.js';
@@ -13,11 +14,12 @@ import { toast } from './toast.js';
 async function renderEntries(){
   const request=beginViewRequest();
   const isSupervisor=['TA_SUPERVISOR','SUPERVISOR'].includes(state.me.role_code);
+  const pocOnly=['AM','OM'].includes(state.me.role_code);
   const canCollaborate=['TA_SUPERVISOR','SUPERVISOR','TA_GSM','GSM'].includes(state.me.role_code);
-  const title=isSupervisor?'主管登记记录':'我的登记记录';
-  const description=isSupervisor?'默认展示本人登记的扣分和缺勤记录；可切换查看全部主管登记记录。其他主管的记录仅供查询，本人记录继续按原权限操作。':'展示本人登记的数据和重复处分跟进状态。';
+  const title=pocOnly?'POC登记记录':isSupervisor?'主管登记记录':'我的登记记录';
+  const description=pocOnly?'展示本人开具的POC特别贡献。':isSupervisor?'展示本人登记的认可、扣分和缺勤记录。切换到全部主管时，可查询其他主管的扣分和缺勤记录。':'展示本人登记的数据和重复处分跟进状态。';
   const scopeField=isSupervisor?'<label>查看范围<select name="scope"><option value="mine">我的登记记录</option><option value="supervisors">全部主管登记记录</option></select></label>':'';
-  const recordTypes=isSupervisor?'<option value="all">全部</option><option value="deduction">扣分</option><option value="sick_leave">缺勤</option>':'<option value="all">全部</option><option value="recognition">加分</option><option value="deduction">扣分</option><option value="sick_leave">缺勤</option><option value="follow_up">处分跟进</option>';
+  const recordTypes=pocOnly?'<option value="recognition">POC特别贡献</option>':isSupervisor?'<option value="all">全部</option><option value="deduction">扣分</option><option value="sick_leave">缺勤</option>':'<option value="all">全部</option><option value="recognition">加分</option><option value="deduction">扣分</option><option value="sick_leave">缺勤</option><option value="follow_up">处分跟进</option>';
   app.innerHTML=`<div class="section-gap"><section class="panel"><h2>${title}</h2><p>${description}</p><form id="entryFilter" class="entry-filter">${scopeField}<label>开始日期<input name="start_date" type="date" value="${monthStart()}"></label><label>结束日期<input name="end_date" type="date" value="${today()}"></label><label>记录类型<select name="record_type">${recordTypes}</select></label><label>状态<select name="status"><option value="">全部</option><option value="confirmed">已确认</option><option value="pending">待复核 / 待经理跟进</option><option value="issued">已开具</option><option value="rejected">不通过</option><option value="pending_material">待补充材料</option><option value="material_processing">材料生成中</option><option value="material_failed">材料生成失败</option><option value="active">已生效</option><option value="covered">已覆盖</option><option value="void">已作废</option></select></label><label>员工搜索<input name="keyword" placeholder="姓名/员工号"></label><button class="primary">查询</button></form><div class="actions"><button id="allHistoryBtn" class="secondary">查看全部历史</button></div></section><div id="entryResults"></div></div>`;
   const form=document.getElementById('entryFilter');let currentPage=1,materialPage=1,materialStatus='',disposeGrid=null;
   registerPageCleanup(()=>disposeGrid?.());
@@ -56,7 +58,26 @@ async function renderEntries(){
 }
 
 function bindEntryActions(done){const page=captureViewContext();
-  document.querySelectorAll('[data-entry-withdraw]').forEach(button=>button.onclick=async()=>{if(!await confirmModal('撤回签卡','<p>撤回后该条记录不再计分，操作记录仅供高级别导出复查，是否继续？</p>','确认撤回'))return;try{await api('/api/recognitions/'+button.dataset.entryWithdraw,{method:'DELETE'});toast('加分记录已撤回');page.refresh(done)}catch(error){toast(error.message,true)}});
+  document.querySelectorAll('[data-entry-withdraw]').forEach(button=>button.onclick=async()=>{
+    const active=button.hasAttribute('data-active-recognition');
+    const reason=active?await promptModal('撤回主动认可','撤回后原签卡停止计分，接收人会看到撤回通知。请填写可展示给接收人的原因。','例如：认可内容填写有误','确认撤回'):null;
+    if(active?!reason:!await confirmModal('撤回签卡','<p>撤回后该条记录不再计分，操作记录仅供高级别导出复查，是否继续？</p>','确认撤回'))return;
+    try{
+      await api('/api/recognitions/'+button.dataset.entryWithdraw,active?json('DELETE',{reason}):{method:'DELETE'});
+      toast(active?'原签卡已撤回，可以重新发卡':'加分记录已撤回');
+      page.refresh(done);
+    }catch(error){toast(error.message,true);}
+  });
+  document.querySelectorAll('[data-entry-reissue]').forEach(button=>button.onclick=async()=>{
+    try{
+      const draft=await api('/api/recognitions/'+button.dataset.entryReissue+'/reissue');
+      if(!page.isCurrent())return;
+      state.recognitionReissueDraft=draft;
+      state.registerMode='active';
+      state.registerTarget=draft.supervisor_target?'supervisor':'frontline';
+      gotoTab('register');
+    }catch(error){toast(error.message,true);}
+  });
   document.querySelectorAll('[data-entry-void]').forEach(button=>button.onclick=async()=>{const reason=await promptModal('作废扣分记录','请输入作废原因（必填）：','作废原因');if(!reason)return;try{await api('/api/deductions/'+button.dataset.entryVoid+'/void',json('POST',{reason}));toast('扣分记录已作废');page.refresh(done)}catch(error){toast(error.message,true)}});
   document.querySelectorAll('[data-entry-material-retry]').forEach(button=>button.onclick=async()=>{try{const current=(await api('/api/deductions/'+button.dataset.entryMaterialRetry+'/material-status')).record;if(!page.isCurrent())return;openDeductionMaterialRetry(current.id,()=>page.refresh(done));}catch(error){toast(error.message,true)}});
   document.querySelectorAll('[data-entry-sick-void]').forEach(button=>button.onclick=async()=>{const reason=await promptModal('作废缺勤记录','请输入作废原因（必填）：','作废原因');if(!reason)return;try{await api('/api/sick-leaves/'+button.dataset.entrySickVoid+'/void',json('POST',{reason}));toast('缺勤记录已作废，全勤分已重新计算');page.refresh(done)}catch(error){toast(error.message,true)}});

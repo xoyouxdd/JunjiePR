@@ -17,15 +17,17 @@ function isActingFrontline(){return ['CM','TR','SUPERVISOR'].includes(state.me?.
 
 function menuItems() {
   const r=state.me.role_code, items=[];
-  if (['CM','TR'].includes(r)) items.push(['home','首页'],['register','登记']);
+  if (['CM','TR'].includes(r)) items.push(['home','个人中心'],['register','登记']);
   else if (['TA_SUPERVISOR','SUPERVISOR'].includes(r)) items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);
   else if (['TA_GSM','GSM'].includes(r)) {items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看'],['prRankings','PR排名数据'],['register','绩效登记'],['entries','我的登记记录']);}
-  else if (['AM','OM'].includes(r)) {items.push(['statistics','景点数据与导出'],['prRankings','PR排名数据'],['register','POC特别贡献']);}
+  else if (['AM','OM'].includes(r)) {items.push(['statistics','景点数据与导出'],['prRankings','PR排名数据'],['register','POC特别贡献'],['entries','POC登记记录']);}
   else if (r==='SYSTEM_ADMIN') items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);
   else if (r==='HR_CIRCLE') {items.push(['hrEmployees','员工管理'],['monthClose','月结'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置'],['prRankings','PR排名数据']);}
   else if (r==='HR_ADMIN') {items.push(['hrEmployees','员工管理'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
   else if (has('DATA_VIEW')) items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
+  if(['CM','TR','SUPERVISOR','TA_SUPERVISOR','TA_GSM','GSM','AM','OM'].includes(state.me.base_role_code||r))items.push(['activityPoints','我的积分卡']);
+  if(!state.me.rotation_temporary)items.push(['activities','活动中心']);
   if(has('REVIEW_SUPERVISOR'))items.splice(Math.min(items.length,1),0,['supervisorReview','主管复核']);
   if(has('LOA_REGISTER'))items.push(['loa','LOA登记']);
   if(has('SICK_LEAVE_IMPORT'))items.push(['sickLeaveImport','缺勤登记']);
@@ -35,7 +37,7 @@ function menuItems() {
   const personalAllowed=!['HR_CIRCLE','HR_ADMIN'].includes(state.me.base_role_code||r);
   if(personalAllowed&&!items.some(([id])=>id==='home')){
     const scored=['CM','TR','SUPERVISOR'].includes(state.me.base_role_code)||['TA_SUPERVISOR','SUPERVISOR'].includes(r);
-    if(scored)items.unshift(['home','首页']);
+    if(scored)items.unshift(['home','个人中心']);
   }
   items.splice(['CM','TR'].includes(r)?1:0,0,['actionCenter','待办']);
   if(state.me.rotation_entry)items.push(['rotationTest','轮岗看板']);

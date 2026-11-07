@@ -10,6 +10,7 @@ FZ团队工作台（原 FZPR登记），覆盖认可签卡、PR积分、公告�
 
 | 文档 | 内容 |
 |---|---|
+| [docs/attendance-medals.md](docs/attendance-medals.md) | 全勤勋章、请假核对、试用与正式展示边界 |
 | [docs/rotation-forecast-v2.md](docs/rotation-forecast-v2.md) | 动态轮岗预排、访问范围与跨夜规则 |
 | [docs/rotation-early-post-shifts.md](docs/rotation-early-post-shifts.md) | 7点岗位跨班次预排与接替关系 |
 | [docs/rotation-prearranged-lines.md](docs/rotation-prearranged-lines.md) | 每日预排线路启停与权限 |

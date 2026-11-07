@@ -505,6 +505,12 @@ def test_name_mismatch_is_skipped_after_registrant_review_and_old_sick_leave_is_
             "leave_type": "法定病假", "hours": Decimal("8"), "days": Decimal("1"),
         }], {("01727264", "病假时间总计"): Decimal("8")}, []))
         monkeypatch.setattr(sick_leave_import, "_transaction_months", lambda _: {month})
+        # This fixture replaces the BIFF parser with synthetic rows; provide the
+        # independent honor reader the same unmatched identity evidence.
+        from app.services import attendance_medals
+        monkeypatch.setattr(attendance_medals, "read_all_leaves", lambda *args: ([], [
+            {"employee_id": employee_id, "circle_id": employee.attraction_id, "reason": "姓名不匹配"}
+        ], []))
         assert client.post("/api/login", json={"employee_no": "GSMTEST01", "password": "1234"}).status_code == 200
         preview = client.post("/api/sick-leave-imports/preview", files={"workbook": ("transactions.xls", b"fake-xls")}, data={"month": month})
         assert preview.status_code == 200, preview.text

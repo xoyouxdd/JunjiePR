@@ -96,7 +96,7 @@ def test_discrete_days_no_identity_or_permissions_and_optimistic_conflict(setup)
         expected = recognition_score_for_role(db, db.query(Role).filter_by(code='TA_SUPERVISOR').one().id, day)
         assert Decimal(str(row['score'])) == expected
         assert db.query(AuditLog).filter_by(entity_type='employee', entity_id=eid, action='调整临时主管认可资格').count() == 1
-    non_day = day[:8] + '07'
+    non_day = next(day[:8] + f'{n:02d}' for n in range(1, 29) if day[:8] + f'{n:02d}' not in {day, second})
     assert eid not in {r['id'] for r in choices(client, circle, non_day)}
     login(client, number, '1234')
     me = client.get('/api/me').json()

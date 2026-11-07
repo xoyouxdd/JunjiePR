@@ -196,6 +196,12 @@ async def add_security_headers(request: Request, call_next):
         response.headers.setdefault(name, value)
     if request.url.path.startswith('/static/images/avatars/') and response.status_code == 200:
         response.headers.setdefault('Cache-Control', 'no-cache' if request.url.path.endswith('/catalog.json') else 'public, max-age=3600')
+    elif request.url.path.startswith('/static/images/attendance-medals/') and response.status_code == 200:
+        # Content-addressed, public artwork only; no employee data is cached here.
+        response.headers.setdefault('Cache-Control', 'public, max-age=31536000, immutable')
+        if request.url.path.endswith('.webp'):
+            # Windows registry MIME associations may otherwise report text/plain.
+            response.headers['Content-Type'] = 'image/webp'
     if request_is_https(request):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     return response
@@ -227,6 +233,8 @@ async def reject_cross_site_state_changes(request: Request, call_next):
 def startup() -> None:
     validate_runtime_paths()
     init_db()
+    from app.activity_worker import start_worker as start_activity_worker
+    start_activity_worker()
     from app.services.employee_types import start_worker as start_employee_type_worker
     start_employee_type_worker()
     start_deduction_material_worker()
@@ -242,6 +250,8 @@ def startup() -> None:
 
 @app.on_event("shutdown")
 def shutdown_announcements():
+    from app.activity_worker import stop_worker as stop_activity_worker
+    stop_activity_worker()
     from app.services.employee_types import stop_worker as stop_employee_type_worker
     stop_employee_type_worker()
     stop_announcement_worker()

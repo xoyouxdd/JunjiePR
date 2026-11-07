@@ -52,7 +52,10 @@ async function renderReview(showHistory=false, offset=0){
   bindReviewActions(showHistory,pageOffset);
 }
 
-function reviewActions(r){return r.status==='pending'?`<button data-review="${r.id}" data-action="confirm" class="primary">确认</button> <button data-review="${r.id}" data-action="reject" class="danger">不通过</button>`:`<button data-review="${r.id}" data-action="restore" class="secondary">还原</button>`}
+function reviewActions(r){
+  if(r.review_read_only)return '<small class="field-hint">上级主动认可 · 仅供查看</small>';
+  return r.status==='pending'?`<button data-review="${r.id}" data-action="confirm" class="primary">确认</button> <button data-review="${r.id}" data-action="reject" class="danger">不通过</button>`:`<button data-review="${r.id}" data-action="restore" class="secondary">还原</button>`;
+}
 
 const reviewWrites=new Set();
 function bindReviewActions(showHistory=false,offset=0){

@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw
 import pytest
 
 from app.main import app
+from app.branding import BRAND_EN
 from app.announcement_exports import pdf, spreadsheet, report_groups, signature_previews, expected_statement
 from app.announcement_export_data import prepare_export_data
 from app.v2_database import SessionLocal, FILE_DIR
@@ -87,6 +88,8 @@ def test_compact_reports_keep_signatures_together_and_generate_review_samples():
     (OUTPUT/"receipt-sample.pdf").write_bytes(content)
     (OUTPUT/"receipt-sample.xlsx").write_bytes(excel)
     with fitz.open(stream=content,filetype="pdf") as document:
+        assert document.metadata["author"] == BRAND_EN
+        assert all(BRAND_EN in page.get_text() for page in document)
         assert document.page_count==3
         assert "发布内容" in document[0].get_text() and "开班前核对" in document[0].get_text()
         assert "如何阅读" not in "".join(p.get_text() for p in document)
@@ -102,6 +105,8 @@ def test_compact_reports_keep_signatures_together_and_generate_review_samples():
         for i,page in enumerate(document):
             page.get_pixmap(matrix=fitz.Matrix(1.5,1.5)).save(OUTPUT/f"receipt-sample-{i+1}.png")
     book=load_workbook(BytesIO(excel))
+    assert book.properties.creator == BRAND_EN
+    assert all(ws.oddFooter.left.text == BRAND_EN for ws in book)
     assert len(book.worksheets)==4 and book.active.title=="公告与总览"
     assert sum(len(s._images) for s in book)==9
     assert all(image.anchor.editAs=="twoCell" for s in book for image in s._images)

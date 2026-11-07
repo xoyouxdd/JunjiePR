@@ -4,6 +4,8 @@ const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'../app/static');
 assert.match(fs.readFileSync(path.join(root,'js/app/rankings.js'),'utf8'),/import \{ toast \} from '\.\/toast\.js'/);
 const ranking=fs.readFileSync(path.join(root,'js/app/rankings.js'),'utf8').replace(/^import .*\r?\n/gm,'').replace(/^export .*$/gm,'');
+const statistics=fs.readFileSync(path.join(root,'js/app/statistics.js'),'utf8');
+const statisticsCode=statistics.replace(/^import .*\r?\n/gm,'').replace(/^export .*$/gm,'');
 const navigation=fs.readFileSync(path.join(root,'js/app/navigation.js'),'utf8');
 const start=navigation.indexOf('function menuItems() {'),menu=navigation.slice(start,navigation.indexOf('\n}',start)+2);
 const css=['style.css','workspace-ui.css'].map(f=>fs.readFileSync(path.join(root,'css',f),'utf8')).join('\n');
@@ -12,16 +14,17 @@ for(const width of [320,390,1280]){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
  await page.setContent('<style>'+css+'</style><main id="app" data-workspace-ui></main>');
- await page.evaluate('(()=>{'+ranking+'\n'+menu+`\nwindow.requests=[];window.exports=[];window.toasts=[];
+ await page.evaluate('(()=>{'+ranking+'\n'+statisticsCode+'\n'+menu+`\nwindow.requests=[];window.exports=[];window.toasts=[];
  const app=document.getElementById('app');
  const state={me:{role_code:'HR_CIRCLE',base_role_code:'HR_CIRCLE',attraction_id:1},options:{employee_circles:[{id:1,name:'热力追踪'},{id:2,name:'矮人迷宫'},{id:3,name:'小熊罐子'}],recognition_types:[{id:1,name:'安全'}],deduction_types:[{id:1,name:'考勤'}]}};
  const has=p=>['DATA_VIEW','DATA_EXPORT','HR_MANAGE'].includes(p);
  let viewGeneration=0;const beginViewRequest=()=>{const generation=++viewGeneration;return {isCurrent:()=>generation===viewGeneration}};const esc=v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
  const fmt=v=>Number(v||0).toFixed(2),fmtDeduction=fmt,actingNoteMarkup=()=>'',monthStart=()=>'2026-11-01',today=()=>'2026-11-01',portalPath=s=>s;
+ const monthNow=()=>'2026-11',registerPageCleanup=()=>{},TREND_SPANS=[3,6,12],confirmModal=async()=>true;
  const opt=(rows)=>rows.map(r=>'<option value="'+r.id+'">'+esc(r.name)+'</option>').join('');
  const queueExport=async url=>{exports.push(url);if(window.failExport)throw Error('导出失败测试');if(window.deferExport)await new Promise(resolve=>window.releaseExport=resolve)},toast=(...args)=>window.toasts.push(args);
- const api=async url=>{requests.push(url);const q=new URL(url,'http://fixture').searchParams;const payload={category:q.get('category'),population:q.get('population'),venue_columns:['leader','gsm_leader'].includes(q.get('category'))?[{key:'1',name:'热力追踪'},{key:'2',name:'矮人迷宫'},{key:'3',name:'小熊罐子'}]:[],circle_scope:state.me.role_code==='HR_CIRCLE'?'recipient':'issuer',population_name:q.get('population')==='all'?'全部人群':q.get('population')==='supervisor'?'LEAD':'CM/TR',rows:[{employee_id:11,employee_no:'1234567',employee_name:'本圈员工',role_name:'CM',rank:1,venue_counts:{'1':1,'2':0,'3':1},group_label:'本圈A组',count:2,score:1,recognition_score:1,deduction_score:0,attendance_score:12,total_score:13,leave_days:0,charged_days:0,recent_date:'2026-11-01'}],total:21,pages:2,page:Number(q.get('page')||1),page_size:20,attraction_name:state.options.employee_circles.find(c=>String(c.id)===q.get('attraction_id'))?.name||'全部景点圈',start_date:q.get('start_date'),end_date:q.get('end_date')};if(window.deferCategory===q.get('category'))await new Promise(resolve=>window.releaseRanking=resolve);if(window.emptyRanking){payload.rows=[];payload.total=0;payload.pages=1;}return payload;};
- window.fixtureState=state;window.renderRanking=renderPrRankings;window.rankingMenu=menuItems;
+ const api=async url=>{requests.push(url);const q=new URL(url,'http://fixture').searchParams;if(url.startsWith('/api/statistics/my-exports'))return {items:[]};if(url.startsWith('/api/statistics?'))return {month:q.get('month'),title:q.get('title')||'',summary:{employee_count:0},hierarchy:[],filters:{},loa_rows:[],issuer_keyword:q.get('issuer_keyword')||'',issuer_counts:{population_name:q.get('issuer_population'),attraction_name:'热力追踪',venue_columns:[],rows:[{employee_no:'1234567',employee_name:q.get('issuer_keyword')||'签卡AM',role_name:'AM',count:2,score:1,venue_counts:{}}]}};const payload={category:q.get('category'),population:q.get('population'),venue_columns:['leader','gsm_leader'].includes(q.get('category'))?[{key:'1',name:'热力追踪'},{key:'2',name:'矮人迷宫'},{key:'3',name:'小熊罐子'}]:[],circle_scope:state.me.role_code==='HR_CIRCLE'?'recipient':'issuer',population_name:q.get('population')==='all'?'全部人群':q.get('population')==='supervisor'?'LEAD':'CM/TR',rows:[{employee_id:11,employee_no:'1234567',employee_name:'本圈员工',role_name:'CM',rank:1,venue_counts:{'1':1,'2':0,'3':1},group_label:'本圈A组',count:2,score:1,recognition_score:1,deduction_score:0,attendance_score:12,total_score:13,leave_days:0,charged_days:0,recent_date:'2026-11-01'}],total:21,pages:2,page:Number(q.get('page')||1),page_size:20,attraction_name:state.options.employee_circles.find(c=>String(c.id)===q.get('attraction_id'))?.name||'全部景点圈',start_date:q.get('start_date'),end_date:q.get('end_date')};if(window.deferCategory===q.get('category'))await new Promise(resolve=>window.releaseRanking=resolve);if(window.emptyRanking){payload.rows=[];payload.total=0;payload.pages=1;}return payload;};
+ window.fixtureState=state;window.renderRanking=renderPrRankings;window.rankingMenu=menuItems;window.managementCountsHtml=managementRecognitionCounts;window.renderStats=renderStatistics;
  })()`);
  for(const circleId of [1,2,3]){
   const offset=await page.evaluate(async id=>{const offset=requests.length;fixtureState.me.attraction_id=id;await renderRanking();return offset},circleId);
@@ -60,6 +63,8 @@ for(const width of [320,390,1280]){
  // The manager's issuer boards reuse the population control and show occurrence
  // counts in desktop tables and mobile cards.  The other four boards stay split.
  await page.locator('[data-pr-category=gsm_leader]').click();
+ assert.equal(await page.locator('[data-pr-category=gsm_leader]').textContent(),'管理层认可次数');
+ assert.match(await page.locator('.pr-ranking-table th').nth(1).textContent(),/AM \/ OM/);
  assert.equal(await page.locator('[name=population] option').count(),3);
  assert.equal(await page.locator('[data-pr-circle-label]').textContent(),'签卡人所属圈');
  assert.equal(await page.locator('[data-pr-search-label]').textContent(),'签卡人搜索');
@@ -125,6 +130,32 @@ for(const width of [320,390,1280]){
  assert.equal(await page.locator('#prExport').count(),0);
  await page.evaluate(()=>{fixtureState.me.role_code='HR_ADMIN';fixtureState.me.base_role_code='HR_ADMIN'});
  assert(!(await page.evaluate(()=>rankingMenu())).some(([id])=>id==='prRankings'));
+ await page.evaluate(()=>{
+   document.getElementById('app').innerHTML=managementCountsHtml({issuer_counts:{
+     venue_columns:[{key:'1',name:'热力追踪'},{key:'2',name:'矮人迷宫'},{key:'3',name:'小熊罐子'}],
+     rows:[{employee_name:'签卡AM',employee_no:'1234567',role_name:'AM',count:3,venue_counts:{'1':1,'2':2},score:2},
+           {employee_name:'签卡OM',employee_no:'1234568',role_name:'OM',count:1,venue_counts:{'3':1},score:0}],
+   }});
+ });
+ assert.equal(await page.locator('[data-management-recognitions] tbody tr').count(),2);
+ assert.match(await page.locator('[data-management-recognitions]').textContent(),/签卡AM.*AM.*3/);
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'statistics issuer overflow '+width);
+ await page.evaluate(async()=>{fixtureState.me.role_code='GSM';fixtureState.me.employee_no='GSMTEST';await renderStats()});
+ await page.locator('#statsFilter [name=keyword]').fill('员工筛选');
+ await page.locator('#statsFilter [name=issuer_keyword]').fill('AMTEST01');
+ await page.locator('#statsFilter [name=issuer_population]').selectOption('supervisor');
+ await page.locator('#statsFilter button.primary').click();
+ await page.locator('[data-management-recognitions] tbody tr').filter({hasText:'AMTEST01'}).waitFor();
+ const statsQuery=new URL(await page.evaluate(()=>requests.filter(url=>url.startsWith('/api/statistics?')).at(-1)),'http://fixture').searchParams;
+ assert.equal(statsQuery.get('keyword'),'员工筛选');
+ assert.equal(statsQuery.get('issuer_keyword'),'AMTEST01');
+ assert.equal(statsQuery.get('issuer_population'),'supervisor');
+ await page.locator('#exportBtn').click();
+ const exportQuery=new URL(await page.evaluate(()=>exports.at(-1)),'http://fixture').searchParams;
+ assert.equal(exportQuery.get('keyword'),'员工筛选');
+ assert.equal(exportQuery.get('issuer_keyword'),'AMTEST01');
+ assert.equal(exportQuery.get('issuer_population'),'supervisor');
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'statistics filter overflow '+width);
  assert.deepEqual(errors,[]);await page.close();
 }
 console.log('PASS: HR and manager scope; six categories; population/search/type/sort/export; venue tables and mobile cards; empty results; stale response race; TA GSM export restriction; 320/390/1280px');

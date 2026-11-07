@@ -1,7 +1,7 @@
 // Enhance only the already-authorized, already-paginated recognition results.
 import { attachmentControl, bindFilePreviews } from './files.js';
 import { employeeNumber, esc, recognitionScoreNote, recognitionScoreText } from './format.js';
-import { sameDayDuplicateBadge, statusBadge } from './records.js';
+import { recognitionEntryActions, sameDayDuplicateBadge, statusBadge } from './records.js';
 import { loadUiLibrary } from './ui-libraries.js';
 
 function recognitionDetail(row){
@@ -29,9 +29,9 @@ function mountRecognitionGrid(panel,rows,onActions){
           {title:'业务日期',field:'recognition_date',minWidth:104,headerSort:true,sorter:'string'},
           {title:'员工',field:'employee_name',minWidth:110,headerSort:true,formatter:cell=>`${esc(cell.getValue())}<br><small>${esc(cell.getData().employee_no)}</small>`},
           {title:'认可类别 / 认可人',field:'recognition_type',minWidth:150,widthGrow:2,headerSort:true,formatter:cell=>`${esc(cell.getValue())}<br><small>${esc(cell.getData().recognizer_name)}</small>`},
-          {title:'分值',field:'credited_fraction',minWidth:85,hozAlign:'right',formatter:cell=>recognitionScoreText(cell.getData())},
+          {title:'分值',field:'credited_fraction',minWidth:85,hozAlign:'right',formatter:cell=>cell.getData().status==='void'?'—':recognitionScoreText(cell.getData())},
           {title:'状态',field:'status',minWidth:85,formatter:cell=>statusBadge(cell.getData())},
-          {title:'操作',minWidth:142,formatter:cell=>`<button type="button" class="secondary" data-grid-detail="${Number(cell.getData().id)}" aria-expanded="${opened.has(cell.getData().id)}">${opened.has(cell.getData().id)?'收起':'查看'}</button>${(cell.getData().available_actions||[]).includes('withdraw')?` <button type="button" class="secondary" data-entry-withdraw="${Number(cell.getData().id)}">撤回</button>`:''}`,cellClick:(event,cell)=>{const button=event.target.closest('[data-grid-detail]');if(!button)return;const row=cell.getRow(),id=row.getData().id;if(opened.has(id))opened.delete(id);else opened.add(id);row.reformat();row.normalizeHeight();onActions();}}
+          {title:'操作',minWidth:142,formatter:cell=>`<button type="button" class="secondary" data-grid-detail="${Number(cell.getData().id)}" aria-expanded="${opened.has(cell.getData().id)}">${opened.has(cell.getData().id)?'收起':'查看'}</button> ${recognitionEntryActions(cell.getData())}`,cellClick:(event,cell)=>{const button=event.target.closest('[data-grid-detail]');if(!button)return;const row=cell.getRow(),id=row.getData().id;if(opened.has(id))opened.delete(id);else opened.add(id);row.reformat();row.normalizeHeight();onActions();}}
         ]});
       table.on('tableBuilt',()=>{
         if(disposed||serial!==sequence||!currentHost.isConnected)return;

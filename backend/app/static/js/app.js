@@ -11,6 +11,8 @@ import { renderEntries } from './app/entries.js';
 import { startExportTasks } from './app/export-tasks.js';
 import { esc } from './app/format.js';
 import { renderHome } from './app/home.js';
+import { renderActivityPoints } from './app/activity-points.js';
+import { renderActivities } from './app/activities.js';
 import { renderCircleTransfers, renderHrGroups, renderHrScores, renderLogs, renderMonthClose } from './app/hr.js';
 import { renderHrEmployees } from './app/hr-employees.js';
 import { renderMembers } from './app/members.js';
@@ -32,6 +34,8 @@ import { mountDailyWish } from './app/daily-wish.js';
 
 configureViews({
   home: renderHome,
+  activityPoints: renderActivityPoints,
+  activities: renderActivities,
   actionCenter: renderActionCenter,
   operations: renderOperations,
   register: renderRegister,

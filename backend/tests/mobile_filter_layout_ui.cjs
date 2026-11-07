@@ -4,7 +4,7 @@ const {chromium,webkit,firefox}=require('playwright');
 const root=path.resolve(__dirname,'../app/static'),history=Array.from({length:12},(_,i)=>({exported_at:'2026-10-19 20:08',month:'2026-10',attraction_name:'热力追踪',title:'CM/TR全部',keyword:i?'':'合成长姓名和员工号',employee_count:120+i}));
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const options='<option value="1">热力追踪</option><option value="2">矮人迷宫</option>';
-const vars={monthNow:()=> '2026-10',monthStart:()=> '2026-10-01',today:()=> '2026-10-20',opt:()=>options,state:{options:{}},circleOptions:options,scopedHr:false,canExport:true,scopeField:'',recordTypes:'<option value="all">全部</option>',levelOptions:'<option value="1">声明</option>',typeOptions:'<option value="1">合成类型</option>',esc};
+const vars={monthNow:()=> '2026-10',monthStart:()=> '2026-10-01',today:()=> '2026-10-20',opt:()=>options,state:{options:{}},circleOptions:options,scopedHr:false,canExport:true,canViewIssuers:true,scopeField:'',recordTypes:'<option value="all">全部</option>',levelOptions:'<option value="1">声明</option>',typeOptions:'<option value="1">合成类型</option>',esc};
 function form(file,id,extra={}){
   const source=fs.readFileSync(path.join(root,'js/app',file),'utf8'),start=source.indexOf(`<form id="${id}"`),end=source.indexOf('</form>',start);
   assert(start>=0&&end>start);return vm.runInNewContext('`'+source.slice(start,end+7)+'`',{...vars,...extra});

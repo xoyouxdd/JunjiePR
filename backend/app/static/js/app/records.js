@@ -14,7 +14,7 @@ function workItemDetailsHtml(data){
   return `<p class="field-hint">仅展示当前授权范围；处理沿用原权限与流程。</p><div class="work-card-list">${(data.items||[]).map(row=>`<article class="work-card"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><p>${esc(row.occurred_on)} · ${esc(row.summary)}</p><p>负责人：${esc(row.responsible||'请联系业务负责人')}</p>${row.can_handle?`<button type="button" class="secondary" data-follow-up-register="${Number(row.id)}">前往登记</button>`:''}</article>`).join('')||'<p class="empty">当前没有未完成事项</p>'}</div><div class="pagination"><button type="button" class="secondary" data-work-prev ${page<=1?'disabled':''}>上一页</button><span>第${page}页，共${total}项</span><button type="button" class="secondary" data-work-next ${page*size>=total?'disabled':''}>下一页</button></div>`;
 }
 
-const statusBadge = row => `<span class="badge status-chip ${row.status==='confirmed'||row.status==='issued'||(row.record_type==='sick_leave'&&row.status==='active')?'ok':row.status==='rejected'||row.status==='material_failed'||(row.record_type==='deduction'&&row.status==='active')?'danger':'warn'}">${esc(row.status_name || row.status)}</span>`;
+const statusBadge = row => `<span class="badge status-chip ${row.status==='confirmed'||row.status==='issued'||(row.record_type==='sick_leave'&&row.status==='active')?'ok':row.status==='rejected'||row.status==='material_failed'||(row.record_type==='deduction'&&row.status==='active')?'danger':'warn'}">${esc(row.status_name || row.status)}${row.reissued?' · 重新发卡':''}</span>`;
 
 function splitCoveredSickRecords(rows){
   const visible=[],covered=[];
@@ -32,6 +32,14 @@ function recognitionCard(r,i,readOnly=false){return `<article class="record-card
 
 function bindWithdraw(root, done){const page=captureViewContext();root.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=async()=>{if(!await confirmModal('撤回签卡','<p>撤回后该条记录不再计分，操作记录仅供高级别导出复查，是否撤回？</p>','确认撤回'))return;try{await api('/api/recognitions/'+b.dataset.withdraw,{method:'DELETE'});toast('已撤回');page.refresh(done);}catch(e){toast(e.message,true)}})}
 
+function recognitionEntryActions(row){
+  const actions=row.available_actions||[];
+  if(actions.includes('reissue'))return `<button type="button" data-entry-reissue="${row.id}" class="secondary">重新发卡</button>`;
+  if(row.replacement_id)return '<small class="field-hint">已重新发卡</small>';
+  if(actions.includes('withdraw'))return `<button type="button" data-entry-withdraw="${row.id}" ${row.active_recognition?'data-active-recognition':''} class="secondary">撤回</button>`;
+  return '';
+}
+
 function entryRow(row){
   if(row.record_type==='follow_up'){
     const issued=row.status==='issued'?`<br><small>${esc(row.issued_by_name)} · ${esc(row.issued_at)}</small>`:'';
@@ -39,7 +47,7 @@ function entryRow(row){
   }
   if(row.record_type==='recognition'){
     const evidence=attachmentControl(row.image_url,'图片',row.image_preview_kind);
-    return `<tr><td>${esc(row.submitted_at)}</td><td>加分</td><td>${esc(row.employee_name)}<br><small>${esc(row.employee_no)}</small></td><td>${esc(row.recognition_date)}</td><td>${esc(row.recognition_type)} · ${esc(row.recognizer_name)}${sameDayDuplicateBadge(row)}<br>${esc(row.content)}${evidence}${row.monthly_cap_reason?`<br><small>${esc(row.monthly_cap_reason)}</small>`:''}</td><td class="score-positive">+${recognitionScoreText(row)}</td><td>${statusBadge(row)}</td><td>${row.available_actions.includes('withdraw')?`<button data-entry-withdraw="${row.id}" class="secondary">撤回</button>`:''}</td></tr>`;
+    return `<tr><td>${esc(row.submitted_at)}</td><td>加分</td><td>${esc(row.employee_name)}<br><small>${esc(row.employee_no)}</small></td><td>${esc(row.recognition_date)}</td><td>${esc(row.recognition_type)} · ${esc(row.recognizer_name)}${sameDayDuplicateBadge(row)}<br>${esc(row.content)}${evidence}${row.monthly_cap_reason?`<br><small>${esc(row.monthly_cap_reason)}</small>`:''}</td><td class="score-positive">${row.status==="void"?"—":"+"+recognitionScoreText(row)}</td><td>${statusBadge(row)}</td><td>${recognitionEntryActions(row)}</td></tr>`;
   }
   if(row.record_type==='sick_leave'){
     const submitterNote=Number(row.submitter_id)===Number(state.me.id)?'':`<br><small>登记人：${esc(row.submitter_name)}</small>`;
@@ -60,9 +68,9 @@ function entryCard(row){
     return `<article class="work-card"><div class="work-card-head">${person}${chip}</div><p>${esc(row.occurred_on)} · 处分跟进 · 三个月内第二次</p>${row.issued_by_name?`<p>${esc(row.issued_by_name)} · ${esc(row.issued_at||'')}</p>`:''}</article>`;
   }
   if(row.record_type==='recognition'){
-    const actions=row.available_actions.includes('withdraw')?`<button data-entry-withdraw="${row.id}" class="secondary">撤回</button>`:'';
+    const actions=recognitionEntryActions(row);
     const evidence=row.image_url?attachmentControl(row.image_url,'查看材料',row.image_preview_kind):'';
-    return `<article class="work-card recognition-entry-card"><div class="work-card-head">${person}${chip}</div><p>${esc(row.recognition_date)} · 加分 · ${esc(row.recognition_type)} · ${recognitionScoreText(row)}</p>${sameDayDuplicateBadge(row)}<details class="recognition-card-detail"><summary>查看认可内容与材料</summary><p>签卡人：${esc(row.recognizer_name)}</p><p>${esc(row.content)}${evidence}</p></details>${recognitionScoreNote(row)}<div class="work-card-actions">${actions}</div></article>`;
+    return `<article class="work-card recognition-entry-card"><div class="work-card-head">${person}${chip}</div><p>${esc(row.recognition_date)} · 加分 · ${esc(row.recognition_type)}${row.status==="void"?"":" · "+recognitionScoreText(row)}</p>${sameDayDuplicateBadge(row)}<details class="recognition-card-detail"><summary>查看认可内容与材料</summary><p>签卡人：${esc(row.recognizer_name)}</p><p>${esc(row.content)}${evidence}</p></details>${recognitionScoreNote(row)}<div class="work-card-actions">${actions}</div></article>`;
   }
   if(row.record_type==='sick_leave'){
     const actions=row.available_actions.includes('void')?`<button data-entry-sick-void="${row.id}" class="secondary">作废</button>`:'';
@@ -77,4 +85,4 @@ function entryCard(row){
   return `<article class="work-card ${row.status==='void'?'void-row':''}"><div class="work-card-head">${person}${chip}</div><p>${esc(row.occurred_on)} · 扣分 · ${esc(row.deduction_type)} · ${points}</p><p>${esc(row.description)} ${material}</p><div class="work-card-actions">${actions}</div></article>`;
 }
 
-export { workItemDetailsHtml, bindWithdraw, coveredSickDisclosure, entryCard, entryRow, opt, recognitionCard, sameDayDuplicateBadge, splitCoveredSickRecords, statusBadge };
+export { workItemDetailsHtml, bindWithdraw, coveredSickDisclosure, entryCard, entryRow, opt, recognitionCard, recognitionEntryActions, sameDayDuplicateBadge, splitCoveredSickRecords, statusBadge };

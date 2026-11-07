@@ -123,9 +123,10 @@ async def stage_photo_materials(db, uploads: list[UploadFile], uploader_id: int)
                 status="processing_source",
             )
             db.add(row)
-            db.flush()
             staged.append(row)
             current_path = None
+        # Finish async file reads before taking SQLite's write lock.
+        db.flush()
         return staged
     except Exception:
         if current_path:
@@ -182,7 +183,11 @@ async def stage_pdf_material(db, upload: UploadFile, uploader_id: int) -> Stored
         status="processing_source",
     )
     db.add(row)
-    db.flush()
+    try:
+        db.flush()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     return row
 
 

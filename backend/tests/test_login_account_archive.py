@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.v2_database import SessionLocal  # noqa: E402
-from app.v2_models import AuditLog, Employee, GroupLeaderAssignment, MonthClosure, RecognitionRecord, RecognitionType, UserAccount, WorkGroup  # noqa: E402
+from app.v2_models import AuditLog, Employee, GroupLeaderAssignment, GroupMembership, MonthClosure, RecognitionRecord, RecognitionType, UserAccount, WorkGroup  # noqa: E402
 
 
 ROOT = Path(__file__).parents[1]
@@ -44,6 +44,12 @@ def organization_employee_ids(client: TestClient) -> set[int]:
         for group in circle["groups"]:
             employees.extend(group["members"])
     return {employee["id"] for employee in employees}
+
+
+def managed_group(client: TestClient, group_id: int) -> dict:
+    response = client.get("/api/hr/groups")
+    assert response.status_code == 200, response.text
+    return next(group for circle in response.json()["circles"] for group in circle["groups"] if group["id"] == group_id)
 
 
 def mark_eligible_with_business_history() -> tuple[int, int]:
@@ -101,6 +107,11 @@ def test_remove_login_after_three_days_keeps_employee_and_business_archive() -> 
         item = next(row for row in directory.json() if row["id"] == employee_id)
         assert item["account_deletion_eligible"] is True
         assert employee_id in organization_employee_ids(client)
+        with SessionLocal() as db:
+            membership = db.query(GroupMembership).filter_by(employee_id=employee_id, status="active").one()
+            group_id, membership_id = membership.group_id, membership.id
+        before_group = managed_group(client, group_id)
+        assert employee_id in {member["id"] for member in before_group["members"]}
         removed = client.request(
             "DELETE",
             f"/api/hr/employees/{employee_id}/account",
@@ -114,6 +125,7 @@ def test_remove_login_after_three_days_keeps_employee_and_business_archive() -> 
             assert employee.account_deleted_at is not None
             archived_at = employee.account_deleted_at.strftime("%Y-%m-%d %H:%M:%S")
             assert db.get(UserAccount, account_id) is None
+            assert db.get(GroupMembership, membership_id) is not None
             assert db.query(RecognitionRecord).filter_by(employee_id=employee_id).count() == 1
             assert db.query(AuditLog).filter_by(action="删除人员（留档）", entity_id=str(employee_id)).count() == 1
         rejected_login = client.post("/api/login", json={"employee_no": "CMTEST01", "password": "isolated-test-only"})
@@ -124,6 +136,11 @@ def test_remove_login_after_three_days_keeps_employee_and_business_archive() -> 
         assert item["account_deletion_eligible"] is False
         assert "已删除·留档" in item["account_deletion_reason"]
         assert employee_id not in organization_employee_ids(client)
+        after_group = managed_group(client, group_id)
+        assert after_group["member_count"] == before_group["member_count"] - 1
+        assert {member["id"] for member in after_group["members"]} == {
+            member["id"] for member in before_group["members"] if member["id"] != employee_id
+        }
         exported = client.get('/api/statistics/export', params={'month':date.today().strftime('%Y-%m')})
         assert exported.status_code == 200, exported.text
         book = load_workbook(BytesIO(exported.content))
@@ -158,10 +175,23 @@ def test_legacy_active_employee_with_archived_login_is_hidden_from_management_tr
             employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
             employee.is_active = True
             employee.account_deleted_at = datetime.now()
+            group = WorkGroup(name="历史留档空组", attraction_id=employee.attraction_id)
+            db.add(group)
+            db.flush()
+            membership = GroupMembership(employee_id=employee.id, group_id=group.id, starts_on=date.today().isoformat())
+            db.add(membership)
+            db.flush()
+            group_id, membership_id = group.id, membership.id
             db.commit()
             employee_id = employee.id
         login(client, "HR01", "isolated-admin-only")
         assert employee_id not in organization_employee_ids(client)
+        group = managed_group(client, group_id)
+        assert group["member_count"] == 0 and group["members"] == []
+        closed = client.post(f"/api/hr/groups/{group_id}/close", json={"reason": "隔离测试", "revision": group["revision"]})
+        assert closed.status_code == 200, closed.text
+        with SessionLocal() as db:
+            assert db.get(GroupMembership, membership_id) is not None
 
 
 def test_hr_archive_ui_and_export_marker_are_present() -> None:

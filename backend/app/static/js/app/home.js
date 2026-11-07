@@ -6,8 +6,11 @@ import { esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, portalP
 import { bindWithdraw, recognitionCard } from './records.js';
 import { app, state } from './state.js';
 import { mountHonors } from './honors.js';
-import { mountAvatarWardrobe } from './avatars.js';
+import { mountMedalCollection } from './attendance-medals.js';
+import { avatarMarkup, mountAvatarWardrobe } from './avatars.js';
 import { memoryEligible, mountMonthlyMemory } from './monthly-memory.js';
+import { mountRecognitionInbox } from './recognition-inbox.js';
+import { mountActivityPoints } from './activity-points.js';
 
 // 首页"我的信息"：组员显示所在小组与主管/代理主管；主管显示所带小组。
 function homeGroupInfo(organization){
@@ -125,7 +128,7 @@ function homeMonthControl(selectedMonth){
   for(const option of homeMonthOptions){
     const year=option.month.slice(0,4);
     if(!years.has(year))years.set(year,[]);
-    years.get(year).push(`<option value="${esc(option.month)}"${option.month===selectedMonth?' selected':''}>${esc(memberHomeMonthLabel(option.month))}${option.month===current?'（本月）':''}${option.status_label?` · ${esc(option.status_label)}`:''}</option>`);
+    years.get(year).push(`<option value="${esc(option.month)}"${option.month===selectedMonth?' selected':''}>${esc(memberHomeMonthLabel(option.month))}</option>`);
   }
   return `<label class="home-month-control">数据月份<select id="homeMonthSelect" aria-label="查看绩效月份">${[...years].map(([year,options])=>`<optgroup label="${esc(year)}年">${options.join('')}</optgroup>`).join('')}</select></label>`;
 }
@@ -134,7 +137,7 @@ function bindHomeMonth(){
 }
 function homeQueryState(request,selectedMonth,error){
   const message=error?`查询${memberHomeMonthLabel(selectedMonth)}失败：${error}`:`正在查询${memberHomeMonthLabel(selectedMonth)}…`;
-  request.write(`<section class="panel member-home-panel"><div class="home-info-heading"><h2>我的信息</h2>${homeMonthControl(selectedMonth)}</div><div class="${error?'error':'empty'}" ${error?'role="alert"':'role="status" aria-busy="true"'}>${esc(message)}</div>${error?'<button class="secondary home-query-retry" type="button" id="homeQueryRetry">重试</button>':''}</section>`);
+  request.write(`<section class="panel member-home-panel"><div class="home-info-heading"><h2>个人中心</h2>${homeMonthControl(selectedMonth)}</div><div class="${error?'error':'empty'}" ${error?'role="alert"':'role="status" aria-busy="true"'}>${esc(message)}</div>${error?'<button class="secondary home-query-retry" type="button" id="homeQueryRetry">重试</button>':''}</section>`);
   bindHomeMonth();
   if(error)document.getElementById('homeQueryRetry').onclick=()=>renderHome();
 }
@@ -142,7 +145,9 @@ function homeQueryState(request,selectedMonth,error){
 let homeRankCleanup=null;
 let homeAvatarCleanup=null;
 let homeMemoryCleanup=null;
+let homeProfileCleanup=null;
 async function renderHome(){
+  homeProfileCleanup?.();homeProfileCleanup=null;
   homeMemoryCleanup?.();homeMemoryCleanup=null;
   homeAvatarCleanup?.();homeAvatarCleanup=null;
   homeRankCleanup?.();homeRankCleanup=null;
@@ -180,37 +185,92 @@ async function renderHome(){
   };
   const summaryMarkup=`<p class="home-recognition-summary" aria-label="${esc(selectedMonthLabel)}签卡汇总"><span>已计分<strong>${esc(summary.credited)}</strong>张</span>${summary.pending?`<span class="home-recognition-pending">待复核<strong>${esc(summary.pending)}</strong>张</span>`:''}${summary.uncredited?`<span>已确认未计分<strong>${esc(summary.uncredited)}</strong>张</span>`:''}${summary.rejected?`<span>不通过<strong>${esc(summary.rejected)}</strong>张</span>`:''}</p>`;
   const memoryAvailable=memoryEligible(state.me);
-  const personalActions=`<div class="home-personal-actions">${d.monthly_rank_available===true?'<button type="button" class="home-honor-entry" id="homeRankView" aria-label="查看我的月度勋章" aria-expanded="false" aria-controls="homeRankContent"><span class="home-entry-emblem" aria-hidden="true">✦</span><span><strong>月度勋章</strong><small data-rank-label>看见本月荣誉</small></span></button>':''}${memoryAvailable?'<button type="button" class="home-memory-entry" id="homeMemoryView" aria-expanded="false" aria-controls="homeMemoryContent"><span class="home-entry-paper" aria-hidden="true">▤</span><span><strong>月度回忆卡</strong><small>珍藏认可瞬间</small></span></button>':''}</div><div id="homeMemoryContent" hidden></div>`;
-  const rankMarkup=`<div id="homeAvatar"></div>`+(d.monthly_rank_available===true?`<details class="member-rank-rules home-hr-notice"><summary>HR提示与月度勋章说明</summary><p>${rankStatement}</p><p>仅本人主动查看，不公开排行榜，不新增奖惩或绩效评定依据。</p></details><div class="member-rank-entry"><div id="homeRankContent" hidden></div></div>`:'');
-  if(!request.write(`<div class="section-gap">
-    <section class="panel member-home-panel" data-season="${season}"><div class="home-info-heading"><h2>我的信息</h2>${homeMonthControl(selectedMonth)}<span class="badge${d.month_closed?' member-month-closed':''}">${esc(monthStatus)}</span>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div>${personalActions}${rankMarkup}<div class="member-info-grid">
-      <div><span>姓名 / ${organization?'月结角色':'当前角色'}</span><strong>${esc(state.me.name)} · ${esc(organization?.role_label||state.me.role_label||state.me.role_name)}</strong></div>
-      <div><span>${organization?'月结景点圈':'当前景点圈'}</span><strong>${esc(organization?.attraction_name||state.me.attraction_name||'未分配')}</strong></div>
-      ${homeGroupInfo(organization)}
-      <div class="member-score-summary"><div class="member-score-items">
-        ${cats.map(x=>`<div class="member-score-item"><span>${homeScoreIcon(x)}${x}</span><strong>${fmt(d.category_scores?.[x])}</strong></div>`).join('')}
-        <div class="member-score-item"><span>${homeScoreIcon('全勤分')}全勤分</span><strong>${fmt(d.attendance_score)}</strong></div>
-        <div class="member-score-item"><span>${homeScoreIcon('扣分')}扣分</span><strong>${fmtDeduction(d.deduction_score)}</strong></div>
-        <div class="member-score-item member-score-total"><span>${homeScoreIcon('总分')}${isHistoricalMonth?'当月总分':'本月总分'}</span><strong>${fmt(d.total_score)}</strong></div>
-      </div></div>
-    </div>${showScoreExplainer?`<details class="score-explainer"><summary>${isHistoricalMonth?`${selectedMonthLabel}绩效分怎么算的？`:'本月总分怎么算的？'}</summary><ul><li>加分：认可人签卡确认后，按认可人当日角色分值计入对应类别（安全/礼仪/包容/效率/演出等）。</li><li>全勤分：基础分 10 分；当月无病假满勤再加 2 分；病假按天扣减（0.5 天扣 0.25 分），最低 0 分。</li><li>扣分：声明/备忘录/警告等扣分记录按等级计分，作废后不再计入。</li><li>本月总分 = 加分 + 全勤分 − 扣分（仅统计已确认的有效记录）。</li></ul></details>`:''}</section>
-    <section class="panel"><h2>我的签卡${isHistoricalMonth?` · ${selectedMonthLabel}`:''}</h2>${summaryMarkup}<div class="mobile-records">${(d.records||[]).length?d.records.map((r,i)=>recognitionCard(r,i,homeReadOnly)).join(''):`<div class="empty">${isHistoricalMonth?`${selectedMonthLabel}暂无签卡`:'本月暂无签卡'}</div>`}</div></section>
+  const personalActions=`<div class="personal-honor-tabs" role="tablist" aria-label="荣誉与回忆">${d.monthly_rank_available===true?'<button type="button" role="tab" class="home-honor-entry" id="homeRankView" aria-label="查看我的月度勋章" aria-selected="false" aria-expanded="false" aria-controls="homeRankContent"><span class="personal-tile-icon" aria-hidden="true">✦</span><strong>月度勋章</strong><small data-rank-label>查看当月</small></button>':''}${memoryAvailable?'<button type="button" role="tab" class="home-memory-entry" id="homeMemoryView" aria-selected="false" aria-expanded="false" aria-controls="homeMemoryContent"><span class="personal-tile-icon" aria-hidden="true">▤</span><strong>月度回忆</strong><small>收藏认可</small></button>':''}<button type="button" role="tab" id="homeAttendanceView" aria-selected="false" aria-expanded="false" aria-controls="homeAttendanceContent"><span class="personal-tile-icon" aria-hidden="true">✺</span><strong>全勤勋章</strong><small>查看当月</small></button></div>`;
+  if(!request.write(`<div class="personal-center section-gap">
+    <section class="panel personal-profile"><div class="personal-profile-main"><span class="personal-profile-avatar">${avatarMarkup(state.me.avatar_key,state.me.name)||'<span aria-hidden="true">'+esc((state.me.name||'我').slice(0,1))+'</span>'}</span><div><h2>${esc(state.me.name)}</h2><p>${esc(state.me.role_label||state.me.role_name)}<span>·</span>${esc(state.me.attraction_name||'未分配')}</p></div></div><details class="personal-profile-details"><summary>个人资料</summary><div class="personal-profile-meta"><span>工号 ${esc(state.me.employee_no||'')}</span>${state.me.group_name?`<span>${esc(state.me.group_name)}</span>`:''}${(state.me.led_groups||[]).length?`<span>带组 · ${state.me.led_groups.map(group=>esc(group.name)).join('、')}</span>`:''}${state.me.group_leader_label?`<span>${esc(state.me.group_leader_label)}</span>`:''}</div><details class="personal-avatar-settings"><summary>头像与装扮</summary><div id="homeAvatar"></div></details></details></section>
+    <div class="section-gap" id="homeRecognitionContext">
+      <section class="panel member-home-panel personal-month-panel" data-season="${season}">
+        <div class="personal-month-summary"><div class="personal-score-main"><h2>${isHistoricalMonth?'当月PR':'本月PR'}</h2><strong>${fmt(d.total_score)}</strong></div><div class="personal-month-tools">${homeMonthControl(selectedMonth)}<span class="badge${d.month_closed?' member-month-closed':''}">${esc(monthStatus)}</span>${isHistoricalMonth?'<span class="badge warn home-read-only">仅可查看</span>':''}</div></div>
+        ${organization?`<p class="personal-month-organization">${esc(organization.role_label||'')} · ${esc(organization.attraction_name||'')}${organization.group_name?' · '+esc(organization.group_name):''}</p>`:''}
+        <details class="personal-score-breakdown"><summary>分值明细</summary><div class="personal-score-parts"><div><span>认可加分</span><strong>${fmt(d.recognition_score??Object.values(d.category_scores||{}).reduce((n,v)=>n+Number(v||0),0))}</strong></div><div><span>全勤分</span><strong>${fmt(d.attendance_score)}</strong></div><div><span>扣分</span><strong>${fmtDeduction(d.deduction_score)}</strong></div></div><div class="member-score-items">${cats.map(x=>`<div class="member-score-item"><span>${homeScoreIcon(x)}${x}</span><strong>${fmt(d.category_scores?.[x])}</strong></div>`).join('')}</div>${showScoreExplainer?'<p class="field-hint">PR = 认可加分 + 全勤分 − 扣分</p>':''}</details>
+      </section>
+      <div class="personal-content-grid">
+        <section class="panel personal-keepsakes"><div class="personal-section-heading"><h2>荣誉与回忆</h2><span>${esc(selectedMonthLabel)}</span></div>${personalActions}<p class="personal-honor-placeholder" hidden></p><div id="homeRankContent" class="panel personal-rank-content" role="tabpanel" aria-labelledby="homeRankView" hidden></div><div id="homeMemoryContent" role="tabpanel" aria-labelledby="homeMemoryView" hidden></div><div id="homeAttendanceContent" role="tabpanel" aria-labelledby="homeAttendanceView" hidden></div></section>
+        <div id="activityPoints" class="personal-points"></div>
+      </div>
+      <section class="panel personal-records"><details><summary><span>我的认可</span><span class="personal-record-count">${esc((d.records||[]).length)} 张</span></summary>${summaryMarkup}<div class="mobile-records">${(d.records||[]).length?d.records.map((r,i)=>recognitionCard(r,i,homeReadOnly)).join(''):`<div class="empty">${isHistoricalMonth?`${selectedMonthLabel}暂无签卡`:'本月暂无签卡'}</div>`}</div></details></section>
+    </div>
+    <div id="recognitionInbox"></div>
   </div>`))return;
+  mountRecognitionInbox(document.getElementById('recognitionInbox'),document.getElementById('homeRecognitionContext'),request,state.me.name);
+  mountActivityPoints(document.getElementById('activityPoints'),request);
+  const refreshPersonalAvatar=event=>{
+    if(event.detail?.owner!==state.me.id||!request.isCurrent())return;
+    app.querySelector('.personal-profile-avatar').innerHTML=avatarMarkup(state.me.avatar_key,state.me.name)||'<span>'+esc((state.me.name||'我').slice(0,1))+'</span>';
+  };
+  window.addEventListener('app:avatar-changed',refreshPersonalAvatar);
+  homeProfileCleanup=()=>window.removeEventListener('app:avatar-changed',refreshPersonalAvatar);
+  registerPageCleanup(homeProfileCleanup);
+  const honorButtons=[...app.querySelectorAll('.personal-honor-tabs button')];
+  const honorHosts=['homeRankContent','homeMemoryContent','homeAttendanceContent'];
+  let honorRequest=0;
+  honorButtons.forEach((button,index)=>{
+    button.tabIndex=index===0?0:-1;
+    button.onkeydown=event=>{
+      if(!['ArrowRight','ArrowLeft','Home','End'].includes(event.key))return;
+      event.preventDefault();
+      const available=honorButtons.filter(item=>!item.disabled),current=available.indexOf(button);
+      const next=event.key==='Home'?0:event.key==='End'?available.length-1:(current+(event.key==='ArrowRight'?1:-1)+available.length)%available.length;
+      available[next]?.focus();available[next]?.click();
+    };
+  });
+  function selectHonor(button){
+    ++honorRequest;
+    const closing=button.getAttribute('aria-expanded')==='true';
+    for(const other of honorButtons){
+      if(other===button)continue;
+      other.setAttribute('aria-selected','false');other.setAttribute('aria-expanded','false');
+      other.tabIndex=-1;
+      if(other.id==='homeRankView'){
+        homeRankCleanup?.();homeRankCleanup=null;
+        other.setAttribute('aria-label','查看我的月度勋章');other.querySelector('[data-rank-label]').textContent='查看当月';
+        const panel=document.getElementById('homeRankContent');panel.classList.remove('member-rank-panel','member-rank-awaiting');panel.removeAttribute('data-rank-tier');
+      }
+      if(other.id==='homeMemoryView'){homeMemoryCleanup?.();homeMemoryCleanup=null;document.getElementById('homeMemoryContent').replaceChildren();}
+    }
+    honorHosts.forEach(id=>{document.getElementById(id).hidden=closing||id!==button.getAttribute('aria-controls');});
+    button.setAttribute('aria-selected',String(!closing));
+    button.tabIndex=0;
+    app.querySelector('.personal-honor-placeholder').hidden=!closing;
+  }
+  const avatarDetails=app.querySelector('.personal-avatar-settings');
+  avatarDetails.ontoggle=()=>{
+    if(avatarDetails.open&&!homeAvatarCleanup){homeAvatarCleanup=mountAvatarWardrobe(document.getElementById('homeAvatar'),{isCurrent:()=>request.isCurrent()});registerPageCleanup(homeAvatarCleanup);}
+  };
+  const attendanceButton=document.getElementById('homeAttendanceView');
+  attendanceButton.onclick=()=>{
+    selectHonor(attendanceButton);
+    const host=document.getElementById('homeAttendanceContent'),opening=attendanceButton.getAttribute('aria-expanded')!=='true';
+    attendanceButton.setAttribute('aria-expanded',String(opening));host.hidden=!opening;
+    if(opening)mountMedalCollection(host,state.me.id,{isCurrent:()=>request.isCurrent()&&!host.hidden,month:selectedMonth,compact:true});
+  };
   bindHomeMonth();
   const memoryButton=document.getElementById('homeMemoryView');
   if(memoryButton)memoryButton.onclick=()=>{
+    selectHonor(memoryButton);
     const host=document.getElementById('homeMemoryContent');
     if(memoryButton.getAttribute('aria-expanded')==='true'){
       homeMemoryCleanup?.();homeMemoryCleanup=null;host.replaceChildren();host.hidden=true;memoryButton.setAttribute('aria-expanded','false');return;
     }
     host.hidden=false;memoryButton.setAttribute('aria-expanded','true');
-    const dispose=mountMonthlyMemory(host,{me:{...state.me},month:selectedMonth,rows:d.records||[],isCurrent:()=>request.isCurrent()});
+    const dispose=mountMonthlyMemory(host,{me:{...state.me},month:selectedMonth,rows:d.records||[],compact:true,isCurrent:()=>request.isCurrent()});
     const cleanup=()=>{dispose();unregisterPageCleanup(cleanup);};homeMemoryCleanup=cleanup;registerPageCleanup(cleanup);
   };
   const rankButton=document.getElementById('homeRankView');
-  homeAvatarCleanup=mountAvatarWardrobe(document.getElementById('homeAvatar'),{isCurrent:()=>request.isCurrent()});registerPageCleanup(homeAvatarCleanup);
   if(rankButton)rankButton.onclick=async()=>{
-    const host=document.getElementById('homeRankContent'),panel=host.closest('.member-home-panel');
+    selectHonor(rankButton);
+    const rankRequest=honorRequest;
+    const host=document.getElementById('homeRankContent'),panel=host;
     if(rankButton.getAttribute('aria-expanded')==='true'){
       homeRankCleanup?.();homeRankCleanup=null;
       host.hidden=true;rankButton.setAttribute('aria-expanded','false');rankButton.setAttribute('aria-label','查看我的月度勋章');rankButton.querySelector('[data-rank-label]').textContent='看见本月荣誉';
@@ -220,17 +280,17 @@ async function renderHome(){
     rankButton.disabled=true;host.hidden=false;host.innerHTML='<p class="empty" role="status" aria-busy="true">正在查询本人的月度勋章…</p>';
     try{
       const rank=await api('/api/self-month-rank?month='+encodeURIComponent(selectedMonth));
-      if(!request.isCurrent())return;
+      if(!request.isCurrent()||rankRequest!==honorRequest)return;
       if(rank.month!==selectedMonth)throw new Error('返回的数据月份不一致，请重试。');
       const view=homeRankContent(rank,selectedMonth,d);
       panel.classList.toggle('member-rank-panel',view.ranked);panel.classList.toggle('member-rank-awaiting',view.waiting);
       if(view.ranked)panel.dataset.rankTier=rank.tier;
-      homeRankCleanup=mountHonors(host,{month:selectedMonth,rank,cardHTML:view.html,bindCeremony:bindRankCeremony,isCurrent:()=>request.isCurrent(),onMonth:async month=>{
+      homeRankCleanup=mountHonors(host,{compact:true,month:selectedMonth,rank,cardHTML:view.html,bindCeremony:bindRankCeremony,isCurrent:()=>request.isCurrent(),onMonth:async month=>{
         state.homeMonth=month;await renderHome();
         if(state.tab==='home'&&state.homeMonth===month)document.getElementById('homeRankView')?.click();
       }});registerPageCleanup(homeRankCleanup);
       rankButton.setAttribute('aria-expanded','true');rankButton.setAttribute('aria-label','收起我的月度勋章');rankButton.querySelector('[data-rank-label]').textContent='收起本月荣誉';
-    }catch(error){if(request.isCurrent())host.innerHTML=`<p class="error" role="alert">查看失败：${esc(error.message)}，可再次点击重试。</p>`;}
+    }catch(error){if(request.isCurrent()&&rankRequest===honorRequest)host.innerHTML=`<p class="error" role="alert">查看失败：${esc(error.message)}，可再次点击重试。</p>`;}
     finally{if(rankButton.isConnected)rankButton.disabled=false;}
   };
   bindImagePreviews(app);

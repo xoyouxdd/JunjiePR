@@ -4,7 +4,7 @@ import json
 from math import ceil
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, load_only
 
 from app.database.reference_data import EMPLOYEE_CIRCLES, LEGACY_CIRCLE_BY_VENUE
@@ -22,7 +22,7 @@ def issuer_ranking_payload(db: Session, user, start_value: str, end_value: str,
     subtype = db.get(RecognitionType, subtype_id) if subtype_id else None
     if subtype_id and (not subtype or not subtype.active):
         raise HTTPException(400, "请选择有效认可类型")
-    codes = GSM_CODES if category == "gsm_leader" else LEADER_CODES
+    codes = GSM_CODES | {"AM", "OM"} if category == "gsm_leader" else LEADER_CODES
     scoped_hr = user.role.code == "HR_CIRCLE"
     query = (db.query(RecognitionRecord)
              .join(Employee, Employee.id == RecognitionRecord.recognizer_employee_id)
@@ -37,8 +37,10 @@ def issuer_ranking_payload(db: Session, user, start_value: str, end_value: str,
                          RecognitionRecord.recognizer_role_code_snapshot.is_(None))))
     if attraction:
         # HR must never see records for recipients outside its authorized circle.
-        query = query.filter(RecognitionRecord.home_attraction_id == attraction.id
-                             if scoped_hr else Employee.attraction_id == attraction.id)
+        query = query.filter(RecognitionRecord.home_attraction_id == attraction.id if scoped_hr else or_(
+            Employee.attraction_id == attraction.id,
+            and_(Employee.attraction_id.is_(None), RecognitionRecord.home_attraction_id == attraction.id),
+        ))
     if subtype:
         query = query.filter(RecognitionRecord.recognition_type_id == subtype.id)
     value = employee_number(keyword).lower()
@@ -123,6 +125,8 @@ def issuer_ranking_payload(db: Session, user, start_value: str, end_value: str,
         if target_code not in allowed:
             continue
         person = employees[row.recognizer_employee_id]
+        if attraction and not scoped_hr and person.attraction_id is None and code not in {"AM", "OM"}:
+            continue
         if value and value not in person.name.lower() and value not in person.employee_no.lower():
             continue
         item = aggregates.setdefault(person.id, empty(person, code))

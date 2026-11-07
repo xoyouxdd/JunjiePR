@@ -351,15 +351,15 @@ def export_pr_rankings(
 
 
 @router.get("/statistics")
-def statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_VIEW", "DATA_EXPORT"))):
-    cache_key = (user.id, tuple(sorted(user.role_codes)), month, attraction_id, (keyword or "").strip(), (title or "").strip().upper())
+def statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_VIEW", "DATA_EXPORT")), issuer_keyword: str = "", issuer_population: str = "frontline"):
+    cache_key = (user.id, tuple(sorted(user.role_codes)), month, attraction_id, (keyword or "").strip(), (title or "").strip().upper(), issuer_keyword.strip(), issuer_population)
     with _statistics_cache_lock:
         now = monotonic()
         cached = _statistics_response_cache.get(cache_key)
         if cached and cached[0] > now:
             content = cached[1]
         else:
-            payload = statistics_payload(db, month, attraction_id, keyword, title, user)
+            payload = statistics_payload(db, month, attraction_id, keyword, title, user, issuer_keyword=issuer_keyword, issuer_population=issuer_population)
             content = json.dumps(
                 payload,
                 ensure_ascii=False,
@@ -480,8 +480,8 @@ def my_statistics_exports(
 
 
 @router.get("/statistics/export")
-def export_statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_EXPORT"))):
-    data = statistics_payload(db, month, attraction_id, keyword, title, user, include_records=True)
+def export_statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_EXPORT")), issuer_keyword: str = "", issuer_population: str = "frontline"):
+    data = statistics_payload(db, month, attraction_id, keyword, title, user, include_records=True, issuer_keyword=issuer_keyword, issuer_population=issuer_population)
     wb, attraction_label, title_label = build_statistics_workbook(
         db,
         data,
@@ -501,7 +501,7 @@ def export_statistics(month: str, attraction_id: int | None = None, keyword: str
     output = BytesIO()
     save_export_workbook(wb, output)
     output.seek(0)
-    write_audit(db, user.employee, "导出统计数据", "statistics_export", month, after={"attraction_id": attraction_id, "title": data["title"], "keyword": keyword or "", "employee_count": len(data["scores"])})
+    write_audit(db, user.employee, "导出统计数据", "statistics_export", month, after={"attraction_id": attraction_id, "title": data["title"], "keyword": keyword or "", "employee_count": len(data["scores"]), "issuer_keyword": issuer_keyword, "issuer_population": issuer_population})
     db.commit()
     ascii_filename = f"recognition_v2_{month.replace('-', '_')}_circle-{attraction_id or 'all'}_{data['title'] or 'all'}.xlsx"
     display_filename = f"认可数据_{month}_{attraction_label}_{title_label}.xlsx"
