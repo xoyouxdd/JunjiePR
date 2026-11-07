@@ -228,7 +228,7 @@ async function oldReviewRetainsQueueAndCannotRepaint() {
 
 async function oldEntryRefreshCannotClaimNewRequest() {
   const h = await harness('entries');
-  const button = {dataset: {entryWithdraw: '9'}};
+  const button = {dataset: {entryWithdraw: '9'}, hasAttribute: () => false};
   h.context.document.querySelectorAll = selector => selector === '[data-entry-withdraw]' ? [button] : [];
   let reloads = 0;
   h.context.bindEntryActions(() => { reloads++; h.context.beginViewRequest(); });
