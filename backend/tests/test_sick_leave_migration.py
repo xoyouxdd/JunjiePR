@@ -212,9 +212,10 @@ def test_index_repair_precedes_appended_employment_history_step() -> None:
     rotation_posts = ('2026-11-rotation-five-posts', 'ensure_rotation_five_posts')
     scoring_snapshots = ('2026-11-scoring-policy-snapshots', 'ensure_scoring_policy_snapshots')
     rotation_six_posts = ('2026-11-rotation-six-posts', 'ensure_rotation_six_posts')
-    assert SCHEMA_MIGRATION_STEPS[-8:] == [
+    assert SCHEMA_MIGRATION_STEPS[-9:] == [
         repair, employment, employee_type, learning_categories,
         about_system, rotation_posts, scoring_snapshots, rotation_six_posts,
+        ("2026-11-rejected-upgrade-claim-release", "ensure_rejected_upgrade_claim_release"),
     ]
     assert SCHEMA_MIGRATION_STEPS.count(repair) == 1
     assert SCHEMA_MIGRATION_STEPS.count(employment) == 1
