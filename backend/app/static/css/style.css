@@ -1657,6 +1657,37 @@ details.form-more > summary {
 @media (pointer: coarse) { .declaration-level-select { min-height: 44px; height: 44px; font-size: 16px; } }
 .declaration-material { width: auto; white-space: nowrap; }
 .declaration-mobile { display: none; }
+/* Shared association cards: presentation only; scoring stays server-owned. */
+.declaration-cards { gap: 12px; }
+.declaration-desktop.declaration-cards { display: grid; }
+.declaration-cards .declaration-record { display: grid; gap: 12px; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow-wrap: anywhere; }
+.declaration-cards .declaration-record p { margin: 0; }
+.declaration-cards .declaration-record-heading { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.declaration-card-identity,.declaration-score { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.declaration-card-identity small { color: var(--muted); }
+.declaration-score { justify-content: flex-end; font-size: 13px; }
+.declaration-score strong { font-size: 22px; font-variant-numeric: tabular-nums; color: var(--text-label); }
+.declaration-score .status-chip { white-space: normal; overflow-wrap: anywhere; }
+.declaration-record-context { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+.declaration-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.declaration-cards .declaration-classification { display: flex; gap: 12px 24px; flex-wrap: wrap; }
+.declaration-cards .declaration-upgrade-result { border-left: 3px solid var(--declaration-accent); }
+.declaration-links { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--text-secondary); font-size: 12px; }
+.declaration-link-row { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; }
+.declaration-related-link { border: 0; padding: 4px 0; background: transparent; color: var(--primary); text-decoration: underline; text-underline-offset: 3px; border-radius: 0; font: inherit; }
+.declaration-relation-view { padding: 14px; margin-bottom: 14px; border: 1px solid var(--primary); border-radius: 12px; background: var(--surface-soft); }
+.declaration-relation-view[hidden] { display: none; }
+.declaration-relation-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.declaration-relation-heading h3 { margin: 0; font-size: 15px; }
+.declaration-void-note { color: var(--danger-text); font-size: 12px; }
+@media (max-width:760px) {
+  .declaration-desktop.declaration-cards { display: none; }
+  .declaration-cards .declaration-record { padding: 12px; }
+  .declaration-score { justify-content: flex-start; }
+  .declaration-level-toggle strong { white-space: normal; text-align: right; }
+  .declaration-relation-view { padding: 8px; }
+}
+@media (pointer:coarse) { .declaration-related-link { min-height: 44px; } }
 /* good/bad describe the business direction, not the arrow: more deductions is bad. */
 .trend-delta { font-size: 12px; font-weight: 700; }
 .trend-delta.good { color: var(--ok); }
@@ -2545,6 +2576,11 @@ body.rotation-personal-only .rt-line{margin-top:12px;}
 .declaration-statistics-page .declaration-filter input,
 .declaration-statistics-page .declaration-filter select { min-height: 42px; }
 .declaration-statistics-page .declaration-search { grid-column: span 2; }
+.declaration-search { display: grid; gap: 6px; min-width: 0; position: relative; align-content: start; }
+.declaration-search-control { position: relative; min-width: 0; }
+.declaration-search-control > input { width: 100%; }
+.declaration-search .employee-search-results { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 15; }
+.declaration-search .employee-search-results[hidden] { display: none; }
 .declaration-statistics-page .statistics-actions { grid-column: auto; display: flex; gap: 8px; align-self: end; }
 .declaration-statistics-page .statistics-actions button { flex: 1; min-width: 0; padding-inline: 10px; white-space: nowrap; }
 .declaration-statistics-page .declaration-kpis { grid-template-columns: repeat(6,minmax(0,1fr)); gap: 12px; margin: 20px 0 12px; }
@@ -2640,4 +2676,27 @@ body.rotation-personal-only .rt-line{margin-top:12px;}
   .declaration-statistics-page .declaration-operations { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
   .declaration-statistics-page .declaration-material-actions .declaration-material,
   .declaration-statistics-page .declaration-status-action { min-height: 44px; display: inline-flex; align-items: center; }
+}
+
+/* Keep the association-card layout above the older table/mobile overrides. */
+.declaration-statistics-page .declaration-record-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.declaration-statistics-page .declaration-record > .declaration-score { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 16px 28px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); align-items: start; }
+.declaration-statistics-page .declaration-score .declaration-score-status { display: block; font-size: 17px; color: var(--text-strong); }
+.declaration-statistics-page .declaration-score .declaration-score-reason { margin-top: 6px; color: var(--text-secondary); line-height: 1.7; font-size: 13px; }
+.declaration-statistics-page .declaration-score-values { display: grid; gap: 5px; text-align: right; font-size: 12px; color: var(--muted); }
+.declaration-statistics-page .declaration-performance-score { color: var(--text-strong); }
+.declaration-statistics-page .declaration-score-summary { min-width: 0; }
+.declaration-statistics-page .declaration-cards .declaration-classification { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 24px; }
+.declaration-statistics-page .declaration-cards .declaration-workflow { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.declaration-statistics-page .declaration-record-heading > .declaration-card-identity,
+.declaration-statistics-page .declaration-record-heading > .declaration-score { display: flex; flex-wrap: wrap; gap: 8px; }
+.declaration-statistics-page .declaration-score strong { font-size: 22px; }
+.declaration-statistics-page .declaration-card-bottom > * { min-width: 0; }
+.declaration-statistics-page .declaration-record-heading > * { min-width: 0; }
+.declaration-statistics-page .declaration-links .field-hint { margin: 0; }
+@media(max-width:760px) {
+  .declaration-statistics-page .declaration-record > .declaration-score { grid-template-columns: minmax(0,1fr); gap: 12px; padding: 12px; }
+  .declaration-statistics-page .declaration-score-values { text-align: left; border-top: 1px solid var(--line); padding-top: 10px; }
+  .declaration-statistics-page .declaration-card-bottom { display: grid; }
+  .declaration-statistics-page .declaration-record-heading { flex-direction: column; }
 }

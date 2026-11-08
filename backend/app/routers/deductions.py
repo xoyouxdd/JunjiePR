@@ -1,6 +1,7 @@
 """Deduction entry, upgrade and target endpoints."""
 from __future__ import annotations
 from app.services import scoring_policies as scoring_config
+from app.services.upgrade_recovery import reviewer_available, can_recover, can_recover_legacy
 
 import json
 import secrets
@@ -19,7 +20,6 @@ from app.routers._shared import (
     add_calendar_months,
     DEDUCTION_LEVEL_ORDER,
     MATERIAL_COLLABORATOR_CODES,
-    NEXT_DEDUCTION_LEVEL,
     REPEAT_CONTROLLED_DEDUCTION_CODES,
     UPGRADE_REVIEWER_CODES,
     client_ip,
@@ -109,7 +109,9 @@ def attendance_repeat_context(db: Session, employee_id: int, deduction_type: Ded
             DeductionRecord.employee_id == employee_id,
             DeductionType.code.in_(scoring_config.repeat_codes(db, deduction_type, occurred_on)),
             DeductionRecord.status == "active",
-            or_(DeductionRecord.upgrade_role.is_(None), DeductionRecord.upgrade_role.notin_({"source_first", "source_second"})),
+            DeductionRecord.deduction_level_id.in_(db.query(DeductionLevel.id).filter(DeductionLevel.code == "STATEMENT")),
+            DeductionRecord.upgrade_role.is_(None), DeductionRecord.upgrade_request_id.is_(None),
+            or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"),
             DeductionRecord.legacy_upgrade_excluded.is_(False),
             DeductionRecord.occurred_on >= window_start,
             DeductionRecord.occurred_on <= window_end,
@@ -126,9 +128,7 @@ def attendance_repeat_context(db: Session, employee_id: int, deduction_type: Ded
             "window_end": window_end,
             "previous_records": [],
         }
-    highest = max(rows, key=lambda row: DEDUCTION_LEVEL_ORDER.get(db.get(DeductionLevel, row.deduction_level_id).code, 0))
-    highest_level = db.get(DeductionLevel, highest.deduction_level_id)
-    minimum_code = NEXT_DEDUCTION_LEVEL.get(highest_level.code, "MEMO")
+    minimum_code = "MEMO"
     minimum_level = db.query(DeductionLevel).filter(DeductionLevel.code == minimum_code, DeductionLevel.active.is_(True)).one()
     direct_only = direct_only_deduction_user(user)
     history = [
@@ -143,8 +143,7 @@ def attendance_repeat_context(db: Session, employee_id: int, deduction_type: Ded
     ]
     category_name = "违规病假" if deduction_type.code == "SICK_LEAVE_VIOLATION" else "考勤"
     message = (
-        f"此员工在3个月内已有同类{category_name}登记，本次需要升级为备忘录或警告，"
-        + ("TA主管/主管不能继续登记，请由GSM登记。" if direct_only else f"本次最低处分等级为{minimum_level.name}，请确认历史记录后继续登记。")
+        f"此员工在3个月内已有未用于升级的同类{category_name}声明，请将两张声明提交升级工单，由经理确认实际开具的备忘录或一级警告。"
     )
     return {
         "has_repeat": True,
@@ -185,6 +184,13 @@ def deduction_upgrade_payload(db: Session, row: DeductionUpgradeRequest, *, incl
         "transfers": [{"from_name": item.from_reviewer_name, "to_name": item.to_reviewer_name, "reason": item.reason, "created_at": item.created_at.strftime("%Y-%m-%d %H:%M:%S")} for item in transfer_rows],
     }
     if include_details:
+        try:
+            minimum = scoring_config.validate_statement_upgrade_pair(db, second, row.first_deduction_id) if second and row.status in {"pending","awaiting_material"} else None
+            payload["minimum_level_id"] = minimum.id if minimum else None
+            payload["minimum_level_name"] = minimum.name if minimum else ""
+        except HTTPException as exc:
+            payload["minimum_level_error"] = str(exc.detail)
+        payload["reviewer_available"] = reviewer_available(db, row.reviewer_id)
         payload["first_record"] = deduction_payload(first) if first else None
         payload["second_record"] = deduction_payload(second) if second else None
     return payload
@@ -294,11 +300,11 @@ async def create_deduction(
         raise_pending_material_conflict(existing_pending_material)
     photo_mode = bool([item for item in (document_images or []) if item and item.filename])
     pdf_mode = bool(document and document.filename)
-    if direct_only_deduction_user(user) and level.code == "STATEMENT" and scoring_config.repeats(db, deduction_type, occurred_on) and (photo_mode or pdf_mode):
+    if level.code == "STATEMENT" and scoring_config.repeats(db, deduction_type, occurred_on) and (photo_mode or pdf_mode):
         if statement_upgrade_candidate(db, employee_id, deduction_type.id, occurred_on):
             raise HTTPException(409, "三个月内已有可升级同类声明，请通过声明升级工单提交")
         repeat_context = {"has_repeat": False, "blocked": False, "requires_confirmation": False}
-    elif photo_mode or pdf_mode:
+    elif level.code == "STATEMENT" and (photo_mode or pdf_mode):
         repeat_context = attendance_repeat_context(db, employee_id, deduction_type, occurred_on, user)
     else:
         repeat_context = {"has_repeat": False, "blocked": False, "requires_confirmation": False, "previous_records": []}
@@ -441,7 +447,13 @@ def deduction_upgrade_preview(employee_id: int, deduction_type_id: int, occurred
     first = statement_upgrade_candidate(db, target.id, deduction_type.id, occurred_on)
     if not first:
         return {"eligible": False}
-    return {"eligible": True, "first_record": deduction_payload(first), "reviewers": statement_upgrade_reviewer_options(db)}
+    probe = DeductionRecord(employee_id=target.id, deduction_type_id=deduction_type.id, occurred_on=occurred_on,
+        scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)))
+    minimum = scoring_config.validate_statement_upgrade_pair(db, probe, first.id)
+    reviewers = statement_upgrade_reviewer_options(db)
+    return {"eligible": True, "first_record": deduction_payload(first), "reviewers": reviewers,
+            "minimum_level_id": minimum.id, "minimum_level_name": minimum.name,
+            "default_reviewer_id": user.id if any(r["id"] == user.id for r in reviewers) else None}
 
 
 @router.post("/deduction-upgrades")
@@ -455,8 +467,10 @@ async def create_deduction_upgrade(
     document: UploadFile | None = File(None),
     document_images: list[UploadFile] | None = File(None),
     db: Session = Depends(get_db),
-    user: V2User = Depends(require_permissions("DEDUCTION_DIRECT")),
+    user: V2User = Depends(current_user),
 ):
+    if not ({"DEDUCTION_DIRECT", "DEDUCTION_ALL"} & user.permissions):
+        raise HTTPException(403, "没有声明升级登记权限")
     parse_iso_date(occurred_on, "事件日期")
     description = description.strip()
     if not description:
@@ -506,6 +520,13 @@ async def create_deduction_upgrade(
     if claimed.rowcount != 1:
         db.rollback()
         raise HTTPException(409, "该历史声明已被其他工单使用，请刷新后重试")
+    try:
+        probe = DeductionRecord(employee_id=target.id, deduction_type_id=deduction_type.id, occurred_on=occurred_on,
+            scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)))
+        scoring_config.validate_statement_upgrade_pair(db, probe, first.id)
+    except Exception:
+        db.rollback()
+        raise
     file_row = None
     source_rows: list[StoredFile] = []
     needs_pdf_processing = False
@@ -538,6 +559,12 @@ async def create_deduction_upgrade(
         db.add(second)
         db.flush()
         if photo_mode or needs_pdf_processing:
+            work = DeductionUpgradeRequest(employee_id=target.id, deduction_type_id=deduction_type.id,
+                first_deduction_id=first.id, second_deduction_id=second.id,
+                reviewer_id=reviewer.id, reviewer_name=reviewer.name,
+                submitted_by=user.id, submitted_by_name=user.name, status="awaiting_material")
+            db.add(work); db.flush()
+            first.upgrade_request_id = second.upgrade_request_id = work.id
             queue_photo_material_job(db, second, file_row, source_rows, mode="upgrade_pdf_compress" if needs_pdf_processing else "upgrade", reviewer_id=reviewer.id, first_deduction_id=first.id)
             write_audit(db, user.employee, "提交声明升级材料", "deduction", second.id, after={"first_deduction_id": first.id, "reviewer": reviewer.name, "material_status": "processing"}, ip_address=client_ip(request))
             db.commit()
@@ -609,6 +636,64 @@ def transfer_deduction_upgrade(request_id: int, payload: dict, request: Request,
     return {"ok": True}
 
 
+@router.get("/deduction-upgrades/recovery")
+def upgrade_recovery_tasks(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    items = []
+    if not ({"DEDUCTION_DIRECT","DEDUCTION_ALL","SYSTEM_ADMIN"} & user.permissions):
+        return {"items": [], "reviewers": []}
+    query = db.query(DeductionUpgradeRequest).join(DeductionRecord, DeductionRecord.id == DeductionUpgradeRequest.second_deduction_id).filter(
+        DeductionUpgradeRequest.status.in_({"pending","awaiting_material"}))
+    if "SYSTEM_ADMIN" not in user.permissions:
+        query = query.filter(or_(DeductionUpgradeRequest.submitted_by == user.id, DeductionRecord.submitter_id == user.id))
+    for work in query.all():
+        if not reviewer_available(db, work.reviewer_id):
+            second = db.get(DeductionRecord, work.second_deduction_id)
+            if can_recover(db, user, work, second):
+                items.append(deduction_upgrade_payload(db, work))
+    return {"items": items, "reviewers": statement_upgrade_reviewer_options(db) if items else []}
+
+
+@router.post("/deduction-upgrades/{request_id}/recover")
+def recover_upgrade_reviewer(request_id: int, payload: dict, request: Request,
+                             db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    try:
+        db.rollback(); db.execute(text("BEGIN IMMEDIATE"))
+        work = db.get(DeductionUpgradeRequest, request_id, populate_existing=True)
+        second = db.get(DeductionRecord, work.second_deduction_id) if work else None
+        if not work or not can_recover(db, user, work, second):
+            raise HTTPException(403, "仅原发起人、原声明登记人或系统管理员可以恢复此工单")
+        if work.status not in {"pending","awaiting_material"} or reviewer_available(db, work.reviewer_id):
+            raise HTTPException(409, "工单已处理或原审核经理仍有效，请刷新后使用原转交流程")
+        if payload.get("expected_reviewer_id") != work.reviewer_id or payload.get("expected_status") != work.status:
+            raise HTTPException(409, "工单状态或审核经理已变化，请刷新后重试")
+        ensure_month_open(db, second.deduction_month, second.attraction_id_snapshot, "重新指派升级审核经理")
+        reason = str(payload.get("reason") or "").strip()
+        if not reason:
+            raise HTTPException(400, "重新指派原因必填")
+        try:
+            target_id = int(payload.get("reviewer_id") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "请选择有效审核经理")
+        target = checked_upgrade_reviewer(db, target_id)
+        old_id, old_name = work.reviewer_id, work.reviewer_name
+        work.reviewer_id, work.reviewer_name = target.id, target.name
+        # Keep the queued/failed conversion on the same declaration and work order.
+        if second.material_job_id:
+            job = db.get(DeductionMaterialJob, second.material_job_id)
+            if job and job.mode in {"upgrade","upgrade_pdf_compress"}:
+                job.reviewer_id = target.id
+        db.add(DeductionUpgradeTransfer(request_id=work.id, from_reviewer_id=old_id, from_reviewer_name=old_name,
+            to_reviewer_id=target.id, to_reviewer_name=target.name, reason="审核经理失效后重新指派："+reason))
+        write_audit(db, user.employee, "重新指派失效升级审核经理", "deduction_upgrade", work.id,
+            before={"reviewer_id":old_id,"reviewer_name":old_name},
+            after={"reviewer_id":target.id,"reviewer_name":target.name,"reason":reason}, ip_address=client_ip(request))
+        db.commit()
+    except Exception:
+        db.rollback(); raise
+    invalidate_data_caches()
+    return {"ok": True}
+
+
 def pending_upgrade_for_update(db: Session, request_id: int, user: V2User, unavailable_message: str) -> DeductionUpgradeRequest:
     # Authentication can leave a read transaction (and cached pending rows).
     # Acquire SQLite's writer lock before checking the current status/assignee,
@@ -644,6 +729,9 @@ def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, 
                 raise HTTPException(400, "请先确认已完成真实备忘录或一级警告开具")
             if not level or level.code not in {"MEMO", "WARNING_1"}:
                 raise HTTPException(400, "升级结果仅可选择备忘录或一级警告")
+            scoring_config.validate_statement_upgrade_pair(db, second, first.id)
+            if not level.active:
+                raise HTTPException(409, "所选处分等级已停用，请刷新后重选")
         claimed = db.execute(
             update(DeductionUpgradeRequest)
             .where(DeductionUpgradeRequest.id == row.id, DeductionUpgradeRequest.status == "pending", DeductionUpgradeRequest.reviewer_id == user.id)
@@ -738,16 +826,73 @@ def deduction_material_status(record_id: int, db: Session = Depends(get_db), use
     return {"ok": True, "record": deduction_payload(row)}
 
 
+def material_retry_record(db, record_id, user):
+    row = db.get(DeductionRecord, record_id)
+    if not row:
+        raise HTTPException(404, "扣分记录不存在")
+    if row.submitter_id != user.id and "SYSTEM_ADMIN" not in user.permissions and user.role.code not in MATERIAL_COLLABORATOR_CODES:
+        raise HTTPException(403, "仅原登记人、主管或管理员可以补充材料")
+    if row.status not in {"pending_material", "material_failed"}:
+        raise HTTPException(409, "该声明已被处理，请刷新待办")
+    ensure_month_open(db, row.deduction_month, row.attraction_id_snapshot, "重新提交扣分材料")
+    return row
+
+
+def checked_upgrade_reviewer(db, reviewer_id):
+    reviewer = db.get(Employee, reviewer_id) if reviewer_id else None
+    role = role_at(db, reviewer.id) if reviewer else None
+    if not reviewer or not reviewer.is_active or not role or role.code not in UPGRADE_REVIEWER_CODES:
+        raise HTTPException(400, "请选择在职的GSM或TA GSM审核")
+    if not db.query(UserAccount).filter_by(employee_id=reviewer.id, enabled=True).first():
+        raise HTTPException(400, "所选审核人账号未启用")
+    return reviewer
+
+
+@router.get("/deductions/{record_id}/material-upgrade-preview")
+def material_upgrade_preview(record_id: int, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    row = material_retry_record(db, record_id, user)
+    work = db.get(DeductionUpgradeRequest, row.upgrade_request_id) if row.upgrade_request_id else None
+    job = db.get(DeductionMaterialJob, row.material_job_id) if row.material_job_id else None
+    if not work and job and job.mode in {"upgrade","upgrade_pdf_compress"} and not reviewer_available(db, job.reviewer_id):
+        if not can_recover_legacy(user, row):
+            raise HTTPException(403, "请由原登记人、原补材料发起人或系统管理员重新指派审核经理")
+        first = db.get(DeductionRecord, job.first_deduction_id)
+        if not first or first.status != "active" or first.upgrade_request_id:
+            raise HTTPException(409, "历史来源状态已变化，请联系管理员核对")
+        minimum = scoring_config.validate_statement_upgrade_pair(db, row, first.id)
+        reviewers = statement_upgrade_reviewer_options(db)
+        return {"eligible": True, "recover_legacy": True, "first_record": deduction_payload(first), "reviewers": reviewers,
+                "minimum_level_id": minimum.id, "minimum_level_name": minimum.name,
+                "default_reviewer_id": user.id if any(r["id"] == user.id for r in reviewers) else None}
+    if work or (job and job.mode in {"upgrade", "upgrade_pdf_compress"}):
+        return {"eligible": False, "existing_upgrade": True,
+                "needs_recovery": not reviewer_available(db, work.reviewer_id if work else job.reviewer_id)}
+    first = scoring_config.validate_material_repeat(db, row, allow_statement_upgrade=True)
+    if not isinstance(first, DeductionRecord):
+        return {"eligible": False}
+    reviewers = statement_upgrade_reviewer_options(db)
+    minimum = scoring_config.validate_statement_upgrade_pair(db, row, first.id)
+    return {"eligible": True, "first_record": deduction_payload(first), "reviewers": reviewers,
+            "minimum_level_id": minimum.id, "minimum_level_name": minimum.name,
+            "default_reviewer_id": user.id if any(r["id"] == user.id for r in reviewers) else None}
+
+
 @router.post("/deductions/{record_id}/material")
 async def retry_deduction_material(
     record_id: int,
     request: Request,
     document: UploadFile | None = File(None),
     document_images: list[UploadFile] | None = File(None),
+    reviewer_id: int | None = Form(None),
+    expected_first_id: int | None = Form(None),
+    recovery_reason: str = Form(""),
+    expected_operator_id: int | None = Form(None),
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
     """Claim and supplement an existing declaration without creating another deduction."""
+    if expected_operator_id is not None and expected_operator_id != user.id:
+        raise HTTPException(409, {"code": "MATERIAL_OPERATOR_CHANGED", "message": "当前登录账号已变化，请重新登录原账号后再提交材料"})
     row = db.get(DeductionRecord, record_id)
     if not row:
         raise HTTPException(404, "扣分记录不存在")
@@ -799,6 +944,16 @@ async def retry_deduction_material(
         elif old_job and old_job.mode in {"upgrade", "upgrade_pdf_compress"}:
             first = db.get(DeductionRecord, old_job.first_deduction_id) if old_job.first_deduction_id else None
             reviewer = db.get(Employee, old_job.reviewer_id) if old_job.reviewer_id else None
+            recovered_legacy = False
+            if not reviewer_available(db, old_job.reviewer_id):
+                if not can_recover_legacy(user, row):
+                    raise HTTPException(403, "没有重新指派原审核经理的权限")
+                if not first or expected_first_id != first.id:
+                    raise HTTPException(409, "原审核经理失效，请刷新补材料入口重新选择经理")
+                if not recovery_reason.strip():
+                    raise HTTPException(400, "重新指派原因必填")
+                reviewer = checked_upgrade_reviewer(db, reviewer_id)
+                recovered_legacy = True
             if not first or not reviewer or first.upgrade_request_id or first.status != "active":
                 raise HTTPException(409, "关联升级声明状态已变化，无法重新提交材料")
             claimed = db.execute(
@@ -810,9 +965,45 @@ async def retry_deduction_material(
             if claimed.rowcount != 1:
                 db.rollback()
                 raise HTTPException(409, "关联历史声明正在被其他工单使用，请刷新后重试")
+            work = DeductionUpgradeRequest(employee_id=row.employee_id, deduction_type_id=row.deduction_type_id,
+                first_deduction_id=first.id, second_deduction_id=row.id, reviewer_id=reviewer.id,
+                reviewer_name=reviewer.name, submitted_by=user.id, submitted_by_name=user.name, status="awaiting_material")
+            db.add(work); db.flush()
+            first.upgrade_request_id = row.upgrade_request_id = work.id
+            if recovered_legacy:
+                db.add(DeductionUpgradeTransfer(request_id=work.id, from_reviewer_id=old_job.reviewer_id,
+                    from_reviewer_name=db.get(Employee, old_job.reviewer_id).name if db.get(Employee,old_job.reviewer_id) else "原审核经理",
+                    to_reviewer_id=reviewer.id, to_reviewer_name=reviewer.name, reason="旧版任务重新指派："+recovery_reason.strip()))
+                write_audit(db, user.employee, "重新指派失效升级审核经理", "deduction_upgrade", work.id,
+                    after={"reviewer_id":reviewer.id,"previous_reviewer_id":old_job.reviewer_id,"legacy_job_id":old_job.id,"reason":recovery_reason.strip()}, ip_address=client_ip(request))
             upgrade_material = True
         if not upgrade_material:
-            scoring_config.validate_material_repeat(db, row)
+            candidate = scoring_config.validate_material_repeat(db, row, allow_statement_upgrade=True)
+            if isinstance(candidate, DeductionRecord):
+                if expected_first_id != candidate.id:
+                    raise HTTPException(409, "此声明需要升级或历史来源已变化，请刷新升级入口并选择审核经理")
+                reviewer = checked_upgrade_reviewer(db, reviewer_id)
+                first = candidate
+                claimed = db.execute(update(DeductionRecord).where(
+                    DeductionRecord.id == first.id, DeductionRecord.status == "active",
+                    DeductionRecord.upgrade_request_id.is_(None),
+                    or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"),
+                ).values(upgrade_state="material_processing", upgrade_role="source_first").execution_options(synchronize_session=False))
+                if claimed.rowcount != 1:
+                    raise HTTPException(409, "关联历史声明正在被其他工单使用，请刷新后重试")
+                # Reserve both records in the same transaction. Keeping an
+                # awaiting-material work order makes failed conversion retries
+                # retain the selected manager and the original declaration.
+                work = DeductionUpgradeRequest(employee_id=row.employee_id, deduction_type_id=row.deduction_type_id,
+                    first_deduction_id=first.id, second_deduction_id=row.id, reviewer_id=reviewer.id,
+                    reviewer_name=reviewer.name, submitted_by=user.id, submitted_by_name=user.name,
+                    status="awaiting_material")
+                db.add(work); db.flush()
+                first.upgrade_request_id = row.upgrade_request_id = work.id
+                row.upgrade_role = "source_second"
+                upgrade_material = True
+            elif reviewer_id or expected_first_id:
+                raise HTTPException(409, "升级条件已变化，请刷新后按当前业务状态提交")
         output = create_pdf_placeholder(db, user.id)
         old_output = db.get(StoredFile, row.document_file_id)
         if old_output and old_output.status == "pending_conversion":

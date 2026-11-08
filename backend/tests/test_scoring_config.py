@@ -344,13 +344,13 @@ def test_monthly_count_and_cap_work_together(client):
     assert credit(recognize(client,employee))==(3,0)
 
 
-def test_configured_deduction_repeat_upgrade_requires_confirmation_and_minimum_level(client):
+def test_configured_repeat_pairs_statements_without_recursive_result_levels(client):
     value=policy(client,'SAFETY','deduction','all');value['repeat']='upgrade'
     assert save(client,value,'SAFETY','deduction','all').status_code==200
     employee=target();login(client,'GSMTEST01')
     first=deduct(client,employee);assert first.status_code==200,first.text
     assert deduct(client,employee).status_code==409
-    assert deduct(client,employee,repeat=True).status_code==400
+    assert deduct(client,employee,repeat=True).status_code==409
     second=deduct(client,employee,level='MEMO',repeat=True);assert second.status_code==200,second.text
     with SessionLocal() as db:
         assert [float(row.points) for row in db.query(DeductionRecord).filter_by(employee_id=employee).order_by(DeductionRecord.id)]==[1,3]

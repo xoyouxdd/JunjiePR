@@ -2,6 +2,10 @@
 import { getViewSignal } from './context.js';
 import { portalPath } from './format.js';
 
+let unauthorizedRedirectHolds=0;
+// Protect an open file draft from unrelated background reads expiring its login.
+function holdUnauthorizedRedirect(){unauthorizedRedirectHolds++;let released=false;return ()=>{if(!released){released=true;unauthorizedRedirectHolds--;}};}
+
 function validationErrorMessage(detail){if(!detail||typeof detail!=='object')return '';if(detail.code==='SICK_LEAVE_VALIDATION_ERROR'&&Array.isArray(detail.fields)){return detail.fields.map(item=>item?.message).filter(Boolean).join(' ');}if(Array.isArray(detail)){const names={employee_id:'缺勤员工',leave_start_date:'开始日期',leave_end_date:'结束日期',leave_days:'缺勤天数',proof:'缺勤证明'};const fields=[...new Set(detail.map(item=>item?.loc?.[item.loc.length-1]).filter(Boolean))];return fields.length?`${fields.map(field=>`${names[field]||field}未成功提交`).join('、')}，请检查后重试。`:'';}return ''}
 
 function apiFallbackMessage(status){const messages={400:'提交内容不符合要求，请检查页面提示后重试。',403:'当前账号没有执行此操作的权限，请确认操作范围或联系管理员。',404:'所需记录不存在，或已被其他人处理，请刷新页面后重试。',409:'数据刚刚被其他操作更新，请刷新页面确认最新状态后再试。',413:'上传文件过大，请选择不超过100MB的业务材料后重试。',422:'提交内容不完整，请确认已选择员工、日期和必填材料后重试。',429:'操作过于频繁，请稍候再试。',500:'系统暂时无法处理本次操作，请稍后重试；若持续发生请记录操作时间并联系管理员。',502:'服务正在恢复，请稍后重试。',503:'服务暂不可用，请稍后重试。'};return messages[status]||`请求失败（${status}），请稍后重试。`;}
@@ -16,7 +20,7 @@ async function readApiBody(res){
 }
 
 async function api(url, options={}) {
-  const requestOptions={...options};
+  const {redirectOnUnauthorized=true,...requestOptions}=options;
   const reading=!requestOptions.method||requestOptions.method.toUpperCase()==='GET';
   const parentSignal=requestOptions.signal||(reading?getViewSignal():null);
   const controller=reading?new AbortController():null;let timedOut=false;
@@ -28,14 +32,14 @@ async function api(url, options={}) {
   let res;
   try { res = await fetch(portalPath(url), requestOptions); }
   catch(error) { if(error?.name==='AbortError'&&!timedOut)throw error;throw new Error(timedOut?'连接等待超时，请检查网络后重试。':reading?'网络连接失败，请检查网络后重试；若持续发生请记录操作时间并联系管理员。':'连接中断，提交结果暂未确认。请先查看相关记录，确认未成功后再重试。'); }
-  if (res.status === 401) { location.href=portalPath('/login'); const error=new Error('登录已失效');error.status=401;throw error; }
+  if (res.status === 401) { if(redirectOnUnauthorized&&!unauthorizedRedirectHolds)location.href=portalPath('/login'); const error=new Error('登录已失效');error.status=401;throw error; }
   const body = await readApiBody(res);
   if (!res.ok) { const detail=body.detail; const fallback=apiFallbackMessage(res.status); const error=new Error(typeof detail==='object'?(detail.message||validationErrorMessage(detail)||fallback):(detail||fallback)); error.detail=detail; error.status=res.status; throw error; }
   return body;
-  }catch(error){if(timedOut)throw new Error('连接等待超时，请检查网络后重试。');if(!reading&&!error.status)throw new Error('提交结果暂未确认，请先查看相关记录，确认未成功后再重试。');throw error;}
+  }catch(error){if(timedOut)throw new Error('连接等待超时，请检查网络后重试。');if(!reading&&!error.status){const uncertain=new Error('提交结果暂未确认，请先查看相关记录，确认未成功后再重试。');uncertain.cause=error;throw uncertain;}throw error;}
   finally{if(timer!==null)clearTimeout(timer);if(reading)parentSignal?.removeEventListener('abort',abort);}
 }
 
 const json = (method, body) => ({method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 
-export { api, apiFallbackMessage, json, readApiBody };
+export { api, apiFallbackMessage, holdUnauthorizedRedirect, json, readApiBody };

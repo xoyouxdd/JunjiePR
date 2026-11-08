@@ -74,37 +74,74 @@ def stored_deduction_points(db, row, level):
                             row.occurred_on, json.loads(row.scoring_policy_json))
 
 
-def validate_material_repeat(db, row) -> bool:
-    """Recheck the frozen rule before activation; callers serialize final writes."""
+def validate_statement_upgrade_pair(db, row, first_id=None):
+    """Validate a pair of statements; memo/warning history never raises its level.
+
+    The retained minimum fields describe the allowed result range (memo or
+    first warning), not a recursive progression through disciplinary history.
+    """
     from app.date_utils import add_calendar_months, subtract_calendar_months
-    from app.deduction_policy import DEDUCTION_LEVEL_ORDER, NEXT_DEDUCTION_LEVEL
+    from app.deduction_policy import upgrade_type_codes
+    from app.v2_models import DeductionRecord, DeductionUpgradeRequest
+    first = db.get(DeductionRecord, first_id) if first_id else None
+    first_level = db.get(DeductionLevel, first.deduction_level_id) if first else None
+    own_level = db.get(DeductionLevel, row.deduction_level_id) if row.deduction_level_id else None
+    policy = json.loads(row.scoring_policy_json) if row.scoring_policy_json else None
+    code = db.get(DeductionType, row.deduction_type_id).code
+    group = policy['group'] if policy else sorted(upgrade_type_codes(code))
+    day = date.fromisoformat(row.occurred_on)
+    if (not first or first.id == row.id or first.employee_id != row.employee_id
+            or first.status != 'active' or first.legacy_upgrade_excluded
+            or not first_level or first_level.code != 'STATEMENT'
+            or (own_level and own_level.code != 'STATEMENT')
+            or db.get(DeductionType, first.deduction_type_id).code not in group
+            or not subtract_calendar_months(day,3).isoformat() <= first.occurred_on <= add_calendar_months(day,3).isoformat()):
+        raise HTTPException(409, '关联声明条件已变化，请刷新后核对两张原声明')
+    if first.upgrade_request_id:
+        work = db.get(DeductionUpgradeRequest, first.upgrade_request_id)
+        if not work or work.first_deduction_id != first.id or work.second_deduction_id != row.id or work.status not in {'pending','awaiting_material'}:
+            raise HTTPException(409, '历史声明已用于其他升级工单，请刷新后重试')
+    elif first.upgrade_role not in (None,'source_first') or first.upgrade_state not in (None,'eligible','pending','material_processing','awaiting_material'):
+        raise HTTPException(409, '历史声明已用于升级，请刷新后重试')
+    available = {item.code:item for item in db.query(DeductionLevel).filter(DeductionLevel.code.in_(['MEMO','WARNING_1']),DeductionLevel.active.is_(True))}
+    level = available.get('MEMO') or available.get('WARNING_1')
+    if not level:
+        raise HTTPException(409, '升级结果等级当前不可用，请联系管理员')
+    return level
+
+
+def validate_material_repeat(db, row, *, allow_statement_upgrade=False):
+    """Only an unused statement can pair with another unused statement."""
+    from app.date_utils import add_calendar_months, subtract_calendar_months
     from app.v2_models import DeductionRecord
+    level = db.get(DeductionLevel, row.deduction_level_id)
+    if not level or level.code != 'STATEMENT':
+        return False
     if row.scoring_policy_json:
         policy = json.loads(row.scoring_policy_json)
     else:
         from app.deduction_policy import REPEAT_CONTROLLED_DEDUCTION_CODES, upgrade_type_codes
         code = db.get(DeductionType, row.deduction_type_id).code
-        policy = dict(repeat='upgrade' if code in REPEAT_CONTROLLED_DEDUCTION_CODES else 'sum',
-                      group=sorted(upgrade_type_codes(code)))
+        policy = dict(repeat='upgrade' if code in REPEAT_CONTROLLED_DEDUCTION_CODES else 'sum', group=sorted(upgrade_type_codes(code)))
     if policy['repeat'] != 'upgrade':
         return False
     day = date.fromisoformat(row.occurred_on)
-    rows = db.query(DeductionRecord).join(DeductionType).filter(
+    first = db.query(DeductionRecord).join(DeductionType).filter(
         DeductionRecord.employee_id == row.employee_id, DeductionRecord.id != row.id,
         DeductionType.code.in_(policy['group']), DeductionRecord.status == 'active',
-        (DeductionRecord.upgrade_role.is_(None) | DeductionRecord.upgrade_role.notin_(['source_first','source_second'])),
+        DeductionRecord.deduction_level_id == level.id, DeductionRecord.upgrade_role.is_(None),
+        DeductionRecord.upgrade_request_id.is_(None),
+        DeductionRecord.upgrade_state.in_(['eligible']) | DeductionRecord.upgrade_state.is_(None),
         DeductionRecord.legacy_upgrade_excluded.is_(False),
-        DeductionRecord.occurred_on >= subtract_calendar_months(day, 3).isoformat(),
-        DeductionRecord.occurred_on <= add_calendar_months(day, 3).isoformat()).all()
-    if not rows:
+        DeductionRecord.occurred_on >= subtract_calendar_months(day,3).isoformat(),
+        DeductionRecord.occurred_on <= add_calendar_months(day,3).isoformat(),
+    ).order_by(DeductionRecord.occurred_on, DeductionRecord.id).first()
+    if not first:
         return False
-    highest = max((db.get(DeductionLevel, r.deduction_level_id) for r in rows),
-                  key=lambda level: DEDUCTION_LEVEL_ORDER.get(level.code, 0))
-    level = db.get(DeductionLevel, row.deduction_level_id)
-    minimum = NEXT_DEDUCTION_LEVEL.get(highest.code, 'MEMO')
-    if DEDUCTION_LEVEL_ORDER.get(level.code, 0) < DEDUCTION_LEVEL_ORDER[minimum]:
-        raise HTTPException(409, '材料生效时检测到同类处分，须按原流程升级，当前记录暂不计分')
-    return True
+    if allow_statement_upgrade:
+        validate_statement_upgrade_pair(db,row,first.id)
+        return first
+    raise HTTPException(409, '材料生效时检测到可配对的同类声明，请通过声明升级入口提交，当前记录暂不计分')
 
 
 def deduction_allowed(db, user, deduction_type, on_date):

@@ -1162,12 +1162,16 @@ class DeductionMaterialJob(Base):
 
 class DeductionUpgradeRequest(Base):
     __tablename__ = "deduction_upgrade_requests"
-    __table_args__ = (Index("ix_deduction_upgrade_assignee_status", "reviewer_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_deduction_upgrade_assignee_status", "reviewer_id", "status", "created_at"),
+        Index("uq_deduction_upgrade_occupied_first", "first_deduction_id", unique=True,
+              sqlite_where=text("status != 'rejected'")),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     deduction_type_id: Mapped[int] = mapped_column(ForeignKey("deduction_types.id"), index=True)
-    first_deduction_id: Mapped[int] = mapped_column(ForeignKey("deduction_records.id"), unique=True, index=True)
+    first_deduction_id: Mapped[int] = mapped_column(ForeignKey("deduction_records.id"), index=True)
     second_deduction_id: Mapped[int] = mapped_column(ForeignKey("deduction_records.id"), unique=True, index=True)
     reviewer_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), index=True)
     reviewer_name: Mapped[str] = mapped_column(String(100))

@@ -1015,7 +1015,7 @@
 | `id` | INTEGER PK | 否 | |
 | `employee_id` | INTEGER | 否 | FK → `employees.id` |
 | `deduction_type_id` | INTEGER | 否 | FK → `deduction_types.id` |
-| `first_deduction_id` | INTEGER | 否 | FK → `deduction_records.id` UNIQUE |
+| `first_deduction_id` | INTEGER | 否 | FK → `deduction_records.id`；仅未被拒绝的工单唯一占用 |
 | `second_deduction_id` | INTEGER | 否 | FK → `deduction_records.id` UNIQUE |
 | `reviewer_id` | INTEGER | 否 | FK → `employees.id` |
 | `reviewer_name` | VARCHAR(100) | 否 | |
@@ -1031,7 +1031,7 @@
 | `resolved_at` | DATETIME | 是 | |
 | `created_at` | DATETIME | 否 | |
 
-键：PK `id`；UNIQUE `first_deduction_id`、`second_deduction_id`、`result_deduction_id`。
+键：PK `id`；UNIQUE `second_deduction_id`、`result_deduction_id`。部分唯一索引 `uq_deduction_upgrade_occupied_first` 约束 `first_deduction_id WHERE status != 'rejected'`，允许被拒工单保留历史来源后重新配对。
 
 列级索引：`employee_id`、`deduction_type_id`、`first_deduction_id`、`second_deduction_id`、`reviewer_id`、`status`、`submitted_by`、`created_at`。
 

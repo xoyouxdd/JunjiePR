@@ -116,6 +116,8 @@ async function fixtureRequest(request, response) {
       close_block_reason: allowed ? '' : '仅可关闭上月及更早月份，当月和未来月份不能月结。'});
   }
   else if (route === '/api/deduction-upgrades/pending') sendJson(response, {items:[]});
+  else if (route === '/api/deduction-upgrades/recovery') sendJson(response, {items:[],reviewers:[]});
+  else if (/^\/api\/deductions\/\d+\/material-upgrade-preview$/.test(route)) sendJson(response, {eligible:false});
   else if (route === '/api/announcements/options' && trainingDemo) sendJson(response, {can_publish: mode === 'publisher', can_follow: mode === 'publisher', can_train: mode === 'trainer', can_admin: false,
     counts: {pending: 1,messages: 0,handovers: 0}, categories: ['安全 & 合规'], circles: [{id:1,name:'热力追踪'},{id:2,name:'小熊罐子'}],
     tiers: {frontline:'CM / TR',lead:'LEAD'}, publisher: {circles:[1],projects:[],tiers:['frontline','lead'],categories:['安全 & 合规']}});

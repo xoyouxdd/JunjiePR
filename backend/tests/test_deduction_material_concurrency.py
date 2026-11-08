@@ -49,6 +49,8 @@ def make_pdf() -> bytes:
         pytest.param(False, True, False, "2098-09", id="ordinary-retry"),
         pytest.param(True, True, False, "2099-01", id="existing-upgrade-retry"),
         pytest.param(True, True, True, "2099-05", id="upgrade-before-work-order-retry"),
+        pytest.param("supplement", False, False, "2097-01", id="supplement-converts-to-upgrade"),
+        pytest.param("supplement", True, False, "2097-05", id="supplement-upgrade-failure-retry"),
     ],
 )
 def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
@@ -79,7 +81,11 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
             reviewer = next(row for row in lead.get("/api/sick-leaves/violation-upgrade-preview", params={
                 "employee_id": target["id"], "leave_start_date": month + "-05",
             }).json()["reviewers"] if row["employee_no"] == "GSMTEST01")
-            if before_work_order:
+            if upgrade == "supplement":
+                submitted = manager.post("/api/deductions", data={**form, "occurred_on": month + "-05"})
+                assert submitted.status_code == 200, submitted.text
+                record = submitted.json()["record"]
+            elif before_work_order:
                 image = BytesIO()
                 Image.new("RGB", (16, 16), "white").save(image, format="JPEG")
                 submitted = lead.post("/api/deduction-upgrades", data={
@@ -87,6 +93,16 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
                 }, files={"document_images": ("first-attempt.jpg", image.getvalue(), "image/jpeg")})
                 assert submitted.status_code == 200, submitted.text
                 record = submitted.json()["record"]
+                # Explicitly reproduce an old queued job created before work
+                # orders were reserved during asynchronous entry.
+                with SessionLocal() as db:
+                    legacy = db.get(DeductionRecord, record["id"])
+                    legacy_first = db.get(DeductionRecord, first_record["id"])
+                    old_order_id = legacy.upgrade_request_id
+                    if old_order_id:
+                        legacy.upgrade_request_id = legacy_first.upgrade_request_id = None
+                        db.query(DeductionUpgradeRequest).filter_by(id=old_order_id).delete()
+                        db.commit()
             else:
                 submitted = lead.post("/api/sick-leaves", data={
                     "employee_id": target["id"], "leave_start_date": month + "-05", "leave_end_date": month + "-05",
@@ -101,11 +117,15 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
         assert record["status"] == ("material_processing" if before_work_order else "pending_material")
         record_id = record["id"]
         path = f"/api/deductions/{record_id}/material"
+        upgrade_fields = {"reviewer_id": reviewer["id"], "expected_first_id": first_record["id"]} if upgrade == "supplement" else {}
+        if upgrade == "supplement":
+            preview = manager.get(f"/api/deductions/{record_id}/material-upgrade-preview").json()
+            assert preview["eligible"] and preview["default_reviewer_id"] == reviewer["id"]
         queue = "/api/deductions/pending-materials?scope=all"
         failed_job_id = original_order_id = None
         if retry_after_failure:
             if not before_work_order:
-                first_attempt = lead.post(path, files={"document": ("first-attempt.pdf", pdf, "application/pdf")})
+                first_attempt = lead.post(path, data=upgrade_fields, files={"document": ("first-attempt.pdf", pdf, "application/pdf")})
                 assert first_attempt.status_code == 200, first_attempt.text
 
             def fail_conversion(*_args):
@@ -159,7 +179,7 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
         with SessionLocal() as db:
             before_files = db.query(StoredFile).count()
         with ThreadPoolExecutor(max_workers=2) as pool:
-            pending = [pool.submit(client.post, path, files=files) for client in (lead, manager)]
+            pending = [pool.submit(client.post, path, data=upgrade_fields, files=files) for client in (lead, manager)]
             responses = sorted((future.result(timeout=30) for future in pending), key=lambda r: r.status_code)
         assert [r.status_code for r in responses] == [200, 409], [r.text for r in responses]
         assert "已被处理" in responses[1].json()["detail"]

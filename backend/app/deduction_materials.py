@@ -337,7 +337,8 @@ def _finalize_upgrade(db, job: DeductionMaterialJob, deduction: DeductionRecord)
         if first.upgrade_request_id != request.id or deduction.upgrade_request_id != request.id:
             raise MaterialError("upgrade_unavailable", "升级声明关联状态已变化，请重新登记")
         request.status = "pending"
-        request.reviewer_id, request.reviewer_name = reviewer.id, reviewer.name
+        # Recovery may reassign while a worker is converting an older snapshot.
+        # The work order owns the current assignment; a job cannot restore it.
     elif first.upgrade_request_id:
         raise MaterialError("upgrade_unavailable", "升级声明已被其他工单使用，请重新登记")
     else:

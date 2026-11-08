@@ -8,6 +8,7 @@ function harness() {
   const timers = new Map();let nextTimer=0;
   let nextResponse;
   const context = vm.createContext({
+    unauthorizedRedirectHolds:0,
     AbortController, setTimeout:(callback,delay)=>{timers.set(++nextTimer,{callback,delay});return nextTimer;},clearTimeout:id=>timers.delete(id),
     getViewSignal: () => controller.signal,
     portalPath: value => '/recognition' + value,
@@ -19,7 +20,7 @@ function harness() {
       return nextResponse;
     },
   });
-  for (const name of ['validationErrorMessage', 'apiFallbackMessage', 'readApiBody', 'api']) {
+  for (const name of ['holdUnauthorizedRedirect', 'validationErrorMessage', 'apiFallbackMessage', 'readApiBody', 'api']) {
     vm.runInContext(frontendFunctionSource(name), context, {filename: `api.js:${name}`});
   }
   function reply(status, body) {
@@ -71,6 +72,21 @@ function harness() {
   h.reply(401, {});
   await assert.rejects(h.context.api('/api/test'), error => error.message === '登录已失效');
   assert.equal(h.context.location.href, '/recognition/login');
+  for(const method of ['GET','POST']){
+    const retained=harness();let sent;
+    retained.response(options=>{sent=options;return {status:401,ok:false,text:async()=>'{"detail":"登录已失效"}'};});
+    const previous=retained.context.location.href;
+    await assert.rejects(retained.context.api('/api/material',{method,redirectOnUnauthorized:false}),error=>error.status===401);
+    assert.equal(retained.context.location.href,previous,'opt-in upload handling must preserve current page');
+    assert.equal('redirectOnUnauthorized' in sent,false,'UI-only option must not reach fetch');
+  }
+  const guarded=harness();guarded.reply(401,{});
+  const releaseA=guarded.context.holdUnauthorizedRedirect(),releaseB=guarded.context.holdUnauthorizedRedirect();
+  await assert.rejects(guarded.context.api('/api/background'),error=>error.status===401);
+  assert.equal(guarded.context.location.href,'');releaseA();releaseA();
+  assert.equal(guarded.context.unauthorizedRedirectHolds,1);
+  releaseB();await assert.rejects(guarded.context.api('/api/background'),error=>error.status===401);
+  assert.equal(guarded.context.location.href,'/recognition/login');
   const slow=harness();
   slow.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
   const waiting=slow.context.api('/api/slow');slow.expire();
@@ -109,8 +125,8 @@ function harness() {
   finishWrite({status:200,ok:true,text:async()=>'{"saved":true}'});
   assert.equal((await write).saved,true,'Navigation and read timeout must not cancel a pending write');
   h.response(new Error('network dropped'));
-  await assert.rejects(h.context.api('/api/write',{method:'POST'}),error=>error.message.includes('提交结果暂未确认'));
+  await assert.rejects(h.context.api('/api/write',{method:'POST'}),error=>error.message.includes('提交结果暂未确认')&&error.cause.message.includes('连接中断'));
   h.reply(200,'<html>lost response</html>');
-  await assert.rejects(h.context.api('/api/write',{method:'POST'}),error=>error.message.includes('先查看相关记录'));
+  await assert.rejects(h.context.api('/api/write',{method:'POST'}),error=>error.message.includes('先查看相关记录')&&error.cause.message.includes('无法解析'));
   console.log('API errors: real-owner proof/legacy fields, status fallbacks, invalid body, network/abort and expired login passed.');
 })().catch(error => {console.error(error); process.exitCode = 1;});

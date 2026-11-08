@@ -59,7 +59,8 @@ DEDUCTION_TYPE_ORDER = (
 DEDUCTION_LEVEL_ORDER = {"STATEMENT": 1, "MEMO": 2, "WARNING_1": 3, "WARNING_2": 4}
 
 
-NEXT_DEDUCTION_LEVEL = {"STATEMENT": "MEMO", "MEMO": "WARNING_1", "WARNING_1": "WARNING_2", "WARNING_2": "WARNING_2"}
+# Only two unused statements participate in automatic upgrading. Results do not.
+NEXT_DEDUCTION_LEVEL = {"STATEMENT": "MEMO"}
 
 
 UPGRADE_REVIEWER_CODES = {"GSM", "TA_GSM"}
@@ -108,6 +109,8 @@ def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id
             DeductionType.code.in_(repeat_codes(db, deduction_type, occurred_on)),
             DeductionRecord.deduction_level_id == statement.id,
             DeductionRecord.status == "active",
+            DeductionRecord.upgrade_role.is_(None),
+            DeductionRecord.upgrade_request_id.is_(None),
             DeductionRecord.legacy_upgrade_excluded.is_(False),
             or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"),
             DeductionRecord.occurred_on >= window_start,

@@ -6,7 +6,10 @@ import re
 from collections import Counter, defaultdict
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from app.deduction_policy import deduction_counts_for_score
+from app.score_policy import loa_month_exclusion
 
 from app.v2_models import (
     Attraction, DeductionLevel, DeductionRecord, DeductionType,
@@ -29,7 +32,7 @@ def declaration_payload(
     type_id: int | None, status: str, keyword: str,
 ) -> dict:
     checked_month(month)
-    if status and status not in set(STATUS_LABELS.values()):
+    if status and status not in {*STATUS_LABELS.values(), "current"}:
         raise HTTPException(400, "业务状态无效")
     attraction_rows = db.query(Attraction).all()
     attractions = {row.id: row.name for row in attraction_rows}
@@ -53,27 +56,80 @@ def declaration_payload(
         query = query.filter(DeductionRecord.deduction_type_id == type_id)
     needle = employee_number(keyword).casefold()
     selected = query.order_by(DeductionRecord.occurred_on.desc(), DeductionRecord.id.desc()).all()
+    selected = [row for row in selected
+                if (not status or (status == "current" and STATUS_LABELS.get(row.status) in {"已生效", "审核中", "待补材料"})
+                    or STATUS_LABELS.get(row.status, row.status) == status)
+                and (not needle or needle in row.employee_name.casefold() or needle in row.employee_no.casefold())]
     approved_seconds = {
         second_id for (second_id,) in db.query(DeductionUpgradeRequest.second_deduction_id)
         .join(DeductionRecord, DeductionRecord.id == DeductionUpgradeRequest.second_deduction_id)
         .filter(DeductionUpgradeRequest.status == "approved", DeductionUpgradeRequest.result_deduction_id.isnot(None),
                 DeductionRecord.deduction_month == month).all()
     }
-    file_ids = {row.document_file_id for row in selected if row.document_file_id}
+    # Relationships are keyed by the work order, including legacy results whose
+    # own upgrade_request_id was not populated. Resolve outside the current
+    # month/level/type filters so a source can always reach its actual result.
+    selected_ids = {row.id for row in selected}
+    upgrades = db.query(DeductionUpgradeRequest).filter(or_(
+        DeductionUpgradeRequest.first_deduction_id.in_(selected_ids),
+        DeductionUpgradeRequest.second_deduction_id.in_(selected_ids),
+        DeductionUpgradeRequest.result_deduction_id.in_(selected_ids),
+    )).all() if selected_ids else []
+    # A released first statement can have multiple rejected work orders and
+    # one current pair. Keep every historical edge reachable from either side,
+    # even when the entry point is a filtered result or a rejected second row.
+    if upgrades:
+        first_ids = {work.first_deduction_id for work in upgrades}
+        upgrades = db.query(DeductionUpgradeRequest).filter(
+            DeductionUpgradeRequest.first_deduction_id.in_(first_ids)).order_by(DeductionUpgradeRequest.id).all()
+    related_ids = {rid for work in upgrades for rid in
+                   (work.first_deduction_id, work.second_deduction_id, work.result_deduction_id) if rid}
+    all_rows = {row.id: row for row in selected}
+    if related_ids - selected_ids:
+        all_rows.update({row.id: row for row in db.query(DeductionRecord)
+                         .filter(DeductionRecord.id.in_(related_ids - selected_ids)).all()})
+    # Apply the existing monthly performance policy to each record's own month,
+    # including linked sources outside the current query month. Read-only only.
+    loa_record_ids = {rid for (rid,) in db.query(DeductionRecord.id).filter(
+        DeductionRecord.id.in_(all_rows),
+        loa_month_exclusion(DeductionRecord.employee_id, DeductionRecord.deduction_month),
+    ).all()} if all_rows else set()
+    file_ids = {row.document_file_id for row in all_rows.values() if row.document_file_id}
     files = {row.id: row for row in db.query(StoredFile).filter(StoredFile.id.in_(file_ids)).all()} if file_ids else {}
-    records = []
-    for row in selected:
-        if row.id in approved_seconds:
-            continue
+    links = defaultdict(list)
+    for work in upgrades:
+        if work.status == "approved" and work.result_deduction_id:
+            approved_seconds.add(work.second_deduction_id)
+        members = [("source_first", work.first_deduction_id), ("source_second", work.second_deduction_id), ("result", work.result_deduction_id)]
+        for role, rid in members:
+            if rid in all_rows:
+                links[rid].append({"request_id": work.id, "status": work.status, "role": role,
+                                   "records": [{"id": mid, "role": kind, "level_name": all_rows[mid].deduction_level_name}
+                                               for kind, mid in members if mid in all_rows]})
+
+    def present(row):
         business_status = STATUS_LABELS.get(row.status, row.status)
-        if status and business_status != status:
-            continue
-        if needle and needle not in row.employee_name.casefold() and needle not in row.employee_no.casefold():
-            continue
         material = files.get(row.document_file_id)
         document_url = f"/api/files/{row.document_file_id}" if material and material.status == "active" and row.material_status == "ready" and row.upgrade_role != "result" else ""
         level = levels.get(row.deduction_level_id)
-        records.append({
+        registered_points = float(row.points)
+        loa_excluded = row.id in loa_record_ids
+        actual_points = registered_points if deduction_counts_for_score(row) and not loa_excluded else 0
+        if row.status == "void":
+            score_status = "已作废 · 不计分"
+        elif row.status != "active":
+            score_status = business_status + " · 未扣分"
+        elif row.upgrade_role == "source_second":
+            score_status = "第二次声明 · 未扣分"
+        elif row.upgrade_role == "source_first":
+            score_status = "首次声明 · " + ("已扣分" if actual_points else "未扣分")
+        elif row.upgrade_role == "result":
+            score_status = "升级结果 · " + ("已扣分" if actual_points else "未扣分")
+        else:
+            score_status = "已扣分" if actual_points else "未扣分"
+        if loa_excluded:
+            score_status += " · LOA当月不计分"
+        return {
             "id": row.id, "employee_id": row.employee_id, "employee_name": row.employee_name,
             "employee_no": row.employee_no, "attraction_id": row.attraction_id_snapshot,
             "attraction_name": attractions.get(row.attraction_id_snapshot, "未记录原景点"),
@@ -87,7 +143,16 @@ def declaration_payload(
             "business_status": business_status, "raw_status": row.status,
             "voided_at": row.voided_at.isoformat() if row.voided_at else None,
             "upgrade_request_id": row.upgrade_request_id or 0, "upgrade_role": row.upgrade_role, "document_url": document_url,
-        })
+            "registered_points": registered_points, "actual_points": actual_points,
+            "deduction_month": row.deduction_month, "loa_excluded": loa_excluded, "score_status": score_status,
+            "void_reason": row.void_reason or "", "upgrade_links": links[row.id],
+            "counted_in_statistics": row.id not in approved_seconds,
+        }
+
+    details = [present(row) for row in selected]
+    # Keep existing statistics, exports and HR consumers unchanged. Display-only
+    # source statements must never enter their event counts a second time.
+    records = [row for row in details if row["counted_in_statistics"]]
 
     level_counts = Counter(row["level_id"] for row in records)
     circle_rows = defaultdict(list)
@@ -110,4 +175,6 @@ def declaration_payload(
                         if item.employee_circle or item.id in circle_rows],
         "types": [{"id": item.id, "name": item.name, "active": item.active} for item in sorted(types.values(), key=lambda item: item.name)],
         "circles": circles, "records": records,
+        "detail_records": details,
+        "related_records": [present(all_rows[rid]) for rid in sorted(related_ids) if rid in all_rows],
     }

@@ -11,7 +11,9 @@ const content=()=>page.locator(width===390?'.declaration-mobile':'.declaration-d
 await open();assert.equal(await content().locator('[data-correct-type] option').count(),2);
 assert.equal(await content().locator('a[download]').getAttribute('href'),'/api/files/42');
 assert.equal(await content().locator('[data-file-preview]').getAttribute('data-file-preview'),'/api/files/42');
-if(width===1280){const widths=await content().locator('thead th').evaluateAll(cols=>cols.map(c=>c.getBoundingClientRect().width));assert.ok(Math.abs(widths[1]/widths[0]-18/15)<0.02,JSON.stringify({name,widths}));assert.ok(Math.abs(widths[2]/widths[0]-24/15)<0.02);}
+assert.equal(await content().locator('.declaration-record').count(),1);
+assert.equal(await content().locator('table').count(),0);
+assert.equal(await content().locator('.declaration-score').count(),1);
 
 await content().locator('[data-correct-type]').selectOption('2');await page.locator('[role=dialog] textarea').fill('复查归类');await page.locator('[role=dialog] button[type=submit]').click();await page.waitForSelector('[role=dialog]',{state:'detached'});await open();
 assert.equal(await content().locator('[data-correct-type]').inputValue(),'2');assert.equal(writes[0].body.expected_type_id,1);assert.equal(writes[0].body.expected_level_id,1);

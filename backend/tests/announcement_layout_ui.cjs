@@ -44,7 +44,7 @@ async function handler(req,res){const url=new URL(req.url,'http://fixture'),r=ur
   else if(r==='/api/activity-points/me')json(res,{eligible:false,earned:0,used:0,available:0,total:0,page:1,page_size:20,items:[]});
   else if(r==='/api/options')json(res,{roles:[],attractions:circles,employee_circles:circles,recognition_venues:circles,recognition_types:[],deduction_types:[]});
   else if(r==='/api/dashboard')json(res,{records:[],attendance_score:12,total_score:12});
-  else if(r==='/api/action-center'||r==='/api/deduction-upgrades/pending')json(res,{items:[],total:0});
+  else if(r==='/api/action-center'||r==='/api/deduction-upgrades/pending'||r==='/api/deduction-upgrades/recovery')json(res,{items:[],total:0});
   else if(r==='/api/changelog/announcement')json(res,{read:true});
   else if(r==='/api/announcements/options'){if(designCase?.optionsGate)await designCase.optionsGate;if(designCase?.optionsFail){res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({detail:'模拟网络连接暂不可用'}));return;}json(res,{can_publish:publishRoles.has(role[0]),can_follow:followRoles.has(role[0]),can_train:role[0]==='TR',can_admin:adminRoles.has(role[0]),can_handover:publishRoles.has(role[0])||adminRoles.has(role[0]),circles,tiers,categories,publisher,counts:{pending:designCase?.pending??2,messages:designCase?.messages??2,handovers:0}});}
   else if(r==='/api/announcements/summary')json(res,{pending:2,messages:2,handovers:0});

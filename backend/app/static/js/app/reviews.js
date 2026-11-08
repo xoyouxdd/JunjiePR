@@ -83,7 +83,7 @@ function bindReviewActions(showHistory=false,offset=0){
 }
 
 function upgradeReviewCards(items){
-  return items.map(row=>`<article class="group-card" data-upgrade="${row.id}"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge warn">待审核</span></div><p>${esc(row.deduction_type)} · 提交人：${esc(row.submitted_by)} · ${esc(row.created_at)}</p><p><strong>A1：</strong>${esc(row.first_record?.occurred_on||'')} · ${esc(row.first_record?.description||'')} ${attachmentControl(row.first_record?.document_url||'','查看A1声明',row.first_record?.document_preview_kind||'')}</p><p><strong>A2：</strong>${esc(row.second_record?.occurred_on||'')} · ${esc(row.second_record?.description||'')} ${attachmentControl(row.second_record?.document_url||'','查看A2声明',row.second_record?.document_preview_kind||'')}</p><div class="actions"><button type="button" class="secondary" data-upgrade-transfer="${row.id}">转交工单</button><button type="button" class="danger" data-upgrade-reject="${row.id}">不通过</button><button type="button" class="primary" data-upgrade-approve="${row.id}">同意升级</button></div></article>`).join('')||'<p class="empty">暂无声明升级待审核工单</p>';
+  return items.map(row=>`<article class="group-card" data-upgrade="${row.id}"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge warn">待审核</span></div><p>${esc(row.deduction_type)} · 提交人：${esc(row.submitted_by)} · ${esc(row.created_at)}</p><p><strong>A1：</strong>${esc(row.first_record?.occurred_on||'')} · ${esc(row.first_record?.description||'')} ${attachmentControl(row.first_record?.document_url||'','查看A1声明',row.first_record?.document_preview_kind||'')}</p><p><strong>A2：</strong>${esc(row.second_record?.occurred_on||'')} · ${esc(row.second_record?.description||'')} ${attachmentControl(row.second_record?.document_url||'','查看A2声明',row.second_record?.document_preview_kind||'')}</p><p class="field-hint">${esc(row.minimum_level_error||'仅两张原声明参与升级；结果按实际开具的备忘录或一级警告确认。')}</p><div class="actions"><button type="button" class="secondary" data-upgrade-transfer="${row.id}">转交工单</button><button type="button" class="danger" data-upgrade-reject="${row.id}">不通过</button><button type="button" class="primary" data-upgrade-approve="${row.id}" ${row.minimum_level_error?'disabled':''}>同意升级</button></div></article>`).join('')||'<p class="empty">暂无声明升级待审核工单</p>';
 }
 
 function bindUpgradeReviewActions(root,refresh){const page=captureViewContext();
@@ -102,7 +102,26 @@ async function renderUpgradeReview(){
   bindUpgradeReviewActions(app,renderUpgradeReview);
 }
 
+function upgradeRecoveryCards(items){
+  return items.map(row=>`<article class="group-card" data-upgrade-recovery="${row.id}"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><p>审核经理已失效：${esc(row.reviewer_name)} · ${esc(row.status_name)}</p><p>原声明和材料保留，重新指派后继续处理。</p><button type="button" class="secondary" data-recover-upgrade="${row.id}">重新选择审核经理</button></article>`).join('');
+}
+
+function bindUpgradeRecoveryActions(root,data,refresh){
+  const page=captureViewContext();
+  root.querySelectorAll('[data-recover-upgrade]').forEach(button=>button.onclick=async()=>{
+    const row=(data.items||[]).find(item=>String(item.id)===button.dataset.recoverUpgrade);
+    if(!row)return;
+    const id=await selectModal('重新指派审核经理','原声明、材料和历史记录将保留。',(data.reviewers||[]).map(r=>({id:r.id,label:`${r.name} · ${r.employee_no} · ${r.role_name}`})),'下一步');
+    if(!id||!page.isCurrent())return;
+    const reason=await promptModal('重新指派原因','请说明原经理失效后的接手原因。','原因','确认重新指派');
+    if(!reason||!page.isCurrent())return;
+    button.disabled=true;
+    try{await api('/api/deduction-upgrades/'+row.id+'/recover',json('POST',{reviewer_id:Number(id),expected_reviewer_id:row.reviewer_id,expected_status:row.status,reason}));toast('审核经理已重新指派');page.refresh(refresh);}
+    catch(error){toast(error.message,true);}finally{button.disabled=false;}
+  });
+}
+
 function renderSupervisorReview(){reviewApiBase='/api/supervisor-reviews';return renderReview();}
 function renderFrontlineReview(){reviewApiBase='/api/reviews';return renderReview();}
 
-export { bindUpgradeReviewActions, renderFrontlineReview, renderSupervisorReview, renderUpgradeReview, upgradeReviewCards };
+export { bindUpgradeReviewActions, bindUpgradeRecoveryActions, upgradeRecoveryCards, renderFrontlineReview, renderSupervisorReview, renderUpgradeReview, upgradeReviewCards };

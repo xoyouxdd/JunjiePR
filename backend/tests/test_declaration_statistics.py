@@ -8,6 +8,7 @@ from hashlib import sha256
 import os
 from pathlib import Path
 import tempfile
+import pytest
 from urllib.parse import unquote
 
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="recognition-declaration-statistics-"))
@@ -153,7 +154,7 @@ def test_event_snapshot_status_upgrade_and_export_match() -> None:
                 result_deduction_id=result.id, submitted_by=employee.id, submitted_by_name="测试登记人")
             db.add(upgrade)
             db.commit()
-            second_id, result_id, file_id = second.id, result.id, file_row.id
+            first_id, second_id, result_id, file_id = first.id, second.id, result.id, file_row.id
             other_circle_id, other_circle_name = other_circle.id, other_circle.name
             employee_no, employee_attraction_id = employee.employee_no, employee.attraction_id
             memo_level_id = level_memo.id
@@ -166,6 +167,12 @@ def test_event_snapshot_status_upgrade_and_export_match() -> None:
         assert body["total_records"] == 5
         assert body["employee_count"] == 1
         assert {row["id"] for row in body["records"]}.isdisjoint({second_id})
+        detail = {row["id"]: row for row in body["detail_records"]}
+        assert len(detail) == 6 and detail[second_id]["actual_points"] == 0
+        assert detail[second_id]["score_status"] == "第二次声明 · 未扣分"
+        assert detail[second_id]["counted_in_statistics"] is False
+        assert detail[result_id]["upgrade_links"][0]["role"] == "result"
+        assert {item["id"] for item in detail[result_id]["upgrade_links"][0]["records"]} == {first_id, second_id, result_id}
         assert result_id in {row["id"] for row in body["records"]}
         assert {row["attraction_id"] for row in body["records"]} == {other_circle_id}
         assert body["statuses"] == {"已生效": 2, "待补材料": 1, "审核中": 1, "已作废": 1}
@@ -174,6 +181,22 @@ def test_event_snapshot_status_upgrade_and_export_match() -> None:
         assert client.get("/api/declaration-statistics", params={**params, "status": "已作废"}).json()["total_records"] == 1
         assert client.get("/api/declaration-statistics", params={**params, "level_id": memo_level_id}).json()["total_records"] == 1
         assert client.get("/api/declaration-statistics", params={**params, "keyword": employee_no[-4:]}).json()["total_records"] == 5
+        # Page default excludes void rows while legacy callers (including HR)
+        # retain the unfiltered default. Query and Excel share the same filter.
+        current_params = {**params, "status": "current", "keyword": employee_no[-4:].lower()}
+        current = client.get("/api/declaration-statistics", params=current_params).json()
+        assert current["total_records"] == 4
+        assert current["statuses"] == {"已生效": 2, "待补材料": 1, "审核中": 1, "已作废": 0}
+        assert len(current["detail_records"]) == 5
+        assert all(row["raw_status"] != "void" for row in current["detail_records"])
+        name_piece = body["records"][0]["employee_name"][-2:]
+        assert client.get("/api/declaration-statistics", params={**current_params, "keyword": name_piece}).json()["total_records"] == 4
+        current_export = client.get("/api/declaration-statistics/export", params=current_params)
+        assert current_export.status_code == 200
+        current_book = load_workbook(BytesIO(current_export.content))
+        assert current_book.worksheets[0]["B2"].value == 4
+        assert current_book.worksheets[1].max_row - 1 == 4
+        assert {row[11] for row in current_book.worksheets[1].iter_rows(min_row=2, values_only=True)} == {"已生效", "待补材料", "审核中"}
         assert client.get("/api/declaration-statistics", params={"month": params["month"], "attraction_id": employee_attraction_id}).json()["total_records"] == 0
         assert client.get("/api/files/" + str(file_id), params={"preview": "true"}).status_code == 404  # authorized; test file has no disk bytes
         exported = client.get("/api/declaration-statistics/export", params=params)
@@ -252,3 +275,91 @@ def test_material_download_filename_removes_path_and_control_characters() -> Non
     row = DeductionRecord(occurred_on="2026-09-24", employee_name="姓名/测试", deduction_type_name='类型:未打卡\\测试\n')
     name = deduction_download_name(row, ".pdf")
     assert name == "2026-09-24_姓名-测试_类型-未打卡-测试-.pdf"
+
+
+@pytest.mark.parametrize("result_code,month", [("MEMO", "2024-05"), ("WARNING_1", "2024-08")])
+def test_card_links_cross_filters_keep_scores_and_statistics(result_code, month) -> None:
+    from app.deduction_policy import deduction_counts_for_score
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
+            levels = {row.code: row for row in db.query(DeductionLevel).all()}
+            dtype = db.query(DeductionType).first()
+            material = StoredFile(storage_key=f"test/association-{month}.pdf", original_filename="材料.pdf",
+                extension=".pdf", mime_type="application/pdf", file_size=1, sha256="2"*64,
+                uploaded_by=employee.id, status="active")
+            db.add(material); db.flush()
+            def add(day, status="active", role=None, code="STATEMENT", points="1"):
+                level = levels[code]
+                row = DeductionRecord(employee_id=employee.id, employee_no=employee.employee_no,
+                    employee_name=employee.name, employee_role_snapshot="CM", attraction_id_snapshot=employee.attraction_id,
+                    deduction_type_id=dtype.id, deduction_type_name=dtype.name, deduction_level_id=level.id,
+                    deduction_level_name=level.name, points=Decimal(points), occurred_on=day, deduction_month=day[:7],
+                    description="关联卡片测试", document_file_id=material.id, submitter_id=employee.id, submitter_name="登记人",
+                    submitter_role_snapshot="CM", permission_scope_snapshot="test", status=status,
+                    material_status="missing" if status=="pending_material" else "ready", upgrade_role=role,
+                    void_reason="填写错误" if status=="void" else None)
+                db.add(row); db.flush()
+                return row
+            first=add("2024-03-01", role="source_first")
+            second=add(month+"-01", role="source_second", points="7")  # legacy nonzero stored points still do not score
+            result=add(month+"-02", role="result", code=result_code, points=str(levels[result_code].points))
+            pending=add(month+"-03", status="pending_material")
+            failed=add(month+"-04", status="material_failed")
+            processing=add(month+"-05", status="material_processing")
+            reviewing=add(month+"-06", status="pending_upgrade", role="source_second")
+            void=add(month+"-07", status="void")
+            ordinary=add(month+"-08", code="MEMO", points="1.5")
+            direct=add(month+"-09", code="WARNING_2", points="10")
+            work=DeductionUpgradeRequest(employee_id=employee.id, deduction_type_id=dtype.id,
+                first_deduction_id=first.id, second_deduction_id=second.id, reviewer_id=employee.id,
+                reviewer_name="审核人", status="approved", result_level_id=levels[result_code].id,
+                result_deduction_id=result.id, submitted_by=employee.id, submitted_by_name="登记人")
+            db.add(work); db.flush()
+            first.upgrade_request_id=second.upgrade_request_id=work.id
+            # Result intentionally has no request ID (legacy production shape).
+            ids={name:row.id for name,row in locals().copy().items() if isinstance(row,DeductionRecord)}
+            all_ids=set(ids.values())
+            db.commit()
+            original={row.id:(row.status,row.points,row.upgrade_role) for row in db.query(DeductionRecord).filter(DeductionRecord.id.in_(all_ids))}
+            score_before=sum(row.points for row in db.query(DeductionRecord).filter(DeductionRecord.id.in_(all_ids)) if deduction_counts_for_score(row))
+            statement_level=levels["STATEMENT"].id
+        login(client,"TATEST01")
+        params={"month":month,"keyword":"CMTEST02"}
+        data=client.get('/api/declaration-statistics',params=params).json()
+        cards={r['id']:r for r in data['detail_records']}
+        assert len(cards)==9 and data['total_records']==8
+        assert cards[ids['second']]['actual_points']==0
+        assert cards[ids['ordinary']]['actual_points']==1.5
+        assert cards[ids['direct']]['actual_points']==10 and cards[ids['direct']]['upgrade_links']==[]
+        for name in ('pending','failed','processing','reviewing','void'):
+            assert cards[ids[name]]['actual_points']==0
+        assert cards[ids['void']]['score_status']=='已作废 · 不计分'
+        assert cards[ids['void']]['void_reason']=='填写错误'
+        current=client.get('/api/declaration-statistics',params={**params,'status':'current'}).json()
+        assert {r['id'] for r in current['detail_records']} == set(cards)-{ids['void']}
+        assert current['statuses']['待补材料']==3  # missing, failed and processing
+        assert current['total_records']==data['total_records']-1
+        linked={r['id']:r for r in data['related_records']}
+        assert set(linked)=={ids['first'],ids['second'],ids['result']}
+        for rid in linked:
+            assert {r['id'] for r in linked[rid]['upgrade_links'][0]['records']}==set(linked)
+        for filters in ({'level_id':statement_level,'status':'已生效'}, {'status':'待补材料'}):
+            filtered=client.get('/api/declaration-statistics',params={**params,**filters}).json()
+            assert all(r['business_status']==filters['status'] for r in filtered['detail_records'])
+            if 'level_id' in filters:
+                assert ids['result'] not in {r['id'] for r in filtered['detail_records']}
+                assert set(linked)=={r['id'] for r in filtered['related_records']}
+        # Only the second source is visible: still available even with zero summary records.
+        filtered=client.get('/api/declaration-statistics',params={**params,'level_id':statement_level,'status':'已生效'}).json()
+        assert filtered['total_records']==0 and len(filtered['detail_records'])==1
+        exported=client.get('/api/declaration-statistics/export',params=params)
+        assert exported.status_code==200
+        wb=load_workbook(BytesIO(exported.content))
+        assert wb.worksheets[0]['B2'].value==8 and wb.worksheets[1].max_row-1==8
+        with SessionLocal() as db:
+            after={row.id:(row.status,row.points,row.upgrade_role) for row in db.query(DeductionRecord).filter(DeductionRecord.id.in_(all_ids))}
+            assert after==original
+            assert sum(row.points for row in db.query(DeductionRecord).filter(DeductionRecord.id.in_(all_ids)) if deduction_counts_for_score(row))==score_before
+        client.post('/api/logout'); login(client,'CMTEST02')
+        assert client.get('/api/declaration-statistics',params=params).status_code==403

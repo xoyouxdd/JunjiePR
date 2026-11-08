@@ -27,6 +27,7 @@ const server=http.createServer((req,res)=>{
  if(route==='/api/recognitions/1'&&req.method==='DELETE'){writes.push(route);entries=entries.filter(r=>r.id!==1);return json(res,{ok:true});}
  if(route==='/api/action-center')return json(res,{month:'2026-10',total:7,items:[{type:'recognition_review',title:'待复核签卡',description:'沿用原直属复核队列',tab:'review',severity:'warning',count:3},{type:'announcement_receipt',title:'待签收公告',description:'沿用公告签收入口',tab:'announcements',severity:'info',count:2},{type:'deduction_material',title:'待补材料',description:'材料协作',tab:'entries',severity:'info',count:2}]});
  if(route==='/api/deduction-upgrades/pending')return json(res,{items:[]});
+ if(route==='/api/deduction-upgrades/recovery')return json(res,{items:[],reviewers:[]});
  if(route==='/api/rotation/adjust/mine'||route==='/api/export-tasks')return json(res,{items:[]});
  if(route==='/api/reviews')return json(res,{items:reviewCount?[]:[{...sourceRows[0],employee_name:'最早待复核员工'}],total:reviewCount?0:1,limit:Number(url.searchParams.get('limit')),offset:0,has_more:false});
  if(route==='/api/reviews/1'&&req.method==='POST'){reviewCount++;return json(res,{record:{...sourceRows[0],status:'confirmed'}});}

@@ -231,12 +231,13 @@ async function refreshActionBadge(){
   const employeeId=state.me.id;
   const isUpgradeReviewer=['TA_GSM','GSM'].includes(state.me.role_code);
   try{
-    const [data,upgradeData]=await Promise.all([
+    const [data,upgradeData,recoveryData]=await Promise.all([
       api('/api/action-center'),
       isUpgradeReviewer?api('/api/deduction-upgrades/pending'):Promise.resolve({items:[]}),
+      api('/api/deduction-upgrades/recovery'),
     ]);
     if(state.me?.id!==employeeId)return;
-    setActionBadge(Number(data.total||0)+(upgradeData.items||[]).length);
+    setActionBadge(Number(data.total||0)+(upgradeData.items||[]).length+(recoveryData.items||[]).length);
     if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
     notifyRotationTimeoutCases(data.rotation_timeout_cases||[]);
   }catch(_){/* A badge refresh must never interrupt the existing page workflow. */}
