@@ -446,7 +446,7 @@ def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
     assert "bindDialogLayer(overlay,{initialFocus:cancel,onClose:value=>{cleanup?.();resolve(value===true);}})" in script
     assert "bindDialogLayer(overlay,{initialFocus:input,onClose:value=>resolve(typeof value==='string'?value:null)})" in script
     assert "bindDialogLayer(drawer,{" in script
-    assert "allowClose:()=>!submitting" in script
+    assert "allowClose:()=>exiting||!submitting" in script
     assert "aria-label=\"撤回签卡\"" in script
     assert "confirmModal('撤回签卡'" in script
     assert "confirmModal('调整所属小组'" in script
