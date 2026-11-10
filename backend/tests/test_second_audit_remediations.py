@@ -72,9 +72,10 @@ def test_active_manager_recognition_reuses_the_self_evidence_control() -> None:
     script = read_frontend_source()
 
     assert "function recognitionSubmissionData(form,imageRequired=true)" in script
-    assert "if(imageRequired&&!file)" in script
-    assert "const imageRequired=selfMode||managerRecognition;" in script
-    assert "recognitionSubmissionData(e.target,imageRequired)" in script
+    assert "if(!file&&(imageRequired||evidenceSelectionAttempted(form)))" in script
+    assert "const imageRequired=selfMode;" in script
+    assert "const imageField=(imageRequired||managerRecognition)?" in script
+    assert "recognitionSubmissionData(form,imageRequired)" in script
 
 
 def test_hr_member_group_is_the_only_inline_control() -> None:
