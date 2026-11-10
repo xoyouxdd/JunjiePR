@@ -544,11 +544,16 @@ function preparingText(kind) {
   return kind === '推7点' ? '准备休息' : kind === '推出圈' ? '准备出圈' : kind === '推病假' ? '准备病假' : kind ? '准备下班' : '';
 }
 
+function rotationMealBadge(p) {
+  return p?.mealEligible && !p.ate ? '<span class="rt-badge meal">未休饭</span>' : '';
+}
+
 function badges(p) {
   const out = [];
   if(p.timingUnverified)out.push('<span class="rt-badge prep">历史时间待核实</span>');
   if(p.interruptedBreak&&['meal','meal_rest'].includes(p.interruptedBreak.kind))out.push('<span class="rt-badge meal">餐休曾中断</span>');
-  if (p.mealEligible && !p.ate) out.push('<span class="rt-badge meal">未休饭</span>');
+  const meal = rotationMealBadge(p);
+  if (meal) out.push(meal);
   if (p.breakKind === 'meal_rest' && p.state === 'rest') out.push('<span class="rt-badge rest">饭后剩余休息时间</span>');
   if (p.preparing) out.push(`<span class="rt-badge prep">${preparingText(p.preparing)}</span>`);
   if (p.flags.includes('推7点下来')) out.push('<span class="rt-badge p7">推7点下来</span>');

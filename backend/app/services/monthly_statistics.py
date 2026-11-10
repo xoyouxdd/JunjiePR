@@ -17,7 +17,7 @@ from app.record_payloads import deduction_payload, recognition_payload, sick_lea
 from app.role_constants import FRONTLINE_CODES, GSM_CODES, SCORED_BASE_CODES
 from app.month_rank_policy import monthly_ranks_enabled
 from app.score_queries import employee_month_scores
-from app.v2_models import Attraction, AttendanceMonthlyScore, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupMembership, ManagementScope, RecognitionAttachment, RecognitionRecord, Role, SickLeaveRecord, WorkGroup
+from app.v2_models import Attraction, AttendanceMonthlyScore, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, GroupMembership, ManagementScope, RecognitionAttachment, RecognitionInboxItem, RecognitionRecord, Role, SickLeaveRecord, WorkGroup
 from app.services.attendance import ensure_month_attendance, recalculate_attendance
 from app.services.identity import acting_period_notes, base_roles_at, identity_labels, roles_at
 from app.services.issuer_rankings import issuer_ranking_payload
@@ -66,6 +66,13 @@ def dashboard_payload(db: Session, month: str, user: V2User) -> dict:
     )
     records.sort(key=lambda row: row.status == "confirmed")
     record_items = [recognition_payload(row) for row in records]
+    if records:
+        sent_ids = {rid for (rid,) in db.query(RecognitionInboxItem.recognition_id)
+                    .filter(RecognitionInboxItem.recognition_id.in_([row.id for row in records])).all()}
+        for item in record_items:
+            if item["id"] in sent_ids:
+                source_label = "POC特别贡献" if item["poc_period_type"] else "主动发信"
+                item["entry_label"] = f"加分人：{item['operator_name']}（{source_label}）"
     excluded = frozen.status == "excluded" if frozen else bool(score.get("loa_excluded"))
     credited_count = sum(row["status"] == "confirmed" and row["credited_fraction"] > 0 and not excluded for row in record_items)
     recognition_summary = {

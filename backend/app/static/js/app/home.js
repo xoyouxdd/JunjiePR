@@ -6,7 +6,7 @@ import { esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, portalP
 import { bindWithdraw, recognitionCard } from './records.js';
 import { app, state } from './state.js';
 import { mountHonors } from './honors.js';
-import { mountMedalCollection } from './attendance-medals.js';
+import { medalCollectionAvailable, mountMedalCollection } from './attendance-medals.js';
 import { avatarMarkup, mountAvatarWardrobe } from './avatars.js';
 import { memoryEligible, mountMonthlyMemory } from './monthly-memory.js';
 import { mountRecognitionInbox } from './recognition-inbox.js';
@@ -184,8 +184,8 @@ async function renderHome(){
     rejected:(d.records||[]).filter(r=>r.status==='rejected').length,
   };
   const summaryMarkup=`<p class="home-recognition-summary" aria-label="${esc(selectedMonthLabel)}签卡汇总"><span>已计分<strong>${esc(summary.credited)}</strong>张</span>${summary.pending?`<span class="home-recognition-pending">待复核<strong>${esc(summary.pending)}</strong>张</span>`:''}${summary.uncredited?`<span>已确认未计分<strong>${esc(summary.uncredited)}</strong>张</span>`:''}${summary.rejected?`<span>不通过<strong>${esc(summary.rejected)}</strong>张</span>`:''}</p>`;
-  const memoryAvailable=memoryEligible(state.me);
-  const personalActions=`<div class="personal-honor-tabs" role="tablist" aria-label="荣誉与回忆">${d.monthly_rank_available===true?'<button type="button" role="tab" class="home-honor-entry" id="homeRankView" aria-label="查看我的月度勋章" aria-selected="false" aria-expanded="false" aria-controls="homeRankContent"><span class="personal-tile-icon" aria-hidden="true">✦</span><strong>月度勋章</strong><small data-rank-label>查看当月</small></button>':''}${memoryAvailable?'<button type="button" role="tab" class="home-memory-entry" id="homeMemoryView" aria-selected="false" aria-expanded="false" aria-controls="homeMemoryContent"><span class="personal-tile-icon" aria-hidden="true">▤</span><strong>月度回忆</strong><small>收藏认可</small></button>':''}<button type="button" role="tab" id="homeAttendanceView" aria-selected="false" aria-expanded="false" aria-controls="homeAttendanceContent"><span class="personal-tile-icon" aria-hidden="true">✺</span><strong>全勤勋章</strong><small>查看当月</small></button></div>`;
+  const memoryAvailable=memoryEligible(state.me),attendanceAvailable=medalCollectionAvailable(selectedMonth);
+  const personalActions=`<div class="personal-honor-tabs" role="tablist" aria-label="荣誉与回忆">${d.monthly_rank_available===true?'<button type="button" role="tab" class="home-honor-entry" id="homeRankView" aria-label="查看我的月度勋章" aria-selected="false" aria-expanded="false" aria-controls="homeRankContent"><span class="personal-tile-icon" aria-hidden="true">✦</span><strong>月度勋章</strong><small data-rank-label>查看当月</small></button>':''}${memoryAvailable?'<button type="button" role="tab" class="home-memory-entry" id="homeMemoryView" aria-selected="false" aria-expanded="false" aria-controls="homeMemoryContent"><span class="personal-tile-icon" aria-hidden="true">▤</span><strong>月度回忆</strong><small>收藏认可</small></button>':''}${attendanceAvailable?'<button type="button" role="tab" id="homeAttendanceView" aria-selected="false" aria-expanded="false" aria-controls="homeAttendanceContent"><span class="personal-tile-icon" aria-hidden="true">✺</span><strong>全勤勋章</strong><small>查看当月</small></button>':''}</div>`;
   if(!request.write(`<div class="personal-center section-gap">
     <section class="panel personal-profile"><div class="personal-profile-main"><span class="personal-profile-avatar">${avatarMarkup(state.me.avatar_key,state.me.name)||'<span aria-hidden="true">'+esc((state.me.name||'我').slice(0,1))+'</span>'}</span><div><h2>${esc(state.me.name)}</h2><p>${esc(state.me.role_label||state.me.role_name)}<span>·</span>${esc(state.me.attraction_name||'未分配')}</p></div></div><details class="personal-profile-details"><summary>个人资料</summary><div class="personal-profile-meta"><span>工号 ${esc(state.me.employee_no||'')}</span>${state.me.group_name?`<span>${esc(state.me.group_name)}</span>`:''}${(state.me.led_groups||[]).length?`<span>带组 · ${state.me.led_groups.map(group=>esc(group.name)).join('、')}</span>`:''}${state.me.group_leader_label?`<span>${esc(state.me.group_leader_label)}</span>`:''}</div><details class="personal-avatar-settings"><summary>头像与装扮</summary><div id="homeAvatar"></div></details></details></section>
     <div class="section-gap" id="homeRecognitionContext">
@@ -195,7 +195,7 @@ async function renderHome(){
         <details class="personal-score-breakdown"><summary>分值明细</summary><div class="personal-score-parts"><div><span>认可加分</span><strong>${fmt(d.recognition_score??Object.values(d.category_scores||{}).reduce((n,v)=>n+Number(v||0),0))}</strong></div><div><span>全勤分</span><strong>${fmt(d.attendance_score)}</strong></div><div><span>扣分</span><strong>${fmtDeduction(d.deduction_score)}</strong></div></div><div class="member-score-items">${cats.map(x=>`<div class="member-score-item"><span>${homeScoreIcon(x)}${x}</span><strong>${fmt(d.category_scores?.[x])}</strong></div>`).join('')}</div>${showScoreExplainer?'<p class="field-hint">PR = 认可加分 + 全勤分 − 扣分</p>':''}</details>
       </section>
       <div class="personal-content-grid">
-        <section class="panel personal-keepsakes"><div class="personal-section-heading"><h2>荣誉与回忆</h2><span>${esc(selectedMonthLabel)}</span></div>${personalActions}<p class="personal-honor-placeholder" hidden></p><div id="homeRankContent" class="panel personal-rank-content" role="tabpanel" aria-labelledby="homeRankView" hidden></div><div id="homeMemoryContent" role="tabpanel" aria-labelledby="homeMemoryView" hidden></div><div id="homeAttendanceContent" role="tabpanel" aria-labelledby="homeAttendanceView" hidden></div></section>
+        <section class="panel personal-keepsakes"><div class="personal-section-heading"><h2>荣誉与回忆</h2><span>${esc(selectedMonthLabel)}</span></div>${personalActions}<p class="personal-honor-placeholder" hidden></p><div id="homeRankContent" class="panel personal-rank-content" role="tabpanel" aria-labelledby="homeRankView" hidden></div><div id="homeMemoryContent" role="tabpanel" aria-labelledby="homeMemoryView" hidden></div>${attendanceAvailable?'<div id="homeAttendanceContent" role="tabpanel" aria-labelledby="homeAttendanceView" hidden></div>':''}</section>
         <div id="activityPoints" class="personal-points"></div>
       </div>
       <section class="panel personal-records"><details><summary><span>我的认可</span><span class="personal-record-count">${esc((d.records||[]).length)} 张</span></summary>${summaryMarkup}<div class="mobile-records">${(d.records||[]).length?d.records.map((r,i)=>recognitionCard(r,i,homeReadOnly)).join(''):`<div class="empty">${isHistoricalMonth?`${selectedMonthLabel}暂无签卡`:'本月暂无签卡'}</div>`}</div></details></section>
@@ -212,7 +212,7 @@ async function renderHome(){
   homeProfileCleanup=()=>window.removeEventListener('app:avatar-changed',refreshPersonalAvatar);
   registerPageCleanup(homeProfileCleanup);
   const honorButtons=[...app.querySelectorAll('.personal-honor-tabs button')];
-  const honorHosts=['homeRankContent','homeMemoryContent','homeAttendanceContent'];
+  const honorHosts=['homeRankContent','homeMemoryContent',...(attendanceAvailable?['homeAttendanceContent']:[])];
   let honorRequest=0;
   honorButtons.forEach((button,index)=>{
     button.tabIndex=index===0?0:-1;
@@ -248,7 +248,7 @@ async function renderHome(){
     if(avatarDetails.open&&!homeAvatarCleanup){homeAvatarCleanup=mountAvatarWardrobe(document.getElementById('homeAvatar'),{isCurrent:()=>request.isCurrent()});registerPageCleanup(homeAvatarCleanup);}
   };
   const attendanceButton=document.getElementById('homeAttendanceView');
-  attendanceButton.onclick=()=>{
+  if(attendanceButton)attendanceButton.onclick=()=>{
     selectHonor(attendanceButton);
     const host=document.getElementById('homeAttendanceContent'),opening=attendanceButton.getAttribute('aria-expanded')!=='true';
     attendanceButton.setAttribute('aria-expanded',String(opening));host.hidden=!opening;

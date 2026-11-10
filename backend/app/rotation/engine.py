@@ -21,13 +21,15 @@ from copy import deepcopy
 
 from app.rotation.roster import classify, fmt, hm
 
+MIN_MEAL_SHIFT_MINUTES = 390
+
 DEFAULT_SETTINGS = {
     'lineOpenAt': '07:15',        # 开园岗位开始时间
     'opReleaseAt': '07:15',       # OP 转为待定的时间
     'walkMin': 3,                 # 默认路程（分钟），可在线配置里按线覆盖
     'breakMin': 15,
     'mealMin': 45,
-    'mealThreshold': 390,         # 班次超过 6.5 小时才有吃饭
+    'mealThreshold': MIN_MEAL_SHIFT_MINUTES,  # 班次超过 6.5 小时才有吃饭
     'mealEarliest': '09:30',
     'mealAfterStart': 150,        # 上班后多久才开始安排吃饭（早班自然优先）
     'mealForceAfterStart': 300,   # 上班超过这么久仍未吃饭，强制安排
@@ -114,11 +116,49 @@ def rotation_end(day):
 
 # ---------------------------------------------------------------- 草稿生成
 
-def build_draft(date, roster, config, settings, duty_counts, week_minutes):
+SEVEN_POST_PRIORITY = {name: rank for rank, name in enumerate(
+    ('迎宾', '快迎1', '小C', '铁马入口', '铁马检票1', '熊出口'), 1)}
+SEVEN_CONFIGURATION_ALERT = '07:00 岗位未配置、重复、停用或未到开放时间：'
+
+
+def open_seven_slots(lines):
+    named = {SEVEN_POST_PRIORITY[post['name'].strip()] for line in lines for post in line['posts']
+             if post['name'].strip() in SEVEN_POST_PRIORITY}
+    slots = {}
+    for line in lines:
+        if line.get('standby'):
+            continue
+        for i, post in enumerate(line['posts']):
+            name_rank = SEVEN_POST_PRIORITY.get(post['name'].strip())
+            rank = name_rank or post.get('seven')
+            if (rank in SEVEN_POST_PRIORITY.values() and (name_rank or rank not in named) and not post.get('draftClosed')
+                    and (not post.get('openAt') or _m(post['openAt']) <= 420)
+                    and (not post.get('closeAt') or _m(post['closeAt']) > 420)):
+                slots.setdefault(rank, []).append((rank, line['id'], i))
+    # A single configured slot owns each priority. An ambiguous rank requires
+    # an explicit configuration correction, not a choice by line order.
+    return [matches[0] for _, matches in sorted(slots.items()) if len(matches) == 1]
+
+
+def refresh_seven_configuration_alert(alerts, slots, early_count):
+    alerts[:] = [alert for alert in alerts if not alert.startswith(SEVEN_CONFIGURATION_ALERT)]
+    if len(slots) < min(early_count, len(SEVEN_POST_PRIORITY)):
+        present = {rank for rank, _, _ in slots}
+        missing = [name for name, rank in SEVEN_POST_PRIORITY.items() if rank not in present]
+        if missing:
+            alerts.append(SEVEN_CONFIGURATION_ALERT + '、'.join(missing))
+
+
+def push7_rank(history, pid):
+    return tuple(history.get(pid, (0, '', 0)))
+
+
+def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, push7_history=None):
     """根据周班表生成当天初始轮岗草稿。
 
     duty_counts: {pid: {'push7': n, 'lost': n}} 本周已做次数
     week_minutes: {pid: {line: minutes}} 本周各线累计
+    push7_history: 新版使用实际完成记录。旧调用继续使用原预排统计。
     """
     cells = roster['days'].get(date)
     if cells is None:
@@ -146,7 +186,9 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes):
             'id': L['id'], 'group': L.get('group', ''), 'standby': bool(L.get('standby')),
             'walk': L.get('walk'),
             'posts': [dict(name=x['name'], openAt=x.get('openAt'), closeAt=x.get('closeAt'),
-                           seven=x.get('seven'), **({'draftClosed': True} if x.get('draftClosed') else {}))
+                           seven=SEVEN_POST_PRIORITY.get(x['name'].strip(), x.get('seven'))
+                           if push7_history is not None else x.get('seven'),
+                           **({'draftClosed': True} if x.get('draftClosed') else {}))
                       for x in L['posts']],
         })
     rot = [p for p in persons.values() if p['role'] == 'rotation']
@@ -155,20 +197,27 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes):
     for p in rot:
         if p['start'] <= open_at - 60:
             p['role'] = 'op'
-    # 7 点岗位：07:00 班站迎宾、快迎1、小C；只有 2 人时小C 不设 7 点岗
+    # 07:00 班按岗位优先级和开放情况依次预排。
     sevens = sorted([p for p in rot if p['role'] == 'rotation' and p['start'] == 420],
                     key=lambda p: (-(p['end'] - p['start']), p['name']))
-    seven_posts = sorted([(post['seven'], L['id'], i) for L in lines for i, post in enumerate(L['posts'])
-                          if post.get('seven')])
+    if push7_history is None:
+        seven_posts = sorted((post['seven'], L['id'], i) for L in lines for i, post in enumerate(L['posts'])
+                             if post.get('seven'))
+    else:
+        seven_posts = open_seven_slots(lines)
+        refresh_seven_configuration_alert(alerts, seven_posts, len(sevens))
     if len(sevens) < 2:
         alerts.append('07:00 上班只有 %d 人，少于 2 人，7 点岗位需要主管安排' % len(sevens))
-    use = seven_posts if len(sevens) >= 3 else seven_posts[:min(2, len(sevens))]
+    use = seven_posts[:len(sevens)]
     seven = {}
     for (_, lid, i), p in zip(use, sevens):
         seven['%s#%d' % (lid, i)] = p['pid']
-    # 推 7 点：07:15 班次中本周次数最少的人，优先长班
+    # 保留可立即上岗的开班候选。新版派发时再从当前可上岗人员中排序。
     early = [p for p in rot if p['role'] == 'rotation' and p['start'] == open_at and not p['absences']]
-    early.sort(key=lambda p: (duty_counts.get(p['pid'], {}).get('push7', 0), -(p['end'] - p['start']), p['name']))
+    if push7_history is None:
+        early.sort(key=lambda p: (duty_counts.get(p['pid'], {}).get('push7', 0), -(p['end'] - p['start']), p['name']))
+    else:
+        early.sort(key=lambda p: (push7_rank(push7_history, p['pid']), p['name'], p['pid']))
     push7 = [p['pid'] for p in early[:len(seven)]]
     if len(push7) < len(seven):
         alerts.append('07:15 班可做推 7 点的只有 %d 人，少于 7 点岗位 %d 个，请主管安排' % (len(push7), len(seven)))
@@ -540,6 +589,14 @@ class Engine:
                 and all(p['pid'] not in plan[kind].values() for kind in ('crew', 'seven'))
                 and not any(a['start'] <= p['start'] < a['end'] for a in p.get('absences', [])))
 
+    def start_opening_rest(self, p, now):
+        start = p['start']
+        p.update(state='rest', breakKind='rest', breakStart=start, arriveAnchor=start,
+                 readyAt=start + self.S['breakMin'], readySince=None, assign=None)
+        if now >= p['readyAt']:
+            p.update(state='ready', readySince=p['readyAt'])
+        self.h.log('initial_rest', 'system', p['pid'], None, None, {'start': start, 'until': p['readyAt']})
+
     def _shift_start(self, p, now, seat, seat7):
         t = p['start']
         if p['role'] == 'op':
@@ -562,7 +619,7 @@ class Engine:
                 x['since'] = t
                 p.update(state='onpost', line=lid, lineStart=t, continuousStart=t, lastLine=lid)
                 p['visited'].append(lid)
-                if p['pid'] in seat7:
+                if p['pid'] in seat7 or (self.d.get('ruleVersion') == 2 and t == 420 and not p.get('sevenReplaced')):
                     p['flags'].append('7点岗')
                 self.h.log('crew_start', 'system', p['pid'], lid, x['name'], {})
                 hold = x.pop('draftHold', None)
@@ -570,12 +627,7 @@ class Engine:
                     self.act_post_hold(lid, i, p['pid'], True, hold['reason'], t, hold['by'])
                 return
         if self.opening_rest_candidate(p):
-            p.update(state='rest', breakKind='rest', breakStart=t, arriveAnchor=t,
-                     readyAt=t + self.S['breakMin'], readySince=None, assign=None)
-            if now >= p['readyAt']:
-                p.update(state='ready', readySince=p['readyAt'])
-            self.h.log('initial_rest', 'system', p['pid'], None, None,
-                       {'start': t, 'until': p['readyAt']})
+            self.start_opening_rest(p, now)
             return
         p['state'] = 'ready'
         p['readyAt'] = now
@@ -1139,7 +1191,7 @@ class Engine:
         self.h.log('arrive', actor, pid, None, None, {'kind': kind, 'walk': round(p.get('walkBack') or 0, 1), 'again': not first})
 
     def meal_eligible(self, p):
-        return p['end'] - p['start'] > self.S['mealThreshold']
+        return p['end'] - p['start'] > max(MIN_MEAL_SHIFT_MINUTES, self.S['mealThreshold'])
 
     def meal_deadline(self, p):
         return p['end']
@@ -1147,14 +1199,21 @@ class Engine:
     def _meal_decision(self, p, now):
         return 'meal' if self.meal_options(p, now)['forced'] else 'rest'
 
-    def meal_options(self, p, now):
+    def meal_options(self, p, now, *, meal_minutes=None):
+        from app.rotation import forecast as F
+
         S = self.S
+        forecast = F.enabled(self)
         supply = 0
         for q in self.P.values():
             ready = q.get('readyAt')
             if (q['pid'] == p['pid'] or q['role'] not in ('rotation', 'op')
-                    or q['state'] not in ('rest', 'ready', 'meal') or ready is None
-                    or ready - now > S['mealReserveLeft'] or q.get('exception') or q.get('manualPaused')):
+                    or q.get('exception') or q.get('manualPaused')):
+                continue
+            if forecast and (q['state'] in F.WAITING_TO_REST or F.preparing_shift_start(q, now)):
+                supply += 1
+                continue
+            if q['state'] not in ('rest', 'ready', 'meal') or ready is None or ready - now > S['mealReserveLeft']:
                 continue
             if not q.get('manualRestored') and (not q['start'] <= now < q['end']
                                                 or not self.can_board(q, max(now, ready), now)):
@@ -1163,14 +1222,15 @@ class Engine:
         result = {'canChoose': False, 'forced': False, 'supply': supply,
                   'required': S.get('mealReserveMinPeople', DEFAULT_SETTINGS['mealReserveMinPeople']), 'reserveWithin': S['mealReserveLeft'],
                   'lines': sum(1 for L in self.d['lines'] if L.get('active') and any(x.get('open') for x in L['posts']))}
-        result['reserveText'] = f"可选吃饭储备 {supply} / {result['required']} 人（剩余餐休≤{result['reserveWithin']}分钟，不含本人）"
+        extra = '，含待确定休息和准备上班' if forecast else ''
+        result['reserveText'] = f"可选吃饭储备 {supply} / {result['required']} 人（剩余餐休≤{result['reserveWithin']}分钟{extra}，不含本人）"
         if not self.meal_eligible(p) or p.get('ate'):
             return result
         if now < max(_m(S['mealEarliest']), p['start'] + S['mealAfterStart']):
             return result
         left = self.meal_deadline(p) - now
         # 吃完后剩余时间太少也不安排
-        if left < S['mealMin'] + 30:
+        if left < (S['mealMin'] if meal_minutes is None else meal_minutes) + 30:
             return result
         result['forced'] = now >= p['start'] + S['mealForceAfterStart']
         result['canChoose'] = not result['forced'] and result['supply'] >= result['required']
@@ -1547,7 +1607,7 @@ class Engine:
     def act_line(self, lid, active, now, actor):
         from app.rotation import workflow as W, daily as D
         if W.enabled(self) and D.prestart(self.d,now):
-            if D.set_prestart_line(self.d,lid,active):
+            if D.set_prestart_line(self.d,lid,active,settings=self.S,read_history=getattr(self.h,'push7_history',None),now=now):
                 self.h.log('line_on' if active else 'line_off',actor,None,lid,None,{'prestart':True})
             return
         L = self.line(lid)

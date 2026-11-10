@@ -11,7 +11,7 @@ os.environ['RECOGNITION_TEST_ADMIN_PASSWORD'] = 'isolated-admin-only'
 from fastapi.testclient import TestClient
 from app.main import app
 from app.v2_database import SessionLocal
-from app.v2_models import Employee, UserAccount, AttendanceMedal, MedalAccountIdentity
+from app.v2_models import Employee, UserAccount, AttendanceMedal, MedalAccountIdentity, MonthClosure
 from app.services import attendance_medals as medals
 from app.services.employment import employment_history
 
@@ -59,6 +59,9 @@ def test_real_rebuild_archive_and_rehire_keep_identity_and_reset_only_rehire_mon
             assert person.terminated_on=='2027-01-31'
             assert db.get(MedalAccountIdentity,eid).first_created_at==original
             assert medals.qualification(db,person,'2027-01')[0]=='拟发放'
+            # January closes after the last-day termination, before the later readback.
+            db.add(MonthClosure(closure_month='2027-01',attraction_id=circle,status='closed'))
+            db.commit()
         monkeypatch.setattr(employees,'date',March)
         monkeypatch.setattr(medals,'date',March)
         rehired=client.post('/api/hr/employees',json={**body,'hired_on':'2027-03-01','starts_on':'2027-03-01'})

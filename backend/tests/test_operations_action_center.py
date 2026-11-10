@@ -33,10 +33,10 @@ def login(client: TestClient, account: str, password: str = "1234") -> None:
     assert response.status_code == 200, response.text
 
 
-def test_trial_medal_messages_do_not_reach_employee_action_center(monkeypatch):
+def test_trial_and_reopened_medal_messages_do_not_reach_employee_action_center(monkeypatch):
     from datetime import date
     from app.services import attendance_medals
-    from app.v2_models import MedalNotice
+    from app.v2_models import AttendanceMedal, MedalNotice, MonthClosure
     class February(date):
         @classmethod
         def today(cls): return cls(2027,2,2)
@@ -45,21 +45,40 @@ def test_trial_medal_messages_do_not_reach_employee_action_center(monkeypatch):
         with SessionLocal() as db:
             person=db.query(Employee).filter_by(employee_no='CMTEST01').one()
             for month in ('2026-11','2026-12','2027-01','2027-02'):
+                db.add(AttendanceMedal(employee_id=person.id, month=month, attraction_id=person.attraction_id))
                 db.add(MedalNotice(employee_id=person.id,month=month,message='合成消息 '+month,reason=''))
+                db.add(MonthClosure(closure_month=month, attraction_id=person.attraction_id, status='closed'))
             db.commit()
         login(client,'CMTEST01')
-        response=client.get('/api/action-center')
-        assert response.status_code==200,response.text
-        notices=[i for i in response.json()['items'] if i['type']=='attendance_medal_notice']
-        assert len(notices)==1 and notices[0]['count']==1
+
+        def unread_medals():
+            response = client.get('/api/action-center')
+            assert response.status_code == 200, response.text
+            return [item['count'] for item in response.json()['items'] if item['type'] == 'attendance_medal_notice']
+
+        assert unread_medals() == [1]
+        for status, expected in (('reopened', []), ('closed', [1])):
+            with SessionLocal() as db:
+                closure = db.query(MonthClosure).filter_by(closure_month='2027-01').one()
+                closure.status = status
+                db.commit()
+            assert unread_medals() == expected
 
 
-def test_attendance_medal_pending_tasks_follow_circle_permissions() -> None:
-    from app.v2_models import Attraction, MedalLeaveMonth, MedalLeaveBatch
+def test_attendance_medal_pending_tasks_follow_circle_permissions(monkeypatch) -> None:
+    from datetime import date
+    from app.services import attendance_medals
+    from app.v2_models import Attraction, MedalLeaveMonth, MedalLeaveBatch, MonthClosure
+
+    class April(date):
+        @classmethod
+        def today(cls): return cls(2027,4,1)
+
+    monkeypatch.setattr(attendance_medals,'date',April)
     with TestClient(app) as client:
         enable_circle_hr_test_login()
         with SessionLocal() as db:
-            month = '2026-11'
+            month = '2027-03'
             expected = db.query(Attraction).filter_by(employee_circle=True, active=True).count()
             state = MedalLeaveMonth(month=month, revision=1, confirmed_revision=1,
                 roster=json.dumps({str(e.id):e.attraction_id for e in db.query(Employee)}))
@@ -70,6 +89,10 @@ def test_attendance_medal_pending_tasks_follow_circle_permissions() -> None:
         login(client, 'CMTEST01')
         assert not any(r['type']=='attendance_medals' for r in client.get('/api/action-center').json()['items'])
         client.post('/api/logout');login(client,'HR-HEAT')
+        assert not any(r['type']=='attendance_medals' for r in client.get('/api/action-center').json()['items'])
+        with SessionLocal() as db:
+            db.add(MonthClosure(closure_month=month,status='closed'))
+            db.commit()
         own=[r for r in client.get('/api/action-center').json()['items'] if r['type']=='attendance_medals']
         assert len(own)==1 and own[0]['count']==1 and own[0]['tab']=='sickLeaveImport'
         client.post('/api/logout');login(client,'HR01','HR123')

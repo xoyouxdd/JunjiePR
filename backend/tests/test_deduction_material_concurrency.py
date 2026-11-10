@@ -215,7 +215,9 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
             decision = dict(decision="approve", result_level_id=memo["id"], issued_confirmed=True, handling_note="Concurrent material approval test")
             approved = manager.post(resolve_path, json=decision)
             assert approved.status_code == 200, approved.text
-            assert manager.post(resolve_path, json=decision).status_code == 404
+            duplicate = manager.post(resolve_path, json=decision)
+            assert duplicate.status_code == 409
+            assert duplicate.json()["detail"]["code"] == "UPGRADE_ALREADY_RESOLVED"
         with SessionLocal() as db:
             rows = db.query(DeductionRecord).filter_by(employee_id=target["id"], deduction_month=month).all()
             counted = [row for row in rows if deduction_counts_for_score(row)]

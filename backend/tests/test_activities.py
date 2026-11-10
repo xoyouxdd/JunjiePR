@@ -102,7 +102,9 @@ def test_multi_pool_view_insufficient_guarantee_and_refund(client):
     first = client.post(f"/api/activities/lots/{cheap['id']}/join", json=body)
     assert first.status_code == 200, first.text
     assert client.post(f"/api/activities/lots/{cheap['id']}/join", json=body).json() == first.json()
-    assert client.get('/api/activity-points/me').json()['available'] == 5
+    card = client.get('/api/activity-points/me').json()
+    assert card['available'] == 5 and card['earned'] == 45
+    assert card['pending_redemption'] == {'count': 2, 'cost': 40, 'title': None, 'state': None}
     body['count'] = 1
     assert client.post(f"/api/activities/lots/{cheap['id']}/join", json=body).status_code == 409
     expire(cheap['id'])
@@ -123,7 +125,9 @@ def test_multi_pool_view_insufficient_guarantee_and_refund(client):
     summary = find(client, event['id'])['summary']
     assert summary['net_used'] == 20 and summary['refunded'] == 20 and summary['issued'] == 1 and summary['claimed'] == 0
     login(client, 'CMTEST01')
-    assert client.get('/api/activity-points/me').json()['available'] == 25
+    card = client.get('/api/activity-points/me').json()
+    assert card['available'] == 25 and card['earned'] == 45
+    assert card['pending_redemption'] == {'count': 1, 'cost': 20, 'title': event['title'], 'state': 'issued'}
     with SessionLocal() as db:
         assert db.query(AuditLog).filter_by(action='活动缺货退款', entity_id=str(event['id'])).count() == 1
 
@@ -150,9 +154,11 @@ def test_auction_holds_outbid_self_raise_and_single_settlement(client):
     money('CMTEST01', 100)
     money('CMTEST02', 100)
     login(client, 'CMTEST01')
+    before = client.get('/api/activity-points/me').json()['pending_redemption']
     assert post(client, f'lots/{lot_id}/bid', amount=20).status_code == 200
     card = client.get('/api/activity-points/me').json()
     assert card['available'] == 80 and card['frozen'] == 20
+    assert card['pending_redemption'] == before
     assert post(client, f'lots/{lot_id}/bid', amount=25).status_code == 200
     assert client.get('/api/activity-points/me').json()['available'] == 75
     login(client, 'CMTEST02')

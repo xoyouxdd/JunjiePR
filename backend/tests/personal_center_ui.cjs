@@ -53,7 +53,7 @@ async function main(){
       await page.locator('.tabs-desktop [data-tab="home"]').click();
       await page.locator('.personal-center .points-amount strong').filter({hasText:'28'}).waitFor();
       assert.equal(await page.locator('.personal-profile h2').textContent(),me.name);
-      assert.equal(await page.locator('.personal-honor-tabs button').count(),3);
+      assert.equal(await page.locator('.personal-honor-tabs button').count(),2);
       assert.equal(await page.locator('.personal-profile-meta').getByText(/带组/).count(),(me.led_groups||[]).length?1:0);
       for(const width of [320,390,1280]){
         await page.setViewportSize({width,height:2000});
@@ -85,15 +85,13 @@ async function main(){
       assert((await compactMemory.boundingBox()).height<=previewHeight+1);
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'memory content overflow');
       assert(await page.locator('#homeRankContent').isHidden());
-      await page.locator('#homeAttendanceView').click();
-      await page.locator('#homeAttendanceContent').getByText('全勤勋章将于2027年2月开放。').waitFor();
-      assert(await page.locator('#homeMemoryContent').isHidden());
+      assert.equal(await page.locator('#homeAttendanceView,#homeAttendanceContent').count(),0);
       // The selected month changes PR / honors / memories; lifetime points stay unchanged.
       const previous=await page.locator('#homeMonthSelect option').evaluateAll(options=>options.map(x=>x.value).find(x=>x!=='2026-11'));
       await page.locator('#homeMonthSelect').selectOption(previous);
       await page.waitForFunction(month=>document.querySelector('#homeMonthSelect')?.value===month&&!document.querySelector('.home-query-retry')&&document.querySelector('.personal-keepsakes'),previous);
       assert(requestedMonths.includes(previous));
-      await page.locator('#homeAttendanceView').click();
+      assert.equal(await page.locator('#homeAttendanceView,#homeAttendanceContent').count(),0);
       assert((await page.locator('.personal-section-heading').textContent()).includes(String(Number(previous.slice(5)))));
       assert.equal(await page.locator('.points-amount strong').textContent(),'28');
       await page.locator('#homeRankView').click();
@@ -110,10 +108,10 @@ async function main(){
       delayRank=true;await page.locator('#homeRankView').click();
       await page.waitForFunction(()=>document.querySelector('#homeRankView')?.disabled);
       while(!releaseRank)await sleep(20);
-      await page.locator('#homeAttendanceView').click();releaseRank();
+      await page.locator('#homeMemoryView').click();releaseRank();
       await page.waitForFunction(()=>!document.querySelector('#homeRankView')?.disabled);
       assert(await page.locator('#homeRankContent').isHidden());
-      assert.equal(await page.locator('#homeAttendanceView').getAttribute('aria-selected'),'true');
+      assert.equal(await page.locator('#homeMemoryView').getAttribute('aria-selected'),'true');
       assert.deepEqual(errors,[]);
       console.log('Verified personal center:',account);
       await context.close();

@@ -7,8 +7,8 @@ import { confirmModal } from './dialogs.js';
 import { esc } from './format.js';
 import { menuItems, navIcon, refreshActionBadge, renderTabs, setActionBadge, notifyRotationTimeoutCases } from './navigation.js';
 import { workItemDetailsHtml } from './records.js';
-import { bindUpgradeReviewActions, upgradeReviewCards, bindUpgradeRecoveryActions, upgradeRecoveryCards } from './reviews.js';
-import { app, state } from './state.js';
+import { bindUpgradeReviewActions, upgradeReviewWorkspace, bindUpgradeRecoveryActions, upgradeRecoveryCards } from './reviews.js';
+import { app, has, state } from './state.js';
 import { toast } from './toast.js';
 import { mountRotationTasks } from './rotation.js';
 import { mountDailyWish } from './daily-wish.js';
@@ -27,21 +27,23 @@ function actionCenterDetailHtml(detail){
   return `<section class="panel action-center-detail"><div class="statistics-detail-heading"><div><h3>${esc(detail.title)}</h3><span>${overdue?'已筛选等待超过48小时的签卡。':'按提交时间从早到晚展示。'}</span></div><button type="button" class="secondary" data-close-action-detail>关闭</button></div><div class="table-wrap"><table><thead><tr><th>员工</th><th>景点圈</th><th>签卡</th><th>员工提交时间</th><th>等待复核</th><th>应复核人</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.employee_name)}</strong><br><small>${esc(row.employee_no)}</small></td><td>${esc(row.attraction_name)}${row.group_name?`<br><small>${esc(row.group_name)}</small>`:''}</td><td>${esc(row.recognition_date)} · ${esc(row.recognition_type)}</td><td>${esc(row.submitted_at)}</td><td>${actionCenterWaiting(row.waiting_hours)}</td><td><strong>${esc(row.reviewer_name)}</strong>${row.reviewer_no?`<br><small>${esc(row.reviewer_no)}${row.reviewer_role_name?` · ${esc(row.reviewer_role_name)}`:''}</small>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">当前没有待复核签卡</td></tr>'}</tbody></table></div></section>`;
 }
 
-async function renderActionCenter(){
+async function renderActionCenter(openPane){
   const request=beginViewRequest();
-  const isUpgradeReviewer=['TA_GSM','GSM'].includes(state.me.role_code);
+  const isUpgradeReviewer=state.me.role_code==='GSM'&&has('DEDUCTION_ALL');
   const [data,upgradeData,recoveryData]=await Promise.all([api('/api/action-center'),isUpgradeReviewer?api('/api/deduction-upgrades/pending'):Promise.resolve({items:[]}),api('/api/deduction-upgrades/recovery')]);
   if(!request.isCurrent())return;
-  const items=data.items||[],upgradeItems=upgradeData.items||[],total=Number(data.total||0)+upgradeItems.length+(recoveryData.items||[]).length;
+  const items=data.items||[],upgradeItems=upgradeData.items||[],recoveryItems=recoveryData.items||[];
+  const reviewCount=upgradeItems.filter(row=>row.reviewer_id===state.me.id).length+(upgradeData.notices||[]).length+recoveryItems.length;
+  const total=Number(data.total||0)+reviewCount;
   setActionBadge(total);
   notifyRotationTimeoutCases(data.rotation_timeout_cases||[]);
   if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
   const severityOrder={critical:0,warning:1,info:2};
   const visibleItems=items.filter(item=>item.type!=='rotation_step').sort((a,b)=>(severityOrder[a.severity]??3)-(severityOrder[b.severity]??3));
   const todoCards=visibleItems.map((item,index)=>`<div class="action-center-item"><article class="action-card severity-${esc(item.severity)} ${index===0?'is-priority':''}"><div class="action-card-main"><span class="action-severity">${item.severity==='critical'?'优先处理':item.severity==='warning'?'请跟进':'待核对'}</span><strong>${esc(item.title)}</strong><p>${esc(item.description)}</p></div><div class="action-card-side"><div class="action-count"><b>${Number(item.count)}</b><span>项</span></div><button type="button" class="${index===0?'primary':'secondary'}" data-action-tab="${esc(item.tab)}" data-action-type="${esc(item.type)}" aria-expanded="false">${item.type==='recognition_review'?'开始复核':'立即查看'}</button>${item.type==='recognition_review'?`<button type="button" class="secondary" data-action-tab="${esc(item.tab)}" data-action-type="recognition_review" data-action-details="true" aria-expanded="false">查看明细</button>`:''}</div></article><div class="action-center-inline-detail" hidden></div></div>`).join('')||(items.some(item=>item.type==='rotation_step')?'':'<section class="empty action-center-empty"><span class="workbench-empty-mark" aria-hidden="true">✓</span><strong>这里暂时没有待办</strong><span>当前没有待处理事项。新的待办会在这里提醒你。</span></section>');
-  const showUpgradePane=isUpgradeReviewer||(recoveryData.items||[]).length>0;
-  const reviewTab=showUpgradePane?`<button type="button" class="secondary" data-action-pane-tab="review">待审核 <span class="badge warn">${upgradeItems.length+(recoveryData.items||[]).length}</span></button>`:'';
-  const reviewPane=showUpgradePane?`<section class="action-center-pane" data-action-pane="review" hidden><p class="field-hint">显示分配给你的审核工单，以及你有权重新指派的失效工单。备忘录和一级警告无需上传文件，处理说明必填。</p><div class="governance-case-list">${upgradeRecoveryCards(recoveryData.items||[])}${upgradeReviewCards(upgradeItems)}</div></section>`:'';
+  const showUpgradePane=isUpgradeReviewer||recoveryItems.length>0;
+  const reviewTab=showUpgradePane?`<button type="button" class="secondary" data-action-pane-tab="review">${isUpgradeReviewer?'待审核':'重新指派'} <span class="badge warn">${reviewCount}</span></button>`:'';
+  const reviewPane=showUpgradePane?`<section class="action-center-pane" data-action-pane="review" hidden>${isUpgradeReviewer?'<p class="field-hint">备忘录和一级警告无需上传文件，处理说明必填。</p>':''}<div class="governance-case-list">${upgradeRecoveryCards(recoveryItems)}${isUpgradeReviewer?upgradeReviewWorkspace(upgradeData):''}</div></section>`:'';
   const shortcuts=menuItems().filter(([id])=>!['actionCenter','password','logs','hrScores','circleHrAccounts'].includes(id)).slice(0,6);
   const side=`<aside class="panel workbench-shortcuts"><h3>常用工作</h3><div>${shortcuts.map(([id,label])=>`<button type="button" class="workbench-shortcut" data-workbench-tab="${esc(id)}">${navIcon(id)}<span>${esc(label)}</span><span aria-hidden="true">›</span></button>`).join('')}</div><div data-workbench-exports></div></aside>`;
   if(!request.write(`<div class="section-gap action-center-page"><section class="workbench-heading"><div><span class="eyebrow">${esc(state.me.role_label||state.me.role_name||'FZ工作台')}</span><h2>今日工作</h2><p>${esc(data.month)} · <strong>${total}</strong> 项待处理<span class="workbench-updated"> · 本次已更新</span></p></div><button type="button" class="secondary" id="refreshActionCenter" title="刷新待办中心">刷新</button></section><div class="workbench-columns"><section class="panel action-center-panel"><div class="action-center-switch"><button type="button" class="primary" data-action-pane-tab="todo">待办 <span class="badge">${Number(data.total||0)}</span></button>${reviewTab}</div><section class="action-center-pane" data-action-pane="todo"><div data-formal-rotation-todo></div><section class="action-center-list">${todoCards}</section></section>${reviewPane}</section>${side}</div></div>`))return;
@@ -51,7 +53,7 @@ async function renderActionCenter(){
   mountRotationTasks(app.querySelector('[data-formal-rotation-todo]'),request,()=>void render());
   const setPane=name=>{app.querySelectorAll('[data-action-pane]').forEach(pane=>{pane.hidden=pane.dataset.actionPane!==name;});app.querySelectorAll('[data-action-pane-tab]').forEach(button=>{const active=button.dataset.actionPaneTab===name;button.classList.toggle('primary',active);button.classList.toggle('secondary',!active);});};
   app.querySelectorAll('[data-action-pane-tab]').forEach(button=>button.onclick=()=>setPane(button.dataset.actionPaneTab));
-  if(!Number(data.total||0)&&(upgradeItems.length||(recoveryData.items||[]).length))setPane('review');
+  if(showUpgradePane&&(openPane==='review'||(!Number(data.total||0)&&(reviewCount||upgradeItems.length))))setPane('review');
   document.getElementById('refreshActionCenter').onclick=()=>render();
   const closeDetail=button=>{const host=button.closest('.action-center-item').querySelector('.action-center-inline-detail');host.innerHTML='';host.hidden=true;button.textContent=button.dataset.actionDetails?'查看明细':'立即查看';button.setAttribute('aria-expanded','false');};
   app.querySelectorAll('[data-action-tab]').forEach(button=>button.onclick=async()=>{if(button.dataset.actionType==='recognition_review'&&!button.dataset.actionDetails){state.reviewFocus=true;state.tab=button.dataset.actionTab;renderTabs();render();return;}const detailTypes=new Set(['backup_health','ungrouped_employee','recognition_review','overdue_review','deduction_follow_up']);if(!detailTypes.has(button.dataset.actionType)){if(button.dataset.actionType==='deduction_material')state.pendingMaterialScope='all';if(button.dataset.actionType==='learning_access')state.learningApprovals=true;if(button.dataset.actionTab==='announcements'){let workspace=announcementWorkspaces.get(state.me.id);if(!workspace){workspace={view:'pending',category:'',q:'',page:1,draft:null};announcementWorkspaces.set(state.me.id,workspace);}workspace.view=button.dataset.actionType==='announcement_receipt'?'pending':'messages';workspace.page=1;workspace.q='';workspace.category='';}state.tab=button.dataset.actionTab;renderTabs();render();return;}if(button.getAttribute('aria-expanded')==='true'){closeDetail(button);return;}button.disabled=true;try{const detail=await api('/api/action-center/'+encodeURIComponent(button.dataset.actionType)+'/details');if(!request.isCurrent())return;app.querySelectorAll('[data-action-tab][aria-expanded="true"]').forEach(closeDetail);const host=button.closest('.action-center-item').querySelector('.action-center-inline-detail');host.innerHTML=actionCenterDetailHtml(detail);host.hidden=false;
@@ -64,8 +66,8 @@ button.textContent='收起';button.setAttribute('aria-expanded','true');host.que
     host.querySelector('[data-backup-dismiss]').onclick=async()=>{const confirmed=await confirmModal('删除备份待办','<p>仅移除当前这条待办，不删除备份文件；新巡检异常或24小时后会重新提醒。</p>','确认删除');if(!confirmed)return;try{await api('/api/admin/backup-health/dismiss',json('POST',{}));toast('当前备份待办已移除');request.refresh(renderActionCenter);void refreshActionBadge();}catch(error){toast(error.message,true)}};
     host.querySelector('[data-backup-retry]').onclick=async()=>{const confirmed=await confirmModal('重新备份数据库','<p>将在服务器后台创建一次新的 SQLite 快照；这不会修复缺失的每日计划任务。</p>','确认备份');if(!confirmed)return;const retryButton=host.querySelector('[data-backup-retry]');retryButton.disabled=true;try{await api('/api/admin/backup-health/retry',json('POST',{}));toast('手动备份已启动');const statusNode=host.querySelector('[data-manual-backup-status]');statusNode.textContent='手动备份正在执行…';for(let i=0;i<120&&host.isConnected;i++){await new Promise(resolve=>setTimeout(resolve,3000));if(!host.isConnected)break;const status=await api('/api/admin/backup-health/manual-status');if(status.status!=='running'){statusNode.textContent=status.status==='completed'?`手动备份成功：${status.file_name||'已完成'}`:'手动备份失败，请联系服务器管理员检查日志。';toast(status.status==='completed'?'手动备份完成':'手动备份失败',status.status!=='completed');retryButton.disabled=false;break;}}}catch(error){retryButton.disabled=false;toast(error.message,true)}};
   }host.scrollIntoView({behavior:'smooth',block:'nearest'});}catch(error){toast(error.message,true)}finally{button.disabled=false;}});
-  if(isUpgradeReviewer)bindUpgradeReviewActions(app,renderActionCenter);
-  bindUpgradeRecoveryActions(app,recoveryData,renderActionCenter);
+  if(isUpgradeReviewer)bindUpgradeReviewActions(app,()=>renderActionCenter('review'));
+  bindUpgradeRecoveryActions(app,recoveryData,()=>renderActionCenter('review'));
   if(state.me.base_role_code==='TR'||state.me.role_code==='TR'){
     const host=document.createElement('section');host.className='panel section-gap';host.setAttribute('aria-label','轮岗协助授权');app.append(host);
     let busy=false;

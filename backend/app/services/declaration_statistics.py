@@ -4,21 +4,27 @@ from app.employee_numbers import employee_number
 
 import re
 from collections import Counter, defaultdict
+from datetime import date
 
 from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from app.deduction_policy import deduction_counts_for_score
+from app.date_utils import subtract_calendar_months
+from app.deduction_policy import deduction_counts_for_score, unused_statement_upgrade_filters
+from app.role_constants import FRONTLINE_CODES
 from app.score_policy import loa_month_exclusion
+from app.services.identity import base_roles_at
+from app.services.scoring_policies import category
+from app.services.upgrade_recovery import upgrade_work_status_name
 
 from app.v2_models import (
     Attraction, DeductionLevel, DeductionRecord, DeductionType,
-    DeductionUpgradeRequest, StoredFile,
+    DeductionUpgradeRequest, Employee, StoredFile, UserAccount,
 )
 
 STATUS_LABELS = {"active": "已生效", "pending_material": "待补材料", "material_processing": "待补材料", "material_failed": "待补材料", "pending_upgrade": "审核中", "void": "已作废"}
 MATERIAL_LABELS = {"ready": "材料已就绪", "missing": "待补材料", "processing": "材料处理中", "failed": "材料处理失败"}
-UPGRADE_LABELS = {"pending": "审核中", "material_processing": "材料处理中", "source_first": "已升级（原声明）", "source_second": "升级来源（不计分）", "result": "升级结果", "rejected": "审核不通过", "eligible": "可升级"}
+UPGRADE_LABELS = {"pending": "审核中", "awaiting_reviewer": "材料已就绪 · 待重新指派", "material_processing": "材料处理中", "source_first": "已升级（原声明）", "source_second": "升级来源（不计分）", "result": "升级结果", "rejected": "审核不通过", "eligible": "可升级"}
 
 
 def checked_month(month: str) -> str:
@@ -27,9 +33,43 @@ def checked_month(month: str) -> str:
     return month
 
 
+def _open_statement_slots(db, selected_ids, levels, types):
+    statement = next((level for level in levels.values() if level.code == "STATEMENT" and level.active), None)
+    has_result_level = any(level.active and level.code in {"MEMO", "WARNING_1"} for level in levels.values())
+    if not statement or not selected_ids or not has_result_level:
+        return set()
+    today = date.today()
+    day = today.isoformat()
+    candidates = (
+        db.query(DeductionRecord.id, DeductionRecord.employee_id, DeductionType.code)
+        .join(DeductionType, DeductionType.id == DeductionRecord.deduction_type_id)
+        .join(Employee, Employee.id == DeductionRecord.employee_id)
+        .join(UserAccount, UserAccount.employee_id == Employee.id)
+        .filter(
+            DeductionRecord.id.in_(selected_ids),
+            *unused_statement_upgrade_filters(statement.id),
+            DeductionRecord.occurred_on.between(subtract_calendar_months(today, 3).isoformat(), day),
+            Employee.is_active.is_(True),
+            UserAccount.enabled.is_(True),
+        ).all()
+    )
+    if not candidates:
+        return set()
+    source_types = set()
+    for kind in types.values():
+        if kind.active:
+            policy = category(db, "deduction", "all", kind.code, day)
+            if policy["active"] and policy["repeat"] == "upgrade":
+                source_types.update(policy["group"])
+    sources = [(record_id, employee_id) for record_id, employee_id, code in candidates if code in source_types]
+    roles = base_roles_at(db, {employee_id for _, employee_id in sources}, today)
+    frontline_ids = {employee_id for employee_id, role in roles.items() if role and role.code in FRONTLINE_CODES}
+    return {record_id for record_id, employee_id in sources if employee_id in frontline_ids}
+
+
 def declaration_payload(
     db: Session, month: str, attraction_id: int | None, level_id: int | None,
-    type_id: int | None, status: str, keyword: str,
+    type_id: int | None, status: str, keyword: str, *, include_upgrade_slots: bool = False,
 ) -> dict:
     checked_month(month)
     if status and status not in {*STATUS_LABELS.values(), "current"}:
@@ -70,6 +110,7 @@ def declaration_payload(
     # own upgrade_request_id was not populated. Resolve outside the current
     # month/level/type filters so a source can always reach its actual result.
     selected_ids = {row.id for row in selected}
+    open_slots = _open_statement_slots(db, selected_ids, levels, types) if include_upgrade_slots else set()
     upgrades = db.query(DeductionUpgradeRequest).filter(or_(
         DeductionUpgradeRequest.first_deduction_id.in_(selected_ids),
         DeductionUpgradeRequest.second_deduction_id.in_(selected_ids),
@@ -100,10 +141,11 @@ def declaration_payload(
     for work in upgrades:
         if work.status == "approved" and work.result_deduction_id:
             approved_seconds.add(work.second_deduction_id)
+        status_name = upgrade_work_status_name(work, all_rows.get(work.second_deduction_id))
         members = [("source_first", work.first_deduction_id), ("source_second", work.second_deduction_id), ("result", work.result_deduction_id)]
         for role, rid in members:
             if rid in all_rows:
-                links[rid].append({"request_id": work.id, "status": work.status, "role": role,
+                links[rid].append({"request_id": work.id, "status": work.status, "status_name": status_name, "role": role,
                                    "records": [{"id": mid, "role": kind, "level_name": all_rows[mid].deduction_level_name}
                                                for kind, mid in members if mid in all_rows]})
 
@@ -146,6 +188,7 @@ def declaration_payload(
             "registered_points": registered_points, "actual_points": actual_points,
             "deduction_month": row.deduction_month, "loa_excluded": loa_excluded, "score_status": score_status,
             "void_reason": row.void_reason or "", "upgrade_links": links[row.id],
+            "upgrade_slot_open": row.id in open_slots,
             "counted_in_statistics": row.id not in approved_seconds,
         }
 

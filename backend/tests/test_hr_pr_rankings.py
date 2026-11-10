@@ -19,7 +19,43 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.v2_database import SessionLocal
 from app.v2_crypto import hash_password
+from app.activity_points_models import ActivityPointsEntry
 from app.v2_models import Attraction, Employee, EmployeeRoleAssignment, Role, UserAccount, RecognitionRecord, RecognitionType, AuditLog
+
+
+def test_points_board_reuses_pr_scope_and_filters_but_only_counts_earned(client):
+    from datetime import timedelta
+    day = date.today().isoformat()
+    earlier = (date.today() - timedelta(days=1)).isoformat()
+    with SessionLocal() as db:
+        cm = db.query(Employee).filter_by(employee_no='9600000').one()
+        lead = db.query(Employee).filter_by(employee_no='9600001').one()
+        own, cm_id = cm.attraction_id, cm.id
+        for employee, delta, kind, business_date in [
+            (cm, 3, 'recognition', day), (cm, -1, 'recognition', day),
+            (cm, 12, 'legacy_import', day), (cm, -2, 'legacy_import', day),
+            (cm, -8, 'activity_spend', day), (cm, 4, 'activity_refund', day),
+            (cm, 7, 'recognition', earlier), (lead, 2, 'recognition', day),
+        ]:
+            db.add(ActivityPointsEntry(employee_id=employee.id, revision=1, delta=delta,
+                kind=kind, origin='test', business_date=business_date, detail_json='{}'))
+        db.commit()
+    params = dict(start_date=day, end_date=day, category='points', attraction_id=own)
+    url = '/api/pr-rankings'
+    for account in ['GSMTEST01', 'AMTEST01', 'OMTEST01']:
+        login(client, account)
+        response = client.get(url, params=params)
+        assert response.status_code == 200, response.text
+        row = response.json()['rows'][0]
+        assert row['employee_id'] == cm_id and row['score'] == 12
+    assert client.get(url, params={**params, 'keyword': '09600000', 'start_date': earlier}).json()['rows'][0]['score'] == 19
+    assert client.get(url, params={**params, 'population': 'supervisor'}).json()['rows'][0]['score'] == 2
+    assert client.get(url, params={**params, 'keyword': '排名合成1-CM'}).json()['total'] == 0
+    assert client.get(url, params={**params, 'population': 'all'}).status_code == 400
+    assert client.get(url+'/export', params=params).status_code == 400
+    for account in ['TAGSMTEST01', 'CMTEST01', 'HR-HEAT', 'HR01']:
+        login(client, account)
+        assert client.get(url, params=params).status_code == 403
 
 ACCOUNTS=['HR-HEAT','HR-DWARF','HR-BEAR']
 CATEGORIES=['overall','recognition','deduction','absence','leader','gsm_leader']

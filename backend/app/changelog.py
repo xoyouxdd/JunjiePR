@@ -6,10 +6,15 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.10.1", "date": "2026-11-10", "status": "candidate",
+     "items": [
+         {"summary": "个人积点卡", "detail": "活动相关名称统一为积点，个人积点卡显示累计获得。已支出且兑换待完成的活动会在卡片下方提示。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"]},
+         {"summary": "积点榜", "detail": "PR排名增加积点榜，沿用景点圈、日期、人群和员工搜索筛选，按区间累计积点排序。", "audiences": ["GSM", "AM", "OM"]},
+     ]},
     {"version": "2026.11.09.1", "date": "2026-11-09", "status": "candidate",
      "items": [{"summary": "声明升级配对与材料处理完善", "detail": "升级审核被拒后释放第一条声明占用，保留历史记录并支持与新声明重新配对；完善最低升级等级、异常工单恢复和材料提交失败处理。声明统计增加当前状态筛选、员工候选及关联工单展示，查询与导出沿用相同筛选范围。", "audiences": ["all"]}]},
     {"version": "2026.11.08.1", "date": "2026-11-08", "status": "candidate",
-     "items": [{"summary": "活动积分、认可收件箱与全勤勋章", "detail": "新增活动中心、活动积分和历史积点导入，完善活动参与、兑换及签收记录；认可收件箱支持查阅与记录更正，个人中心集中展示荣誉。全勤勋章支持管理核对及圈发放，2026年11至12月试用记录仅管理端可见，员工正式展示自2027年2月开放。完善导出与材料并发处理。", "audiences": ["all"]}]},
+     "items": [{"summary": "活动积点、认可收件箱与全勤勋章", "detail": "新增活动中心、活动积点和历史积点导入，完善活动参与、兑换及签收记录；认可收件箱支持查阅与记录更正，个人中心集中展示荣誉。全勤勋章支持管理核对及圈发放，2026年11至12月试用记录仅管理端可见，员工正式展示自2027年2月开放。完善导出与材料并发处理。", "audiences": ["all"]}]},
     {"version": "2026.11.06.1", "date": "2026-11-06", "status": "candidate",
      "items": [{"summary": "动态轮岗预排与签卡发放排名更新", "detail": "新增轮岗规则版本2，按实际状态动态计算预计去向，支持独立确认、排序时间、餐休储备和跨夜处理；统一管理角色的热力追踪看板范围，大屏限制为本人步骤确认。标准线路配置扩至六岗。主管及GSM发放榜按签卡人统计并增加景点明细，景点圈HR沿用本圈人员范围。", "audiences": ["all"]}]},
     {"version": "2026.11.04.3", "date": "2026-11-04", "status": "candidate",

@@ -33,7 +33,10 @@ def get_declaration_statistics(
     type_id: int | None = None, status: str = "", keyword: str = "",
     db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DECLARATION_STATS_VIEW")),
 ):
-    return declaration_payload(db, month or date.today().strftime("%Y-%m"), attraction_id, level_id, type_id, status, keyword)
+    return declaration_payload(
+        db, month or date.today().strftime("%Y-%m"), attraction_id, level_id, type_id, status, keyword,
+        include_upgrade_slots=True,
+    )
 
 
 def build_declaration_workbook(data: dict) -> Workbook:

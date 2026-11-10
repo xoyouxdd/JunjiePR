@@ -26,7 +26,7 @@ function menuItems() {
   else if (r==='HR_ADMIN') {items.push(['hrEmployees','员工管理'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
   else if (has('DATA_VIEW')) items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
-  if(['CM','TR','SUPERVISOR','TA_SUPERVISOR','TA_GSM','GSM','AM','OM'].includes(state.me.base_role_code||r))items.push(['activityPoints','我的积分卡']);
+  if(['CM','TR','SUPERVISOR','TA_SUPERVISOR','TA_GSM','GSM','AM','OM'].includes(state.me.base_role_code||r))items.push(['activityPoints','我的积点卡']);
   if(!state.me.rotation_temporary)items.push(['activities','活动中心']);
   if(has('REVIEW_SUPERVISOR'))items.splice(Math.min(items.length,1),0,['supervisorReview','主管复核']);
   if(has('LOA_REGISTER'))items.push(['loa','LOA登记']);
@@ -103,10 +103,22 @@ function renderUserBadge(){
   const logoutButton=document.getElementById('logoutBtn');if(logoutButton)logoutButton.hidden=!state.me.rotation_temporary;
 }
 
+function updateIdentityMemberCount(count){
+  if(!state.me||!Number.isInteger(count)||count<0||state.me.member_count===count)return;
+  state.me.member_count=count;
+  renderUserBadge();
+  const row=tabs.querySelector('[data-identity-member-count]');
+  if(row){
+    const label=userIdentityParts().members;
+    row.querySelector('dd').textContent=label;
+    row.hidden=!label;
+  }
+}
+
 function mobileIdentityCard(){
   const p=userIdentityParts();
-  const rows=[['姓名',p.name],['工号',p.employeeNo],['角色',p.role],['景点圈',p.circle],['组员',p.members]].filter(([,v])=>v);
-  return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${avatarAllowed()?'<button type="button" class="secondary" data-avatar-settings>个人外观与头像</button>':'<button type="button" class="secondary" data-appearance-settings>个人外观</button>'}</section>`;
+  const rows=[['姓名',p.name],['工号',p.employeeNo],['角色',p.role],['景点圈',p.circle]].filter(([,v])=>v);
+  return `<section class="mobile-identity-card" aria-label="我的身份"><dl>${rows.map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}<div data-identity-member-count${p.members?'':' hidden'}><dt>组员</dt><dd>${esc(p.members)}</dd></div></dl>${avatarAllowed()?'<button type="button" class="secondary" data-avatar-settings>个人外观与头像</button>':'<button type="button" class="secondary" data-appearance-settings>个人外观</button>'}</section>`;
 }
 
 const NAV_FOOTER_IDS=['password'];
@@ -229,15 +241,15 @@ async function refreshActionBadge(){
   if(state.me?.rotation_temporary)return;
   if(!state.me||!menuItems().some(([id])=>id==='actionCenter'))return;
   const employeeId=state.me.id;
-  const isUpgradeReviewer=['TA_GSM','GSM'].includes(state.me.role_code);
+  const isUpgradeReviewer=state.me.role_code==='GSM'&&has('DEDUCTION_ALL');
   try{
     const [data,upgradeData,recoveryData]=await Promise.all([
       api('/api/action-center'),
-      isUpgradeReviewer?api('/api/deduction-upgrades/pending'):Promise.resolve({items:[]}),
+      isUpgradeReviewer?api('/api/deduction-upgrades/pending?mine_only=true'):Promise.resolve({items:[]}),
       api('/api/deduction-upgrades/recovery'),
     ]);
     if(state.me?.id!==employeeId)return;
-    setActionBadge(Number(data.total||0)+(upgradeData.items||[]).length+(recoveryData.items||[]).length);
+    setActionBadge(Number(data.total||0)+(upgradeData.items||[]).length+(upgradeData.notices||[]).length+(recoveryData.items||[]).length);
     if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
     notifyRotationTimeoutCases(data.rotation_timeout_cases||[]);
   }catch(_){/* A badge refresh must never interrupt the existing page workflow. */}
@@ -320,4 +332,4 @@ function renderTabs() {
 
 function gotoTab(tab){state.tab=tab;renderTabs();render();}
 
-export { gotoTab, menuItems, mobilePrimaryIds, navIcon, refreshActionBadge, renderTabs, renderUserBadge, setActionBadge, notifyRotationTimeoutCases };
+export { gotoTab, menuItems, mobilePrimaryIds, navIcon, refreshActionBadge, renderTabs, renderUserBadge, setActionBadge, notifyRotationTimeoutCases, updateIdentityMemberCount };

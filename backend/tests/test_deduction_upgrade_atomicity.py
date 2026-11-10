@@ -26,7 +26,9 @@ from app.v2_models import (
     Employee,
     EmployeeRoleAssignment,
     MonthClosure,
+    Permission,
     Role,
+    RolePermission,
     StoredFile,
     UserAccount,
 )
@@ -59,8 +61,10 @@ def upgrade_db():
         kind = DeductionType(code="ATT_EARLY_CLOCK", name="考勤")
         statement = DeductionLevel(code="STATEMENT", name="声明", points=Decimal("1"))
         memo = DeductionLevel(code="MEMO", name="备忘录", points=Decimal("2"))
-        db.add_all([role, circle, kind, statement, memo])
+        permission = Permission(code="DEDUCTION_ALL", name="扣分管理")
+        db.add_all([role, circle, kind, statement, memo, permission])
         db.flush()
+        db.add(RolePermission(role_id=role.id, permission_id=permission.id))
         reviewers = [Employee(employee_no=f"GSM{i}", name=f"GSM{i}", attraction_id=circle.id) for i in range(3)]
         target = Employee(employee_no="CM1", name="CM1", attraction_id=circle.id)
         db.add_all([*reviewers, target])
@@ -98,9 +102,6 @@ def approval(ids):
 
 def invoke(db, ids, command, reviewer_id=None):
     user = user_for(db, reviewer_id or ids["reviewer"])
-    if command.startswith("transfer"):
-        target_id = ids["third_reviewer"] if command == "transfer_third" else ids["next_reviewer"]
-        return deductions.transfer_deduction_upgrade(ids["request"], {"reviewer_id": target_id, "reason": "交接"}, REQUEST, db, user)
     payload = approval(ids) if command == "approve" else {"decision": "reject", "handling_note": "审核不通过"}
     return deductions.resolve_deduction_upgrade(ids["request"], payload, REQUEST, db, user)
 
@@ -108,26 +109,21 @@ def invoke(db, ids, command, reviewer_id=None):
 def race(sessions, ids, commands):
     barrier = Barrier(len(commands))
 
-    def run(command):
+    def run(entry):
+        command, reviewer_id = entry
         with sessions() as db:
-            user = user_for(db, ids["reviewer"])
             cached = db.get(DeductionUpgradeRequest, ids["request"])
             assert cached.status == "pending"
             barrier.wait(timeout=5)
             try:
-                if command.startswith("transfer"):
-                    target = ids["third_reviewer"] if command == "transfer_third" else ids["next_reviewer"]
-                    deductions.transfer_deduction_upgrade(ids["request"], {"reviewer_id": target, "reason": "交接"}, REQUEST, db, user)
-                else:
-                    payload = approval(ids) if command == "approve" else {"decision": "reject", "handling_note": "审核不通过"}
-                    deductions.resolve_deduction_upgrade(ids["request"], payload, REQUEST, db, user)
-                return command, 200
+                invoke(db, ids, command, reviewer_id)
+                return command, reviewer_id, 200, None
             except HTTPException as exc:
                 assert not db.in_transaction(), "failed command must release its writer lock"
-                return command, exc.status_code
+                return command, reviewer_id, exc.status_code, exc.detail
 
     with ThreadPoolExecutor(max_workers=len(commands)) as executor:
-        return list(executor.map(run, commands))
+        return list(executor.map(run, zip(commands, (ids["next_reviewer"], ids["third_reviewer"]))))
 
 
 def assert_result(db, ids, status):
@@ -162,61 +158,49 @@ def test_stale_pending_read_cannot_create_second_result(upgrade_db):
         assert invoke(first_db, ids, "approve")["ok"]
         with pytest.raises(HTTPException) as error:
             invoke(stale_db, ids, "approve")
-        assert error.value.status_code == 404
+        assert error.value.status_code == 409
+        assert error.value.detail["code"] == "UPGRADE_ALREADY_RESOLVED"
         assert not stale_db.in_transaction()
     with sessions() as db:
         assert_result(db, ids, "approved")
         assert db.query(AuditLog).count() == 1
 
 
+def test_promoted_gsm_cannot_see_or_resolve_own_upgrade(upgrade_db):
+    sessions, ids = upgrade_db
+    with sessions() as db:
+        subject_id = ids["next_reviewer"]
+        db.get(DeductionUpgradeRequest, ids["request"]).employee_id = subject_id
+        for record_id in (ids["first"], ids["second"]):
+            db.get(DeductionRecord, record_id).employee_id = subject_id
+        db.commit()
+        own = user_for(db, subject_id)
+        assert deductions.pending_deduction_upgrades(db, own)["items"] == []
+        with pytest.raises(HTTPException) as error:
+            invoke(db, ids, "reject", subject_id)
+        assert error.value.status_code == 403
+        assert_result(db, ids, "pending")
+
+
 @pytest.mark.parametrize("commands", [("approve", "approve"), ("approve", "reject"), ("reject", "reject")])
 def test_concurrent_resolutions_commit_only_one_outcome(upgrade_db, commands):
     sessions, ids = upgrade_db
     outcomes = race(sessions, ids, commands)
-    assert sorted(code for _, code in outcomes) == [200, 404]
-    winner = next(command for command, code in outcomes if code == 200)
+    assert sorted(code for _, _, code, _ in outcomes) == [200, 409]
+    winner, resolver, _, _ = next(entry for entry in outcomes if entry[2] == 200)
+    conflict = next(entry[3] for entry in outcomes if entry[2] == 409)
     with sessions() as db:
         assert_result(db, ids, "approved" if winner == "approve" else "rejected")
+        work = db.get(DeductionUpgradeRequest, ids["request"])
+        assert work.reviewer_id == ids["reviewer"]
+        assert work.resolved_by == resolver
+        assert conflict["code"] == "UPGRADE_ALREADY_RESOLVED"
+        assert conflict["status"] == work.status
+        assert conflict["resolved_by_name"] == work.resolved_by_name
         assert db.query(AuditLog).count() == 1
 
 
-@pytest.mark.parametrize("commands", [("transfer", "approve"), ("transfer", "reject"), ("transfer", "transfer_third")])
-def test_transfer_and_resolution_share_current_assignee(upgrade_db, commands):
-    sessions, ids = upgrade_db
-    outcomes = race(sessions, ids, commands)
-    assert sorted(code for _, code in outcomes) == [200, 404]
-    winner = next(command for command, code in outcomes if code == 200)
-    with sessions() as db:
-        if winner.startswith("transfer"):
-            assert_result(db, ids, "pending")
-            current_id = ids["third_reviewer"] if winner == "transfer_third" else ids["next_reviewer"]
-            assert db.get(DeductionUpgradeRequest, ids["request"]).reviewer_id == current_id
-            assert db.query(DeductionUpgradeTransfer).count() == 1
-            assert db.query(AuditLog).count() == 1
-            assert invoke(db, ids, "approve", current_id)["ok"]
-        else:
-            assert_result(db, ids, "approved" if winner == "approve" else "rejected")
-            assert db.query(DeductionUpgradeTransfer).count() == 0
-            assert db.query(AuditLog).count() == 1
-
-
-def test_cached_assignee_cannot_resolve_after_transfer(upgrade_db):
-    sessions, ids = upgrade_db
-    with sessions() as stale_db, sessions() as transfer_db:
-        cached = stale_db.get(DeductionUpgradeRequest, ids["request"])
-        assert cached.reviewer_id == ids["reviewer"]
-        assert invoke(transfer_db, ids, "transfer")["ok"]
-        with pytest.raises(HTTPException) as error:
-            invoke(stale_db, ids, "approve")
-        assert error.value.status_code == 404
-        assert invoke(stale_db, ids, "approve", ids["next_reviewer"])["ok"]
-    with sessions() as db:
-        assert_result(db, ids, "approved")
-        assert db.query(DeductionUpgradeTransfer).count() == 1
-        assert db.query(AuditLog).count() == 2
-
-
-@pytest.mark.parametrize("command", ["approve", "reject", "transfer"])
+@pytest.mark.parametrize("command", ["approve", "reject"])
 def test_command_failure_rolls_back_all_effects(upgrade_db, monkeypatch, command):
     sessions, ids = upgrade_db
 

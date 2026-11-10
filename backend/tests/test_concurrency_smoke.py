@@ -78,22 +78,22 @@ def create_pending_self_recognition() -> int:
         heat_id = next(row["id"] for row in options["employee_circles"] if row["name"] == "热力追踪")
         recognizers = client.get("/api/recognizers", params={"attraction_id": heat_id, "recognition_date": date.today().isoformat()}).json()
         recognizer_id = next(row["id"] for row in recognizers if row["employee_no"] == "TATEST01")
-        response = client.post(
-            "/api/recognitions",
-            data={
-                "recognition_date": date.today().isoformat(),
-                "occurred_attraction_id": str(next(row["id"] for row in options["recognition_venues"] if row["name"] == "热力追踪")),
-                "recognition_type_id": str(next(row["id"] for row in options["recognition_types"] if row["code"] == "SAFETY")),
-                "recognizer_employee_id": str(recognizer_id),
-                "content": "并发复核测试",
-                # The preceding idempotency test intentionally creates a
-                # manager record for the same employee/type/recognizer/day.
-                # This separate self-entry is a deliberate second record.
-                "same_day_duplicate_confirmed": "true",
-                "idempotency_key": "concurrency-review-source-001",
-            },
-            files={"image": ("review.png", png_bytes(), "image/png")},
-        )
+        data = {
+            "recognition_date": date.today().isoformat(),
+            "occurred_attraction_id": str(next(row["id"] for row in options["recognition_venues"] if row["name"] == "热力追踪")),
+            "recognition_type_id": str(next(row["id"] for row in options["recognition_types"] if row["code"] == "SAFETY")),
+            "recognizer_employee_id": str(recognizer_id),
+            "content": "并发复核测试",
+            "idempotency_key": "concurrency-review-source-001",
+        }
+        files = {"image": ("review.png", png_bytes(), "image/png")}
+        response = client.post("/api/recognitions", data=data, files=files)
+        # The preceding idempotency test can leave a matching manager entry.
+        if response.status_code == 409:
+            detail = response.json()["detail"]
+            assert detail["code"] == "SAME_DAY_RECOGNITION_DUPLICATE"
+            data.update(same_day_duplicate_confirmed="true", same_day_duplicate_token=detail["same_day_duplicate_token"])
+            response = client.post("/api/recognitions", data=data, files=files)
         assert response.status_code == 200, response.text
         assert response.json()["record"]["status"] == "pending"
         return response.json()["record"]["id"]

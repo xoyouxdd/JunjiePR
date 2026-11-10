@@ -59,7 +59,7 @@ for(const width of [320,390,1280]){
  }
  await page.evaluate(async()=>{fixtureState.me.role_code='GSM';fixtureState.me.base_role_code='GSM';fixtureState.me.attraction_id=1;await renderRanking()});
  assert.equal(await page.locator('#prFilter [name=attraction_id] option').count(),4);assert(await page.locator('#prExport').isVisible());
- assert.equal(await page.locator('[data-pr-category]').count(),6);assert.equal(await page.locator('[name=population] option').count(),2);
+ assert.equal(await page.locator('[data-pr-category]').count(),7);assert.equal(await page.locator('[name=population] option').count(),2);
  // The manager's issuer boards reuse the population control and show occurrence
  // counts in desktop tables and mobile cards.  The other four boards stay split.
  await page.locator('[data-pr-category=gsm_leader]').click();

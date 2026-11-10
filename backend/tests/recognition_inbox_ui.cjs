@@ -59,8 +59,8 @@ async function run() {
     async function issue(sender,target,types,signers={}) {
       const {context,page} = await session(sender,1280);
       await page.locator('.tabs-desktop [data-tab=register]').click();
-      assert.equal(await page.locator('#recognitionForm [data-evidence-album-input]').count(),0);
-      await page.locator('[data-register-mode=active]').click();
+      assert.equal(await page.locator('[data-register-mode=proxy]').count(),0);
+      await page.locator('#recognitionForm').getByText('认可图片（选填，最多1张）').waitFor();
       if (target==='SUPTEST01') await page.locator('[data-register-target=supervisor]').click();
       const form = page.locator('#recognitionForm');
       await form.locator('[data-employee-search]').fill(target);
@@ -82,11 +82,22 @@ async function run() {
           await selectSigner(form,candidate.id);
         }
         await form.locator('[name=content]').fill('浏览器验证'+code);
-        const source = index%2 ? 'camera' : 'album';
-        await form.locator('[data-evidence-'+source+'-input]').setInputFiles({
-          name:source+'.png',mimeType:'image/png',buffer:sample,
-        });
-        await form.locator('[data-evidence-preview]').waitFor();
+        const attachPhoto = code !== 'COURTESY';
+        if (!attachPhoto) {
+          const album = form.locator('[data-evidence-album-input]');
+          await album.setInputFiles({name:'empty.png',mimeType:'image/png',buffer:Buffer.alloc(0)});
+          await form.getByText('图片未成功读取，请重新选择图片后提交。',{exact:true}).waitFor();
+          assert.equal(await form.locator('[data-evidence-thumbnail]').isVisible(),false);
+          await form.locator('[data-evidence-remove]').click();
+          assert.equal(await album.evaluate(input=>input.files.length),0);
+        }
+        if (attachPhoto) {
+          const source = index%2 ? 'camera' : 'album';
+          await form.locator('[data-evidence-'+source+'-input]').setInputFiles({
+            name:source+'.png',mimeType:'image/png',buffer:sample,
+          });
+          await form.locator('[data-evidence-preview]').waitFor();
+        }
         let response;
         try {
           [response] = await Promise.all([
@@ -100,7 +111,7 @@ async function run() {
         assert(response.ok(),await response.text());
         const payload = await response.json();
         assert.equal(payload.record.status,'confirmed');
-        assert.equal(payload.record.has_image,true);
+        assert.equal(payload.record.has_image,attachPhoto);
         records.push(payload.record);
         const feedback = page.locator('.performance-feedback-continue');
         await feedback.click();
@@ -131,6 +142,9 @@ async function run() {
     assert.equal(await home.locator('[data-letter-id][data-unread=false]').count(),1);
     await home.locator('[data-inbox-home]').click();
     await home.locator('[data-inbox-entry]').filter({hasText:'2 封未读'}).waitFor();
+    await member.page.locator('.personal-records summary').click();
+    const safetyCard = member.page.locator('.personal-records .record-card').filter({hasText:'浏览器验证SAFETY'});
+    await safetyCard.getByText(`加分人：${records[1].operator_name}（主动发信）`,{exact:true}).waitFor();
     assert(await member.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     await member.context.close();
 
@@ -142,7 +156,7 @@ async function run() {
     assert.equal(await reviewRow.locator('[data-action=restore]').count(),0);
     await reviewer.context.close();
 
-    async function correct(senderAccount,recipientAccount,original,{removeOriginalSigner=false}={}) {
+    async function correct(senderAccount,recipientAccount,original,{removeOriginalSigner=false,attachPhoto=true}={}) {
       const sender = await session(senderAccount,1280);
       await sender.page.locator('.tabs-desktop [data-tab=entries]').click();
       await sender.page.setViewportSize({width:390,height:850});
@@ -179,8 +193,10 @@ async function run() {
       const expectedSigner = removeOriginalSigner ? senderId : draft.recognizer_employee_id;
       await sender.page.waitForFunction(id=>document.querySelector('#recognizerSelect')?.value===String(id),expectedSigner);
       await correction.locator('[name=content]').fill('重新发卡浏览器验证');
-      await correction.locator('[data-evidence-album-input]').setInputFiles({name:'corrected.png',mimeType:'image/png',buffer:sample});
-      await correction.locator('[data-evidence-preview]').waitFor();
+      if (attachPhoto) {
+        await correction.locator('[data-evidence-album-input]').setInputFiles({name:'corrected.png',mimeType:'image/png',buffer:sample});
+        await correction.locator('[data-evidence-preview]').waitFor();
+      }
       let committedReplacement;
       if (removeOriginalSigner) {
         const existing = await sender.context.request.post(base+'/api/recognitions',{multipart:{
@@ -218,6 +234,7 @@ async function run() {
       assert(response.ok(),await response.text());
       const payload = await response.json();
       const replacement = payload.record;
+      assert.equal(replacement.has_image,attachPhoto);
       if (committedReplacement) {
         assert.equal(payload.duplicate,true);
         assert.equal(replacement.id,committedReplacement.id);
@@ -232,7 +249,7 @@ async function run() {
       return replacement;
     }
 
-    const replacementId = (await correct('SUPTEST01','CMTEST01',records[1])).id;
+    const replacementId = (await correct('SUPTEST01','CMTEST01',records[1],{attachPhoto:false})).id;
 
     const correctedMember = await session('CMTEST01',320);
     assert.equal((await correctedMember.context.request.get(base+records[1].image_url+'?preview=1')).status(),403);
@@ -246,6 +263,57 @@ async function run() {
     await correctedInbox.locator('[data-unseal]').click();
     await correctedInbox.locator('[data-replay]').waitFor();
     await correctedInbox.getByText('重新发卡浏览器验证',{exact:true}).waitFor();
+    assert.equal(await correctedInbox.locator('.rf-paper img').count(),0);
+
+    // The recipient's batch form warns about the active letter before saving.
+    await correctedMember.page.setViewportSize({width:1280,height:850});
+    await correctedMember.page.locator('.tabs-desktop [data-tab=register]').click();
+    const batch = correctedMember.page.locator('#recognitionForm');
+    const card = batch.locator('[data-batch-entry]').first();
+    const opts = await correctedMember.context.request.get(base+'/api/options').then(r=>r.json());
+    const me = await correctedMember.context.request.get(base+'/api/me').then(r=>r.json());
+    const signers = await correctedMember.context.request.get(base+'/api/recognizers?attraction_id='+me.attraction_id).then(r=>r.json());
+    const signerId = signers.find(row=>row.employee_no==='GSMTEST01').id;
+    await card.locator('[name=recognition_type_id]').selectOption(String(opts.recognition_types.find(row=>row.code==='SAFETY').id));
+    await card.locator('[name=occurred_attraction_id]').selectOption(String(opts.recognition_venues.find(row=>row.name==='热力追踪').id));
+    await card.locator('[name=recognizer_employee_id]').selectOption(String(signerId),{force:true});
+    await card.locator('[name=content]').fill('本人登记提醒验证');
+    await batch.locator('[data-evidence-album-input]').setInputFiles({name:'self.png',mimeType:'image/png',buffer:sample});
+    const duplicateDialog = correctedMember.page.getByRole('dialog',{name:'已有主动发信'});
+    await batch.locator('[data-batch-submit]').click();
+    await duplicateDialog.getByText(`加分人：${records[1].operator_name}（主动发信）`,{exact:false}).waitFor();
+    await duplicateDialog.getByRole('button',{name:'取消'}).click();
+    await duplicateDialog.waitFor({state:'detached'});
+    assert.equal(await card.locator('[name=content]').inputValue(),'本人登记提醒验证');
+    assert.equal(await batch.locator('[data-evidence-album-input]').evaluate(input=>input.files.length),1);
+    const afterCancel = await correctedMember.context.request.get(base+'/api/dashboard').then(r=>r.json());
+    assert(!afterCancel.records.some(row=>row.content==='本人登记提醒验证'));
+    await batch.locator('[data-batch-submit]').click();
+    await duplicateDialog.getByRole('button',{name:'确认是独立表现，继续登记'}).waitFor();
+    const concurrentSender = await session('GSMTEST01',1280);
+    const newLetter = await concurrentSender.context.request.post(base+'/api/recognitions',{multipart:{
+      employee_id:String(me.id),
+      recognition_date:await card.locator('[name=recognition_date]').inputValue(),
+      occurred_attraction_id:await card.locator('[name=occurred_attraction_id]').inputValue(),
+      recognition_type_id:await card.locator('[name=recognition_type_id]').inputValue(),
+      recognizer_employee_id:String(signerId),
+      content:'确认期间新发来的认可',
+      active_recognition:'true',
+      same_day_duplicate_confirmed:'true',
+    }});
+    assert(newLetter.ok(),await newLetter.text());
+    await concurrentSender.context.close();
+    await duplicateDialog.getByRole('button',{name:'确认是独立表现，继续登记'}).click();
+    const refreshedDialog = duplicateDialog.filter({hasText:'确认期间新发来的认可'});
+    await refreshedDialog.getByText('同日同类记录已更新，请重新核对。',{exact:false}).waitFor();
+    const afterStaleConfirmation = await correctedMember.context.request.get(base+'/api/dashboard').then(r=>r.json());
+    assert(!afterStaleConfirmation.records.some(row=>row.content==='本人登记提醒验证'));
+    const [batchAccepted] = await Promise.all([
+      correctedMember.page.waitForResponse(r=>r.url().endsWith('/api/recognitions/batch')&&r.request().method()==='POST'),
+      refreshedDialog.getByRole('button',{name:'确认是独立表现，继续登记'}).click(),
+    ]);
+    assert(batchAccepted.ok(),await batchAccepted.text());
+    assert.equal((await batchAccepted.json()).records[0].status,'pending');
     await correctedMember.context.close();
 
     const [trainerOriginal] = await issue('SUPTEST01','TRTEST01',['EFFICIENCY'],{EFFICIENCY:'GSMTEST01'});
@@ -285,8 +353,15 @@ async function run() {
     await correctedLeadInbox.locator('[data-unseal]').click();
     await correctedLeadInbox.getByText('重新发卡浏览器验证',{exact:true}).waitFor();
     await correctedLead.context.close();
+    for (const account of ['AMTEST01','OMTEST01']) {
+      const senior = await session(account,1280);
+      await senior.page.locator('.tabs-desktop [data-tab=register]').click();
+      await senior.page.locator('#pocRecognitionForm').waitFor();
+      assert.equal(await senior.page.locator('#recognitionForm').count(),0);
+      await senior.context.close();
+    }
     assert.deepEqual(errors,[]);
-    console.log('Edge UI passed: LEAD → CM/TR, GSM → LEAD, read-only history, correction, reissue after a lost response, 3→2 unread.');
+    console.log('Edge UI passed: LEAD → CM/TR, GSM → LEAD, read-only history, correction, reissue after a lost response, 3→2 unread, stale batch confirmation refreshed.');
   } finally {
     await browser?.close();
     server.kill();

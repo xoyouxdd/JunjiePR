@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.score_queries import employee_month_scores  # noqa: E402
 from app.v2_database import SessionLocal  # noqa: E402
+from app.v2_models import UserAccount  # noqa: E402
 from app.routers._shared import upgrade_type_codes  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
@@ -101,7 +102,7 @@ def test_upgrade_matches_registered_statement_on_either_side_of_event_date() -> 
         assert outside.status_code == 200 and not outside.json()["eligible"], outside.text
 
 
-def test_statement_upgrade_submit_transfer_approve_and_export_marking() -> None:
+def test_statement_upgrade_submit_approve_and_export_marking() -> None:
     with TestClient(app) as client:
         login(client, "TATEST01")
         options = client.get("/api/options").json()
@@ -114,25 +115,30 @@ def test_statement_upgrade_submit_transfer_approve_and_export_marking() -> None:
         preview = client.get("/api/deduction-upgrades/preview", params={"employee_id": target["id"], "deduction_type_id": second_type["id"], "occurred_on": date.today().isoformat()})
         assert preview.status_code == 200 and preview.json()["eligible"], preview.text
         assert preview.json()["first_record"]["id"] == first.json()["record"]["id"]
-        tagsm = next(row for row in preview.json()["reviewers"] if row["role_code"] == "TA_GSM")
+        reviewers = preview.json()["reviewers"]
+        assert {row["role_code"] for row in reviewers} == {"GSM"}
+        gsm = next(row for row in reviewers if row["employee_no"] == "GSMTEST01")
         data = statement_form(target["id"], second_type["id"], statement["id"], "A2")
-        data["reviewer_id"] = str(tagsm["id"])
+        with SessionLocal() as db:
+            ta_gsm_id = db.query(UserAccount).filter_by(login_account="TAGSMTEST01").one().employee_id
+        rejected = client.post("/api/deduction-upgrades", data={**data, "reviewer_id": str(ta_gsm_id)}, files=pdf_file("second.pdf"))
+        assert rejected.status_code == 400 and "GSM审核" in rejected.text
+        data["reviewer_id"] = str(gsm["id"])
         submitted = client.post("/api/deduction-upgrades", data=data, files=pdf_file("second.pdf"))
         assert submitted.status_code == 200, submitted.text
         request_id = submitted.json()["request"]["id"]
         assert submitted.json()["request"]["second_record"]["status"] == "pending_upgrade"
         client.post("/api/logout")
         login(client, "TAGSMTEST01")
-        pending = client.get("/api/deduction-upgrades/pending").json()["items"]
-        assert [row["id"] for row in pending] == [request_id]
-        reviewers = client.get("/api/deduction-upgrades/reviewers").json()["items"]
-        gsm = next(row for row in reviewers if row["role_code"] == "GSM")
-        moved = client.post(f"/api/deduction-upgrades/{request_id}/transfer", json={"reviewer_id": gsm["id"], "reason": "由GSM审核"})
-        assert moved.status_code == 200, moved.text
+        assert client.get("/api/deduction-upgrades/pending").status_code == 403
+        assert client.post(f"/api/deduction-upgrades/{request_id}/resolve",
+                           json={"decision": "reject", "handling_note": "无审核权限"}).status_code == 403
         client.post("/api/logout")
         login(client, "GSMTEST01")
         pending = client.get("/api/deduction-upgrades/pending").json()["items"]
-        assert pending[0]["transfers"][0]["to_name"] == "测试GSM"
+        assert [row["id"] for row in pending] == [request_id]
+        assert pending[0]["reviewer_id"] == gsm["id"]
+        assert client.post(f"/api/deduction-upgrades/{request_id}/transfer", json={"reviewer_id": gsm["id"]}).status_code == 404
         memo = next(row for row in client.get("/api/options").json()["deduction_levels"] if row["code"] == "MEMO")
         approved = client.post(f"/api/deduction-upgrades/{request_id}/resolve", json={"decision": "approve", "result_level_id": memo["id"], "handling_note": "已完成真实备忘录开具", "issued_confirmed": True})
         assert approved.status_code == 200, approved.text

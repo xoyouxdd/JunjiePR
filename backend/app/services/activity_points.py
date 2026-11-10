@@ -165,6 +165,7 @@ def backfill_apply(db, fingerprint):
 
 
 def personal_card(db, employee_id, page=1, page_size=20):
+    from app.services.activity_queries import pending_redemption
     from app.services.activities import balances
     snapshot = balances(db, employee_id)
     query = db.query(ActivityPointsEntry).filter_by(employee_id=employee_id)
@@ -173,7 +174,8 @@ def personal_card(db, employee_id, page=1, page_size=20):
     entries = query.order_by(ActivityPointsEntry.id.desc()).offset((page-1)*page_size).limit(page_size).all()
     frozen = snapshot['frozen']
     return {"earned": earned, "used": earned-balance, "available": balance-frozen, "frozen": frozen,
-        "expires": False, "redemption_enabled": True, "total": total, "page": page,
+        "expires": False, "redemption_enabled": True, "pending_redemption": pending_redemption(db, employee_id),
+        "total": total, "page": page,
         "page_size": page_size, "items": [{"id": e.id, "recognition_id": e.recognition_id,
             "delta": e.delta, "origin": e.origin, "business_date": e.business_date,
             "created_at": e.created_at.isoformat(), **json.loads(e.detail_json)} for e in entries]}

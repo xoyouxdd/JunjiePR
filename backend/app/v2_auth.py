@@ -74,6 +74,19 @@ class V2User:
         return self.role.name
 
 
+def load_user_identity(db: Session, employee: Employee, account: UserAccount) -> V2User:
+    """Read the effective role and permissions without writing to the session or committing."""
+    base_role = base_role_at(db, employee.id)
+    duty_roles = duties_at(db, employee.id)
+    role = duty_roles[0] if duty_roles else base_role
+    if not role or not base_role:
+        raise HTTPException(403, "当前未配置有效角色")
+    permissions = set(role_permissions(db, base_role.id))
+    for duty in duty_roles:
+        permissions |= role_permissions(db, duty.id)
+    return V2User(employee, account, role, permissions, base_role, duty_roles)
+
+
 def current_user(request: Request, db: Session = Depends(get_db)) -> V2User:
     raw_token = request.cookies.get("rc_v2_session")
     if not raw_token:
@@ -94,11 +107,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> V2User:
     if not employee or not employee.is_active:
         raise HTTPException(401, "员工账号已停用")
     maybe_process_role_expirations(db)
-    base_role = base_role_at(db, employee.id)
-    duty_roles = duties_at(db, employee.id)
-    role = duty_roles[0] if duty_roles else base_role
-    if not role or not base_role:
-        raise HTTPException(403, "当前未配置有效角色")
+    user = load_user_identity(db, employee, account)
     if account.must_change_password and request.url.path not in {"/api/me", "/api/password", "/api/logout"}:
         raise HTTPException(
             status_code=403,
@@ -108,10 +117,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> V2User:
     if not session.last_seen_at or session.last_seen_at <= now - SESSION_TOUCH_INTERVAL:
         session.last_seen_at = now
         db.commit()
-    permissions = set(role_permissions(db, base_role.id))
-    for duty in duty_roles:
-        permissions |= role_permissions(db, duty.id)
-    return V2User(employee, account, role, permissions, base_role, duty_roles)
+    return user
 
 
 def require_permissions(*permission_codes: str):

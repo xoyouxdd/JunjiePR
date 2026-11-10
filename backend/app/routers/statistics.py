@@ -279,9 +279,13 @@ def member_score_summary(
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("MEMBER_RECORDS")),
 ):
-    month = parse_score_month(month or date.today().strftime("%Y-%m"))
-    member_ids = direct_member_ids(db, user.id, include_overseen=True)
-    return member_score_summary_payload(db, month, member_ids, keyword, score_loader=employee_month_scores)
+    current_month = date.today().strftime("%Y-%m")
+    month = parse_score_month(month or current_month)
+    member_ids = direct_member_ids(db, user.id, include_overseen=True, include_archived=month < current_month)
+    # The identity badge counts current direct members, independent of the search and selected month.
+    member_count = len(direct_member_ids(db, user.id, include_archived=False))
+    summary = member_score_summary_payload(db, month, member_ids, keyword, score_loader=employee_month_scores)
+    return {**summary, "member_count": member_count}
 
 
 @router.get("/pr-rankings")
@@ -333,6 +337,8 @@ def export_pr_rankings(
 ):
     if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
         raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
+    if category == "points":
+        raise HTTPException(400, "积点榜暂不支持导出")
     data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id, population)
     if data["total"] > len(data["rows"]):
         data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, data["total"], attraction_id, population)

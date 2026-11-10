@@ -14,14 +14,19 @@ from app.deduction_policy import deduction_counts_for_score
 from app.score_queries import employee_month_scores
 
 
-def rejected_flow(manager,reviewer,month):
+def rejected_flow(manager,month):
     flow=setup_flow(manager,month,supplement=False)
-    with SessionLocal() as db:wid=db.query(DeductionUpgradeRequest).filter_by(second_deduction_id=flow['sid']).one().id
-    target=next(r for r in reviewer.get('/api/deduction-upgrades/reviewers').json()['items'] if r['employee_no']=='GSMTEST01')
-    assert reviewer.post(f'/api/deduction-upgrades/{wid}/transfer',json={'reviewer_id':target['id'],'reason':'原工单转交历史'}).status_code==200
+    manager_info=manager.get('/api/me').json()
+    with SessionLocal() as db:
+        work=db.query(DeductionUpgradeRequest).filter_by(second_deduction_id=flow['sid']).one()
+        wid=work.id
+        # Retain legacy transfer history in the fixture after removal of the transfer API.
+        db.add(DeductionUpgradeTransfer(request_id=wid,from_reviewer_id=manager_info['id'],from_reviewer_name=manager_info['name'],
+                                       to_reviewer_id=work.reviewer_id,to_reviewer_name=work.reviewer_name,reason='原工单转交历史'))
+        db.commit()
     rejected=manager.post(f'/api/deduction-upgrades/{wid}/resolve',json={'decision':'reject','handling_note':'原升级审核不通过，保留材料'})
     assert rejected.status_code==200,rejected.text
-    flow['old_work']=wid;flow['manager_id']=target['id']
+    flow['old_work']=wid;flow['manager_id']=manager_info['id']
     with SessionLocal() as db:
         first=db.get(DeductionRecord,flow['first']);second=db.get(DeductionRecord,flow['sid'])
         assert first.status=='active' and first.upgrade_role is None and first.upgrade_request_id is None
@@ -78,9 +83,9 @@ def work_for(manager,flow,response,sid=None):
 @pytest.mark.parametrize('supplement,loa,fail,month',[(False,False,False,'2031-01'),(True,False,False,'2032-01'),(True,True,False,'2033-01'),(True,False,True,'2037-01')])
 def test_rejected_work_repair_preserves_scores_history_exports_and_material_permissions(monkeypatch,supplement,loa,fail,month):
     monkeypatch.setattr(importlib.import_module('app.main'),'start_deduction_material_worker',lambda:None)
-    with TestClient(app) as manager,TestClient(app) as reviewer,TestClient(app) as unrelated:
-        login(manager,'GSMTEST01');login(reviewer,'TAGSMTEST01');login(unrelated,'CMTEST02')
-        f=rejected_flow(manager,reviewer,month)
+    with TestClient(app) as manager,TestClient(app) as unrelated:
+        login(manager,'GSMTEST01');login(unrelated,'CMTEST02')
+        f=rejected_flow(manager,month)
         new_month=month[:5]+'02' if loa else month
         path,data,sid=new_second(manager,f,new_month+'-07',supplement)
         response=manager.post(path,data=data,files=f['pdf'])
@@ -107,7 +112,7 @@ def test_rejected_work_repair_preserves_scores_history_exports_and_material_perm
                 db.add(EmployeeLOAPeriod(employee_id=f['form']['employee_id'],starts_on=new_month+'-20',ends_on=new_month+'-20',status='ended',created_by=f['manager_id'],created_by_name='经理'));db.commit()
         approved=manager.post(f'/api/deduction-upgrades/{wid}/resolve',json=dict(decision='approve',issued_confirmed=True,result_level_id=f['levels']['MEMO']['id'],handling_note='新工单真实开具备忘录'))
         assert approved.status_code==200,approved.text
-        assert manager.post(f"/api/deduction-upgrades/{f['old_work']}/resolve",json=dict(decision='approve',issued_confirmed=True,result_level_id=f['levels']['MEMO']['id'],handling_note='不得处理旧工单')).status_code==404
+        assert manager.post(f"/api/deduction-upgrades/{f['old_work']}/resolve",json=dict(decision='approve',issued_confirmed=True,result_level_id=f['levels']['MEMO']['id'],handling_note='不得处理旧工单')).status_code==409
         with SessionLocal() as db:
             assert_history(db,f)
             result=db.get(DeductionRecord,db.get(DeductionUpgradeRequest,wid).result_deduction_id)
@@ -141,9 +146,9 @@ def test_rejected_work_repair_preserves_scores_history_exports_and_material_perm
 @pytest.mark.parametrize('mode,month',[('manager','2034-01'),('material','2035-01'),('mixed','2036-01')])
 def test_concurrent_repair_has_one_active_pair_and_can_reject_and_repair_again(monkeypatch,mode,month):
     monkeypatch.setattr(importlib.import_module('app.main'),'start_deduction_material_worker',lambda:None)
-    with TestClient(app) as manager,TestClient(app) as other,TestClient(app) as reviewer:
-        login(manager,'GSMTEST01');login(other,'GSMTEST01');login(reviewer,'TAGSMTEST01')
-        f=rejected_flow(manager,reviewer,month)
+    with TestClient(app) as manager,TestClient(app) as other:
+        login(manager,'GSMTEST01');login(other,'GSMTEST01')
+        f=rejected_flow(manager,month)
         attempts=[new_second(manager,f,month+'-07',mode=='material'),new_second(manager,f,month+'-08',mode!='manager')]
         gate=Barrier(2,timeout=15)
         def submit(client,attempt):

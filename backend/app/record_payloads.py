@@ -69,7 +69,7 @@ def recognition_payload(row: RecognitionRecord) -> dict:
 
 def deduction_payload(row: DeductionRecord) -> dict:
     status_names = {"active": "已扣分", "void": "已作废", "pending_upgrade": "待升级审核", "pending_material": "待补充材料（未扣分）", "material_processing": "材料生成中", "material_failed": "材料生成失败"}
-    upgrade_state_names = {"pending": "待升级审核", "source_first": "已升级（原声明）", "source_second": "已用于升级，不计分", "result": "升级结果", "rejected": "审核不通过"}
+    upgrade_state_names = {"pending": "待升级审核", "awaiting_reviewer": "材料已就绪 · 待重新指派", "source_first": "已升级（原声明）", "source_second": "已用于升级，不计分", "result": "升级结果", "rejected": "审核不通过"}
     return {
         "record_type": "deduction",
         "id": row.id,
@@ -85,7 +85,7 @@ def deduction_payload(row: DeductionRecord) -> dict:
         "submitter_id": row.submitter_id,
         "submitter_name": row.submitter_name,
         "status": row.status,
-        "status_name": status_names.get(row.status, row.status),
+        "status_name": "材料已就绪 · 待重新指派" if row.upgrade_state == "awaiting_reviewer" else status_names.get(row.status, row.status),
         "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
         "void_reason": row.void_reason or "",
         "voided_by_name": row.voided_by_name or "",

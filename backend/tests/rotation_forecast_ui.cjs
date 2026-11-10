@@ -106,11 +106,20 @@ async function main(){try{
     await page.locator('[name=start]').fill('00:20');await page.locator('[name=end]').fill('04:00');
     await page.getByRole('button',{name:'新增',exact:true}).click();
     await page.waitForFunction(()=>RT.data.day.persons.some(p=>p.name==='午夜支援'&&p.start===1460&&p.end===1680&&p.state==='notyet'));
+    const upcoming=page.locator('[data-f-pool=rest] .rt-chip').filter({hasText:'午夜支援'});
+    await upcoming.getByText('准备上班 · 距到班 15 分钟',{exact:true}).waitFor();
+    assert.equal(await page.locator('[data-f-pool=other]').getByText('午夜支援').count(),0);
+    assert.equal(await upcoming.locator('[data-f-board],[data-f-arrive],.rt-forecast-overdue').count(),0);
+    assert.match(await upcoming.locator('.rt-go').innerText(),/^预计 /);
     await page.locator('[data-f-head=A]').click();await page.getByRole('button',{name:'撤岗',exact:true}).click();
     await page.locator('[name=i]').selectOption('1');
     assert.equal(await page.locator('[name=day_offset]').inputValue(),'1');
     await page.locator('[name=time]').fill('00:15');await page.getByRole('button',{name:'确定',exact:true}).click();
     await page.waitForFunction(()=>RT.data.day.lines[0].posts[1].closeAt==='24:15:00');
+    await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-05',time:'00:20'}}));
+    await page.evaluate(()=>RT.load());
+    await page.locator('[data-f-pool=pending] .rt-chip').filter({hasText:'午夜支援'}).locator('[data-f-arrive]').waitFor();
+    assert.equal(await upcoming.count(),0);
     for(const width of [320,390,768,1280]){
       await page.setViewportSize({width,height:900});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'overflow '+width);

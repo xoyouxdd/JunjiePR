@@ -12,6 +12,33 @@ ROOT = Path(__file__).parents[1]
 
 
 @pytest.mark.skipif(not NODE, reason="Node is needed for the real JavaScript renderers")
+def test_forecast_shows_unclaimed_meal_badge_on_posts_and_pool_cards():
+    script = r"""
+const fs=require('fs'),vm=require('vm'),files=JSON.parse(fs.readFileSync(0,'utf8'));
+const ctx=vm.createContext({location:{pathname:'/rotation-board'},localStorage:{getItem:()=>null},
+  document:{body:{classList:{contains:()=>false}},getElementById:()=>null,addEventListener:()=>{}},isManager:()=>true});
+for(const file of files)vm.runInContext(fs.readFileSync(file,'utf8'),ctx);
+vm.runInContext(`
+  const p={pid:'1',name:'员工',state:'onpost',start:435,end:826,flags:[],tags:[],mealEligible:true,ate:false};
+  const post={key:'A#0',name:'入口',open:true,occ:p.pid};
+  const line={id:'A',active:true,posts:[post]};
+  RT.data={day:{ruleVersion:2,persons:[p],lines:[line]}};
+  const board=()=>forecastLineCard(line,600,true).includes('未休饭');
+  const pool=()=>forecastPools(600).includes('未休饭');
+  output=[board()];
+  post.occ=null;p.state='rest';output.push(pool());
+  p.ate=true;output.push(pool());
+  p.ate=false;p.mealEligible=false;output.push(pool());
+`,ctx);
+process.stdout.write(JSON.stringify(ctx.output));
+"""
+    files = [str(ROOT / 'app/static/js' / f'rotation-{name}.js') for name in ('common', 'workflow', 'forecast')]
+    result = subprocess.run([NODE, '-e', script], input=json.dumps(files), encoding='utf-8', capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [True, True, False, False]
+
+
+@pytest.mark.skipif(not NODE, reason="Node is needed for the real JavaScript renderers")
 def test_formal_arrival_hints_and_log_use_actual_outcomes():
     script = r"""
 const fs=require('fs'),vm=require('vm');

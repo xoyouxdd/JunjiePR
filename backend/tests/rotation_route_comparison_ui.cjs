@@ -116,6 +116,22 @@ async function main(){try{
     const ordinary=day.persons.find(p=>p.assign?.line==='A'&&p.assign.kind==='push');assert(ordinary);
     await page.locator('[data-f-board="'+ordinary.pid+'"]').click();await page.getByRole('button',{name:'确认上岗',exact:true}).click();
     await page.waitForFunction(()=>RT.data.day.lines.find(l=>l.id==='A').sortAt===533);
+    const setLine=async active=>{
+      const data=await board(),line=data.lines.find(l=>l.id==='A');
+      await post({action:'line',line:'A',active,line_context:{date:data.date,active:line.active,planRevision:data.prestartPlanRevision??null}});
+      await page.evaluate(()=>RT.load());
+    };
+    await setLine(false);
+    await page.locator('[data-f-head=A]').click();await page.locator('[data-f-open]').click();
+    await page.locator('[name=i]').selectOption('2');await page.locator('[name=time]').fill('09:00:00');
+    await page.getByRole('button',{name:'确定',exact:true}).click();
+    await page.waitForFunction(()=>!RT.modalOpen&&RT.data.day.lines.find(l=>l.id==='A').posts[2].openAt);
+    await clock({action:'set',date:'2026-11-05',time:'09:00:00'});await page.evaluate(()=>RT.load());
+    const missed=page.locator('[data-f-slot="A#2"]');
+    await missed.getByText('加岗已失效',{exact:true}).waitFor();
+    await setLine(true);
+    assert.equal(await missed.getByText('加岗已失效',{exact:true}).count(),1);
+    day=await board();assert.equal(day.lines.find(l=>l.id==='A').posts[2].open,false);
     assert.deepEqual(errors,[]);await context.close();await browser.close();browser=null;
     console.log(engine+': original before/after UI; neutral before pane, blue changed positions only after; identical board/mobile routes; red reroute; per-person confirmation; header edit; 320/390px; opening and ordinary header behavior PASS');
   }

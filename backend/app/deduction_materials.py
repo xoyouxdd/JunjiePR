@@ -16,7 +16,8 @@ from sqlalchemy import and_, or_, update
 import fitz
 
 from app.v2_database import FILE_DIR, SessionLocal
-from app.v2_models import AuditLog, DeductionFollowUp, DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, Employee, StoredFile
+from app.deduction_policy import statement_upgrade_reviewer
+from app.v2_models import AuditLog, DeductionFollowUp, DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, StoredFile
 
 logger = logging.getLogger("junjiepr.materials")
 
@@ -321,8 +322,7 @@ def _write_audit(db, action: str, deduction: DeductionRecord, after: dict) -> No
 
 def _finalize_upgrade(db, job: DeductionMaterialJob, deduction: DeductionRecord) -> None:
     first = db.get(DeductionRecord, job.first_deduction_id) if job.first_deduction_id else None
-    reviewer = db.get(Employee, job.reviewer_id) if job.reviewer_id else None
-    if not first or not reviewer:
+    if not first:
         raise MaterialError("upgrade_unavailable", "升级声明状态已变化，请重新登记")
     request = (
         db.query(DeductionUpgradeRequest)
@@ -333,15 +333,20 @@ def _finalize_upgrade(db, job: DeductionMaterialJob, deduction: DeductionRecord)
         )
         .first()
     )
+    awaiting_reviewer = False
     if request:
         if first.upgrade_request_id != request.id or deduction.upgrade_request_id != request.id:
             raise MaterialError("upgrade_unavailable", "升级声明关联状态已变化，请重新登记")
-        request.status = "pending"
-        # Recovery may reassign while a worker is converting an older snapshot.
-        # The work order owns the current assignment; a job cannot restore it.
+        # The current work order may have been reassigned while the PDF was generated.
+        awaiting_reviewer = statement_upgrade_reviewer(db, request.reviewer_id) is None
+        if not awaiting_reviewer:
+            request.status = "pending"
     elif first.upgrade_request_id:
         raise MaterialError("upgrade_unavailable", "升级声明已被其他工单使用，请重新登记")
     else:
+        reviewer = statement_upgrade_reviewer(db, job.reviewer_id)
+        if not reviewer:
+            raise MaterialError("upgrade_reviewer_unavailable", "原审核经理已失去审核资格，请重新选择审核经理后补交材料")
         request = DeductionUpgradeRequest(
             employee_id=deduction.employee_id,
             deduction_type_id=deduction.deduction_type_id,
@@ -358,7 +363,8 @@ def _finalize_upgrade(db, job: DeductionMaterialJob, deduction: DeductionRecord)
     first.upgrade_request_id = request.id
     first.upgrade_role, first.upgrade_state = "source_first", "pending"
     deduction.upgrade_request_id = request.id
-    deduction.upgrade_role, deduction.upgrade_state = "source_second", "pending"
+    deduction.upgrade_role = "source_second"
+    deduction.upgrade_state = "awaiting_reviewer" if awaiting_reviewer else "pending"
     deduction.status = "pending_upgrade"
 
 

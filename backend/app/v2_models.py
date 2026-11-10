@@ -1188,6 +1188,13 @@ class DeductionUpgradeRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, index=True)
 
 
+class DeductionUpgradeNoticeDismissal(Base):
+    __tablename__ = "deduction_upgrade_notice_dismissals"
+
+    request_id: Mapped[int] = mapped_column(ForeignKey("deduction_upgrade_requests.id", ondelete="CASCADE"), primary_key=True)
+    dismissed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class DeductionUpgradeTransfer(Base):
     __tablename__ = "deduction_upgrade_transfers"
     __table_args__ = (Index("ix_deduction_upgrade_transfer_request", "request_id", "created_at"),)

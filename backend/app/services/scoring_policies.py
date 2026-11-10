@@ -113,7 +113,11 @@ def validate_statement_upgrade_pair(db, row, first_id=None):
 def validate_material_repeat(db, row, *, allow_statement_upgrade=False):
     """Only an unused statement can pair with another unused statement."""
     from app.date_utils import add_calendar_months, subtract_calendar_months
+    from app.deduction_policy import ACTING_GSM_DEDUCTION_SCOPE, SUPERVISOR_DEDUCTION_SCOPE
     from app.v2_models import DeductionRecord
+    # Materials can be processed after a role change. Use the original registration scope.
+    if row.permission_scope_snapshot in {SUPERVISOR_DEDUCTION_SCOPE, ACTING_GSM_DEDUCTION_SCOPE}:
+        return False
     level = db.get(DeductionLevel, row.deduction_level_id)
     if not level or level.code != 'STATEMENT':
         return False

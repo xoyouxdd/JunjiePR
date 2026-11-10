@@ -61,18 +61,19 @@ function bindDeductionUpgradeHint(){
 function bindDeductionV2244(){
   const page=captureViewContext();
   const form=document.getElementById('deductionForm'),submit=document.getElementById('deductionSubmit'),material=bindDeductionMaterialPicker(form),stateBox=document.getElementById('deductionMaterialState');
+  const supervisorTarget=Boolean(form.querySelector('[data-employee-picker][data-target-scope="supervisor"]'));
   form.onsubmit=async event=>{
     event.preventDefault();
     if(!requireEmployeeSelection(form)||form.dataset.submitting==='true')return;
     try{
       const data=submissionData(form),occurredOn=form.querySelector('[name=occurred_on]'),direct=has('DEDUCTION_DIRECT')&&!has('DEDUCTION_ALL'),materialMode=material.appendTo(data);
       requireSubmittedDate(data,occurredOn,'事件日期');
-      if((direct||has('DEDUCTION_ALL'))&&materialMode&&String(data.get('deduction_level_id'))===String(state.options.deduction_levels.find(x=>x.code==='STATEMENT')?.id)){
+      if(!supervisorTarget&&(direct||has('DEDUCTION_ALL'))&&materialMode&&String(data.get('deduction_level_id'))===String(state.options.deduction_levels.find(x=>x.code==='STATEMENT')?.id)){
         const preview=await api('/api/deduction-upgrades/preview?'+new URLSearchParams({employee_id:data.get('employee_id'),deduction_type_id:data.get('deduction_type_id'),occurred_on:data.get('occurred_on')}));
         if(!page.isCurrent())return;
         if(preview.eligible){
           const first=preview.first_record;
-          const reviewerId=await selectModal('可升级声明工单',`<p>该员工三个月内已有同类声明，将进入升级审核。</p><p><strong>历史声明：</strong>${esc(first.occurred_on)} · ${esc(first.deduction_type)} · ${esc(first.description)}</p><p>仅两张声明参与升级，经理确认实际开具的备忘录或一级警告。</p><p>提交后本次声明不可撤回、不可作废；本次不计分，等待审核结果。</p><label>审核 MOD（GSM / TA GSM）</label>`,(preview.reviewers||[]).map(x=>({id:x.id,label:`${x.name} · ${x.employee_no} · ${x.role_name}`})),'提交工单',{defaultValue:preview.default_reviewer_id||''});
+          const reviewerId=await selectModal('可升级声明工单',`<p>该员工三个月内已有同类声明，将进入升级审核。</p><p><strong>历史声明：</strong>${esc(first.occurred_on)} · ${esc(first.deduction_type)} · ${esc(first.description)}</p><p>仅两张声明参与升级，经理确认实际开具的备忘录或一级警告。</p><p>提交后本次声明不可撤回、不可作废；本次不计分，等待审核结果。</p><label>审核经理（GSM）</label>`,(preview.reviewers||[]).map(x=>({id:x.id,label:`${x.name} · ${x.employee_no} · ${x.role_name}`})),'提交工单',{defaultValue:preview.default_reviewer_id||''});
           if(!reviewerId)return;
           data.set('reviewer_id',reviewerId);
           form.dataset.submitting='true';submit.disabled=true;

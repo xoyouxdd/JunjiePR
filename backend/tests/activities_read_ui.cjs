@@ -105,8 +105,8 @@ const pause=ms=>new Promise(r=>setTimeout(r,ms));
   await p.getByText('秋日伙伴礼遇',{exact:true}).click();
   await p.locator('[data-receipt="ui-abort-check"]').click();await archiveBegan;
   const cancelled=p.waitForEvent('requestfailed',{predicate:r=>r.url().endsWith('/receipts/ui-abort-check')});
-  await p.getByRole('button',{name:'我的积分卡',exact:true}).click();await cancelled;releaseArchive();
-  await p.getByRole('heading',{name:'我的活动积分卡',exact:true}).waitFor();
+  await p.getByRole('button',{name:'我的积点卡',exact:true}).click();await cancelled;releaseArchive();
+  await p.getByRole('heading',{name:'我的积点卡',exact:true}).waitFor();
   assert(!/abort|cancel/i.test(await p.locator('#toast').innerText()),'cancelled archive reads must not show an error toast');
   assert.deepEqual(errors,[]);console.log('PASS: pagination, lazy detail, search/status, pending count, cancelled archive reads; 320/390/1280px.');
  }finally{if(browser)await browser.close();server.kill();}

@@ -45,7 +45,7 @@ def test_confirmed_business_priority_matrix(strong, weak):
         if purpose in ('sick', 'out'):
             target['requestedExit'] = purpose
         elif purpose == 'push7':
-            target['flags'] = ['7点岗']
+            target.update(start=420, flags=['7点岗'])
         elif purpose == 'off':
             target['end'] = 620
         elif purpose in ('opening', 'vacancy'):
@@ -68,7 +68,7 @@ def test_vacancy_and_adding_outrank_outgoing_request_on_same_line():
         assert e.P['new0']['assign']['line'] == 'A'
 
 
-@pytest.mark.parametrize('purpose,outcome', [('sick', 'sick'), ('off', 'done')])
+@pytest.mark.parametrize('purpose,outcome', [('sick', 'sick'), ('off', 'done'), ('push7', 'pending')])
 @pytest.mark.parametrize('gap', [0, 1])
 @pytest.mark.parametrize('last', [True, False])
 def test_high_priority_target_is_actually_relieved_even_with_a_prefix_gap(purpose, outcome, gap, last):
@@ -78,6 +78,8 @@ def test_high_priority_target_is_actually_relieved_even_with_a_prefix_gap(purpos
     target = e.P['A2']
     if purpose == 'sick':
         target['requestedExit'] = 'sick'
+    elif purpose == 'push7':
+        target.update(start=420, flags=['7点岗'])
     else:
         target['end'] = 620
     F.plan(e, 600)
@@ -92,12 +94,14 @@ def test_high_priority_target_is_actually_relieved_even_with_a_prefix_gap(purpos
 
 def test_reserved_push7_does_not_hide_other_special_demands():
     e = engine((3,))
-    e.P['A0']['flags'] = ['7点岗']
+    e.P['A0'].update(start=420, flags=['7点岗'])
     e.P['A2']['end'] = 620
-    e.d['plan'].update(seven={'A#0': 'A0'}, push7=['new1'])
+    e.d['push7History'] = {'new0': [1, '2026-11-01', 435]}
     F.plan(e, 600)
     assert e.P['new0']['assign']['kind'] == 'off'
     assert e.P['new1']['assign']['kind'] == 'push7'
+    actual, _ = F.confirmation_plan(e, 'new0', 600)
+    assert actual['kind'] == 'off'
 
 
 def test_moving_head_to_middle_without_replacement_does_not_claim_a_new_head_arrival():

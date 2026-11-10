@@ -34,7 +34,7 @@ async function run(){
       const page=await context.newPage();const errors=[];page.on('pageerror',error=>errors.push(error.message));
       await page.goto(base+'/');
       const card=page.locator('#activityPoints .activity-points-card');
-      await card.getByRole('heading',{name:'我的活动积分卡'}).waitFor();
+      await card.getByRole('heading',{name:'我的积点卡'}).waitFor();
       assert((await card.textContent()).includes('永久有效'));
       await card.locator('summary').click();
       assert((await card.textContent()).includes('还没有积点记录'));
@@ -68,7 +68,8 @@ async function run(){
     await context.request.post(base+'/api/login',{data:{employee_no:'CMTEST01',password:'1234'}});
     const page=await context.newPage();await page.goto(base+'/');
     const card=page.locator('#activityPoints .activity-points-card');
-    await card.getByRole('heading',{name:'我的活动积分卡'}).waitFor();
+    await card.getByRole('heading',{name:'我的积点卡'}).waitFor();
+    assert.equal(await card.locator('.points-amount strong').textContent(),'1');
     await card.locator('summary').click();
     assert((await card.textContent()).includes('+1 点'));
     for(const width of [320,390,1280]){
@@ -97,7 +98,31 @@ async function run(){
     }
     assert.equal(circlePalettes.size,3,'Card follows circle-specific theme colors');
     await context.close();
-    console.log('Activity points UI passed: 320/390/1280px, private card, menu and real recognition.');
+
+    const manager=await browser.newContext({viewport:{width:1280,height:1450}});
+    assert((await manager.request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'1234'}})).ok());
+    await manager.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}});
+    const ranking=await manager.newPage();
+    await ranking.goto(base+'/');
+    await ranking.locator('.tabs-desktop [data-tab="prRankings"]').click();
+    await ranking.locator('[data-pr-category="points"]').click();
+    await ranking.locator('#prResults th').getByText('区间累计积点',{exact:true}).waitFor({state:'attached'});
+    assert.equal(await ranking.locator('#prResults tbody tr').first().locator('.pr-points-value').textContent(),'1 点');
+    assert(await ranking.locator('#prExport').isHidden());
+    for(const width of [320,390,1280]){
+      await ranking.setViewportSize({width,height:1450});
+      assert(await ranking.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`ranking overflow ${width}`);
+      assert(await ranking.locator(width<768?'.pr-points-row':'.pr-ranking-table').first().isVisible());
+      await ranking.locator('.pr-ranking-page').screenshot({path:path.join(output,`points-ranking-${width}.png`)});
+    }
+    await ranking.locator('#prFilter [name=keyword]').fill('CMTEST01');
+    await ranking.locator('#prFilter .primary').click();
+    await ranking.locator('#prResults tbody tr').filter({hasText:'CMTEST01'}).waitFor();
+    assert.equal(await ranking.locator('#prResults tbody tr').count(),1);
+    await ranking.locator('[data-pr-category="overall"]').click();
+    assert(await ranking.locator('#prExport').isVisible());
+    await manager.close();
+    console.log('Activity points UI passed: 320/390/1280px, private card, real recognition, points ranking and PR filters.');
   }finally{
     if(browser)await browser.close();server.kill();
   }

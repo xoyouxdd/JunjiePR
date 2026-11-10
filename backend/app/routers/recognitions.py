@@ -17,7 +17,7 @@ from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employ
 from app.services import scoring_policies as scoring_config
 from app.recognition_encouragement import encouragement_options
 from app.recognition_timing import identify, stage
-from app.role_constants import GSM_CODES
+from app.role_constants import ACTIVE_RECOGNITION_SENDER_CODES, GSM_CODES
 from app.services.attachments import BUSINESS_ATTACHMENT_MAX_BYTES
 from app.services.attendance import loa_excludes_month
 from app.services.identity import TEMPORARY_RECOGNIZER_LABEL, temporary_recognizer_ids
@@ -248,6 +248,7 @@ async def create_recognition(
     employee_id: int | None = Form(None),
     idempotency_key: str | None = Form(None),
     same_day_duplicate_confirmed: bool = Form(False),
+    same_day_duplicate_token: str | None = Form(None, pattern=r"^[0-9a-f]{64}$"),
     active_recognition: bool = Form(False),
     reissue_of_id: int | None = Form(None, gt=0),
     image: UploadFile | None = File(None),
@@ -259,13 +260,15 @@ async def create_recognition(
         return await _create_recognition(request, recognition_date, occurred_attraction_id,
             recognition_type_id, recognizer_employee_id, content, employee_id,
             idempotency_key, same_day_duplicate_confirmed, image, db, user,
-            active_recognition=active_recognition, reissue_of_id=reissue_of_id)
+            active_recognition=active_recognition, reissue_of_id=reissue_of_id,
+            same_day_duplicate_token=same_day_duplicate_token)
 
 
 async def _create_recognition(request, recognition_date, occurred_attraction_id,
     recognition_type_id, recognizer_employee_id, content, employee_id,
     idempotency_key, same_day_duplicate_confirmed, image, db, user,
-    *, shared_file=None, commit=True, active_recognition=False, reissue_of_id=None):
+    *, shared_file=None, commit=True, active_recognition=False, reissue_of_id=None,
+    same_day_duplicate_token=None, batch_row_indices=None):
     request_key = normalize_request_key(idempotency_key)
     payload_digest = None
     compatible_match = None
@@ -330,7 +333,8 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     target_category = scoring_category(target_role)
     target_duty_code = duty_code_at(db, target.id, recognition_date)
     is_self = target.id == user.id
-    manager_entry = not is_self and user.role.code in (LEADER_CODES | GSM_CODES)
+    if active_recognition and (is_self or user.role.code not in ACTIVE_RECOGNITION_SENDER_CODES):
+        raise HTTPException(403, "当前登记不能主动发送认可")
     if not is_self:
         if target_category == "supervisor":
             ensure_supervisor_target_allowed(db, user, target, recognition_date, "加分")
@@ -392,13 +396,10 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
         raise HTTPException(403, "该员工认可日期处于代理TA主管期间，主管和TA主管不能为其代录加分")
     quota_code = recognition_type.code if special_rule and score_policy["count"] == 1 and score_policy["overflow"] == "block" else None
     reviewer = current_leader_for_employee(db, target.id) if is_self else None
-    if active_recognition and not manager_entry:
-        raise HTTPException(403, "当前登记不能主动发送认可")
     if reissue_of_id is not None and not active_recognition:
         raise HTTPException(400, "请使用原签卡对应的主动认可入口重新发卡")
-    if (is_self or active_recognition) and not shared_file and (not image or not image.filename):
-        message = "主动认可必须上传1张认可图片" if active_recognition else "CM/TR本人登记必须上传1张认可图片"
-        raise HTTPException(400, message)
+    if is_self and not shared_file and (not image or not image.filename):
+        raise HTTPException(400, "CM/TR本人登记必须上传1张认可图片")
     file_row = None
     row = RecognitionRecord(
         employee_id=target.id,
@@ -437,7 +438,7 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
     )
     try:
         image_error = None
-        if (is_self or active_recognition) and shared_file is None:
+        if (is_self or active_recognition) and shared_file is None and image and image.filename:
             # Finish image IO before reserving SQLite's writer.
             try:
                 file_row = await save_image_upload(db, image, user.id, persist=False)
@@ -453,6 +454,10 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
             raise HTTPException(400, "请使用原签卡对应的主动认可入口重新发卡")
         # The insert holds the writer, so another submission cannot pass the
         # same-day check against the same set of records.
+        fixed_signer = RecognitionRecord.recognizer_role_snapshot == "系统固定分值"
+        same_signer = fixed_signer if special_rule else (
+            (RecognitionRecord.recognizer_employee_id == recognizer.id) & ~fixed_signer
+        )
         active_same_day_rows = (
             db.query(RecognitionRecord)
             .filter(
@@ -460,31 +465,60 @@ async def _create_recognition(request, recognition_date, occurred_attraction_id,
                 RecognitionRecord.employee_id == target.id,
                 RecognitionRecord.recognition_date == recognition_date,
                 RecognitionRecord.recognition_type_id == recognition_type.id,
-                RecognitionRecord.recognizer_employee_id == recognizer.id,
+                same_signer,
                 RecognitionRecord.status.in_(("pending", "confirmed")),
             )
             .order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc())
             .all()
         )
         if active_same_day_rows:
-            duplicate_group = f"{recognition_date}:{target.id}:{recognition_type.id}:{recognizer.id}"
-            if not same_day_duplicate_confirmed:
-                raise HTTPException(
-                    409,
-                    {
-                        "code": "SAME_DAY_RECOGNITION_DUPLICATE",
-                        "message": "该员工今日已由该认可人登记过同类认可，请确认是否为另一项独立表现。",
-                        "previous_records": [
-                            {
-                                "id": item.id,
-                                "submitted_at": item.submitted_at.strftime("%Y-%m-%d %H:%M"),
-                                "status": item.status,
-                                "content": item.content,
-                            }
-                            for item in active_same_day_rows
-                        ],
-                    },
-                )
+            signer_key = special_rule["option_id"] if special_rule else recognizer.id
+            duplicate_group = f"{recognition_date}:{target.id}:{recognition_type.id}:{signer_key}"
+            token_required = is_self or same_day_duplicate_token is not None
+            if token_required or not same_day_duplicate_confirmed:
+                sent_ids = set()
+                if is_self:
+                    other_confirmed_ids = [item.id for item in active_same_day_rows
+                                           if item.status == "confirmed" and item.operator_employee_id != user.id]
+                    if other_confirmed_ids:
+                        sent_ids = {rid for (rid,) in db.query(RecognitionInboxItem.recognition_id)
+                                    .filter(RecognitionInboxItem.recognition_id.in_(other_confirmed_ids)).all()}
+                previous_records = []
+                matches = []
+                for item in active_same_day_rows:
+                    previous = {
+                        "id": item.id,
+                        "submitted_at": item.submitted_at.strftime("%Y-%m-%d %H:%M"),
+                        "status": item.status,
+                        "content": item.content,
+                        **({"active_sender": item.operator_name} if item.id in sent_ids else {}),
+                    }
+                    entry_index = (batch_row_indices or {}).get(item.id)
+                    if entry_index is not None:
+                        # A rolled-back batch can get different row IDs and timestamps on retry.
+                        previous["batch_entry_index"] = entry_index
+                        matches.append({"batch_entry_index": entry_index, "content": item.content})
+                    else:
+                        matches.append(previous)
+                    previous_records.append(previous)
+                matches.sort(key=lambda item: (item.get("id", 0), item.get("batch_entry_index", 0)))
+                token = submission_payload_digest({"group": duplicate_group, "matches": matches, "user_id": user.id})
+                if not same_day_duplicate_confirmed or token != same_day_duplicate_token:
+                    message = (
+                        f"{recognition_date} 已收到别人主动发来的认可，签卡人和认可类型相同。请确认本次是否为另一项独立表现。"
+                        if sent_ids else "该员工今日已由该认可人登记过同类认可，请确认是否为另一项独立表现。"
+                    )
+                    if same_day_duplicate_token:
+                        message = f"同日同类记录已更新，请重新核对。{message}"
+                    raise HTTPException(
+                        409,
+                        {
+                            "code": "SAME_DAY_RECOGNITION_DUPLICATE",
+                            "message": message,
+                            "previous_records": previous_records,
+                            "same_day_duplicate_token": token,
+                        },
+                    )
             for index, item in enumerate(active_same_day_rows, start=1):
                 item.same_day_duplicate_group = duplicate_group
                 item.same_day_duplicate_sequence = index
@@ -590,14 +624,18 @@ async def create_self_recognition_batch(
         raise HTTPException(400, "登记字段无法解析，请重新提交")
     if not isinstance(items, list) or not 1 <= len(items) <= 5:
         raise HTTPException(400, "一次只能提交1至5条认可")
-    fields = {"recognition_date", "occurred_attraction_id", "recognition_type_id", "recognizer_employee_id", "content", "same_day_duplicate_confirmed"}
+    fields = {"recognition_date", "occurred_attraction_id", "recognition_type_id", "recognizer_employee_id", "content"}
+    confirmation_fields = {"same_day_duplicate_confirmed", "same_day_duplicate_token"}
     for index, item in enumerate(items, 1):
-        if not isinstance(item, dict) or set(item) - fields:
+        if not isinstance(item, dict) or set(item) - fields - confirmation_fields:
             raise HTTPException(400, f"第{index}条：登记字段无效，不允许指定其他员工")
-        if any(not isinstance(item.get(name), (str, int)) or isinstance(item.get(name), bool) or not str(item[name]).strip() for name in fields - {"same_day_duplicate_confirmed"}):
+        if any(not isinstance(item.get(name), (str, int)) or isinstance(item.get(name), bool) or not str(item[name]).strip() for name in fields):
             raise HTTPException(400, f"第{index}条：日期、类型、内容、景点和认可人均须填写")
         if not isinstance(item.get("same_day_duplicate_confirmed", False), bool):
             raise HTTPException(400, f"第{index}条：重复登记确认字段无效")
+        token = item.get("same_day_duplicate_token")
+        if token is not None and (not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token)):
+            raise HTTPException(400, f"第{index}条：重复登记确认标识无效")
         if not isinstance(item["content"], str) or not isinstance(item["recognition_date"], str):
             raise HTTPException(400, f"第{index}条：日期和内容必须是文字")
         try:
@@ -613,7 +651,9 @@ async def create_self_recognition_batch(
             raise HTTPException(413, "认可图片不能超过100MB")
         digest.update(chunk)
     await image.seek(0)
-    payload_digest = submission_payload_digest({"entries": items, "image_sha256": digest.hexdigest()})
+    # Confirmation snapshots can change before acceptance. They are not part of the saved content.
+    receipt_entries = [{k: v for k, v in item.items() if k != "same_day_duplicate_token"} for item in items]
+    payload_digest = submission_payload_digest({"entries": receipt_entries, "image_sha256": digest.hexdigest()})
     shared = None
     try:
         # Finish upload IO before holding the database write reservation.
@@ -633,19 +673,22 @@ async def create_self_recognition_batch(
         db.add(shared)
         db.flush()
         results = []
+        batch_row_indices = {}
         for index, item in enumerate(items, 1):
             try:
                 with stage('record_ms'):
                     result = await _create_recognition(request, item["recognition_date"], item["occurred_attraction_id"],
                         item["recognition_type_id"], str(item["recognizer_employee_id"]), item["content"],
                         None, None, item.get("same_day_duplicate_confirmed", False), None, db, user,
-                        shared_file=shared, commit=False)
+                        shared_file=shared, commit=False, same_day_duplicate_token=item.get("same_day_duplicate_token"),
+                        batch_row_indices=batch_row_indices)
             except HTTPException as exc:
                 detail = dict(exc.detail) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
                 detail["entry_index"] = index
                 detail["message"] = f"第{index}条：{detail.get('message', '登记失败')}"
                 raise HTTPException(exc.status_code, detail) from exc
             results.append(result)
+            batch_row_indices[result["record"]["id"]] = index
             remember_submission(db, user.id, "recognition_batch_item", f"{key}:{index-1}", result["record"]["id"])
         remember_submission(db, user.id, "recognition_batch", key, results[0]["record"]["id"], payload_digest)
         with stage('commit_ms'):

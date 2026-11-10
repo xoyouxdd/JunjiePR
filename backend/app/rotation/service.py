@@ -345,10 +345,54 @@ def duty_counts(db: Session, attraction_id: int, day: str) -> dict:
     return out
 
 
-def write_duties(db: Session, attraction_id: int, day: str, plan: dict) -> None:
+def completed_push7(db: Session, attraction_id: int, day: str) -> dict:
+    """Read actual executions, including older workflow logs, in workday order."""
+    from app.employee_numbers import employee_number
+    from app.rotation.history import reverted_legacy_push7
+    from sqlalchemy import and_, or_
+
+    event = tables_for(db).RotationEvent
+    purpose = func.json_extract(event.detail_json, '$.purpose')
+    rows = db.query(event.id, event.employee_no, event.work_date, event.minute, event.event_type, event.line,
+                    event.detail_json).filter(
+        event.attraction_id == attraction_id, event.work_date <= day,
+        or_(event.event_type == 'push7',
+            and_(event.event_type.in_(('depart', 'manual_forecast_complete')), purpose == 'push7'),
+            event.event_type == 'workflow_restore'),
+    ).order_by(event.id)
+    undone, checkpoints, events = set(), {}, []
+    for row in rows:
+        detail = json.loads(row.detail_json or '{}')
+        if row.event_type == 'workflow_restore':
+            undone.update(detail.get('reverted_push7', []))
+            if detail.get('checkpoints'):
+                checkpoints.setdefault(row.work_date, set()).update(detail['checkpoints'])
+        elif row.employee_no and not row.employee_no.startswith('temporary:'):
+            events.append((row, detail))
+    legacy_undone = reverted_legacy_push7(db, attraction_id, events, checkpoints)
+    history = {}
+    seen = set()
+    for row, detail in events:
+        if row.id in legacy_undone:
+            continue
+        execution = detail.get('push7_execution')
+        # New same-day executions are read from the live state, including undo.
+        if execution:
+            if row.work_date == day or execution in undone or execution in seen:
+                continue
+            seen.add(execution)
+        pid = employee_number(row.employee_no)
+        count, last_day, last_minute = E.push7_rank(history, pid)
+        history[pid] = [count + 1, *max((last_day, last_minute), (row.work_date, row.minute))]
+    return history
+
+
+def write_duties(db: Session, attraction_id: int, day: str, plan: dict, *, record_push7: bool = True) -> None:
     RotationDuty = tables_for(db).RotationDuty
     db.query(RotationDuty).filter(RotationDuty.attraction_id == attraction_id, RotationDuty.work_date == day).delete(synchronize_session=False)
     for kind, key in (("push7", "push7"), ("lost", "lost")):
+        if kind == "push7" and not record_push7:
+            continue
         for no in dict.fromkeys(plan.get(key, [])):
             db.add(RotationDuty(attraction_id=attraction_id, work_date=day, employee_no=no, kind=kind))
 
@@ -407,6 +451,9 @@ class DbHooks:
             self._week = week_minutes(self.db, self.attraction_id, self.day)
         return self._week
 
+    def push7_history(self):
+        return completed_push7(self.db, self.attraction_id, self.day)
+
 
 # ---------------------------------------------------------------- 当天状态
 
@@ -424,8 +471,13 @@ def day_state(row: RotationDay) -> dict:
     key = (row.attraction_id, row.work_date)
     cached = RUNTIME.cache.get(key)
     if cached and cached[0] == row.version:
-        return deepcopy(cached[1])
-    return json.loads(row.state_json)
+        state = deepcopy(cached[1])
+    else:
+        state = json.loads(row.state_json)
+    if state.get('ruleVersion') == 2:
+        from app.rotation.forecast import upgrade_opening_requests
+        upgrade_opening_requests(state)
+    return state
 
 
 def save_day(db: Session, row: RotationDay, state: dict, *, notify: bool = True) -> None:
@@ -935,7 +987,9 @@ def lines_view(eng: E.Engine) -> list[dict]:
         return pid if line.get('active') and eng.P.get(pid,{}).get('state')=='notyet' else None
     return [{
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
-        "sortAt": L.get('sortAt', 0), "adding": bool(L.get('adding')),
+        "sortAt": L.get('sortAt', 0),
+        "adding": bool(L.get('adding') or eng.d.get('ruleVersion') == 2 and L.get('active')
+                       and any(x.get('openRequest') and x.get('open') and not x.get('occ') for x in L['posts'])),
         "walk": eng.walk(L["id"]),
         "posts": [{"name": x["name"], "open": x.get("open"), "occ": display_occ(L,i,x),
                    "key":x.get('key'),"occName": eng.P.get(display_occ(L,i,x), {}).get("name"), "since": x.get("since"), "hold": x.get("hold") or x.get('hold101'),
@@ -944,7 +998,8 @@ def lines_view(eng: E.Engine) -> list[dict]:
                    "manualHold":x.get('hold'),
                    "continuousStart":eng.P.get(display_occ(L,i,x),{}).get('continuousStart'),
                    "openingStatus":opening_status(eng,L,i),
-                   "openAt": x.get("openAt"), "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for i,x in enumerate(L["posts"])],
+                   "openAt": x.get("openAt"), "openExpired": bool(x.get('openExpired')),
+                   "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for i,x in enumerate(L["posts"])],
     } for L in eng.d["lines"]]
 
 
@@ -1010,7 +1065,7 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
         hooks.now = PREARRANGE_MINUTE
         eng.publish(PREARRANGE_MINUTE, 'system')
         state["lastTick"] = PREARRANGE_MINUTE
-        write_duties(db, attraction_id, day, state["plan"])
+        write_duties(db, attraction_id, day, state["plan"], record_push7=state.get('ruleVersion') != 2)
         save_day(db, row, state)
         advance(db, cfg, row, state, minute)
 
@@ -1102,6 +1157,7 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
     if not p:
         return out
     eng, _ = engine_for(db, cfg, row, state)
+    out['ruleVersion'] = state.get('ruleVersion', 1)
     out['taskWorkflow'] = bool(state.get('taskWorkflow'))
     if out['taskWorkflow']:
         # Existing open notices can predate a UI/rule-text update. Project their
@@ -1540,7 +1596,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                     end_stale_days(db, cfg, attraction_id, day)
                 db.flush()
                 state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
-                                      duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day))
+                                      duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day),
+                                      push7_history=completed_push7(db, attraction_id, day))
                 state.setdefault('ruleVersion', 2)
                 if state['ruleVersion'] == 2:
                     from app.rotation.forecast import initialize as initialize_forecast
@@ -1648,7 +1705,7 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
             initialize(eng)
             eng.publish(now, actor)
             state["lastTick"] = now
-            write_duties(db, attraction_id, day, plan)
+            write_duties(db, attraction_id, day, plan, record_push7=state.get('ruleVersion') != 2)
             sync_notices(db, attraction_id, state, eng, now)
         if previous_relief is not None:
             if act=='draft_list' and body.get('kind')=='push7' and 'targets' not in body:plan.pop('push7Targets',None)
@@ -1800,6 +1857,8 @@ def update_config(cfg: RotationConfig, lines, settings, employee_id: int | None)
                     merged[key] = type(default)(number)
                 except (TypeError, ValueError, OverflowError) as exc:
                     raise ActionError(f"参数 {key} 必须是非负整数") from exc
+                if key == 'mealThreshold' and number < E.MIN_MEAL_SHIFT_MINUTES:
+                    raise ActionError('用餐工时门槛至少为390分钟')
         if merged['mealReserveMinPeople'] < 1:
             raise ActionError('允许自选吃饭所需的储备人数至少为1人')
         cfg.settings_json = _dumps({k: v for k, v in merged.items() if v != E.DEFAULT_SETTINGS[k]})

@@ -336,18 +336,24 @@ def active_group_memberships_bulk(db: Session, group_ids: list[int] | set[int], 
     return grouped
 
 
-def direct_member_ids(db: Session, leader_id: int, *, include_overseen: bool = False) -> set[int]:
+def direct_member_ids(
+    db: Session, leader_id: int, *, include_overseen: bool = False, include_archived: bool = True,
+) -> set[int]:
     """Employees whose records this leader reviews; with include_overseen, also
-    the members a formal leader may view in groups run by an acting leader."""
+    the members a formal leader may view in groups run by an acting leader.
+    Current roster callers omit archived employees; record access retains them."""
     leader = db.get(Employee, leader_id)
     leader_role = role_at(db, leader_id) if leader else None
     if leader and leader_role and leader_role.code == "HR_CIRCLE":
+        employees = db.query(Employee).filter(
+            Employee.attraction_id == leader.attraction_id,
+            Employee.is_active.is_(True),
+        )
+        if not include_archived:
+            employees = employees.filter(Employee.account_deleted_at.is_(None))
         return {
             employee.id
-            for employee in db.query(Employee).filter(
-                Employee.attraction_id == leader.attraction_id,
-                Employee.is_active.is_(True),
-            ).all()
+            for employee in employees
             if (role := role_at(db, employee.id)) and role.code in (FRONTLINE_CODES | LEADER_CODES | GSM_CODES)
         }
     today = date.today().isoformat()
@@ -355,6 +361,9 @@ def direct_member_ids(db: Session, leader_id: int, *, include_overseen: bool = F
     def members_of(group_ids: list[int]) -> set[int]:
         if not group_ids:
             return set()
+        if not include_archived:
+            memberships = active_group_memberships_bulk(db, group_ids, today)
+            return {member.employee_id for group in memberships.values() for member in group}
         return {
             employee_id
             for (employee_id,) in db.query(GroupMembership.employee_id)

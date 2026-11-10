@@ -1,7 +1,7 @@
 from __future__ import annotations
 from frontend_source import read_frontend_source
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from io import BytesIO
 from hashlib import sha256
@@ -216,7 +216,7 @@ def test_ui_keeps_level_text_and_mobile_cards() -> None:
     css = (root / "css" / "style.css").read_text(encoding="utf-8")
     assert "声明登记统计" in script
     assert "${esc(row.level_name)}" in script
-    assert "declaration-mobile" in script and "declaration-desktop" in script
+    assert "data-declaration-list-row" in script and "declaration-list-content" in script
     assert "data-declaration-circle" in script and "data-declaration-level" in script
     assert 'href="${esc(portalPath(row.document_url))}" download>下载材料</a>' in script
     for tone in range(6):
@@ -363,3 +363,197 @@ def test_card_links_cross_filters_keep_scores_and_statistics(result_code, month)
             assert sum(row.points for row in db.query(DeductionRecord).filter(DeductionRecord.id.in_(all_ids)) if deduction_counts_for_score(row))==score_before
         client.post('/api/logout'); login(client,'CMTEST02')
         assert client.get('/api/declaration-statistics',params=params).status_code==403
+
+
+@pytest.mark.parametrize(("ready", "first_day", "second_day", "label"), [
+    (False, "2025-03-31", "2025-04-01", "待材料就绪"),
+    (True, "2025-05-31", "2025-06-01", "材料已就绪 · 待重新指派"),
+])
+def test_cross_month_link_matches_recovery_work_status(ready, first_day, second_day, label):
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
+            registrar = db.query(Employee).filter_by(employee_no="TATEST01").one()
+            statement = db.query(DeductionLevel).filter_by(code="STATEMENT").one()
+            kind = db.query(DeductionType).first()
+            pdf = StoredFile(storage_key=f"test/recovery-{second_day}.pdf", original_filename="声明材料.pdf",
+                             extension=".pdf", mime_type="application/pdf", file_size=1,
+                             sha256="2"*64, uploaded_by=registrar.id, status="active")
+            db.add(pdf)
+            db.flush()
+            common = dict(employee_id=employee.id, employee_no=employee.employee_no, employee_name=employee.name,
+                          employee_role_snapshot="CM", attraction_id_snapshot=employee.attraction_id,
+                          deduction_type_id=kind.id, deduction_type_name=kind.name,
+                          deduction_level_id=statement.id, deduction_level_name=statement.name,
+                          description="跨月关联状态", document_file_id=pdf.id, submitter_id=registrar.id,
+                          submitter_name=registrar.name, submitter_role_snapshot="TA主管", permission_scope_snapshot="test")
+            first = DeductionRecord(**common, occurred_on=first_day, deduction_month=first_day[:7],
+                                    points=Decimal("1"), status="active", material_status="ready", upgrade_role="source_first")
+            second = DeductionRecord(**common, occurred_on=second_day, deduction_month=second_day[:7],
+                                     points=Decimal("0"), status="pending_upgrade" if ready else "pending_material",
+                                     material_status="ready" if ready else "missing",
+                                     upgrade_state="awaiting_reviewer" if ready else "awaiting_material",
+                                     upgrade_role="source_second")
+            db.add_all([first, second])
+            db.flush()
+            work = DeductionUpgradeRequest(employee_id=employee.id, deduction_type_id=kind.id,
+                                           first_deduction_id=first.id, second_deduction_id=second.id,
+                                           reviewer_id=employee.id, reviewer_name="已失效审核人",
+                                           submitted_by=registrar.id, submitted_by_name=registrar.name,
+                                           status="awaiting_material")
+            db.add(work)
+            db.flush()
+            first.upgrade_request_id = second.upgrade_request_id = work.id
+            first_id, second_id, work_id = first.id, second.id, work.id
+            db.commit()
+
+        login(client, "TATEST01")
+        recovery = client.get("/api/deduction-upgrades/recovery")
+        assert recovery.status_code == 200, recovery.text
+        task = next(row for row in recovery.json()["items"] if row["id"] == work_id)
+        assert task["status_name"] == label
+        for day, expected_id in ((first_day, first_id), (second_day, second_id)):
+            params = {"month": day[:7], "keyword": "CMTEST02"}
+            response = client.get("/api/declaration-statistics", params=params)
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["total_records"] == 1 and [row["id"] for row in data["detail_records"]] == [expected_id]
+            linked = {row["id"]: row for row in data["related_records"]}
+            assert set(linked) == {first_id, second_id}
+            for row in linked.values():
+                link, = row["upgrade_links"]
+                assert (link["request_id"], link["status"], link["status_name"]) == (work_id, "awaiting_material", label)
+            assert linked[first_id]["actual_points"] == 1 and linked[second_id]["actual_points"] == 0
+            assert bool(linked[second_id]["document_url"]) == ready
+            exported = client.get("/api/declaration-statistics/export", params=params)
+            assert exported.status_code == 200, exported.text
+            workbook = load_workbook(BytesIO(exported.content))
+            assert workbook.worksheets[0]["B2"].value == 1 and workbook.worksheets[1].max_row - 1 == 1
+
+
+def test_upgrade_slot_only_for_unused_statements_in_current_window(monkeypatch):
+    from app.score_queries import employee_month_scores
+    from app.services import declaration_statistics
+    from app.services.identity import base_role_at, role_at
+    from app.services.scoring_policies import category
+    from app.v2_models import EmployeeActingDuty
+
+    today = date(2026, 11, 10)
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return today
+
+    monkeypatch.setattr(declaration_statistics, "date", FixedDate)
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
+            registrar = db.query(Employee).filter_by(employee_no="TATEST01").one()
+            assert employee.attraction_id == registrar.attraction_id
+            employee_id = employee.id
+            repeat = db.query(DeductionType).filter_by(code="SICK_LEAVE_VIOLATION").one()
+            repeat_id = repeat.id
+            standalone = next(kind for kind in db.query(DeductionType).filter_by(active=True)
+                              if category(db, "deduction", "all", kind.code, "2026-11-10")["repeat"] == "sum")
+            levels = {level.code: level for level in db.query(DeductionLevel)}
+            pdf = StoredFile(storage_key="test/upgrade-slot.pdf", original_filename="声明.pdf", extension=".pdf",
+                             mime_type="application/pdf", file_size=1, sha256="2"*64,
+                             uploaded_by=employee.id, status="active")
+            db.add(pdf)
+            db.flush()
+
+            def add(day, kind=repeat, level=levels["STATEMENT"], **overrides):
+                values = dict(status="active", material_status="ready")
+                values.update(overrides)
+                row = DeductionRecord(employee_id=employee.id, employee_no=employee.employee_no,
+                    employee_name=employee.name, employee_role_snapshot="CM", attraction_id_snapshot=employee.attraction_id,
+                    deduction_type_id=kind.id, deduction_type_name=kind.name, deduction_level_id=level.id,
+                    deduction_level_name=level.name, points=Decimal("1"), occurred_on=day, deduction_month=day[:7],
+                    description="三个月升级提示", document_file_id=pdf.id, submitter_id=employee.id,
+                    submitter_name=employee.name, submitter_role_snapshot="CM", permission_scope_snapshot="test", **values)
+                db.add(row)
+                db.flush()
+                return row.id
+
+            edge = add("2026-08-10")
+            outside = add("2026-08-09")
+            inactive = add("2026-08-11", status="void")
+            occupied = add("2026-08-12", upgrade_role="source_first", upgrade_state="pending")
+            legacy = add("2026-08-13", legacy_upgrade_excluded=True)
+            other_type = add("2026-08-14", kind=standalone)
+            memo = add("2026-08-15", level=levels["MEMO"])
+            pending = add("2026-08-16", status="pending_material", material_status="missing")
+            db.commit()
+            deduction_score = employee_month_scores(db, "2026-08", [employee_id])[0]["deduction_score"]
+
+        login(client, "TATEST01")
+        def statistics():
+            response = client.get("/api/declaration-statistics", params={"month":"2026-08", "keyword":"CMTEST02"})
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        baseline = statistics()
+        cards = {row["id"]: row for row in baseline["detail_records"]}
+        assert cards[edge]["upgrade_slot_open"]
+        assert cards[edge]["actual_points"] == cards[edge]["registered_points"] == 1
+        for record_id in (outside, inactive, occupied, legacy, other_type, memo, pending):
+            assert not cards[record_id]["upgrade_slot_open"]
+
+        with SessionLocal() as db:
+            employee = db.get(Employee, employee_id)
+            account = db.query(UserAccount).filter_by(employee_id=employee_id).one()
+            supervisor = db.query(Role).filter_by(code="SUPERVISOR").one()
+            promotion = EmployeeRoleAssignment(employee_id=employee_id, role_id=supervisor.id,
+                                               starts_on="2026-11-10", status="cancelled")
+            db.add(promotion)
+            db.commit()
+            try:
+                for scenario, active, enabled, promotion_status in (
+                    ("账号停用", True, False, "cancelled"),
+                    ("员工离职", False, True, "cancelled"),
+                    ("当前角色改为主管", True, True, "active"),
+                ):
+                    employee.is_active = active
+                    account.enabled = enabled
+                    promotion.status = promotion_status
+                    db.commit()
+                    data = statistics()
+                    card = next(row for row in data["detail_records"] if row["id"] == edge)
+                    assert card == {**cards[edge], "upgrade_slot_open": False}, scenario
+                    for key in ("total_records", "employee_count", "statuses", "circles"):
+                        assert data[key] == baseline[key], scenario
+                    employee.is_active = True
+                    account.enabled = True
+                    promotion.status = "cancelled"
+                    db.commit()
+                    assert statistics() == baseline, scenario
+            finally:
+                employee.is_active = True
+                account.enabled = True
+                db.delete(promotion)
+                db.commit()
+
+        with SessionLocal() as db:
+            acting_role = db.query(Role).filter_by(code="TA_SUPERVISOR").one()
+            db.add(EmployeeActingDuty(employee_id=employee_id, role_id=acting_role.id,
+                                      starts_on=today.isoformat(), status="active"))
+            db.commit()
+            assert role_at(db, employee_id, today).code == "TA_SUPERVISOR"
+            assert base_role_at(db, employee_id, today).code in {"CM", "TR"}
+            assert employee_month_scores(db, "2026-08", [employee_id])[0]["deduction_score"] == deduction_score
+
+        def preview():
+            response = client.get("/api/deduction-upgrades/preview", params={
+                "employee_id": employee_id, "deduction_type_id": repeat_id, "occurred_on": today.isoformat(),
+            })
+            assert response.status_code == 200, response.text
+            return response.json()
+
+        assert statistics() == baseline
+        assert preview()["first_record"]["id"] == edge
+
+        today += timedelta(days=1)
+        expired = next(row for row in statistics()["detail_records"] if row["id"] == edge)
+        assert expired == {**cards[edge], "upgrade_slot_open": False}
+        assert not preview()["eligible"]

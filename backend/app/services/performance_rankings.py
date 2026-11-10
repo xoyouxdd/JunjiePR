@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
+from app.activity_points_models import ActivityPointsEntry
 from app.date_utils import months_between, parse_iso_date
 from app.organization_queries import group_display_metadata_bulk
 from app.role_constants import FRONTLINE_CODES, GSM_CODES, LEADER_CODES
@@ -71,6 +72,8 @@ def ranking_group_labels(db: Session, employee_ids: list[int], on_date: str) -> 
 
 def pr_ranking_scope(db: Session, user: V2User, attraction_id: int | None, population: str = "frontline", category: str = "overall") -> int | None:
     """Authorize before cache lookup; every ranking and export shares this scope."""
+    if category == "points" and user.role.code not in {"GSM", "AM", "OM"}:
+        raise HTTPException(403, "仅GSM、AM和OM可以查看积点榜")
     if user.role.code not in GSM_CODES | {"AM", "OM", "HR_CIRCLE"}:
         raise HTTPException(403, "仅TA GSM、GSM、AM、OM和景点圈HR可以查看PR排名数据")
     if user.role.code == "HR_CIRCLE":
@@ -111,10 +114,12 @@ def pr_ranking_payload(
         raise HTTPException(400, "结束日期不能晚于今天")
     if (end - start).days > 366:
         raise HTTPException(400, "单次排名查询最多支持367天")
-    if category not in {"overall", "recognition", "deduction", "absence", "leader", "gsm_leader"}:
+    if category not in {"overall", "recognition", "deduction", "absence", "leader", "gsm_leader", "points"}:
         raise HTTPException(400, "排名类型无效")
     if sort_by not in {"score", "count"}:
         raise HTTPException(400, "排名依据无效")
+    if category == "points" and (subtype_id is not None or sort_by != "score"):
+        raise HTTPException(400, "积点榜按区间累计积点排名")
 
     attraction = None
     if attraction_id is not None:
@@ -147,7 +152,17 @@ def pr_ranking_payload(
     subtype_name = ""
     uncapped_ranking = False
 
-    if category == "recognition":
+    if category == "points":
+        entry = ActivityPointsEntry
+        rows = db.query(entry.employee_id, func.sum(entry.delta), func.count(entry.id)).filter(
+            entry.employee_id.in_(employee_ids),
+            entry.kind.in_(("recognition", "legacy_import")),
+            entry.business_date.between(start.isoformat(), end_iso),
+        ).group_by(entry.employee_id)
+        for employee_id, score, count in rows:
+            aggregates[employee_id] = {"score": int(score), "count": count}
+        circle_names = dict(db.query(Attraction.id, Attraction.name).all())
+    elif category == "recognition":
         subtype = db.get(RecognitionType, subtype_id) if subtype_id else None
         if subtype_id and (not subtype or not subtype.active):
             raise HTTPException(400, "请选择有效的认可类型")
@@ -271,7 +286,7 @@ def pr_ranking_payload(
     # Score rankings show the identity on the range end date and note any
     # acting-duty window; the issuing ranking keeps the role used when issuing.
     ranking_labels = identity_labels(db, ranked_ids, end_iso) if category != "leader" else {}
-    acting_notes = acting_period_notes(db, ranked_ids, start_value, end_value) if category != "leader" else {}
+    acting_notes = acting_period_notes(db, ranked_ids, start_value, end_value) if category not in {"leader", "points"} else {}
     for employee in employees:
         data = aggregates.get(employee.id, {})
         role = role_map.get(employee.id)
@@ -280,6 +295,7 @@ def pr_ranking_payload(
                 "employee_id": employee.id,
                 "employee_no": employee.employee_no,
                 "employee_name": employee.name,
+                **({"attraction_name": circle_names.get(employee.attraction_id, "")} if category == "points" else {}),
                 "role_name": ranking_labels.get(employee.id) or (role.name if role else "未配置"),
                 "acting_note": acting_notes.get(employee.id, ""),
                 # Supervisors have no group leader of their own.

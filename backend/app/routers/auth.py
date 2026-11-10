@@ -66,7 +66,7 @@ def user_payload(db: Session, user: V2User) -> dict:
         "permissions": sorted(user.permissions),
         "announcement_publisher": bool(announcement_access["circles"] or announcement_access["projects"]),
         "announcement_counts": announcement_counts,
-        "member_count": len(direct_member_ids(db, user.id)),
+        "member_count": len(direct_member_ids(db, user.id, include_archived=False)),
         "must_change_password": user.account.must_change_password,
         # 正式轮岗入口按当前有效角色及班表参与资格判断。
         "rotation_entry": can_enter_formal_rotation(user, db),

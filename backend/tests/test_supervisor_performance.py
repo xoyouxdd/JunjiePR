@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 
 from PIL import Image
 import pytest
@@ -62,13 +65,18 @@ def recognize(client: TestClient, *, recognizer_no: str, key: str, target_no: st
         "recognizer_employee_id": str(recognizer["id"]),
         "content": "主管绩效测试",
         "idempotency_key": key,
-        # Several cases reuse the same recognizer and target on one day.
-        "same_day_duplicate_confirmed": "true",
     }
     if target_no:
         data["employee_id"] = str(employee_id(target_no))
+        data["same_day_duplicate_confirmed"] = "true"
     files = {"image": ("proof.png", png_bytes(), "image/png")} if self_image else None
-    return client.post("/api/recognitions", data=data, files=files)
+    response = client.post("/api/recognitions", data=data, files=files)
+    if response.status_code == 409:
+        detail = response.json()["detail"]
+        if isinstance(detail, dict) and detail.get("code") == "SAME_DAY_RECOGNITION_DUPLICATE":
+            data.update(same_day_duplicate_confirmed="true", same_day_duplicate_token=detail["same_day_duplicate_token"])
+            response = client.post("/api/recognitions", data=data, files=files)
+    return response
 
 
 def deduct(client: TestClient, target_no: str, level_code: str, key: str):
@@ -86,6 +94,90 @@ def deduct(client: TestClient, target_no: str, level_code: str, key: str):
         },
         files={"document": ("statement.pdf", pdf_bytes(), "application/pdf")},
     )
+
+
+def test_supervisor_statements_with_pdf_stay_ordinary_with_same_type_history(monkeypatch):
+    from app import deduction_materials, main
+    from app.routers import deductions
+    from app.score_queries import employee_month_scores
+    from app.v2_models import DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, SubmissionRequest
+
+    monkeypatch.setattr(main, "start_deduction_material_worker", lambda: None)
+    month = "2062-03"
+    with TestClient(app) as client:
+        login(client, "GSMTEST01")
+        target_id = employee_id("SUPTEST01")
+        options = client.get("/api/options").json()
+        kind = next(row for row in options["deduction_types"] if row["code"] == "SICK_LEAVE_VIOLATION")
+        level = next(row for row in options["deduction_levels"] if row["code"] == "STATEMENT")
+        form = {"employee_id": target_id, "deduction_type_id": kind["id"],
+                "deduction_level_id": level["id"], "description": "正式主管普通声明"}
+        pdf = {"document": ("statement.pdf", pdf_bytes(), "application/pdf")}
+
+        def submit(day, files=None):
+            response = client.post("/api/deductions", data={**form, "occurred_on": f"{month}-{day}"}, files=files)
+            assert response.status_code == 200, response.text
+            return response.json()["record"]
+
+        def post_concurrently(path, data=None):
+            barrier = Barrier(2, timeout=10)
+            stage_pdf = deductions.stage_pdf_material
+
+            async def stage_after_both_requests_read_state(*args, **kwargs):
+                await asyncio.to_thread(barrier.wait)
+                return await stage_pdf(*args, **kwargs)
+
+            with monkeypatch.context() as race, ThreadPoolExecutor(max_workers=2) as pool:
+                race.setattr(deductions, "stage_pdf_material", stage_after_both_requests_read_state)
+                requests = [pool.submit(client.post, path, data=data, files=pdf) for _ in range(2)]
+                return [request.result(timeout=30) for request in requests]
+
+        preview = client.get("/api/deduction-upgrades/preview", params={
+            "employee_id": target_id, "deduction_type_id": kind["id"], "occurred_on": month + "-01",
+        })
+        assert preview.status_code == 400
+        first = submit("01", pdf)
+        request_key = "supervisor-concurrent-pdf-registration"
+        replies = post_concurrently("/api/deductions", {
+            **form, "occurred_on": month + "-02", "idempotency_key": request_key,
+        })
+        assert [reply.status_code for reply in replies] == [200, 200], [reply.text for reply in replies]
+        results = [reply.json() for reply in replies]
+        assert sum(bool(result.get("duplicate")) for result in results) == 1
+        second = results[0]["record"]
+        assert second["id"] == results[1]["record"]["id"]
+        assert first["actual_points"] == second["actual_points"] == level["points"]
+
+        with monkeypatch.context() as queued:
+            queued.setattr(deductions, "PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD", 0)
+            third = submit("03", pdf)
+        assert third["material_status"] == "processing"
+        assert deduction_materials.process_next_deduction_material_job()
+
+        pending = submit("04")
+        assert pending["status"] == "pending_material"
+        path = f"/api/deductions/{pending['id']}/material"
+        preview = client.get(path + "-upgrade-preview")
+        assert preview.status_code == 200 and preview.json()["eligible"] is False
+        uploads = sorted(post_concurrently(path), key=lambda reply: reply.status_code)
+        assert [reply.status_code for reply in uploads] == [200, 409], [reply.text for reply in uploads]
+        assert uploads[0].json()["record"]["id"] == pending["id"]
+        with SessionLocal() as db:
+            job = db.query(DeductionMaterialJob).filter_by(deduction_id=pending["id"]).one()
+            assert (job.status, job.mode) == ("queued", "pdf_compress")
+            assert employee_month_scores(db, month, [target_id])[0]["deduction_score"] == 3 * level["points"]
+        assert deduction_materials.process_next_deduction_material_job()
+        assert not deduction_materials.process_next_deduction_material_job()
+
+        with SessionLocal() as db:
+            receipt = db.query(SubmissionRequest).filter_by(operation="deduction", request_key=request_key).one()
+            assert receipt.entity_id == second["id"]
+            assert db.query(DeductionMaterialJob).filter_by(deduction_id=pending["id"]).one().status == "succeeded"
+            rows = db.query(DeductionRecord).filter_by(employee_id=target_id, deduction_month=month).all()
+            assert {row.id for row in rows} == {first["id"], second["id"], third["id"], pending["id"]}
+            assert all(row.status == "active" and row.material_status == "ready" and row.upgrade_role is None for row in rows)
+            assert not db.query(DeductionUpgradeRequest).filter_by(employee_id=target_id).count()
+            assert employee_month_scores(db, month, [target_id])[0]["deduction_score"] == 4 * level["points"]
 
 
 def test_supervisor_self_recognition_goes_to_the_formal_gsm_queue() -> None:

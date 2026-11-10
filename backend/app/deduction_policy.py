@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from app.date_utils import add_calendar_months, parse_iso_date, subtract_calendar_months
 from app.services.identity import role_at
-from app.v2_auth import V2User
+from app.v2_auth import V2User, load_user_identity
 from app.v2_models import DeductionLevel, DeductionRecord, DeductionType, Employee, UserAccount
 from fastapi import HTTPException
 from sqlalchemy import or_
@@ -63,7 +63,10 @@ DEDUCTION_LEVEL_ORDER = {"STATEMENT": 1, "MEMO": 2, "WARNING_1": 3, "WARNING_2":
 NEXT_DEDUCTION_LEVEL = {"STATEMENT": "MEMO"}
 
 
-UPGRADE_REVIEWER_CODES = {"GSM", "TA_GSM"}
+UPGRADE_REVIEWER_CODES = {"GSM"}
+
+SUPERVISOR_DEDUCTION_SCOPE = "主管（全部等级）"
+ACTING_GSM_DEDUCTION_SCOPE = "代理TA GSM的主管（全部等级）"
 
 
 def upgrade_type_codes(code: str) -> frozenset[str]:
@@ -89,6 +92,17 @@ def ensure_deduction_type_allowed(user: V2User, deduction_type: DeductionType, d
         deduction_allowed(db, user, deduction_type, on_date or date.today().isoformat())
 
 
+def unused_statement_upgrade_filters(statement_id: int):
+    return (
+        DeductionRecord.deduction_level_id == statement_id,
+        DeductionRecord.status == "active",
+        DeductionRecord.upgrade_role.is_(None),
+        DeductionRecord.upgrade_request_id.is_(None),
+        DeductionRecord.legacy_upgrade_excluded.is_(False),
+        or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"),
+    )
+
+
 def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id: int, occurred_on: str) -> DeductionRecord | None:
     """Return a registered unused statement within three months either side of the event."""
     statement = db.query(DeductionLevel).filter_by(code="STATEMENT", active=True).first()
@@ -107,12 +121,7 @@ def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id
         .filter(
             DeductionRecord.employee_id == employee_id,
             DeductionType.code.in_(repeat_codes(db, deduction_type, occurred_on)),
-            DeductionRecord.deduction_level_id == statement.id,
-            DeductionRecord.status == "active",
-            DeductionRecord.upgrade_role.is_(None),
-            DeductionRecord.upgrade_request_id.is_(None),
-            DeductionRecord.legacy_upgrade_excluded.is_(False),
-            or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"),
+            *unused_statement_upgrade_filters(statement.id),
             DeductionRecord.occurred_on >= window_start,
             DeductionRecord.occurred_on <= window_end,
         )
@@ -121,17 +130,55 @@ def statement_upgrade_candidate(db: Session, employee_id: int, deduction_type_id
     )
 
 
-def statement_upgrade_reviewer_options(db: Session) -> list[dict]:
-    rows = (
+def can_review_statement_upgrade(user: V2User) -> bool:
+    return user.role.code in UPGRADE_REVIEWER_CODES and "DEDUCTION_ALL" in user.permissions
+
+
+def _upgrade_reviewer_candidates(db: Session):
+    return (
         db.query(Employee, UserAccount)
         .join(UserAccount, UserAccount.employee_id == Employee.id)
         .filter(Employee.is_active.is_(True), UserAccount.enabled.is_(True))
+    )
+
+
+def _eligible_upgrade_identity(db: Session, employee: Employee, account: UserAccount) -> V2User | None:
+    role = role_at(db, employee.id)
+    if not role or role.code not in UPGRADE_REVIEWER_CODES:
+        return None
+    try:
+        user = load_user_identity(db, employee, account)
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        return None
+    return user if can_review_statement_upgrade(user) else None
+
+
+def statement_upgrade_reviewer(db: Session, employee_id: int | None) -> V2User | None:
+    if employee_id is None:
+        return None
+    candidate = _upgrade_reviewer_candidates(db).filter(Employee.id == employee_id).first()
+    return _eligible_upgrade_identity(db, *candidate) if candidate else None
+
+
+def checked_upgrade_reviewer(db: Session, employee_id: int | None) -> Employee:
+    reviewer = statement_upgrade_reviewer(db, employee_id)
+    if not reviewer:
+        raise HTTPException(400, "请选择在职、账号启用且有声明审核权限的GSM审核")
+    return reviewer.employee
+
+
+def statement_upgrade_reviewer_options(db: Session) -> list[dict]:
+    rows = (
+        _upgrade_reviewer_candidates(db)
         .order_by(Employee.name, Employee.employee_no)
         .all()
     )
     result = []
-    for employee, _account in rows:
-        role = role_at(db, employee.id)
-        if role and role.code in UPGRADE_REVIEWER_CODES:
-            result.append({"id": employee.id, "name": employee.name, "employee_no": employee.employee_no, "role_code": role.code, "role_name": role.name})
+    for employee, account in rows:
+        reviewer = _eligible_upgrade_identity(db, employee, account)
+        if reviewer:
+            result.append({"id": employee.id, "name": employee.name, "employee_no": employee.employee_no,
+                           "role_code": reviewer.role.code, "role_name": reviewer.role.name})
     return result

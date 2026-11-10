@@ -50,6 +50,8 @@ def advance(db, cfg, row, state, target):
             boundaries.extend([p['start'], p['end'] - 25, p['end']])
             if p.get('readyAt') is not None:
                 boundaries.extend([p['readyAt'], p.get('timeoutAt', p['readyAt'] + 3)])
+                if p['state'] == 'meal':
+                    boundaries.append(p['readyAt'] - F.MEAL_TO_REST_MINUTES)
             for a in p.get('absences', []):
                 boundaries.extend([a['start'] - eng.S['offLead'], a['start'], a['end']])
         boundaries.append(_m(eng.S['opReleaseAt']))
@@ -59,9 +61,9 @@ def advance(db, cfg, row, state, target):
         t = min(value for value in boundaries if value > t + F.EPS)
     state['lastTick'] = t
     if not changed and state['status'] == 'live':
-        # Publish the same preparation boundary as the legacy board even when
-        # nobody is available to receive a relief forecast yet.
-        changed = any(eng.preparing_shift_end(p, t) and not eng.preparing_shift_end(p, previous)
+        # Both preparation windows can open without changing a person's state.
+        changed = any((eng.preparing_shift_end(p, t) and not eng.preparing_shift_end(p, previous))
+                      or (F.preparing_shift_start(p, t) and not F.preparing_shift_start(p, previous))
                       for p in eng.P.values())
     if changed:
         S.sync_notices(db, row.attraction_id, state, eng, t)
@@ -77,7 +79,7 @@ def notices(eng, now):
     for p in eng.P.values():
         state = p['state']
         a = p.get('assign')
-        if state in {'pending', 'walkback', 'op'}:
+        if state in F.WAITING_TO_REST:
             out[(p['pid'], 'step')] = ('arrive', '请选择休息或吃饭', '确认后开始餐休并显示预计线路。')
         elif state in {'rest', 'meal', 'ready'} and a:
             ready = now >= max(F.readiness(p), a.get('notBefore', 0))
@@ -128,17 +130,29 @@ def person_view(eng, p, now):
     can = bool(task and F.eligible(eng, p, now) and now + F.EPS >= F.readiness(p)
                and now + F.EPS >= (p.get('assign') or {}).get('notBefore', 0)
                and now < F.deadline(eng, p, now, (p.get('assign') or {}).get('notBefore', 0)))
-    actions = ['arrive'] if p['state'] in ('pending', 'walkback', 'op') else ['depart'] if task else []
+    actions = ['arrive'] if p['state'] in F.WAITING_TO_REST else ['depart'] if task else []
+    flags = [flag for flag in p.get('flags', []) if flag not in ('推7点', '7点岗')]
+    if F.seven_target(p):
+        flags.append('7点岗')
+    if task and p['assign']['kind'] == 'push7':
+        flags.append('推7点')
     preparing = {'sick': '推病假', 'out': '推出圈'}.get(p.get('requestedExit'))
     if eng.d['status'] == 'live' and L and eng.preparing_shift_end(p, now) and p.get('requestedExit') != 'sick':
         preparing = '推下班'
-    return {**deepcopy(p), 'task': task, 'taskTimeout': None, 'timeoutCase': None, 'timeoutPending': None,
+    upcoming = eng.d['status'] == 'live' and F.preparing_shift_start(p, now)
+    preview = None
+    if upcoming:
+        projection = getattr(eng, '_read_projection', {})
+        if 'shift_previews' not in projection:
+            projection['shift_previews'] = F.shift_previews(eng, now)
+        preview = projection['shift_previews'].get(p['pid'])
+    return {**deepcopy(p), 'flags': flags, 'task': task, 'taskTimeout': None, 'timeoutCase': None, 'timeoutPending': None,
             'entryHold': None, 'entryGroup': None, 'assignmentLocked': False,
             'post': L['posts'][i]['name'] if L else None, 'postIndex': i,
             'postHold': (L['posts'][i].get('hold') or L['posts'][i].get('hold101')) if L else None,
-            'canDepart': can, 'canArrive': p['state'] in ('pending', 'walkback', 'op'),
+            'canDepart': can, 'canArrive': p['state'] in F.WAITING_TO_REST,
             'departureRoutes': task['routes'] if task else [], 'departureBlocked': None,
-            'previewAssign': None, 'upcomingShift': None, 'arrivalOutcome': None,
+            'previewAssign': deepcopy(preview), 'upcomingShift': upcoming, 'arrivalOutcome': None,
             'preparing': preparing,
             'continuousMinutes': max(0, now - p['continuousStart']) if p.get('continuousStart') is not None and L else 0,
             'mealEligible': eng.meal_eligible(p), 'mealOptions': eng.meal_options(p, now),
@@ -184,11 +198,13 @@ def action(db, cfg, row, eng, body, now, actor):
         if not isinstance(token, str) or token != F.token(eng, p, act):
             raise S.ConfirmationConflict('人员状态已变化，请刷新后重新确认')
     before = H.snapshot(eng.d)
+    before['segmentIdsAtAction'] = H.same_time_segment_ids(db, eng, now)
     result = {'ok': True, 'executed': True}
     if act == 'depart':
         if body.get('group_confirm'):
             raise ActionError('多人预排必须逐人确认上岗')
-        result = F.execute(eng, pid, now, actor, body.get('expected_line'))
+        result = F.execute(eng, pid, now, actor, body.get('expected_line'),
+                           body.get('expected_push7', F.UNSPECIFIED_ROUTE), expected_kind=body.get('expected_kind'))
         if result.get('line_changed'):
             S.save_day(db, row, eng.d)
             return result
@@ -196,7 +212,7 @@ def action(db, cfg, row, eng, body, now, actor):
         choice = body.get('meal_choice') or 'rest'
         if choice not in {'rest', 'meal'}:
             raise ActionError('请选择休息或吃饭')
-        if eng.person(pid)['state'] not in {'pending', 'walkback', 'op'}:
+        if eng.person(pid)['state'] not in F.WAITING_TO_REST:
             raise ActionError('此人不在待确定休息')
         options = eng.meal_options(eng.person(pid), now)
         if options['forced']:
@@ -221,8 +237,15 @@ def action(db, cfg, row, eng, body, now, actor):
         value = body.get('remaining')
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ActionError('请输入有效剩余分钟数')
-        F.pool(eng, pid, 'meal' if p.get('breakKind') == 'meal' else 'rest', now, actor,
-               remaining=value, repeat_meal=True)
+        kind = p.get('breakKind')
+        break_start, arrive_anchor = p.get('breakStart'), p.get('arriveAnchor')
+        F.pool(eng, pid, 'meal' if kind == 'meal' else 'rest', now, actor, remaining=value, repeat_meal=True)
+        if break_start is not None:
+            p['breakStart'] = break_start
+        if arrive_anchor is not None:
+            p['arriveAnchor'] = arrive_anchor
+        if kind == 'meal_rest':
+            p['breakKind'] = kind
     elif act in {'sick', 'leave', 'away'}:
         p = eng.person(pid)
         purpose = 'out' if act == 'away' else 'sick'
@@ -283,14 +306,13 @@ def action(db, cfg, row, eng, body, now, actor):
         for L in eng.d['lines']:
             for i, post in enumerate(L['posts']):
                 post['resumeOpen'] = bool(post.get('open'))
-                post['resumeScheduled'] = bool(post.get('openAt') and not post.get('opened') and not post.get('manual'))
+                post['resumeScheduled'] = F.scheduled_opening(post)
                 post.pop('hold', None)
                 post.pop('hold101', None)
                 if post.get('occ'):
                     F.cancel_active_absences(eng, eng.P[post['occ']], now, actor)
                 F.close_post(eng, L, i, now, actor)
             L['active'] = False
-            L['adding'] = False
     elif act == 'post':
         from app.rotation.engine import rotation_end
         L, i, post = eng.post(body.get('line'), body.get('i'))
@@ -303,18 +325,23 @@ def action(db, cfg, row, eng, body, now, actor):
             at, time_text = scheduled_value(body, 'openAt') if body.get('openAt') else (now, None)
             if at < now - F.EPS or at >= rotation_end(eng.d):
                 raise ActionError('加岗时间须在当前时间至轮岗结束之前')
-            post.update(openAt=time_text, opened=at <= now, manual=False, open=at <= now)
+            immediate = time_text is None
+            post.update(openAt=time_text, opened=immediate, manual=False, open=immediate, openRequest=True)
             post.pop('draftClosed', None)
+            post.pop('openExpired', None)
+            post.pop('resumeOpen', None)
+            post.pop('resumeScheduled', None)
             post.update(closeAt=None, closedAuto=False)
-            if at <= now:
+            if immediate:
                 L['active'] = True
-                L['adding'] = True
         elif body.get('closeAt'):
             at, time_text = scheduled_value(body, 'closeAt')
             if at <= now or at >= rotation_end(eng.d):
                 raise ActionError('计划撤岗时间须晚于当前时间且早于轮岗结束')
             post.update(closeAt=time_text, closedAuto=False)
         else:
+            post.pop('resumeOpen', None)
+            post.pop('resumeScheduled', None)
             F.close_post(eng, L, i, now, actor)
         eng.h.log('post_schedule', actor, None, L['id'], post['name'], {'open': opened})
     elif act == 'line':
@@ -332,6 +359,8 @@ def action(db, cfg, row, eng, body, now, actor):
                 if reopen or scheduled:
                     post.update(draftClosed=False, manual=False, closedAuto=False,
                                 closeAt=None, open=bool(reopen))
+                    if scheduled:
+                        post['openRequest'] = True
         if D.prestart(eng.d, now):
             eng.act_line(L['id'], active, now, actor)
         elif active:
@@ -345,7 +374,7 @@ def action(db, cfg, row, eng, body, now, actor):
             for i in range(len(L['posts'])):
                 post = L['posts'][i]
                 post['resumeOpen'] = bool(post.get('open'))
-                post['resumeScheduled'] = bool(post.get('openAt') and not post.get('opened') and not post.get('manual'))
+                post['resumeScheduled'] = F.scheduled_opening(post)
                 F.close_post(eng, L, i, now, actor)
             L['active'] = False
         eng.h.log('line_change', actor, None, L['id'], None, {'active': L['active']})

@@ -297,7 +297,7 @@ function initialDraftView(data) {
   const listSelect=(kind,n,pool)=>Array.from({length:n},(_,i)=>{
     if(kind!=='push7')return `<select data-list="${kind}">${option(plan[kind][i],pool)}</select>`;
     const target=plan.seven[earlyKeys[i]],selected=plan.push7Targets?plan.push7.find(pid=>plan.push7Targets[pid]===target):plan.push7[i];
-    return `<label>接替 ${esc(draft.persons[target]?.name||target)}<select data-list="push7" data-target="${esc(target)}">${option(selected,pool)}</select></label>`;
+    return `<label>${draft.ruleVersion===2?'早班候选 · ':'接替 '}${esc(draft.persons[target]?.name||target)}<select data-list="push7" data-target="${esc(target)}">${option(selected,pool)}</select></label>`;
   }).join(' ');
   const roleSelect=p=>`<select data-role="${esc(p.pid)}">${[['rotation','轮岗'],['op','OP'],['excluded','不轮岗']].map(([v,t])=>`<option value="${v}" ${p.role===v?'selected':''}>${t}</option>`).join('')}</select>`;
   return `<section class="panel"><h2>${esc(draft.date)} · ${data.prestart_live?'开班前看板':'预排看板'}</h2>
@@ -307,7 +307,7 @@ function initialDraftView(data) {
       ${draft.draftAlerts.map(a=>`<div class="rt-warn">${esc(a)}</div>`).join('')}
       <div class="rt-row"><label class="rt-daily-field">营业闭园时间<input type="time" id="draftClose" value="${esc(draft.closeAt||'')}"></label></div>
       ${placements}
-      <h3>推7点和送失物</h3><p class="field-hint">7点岗位也可选择其他班次，按所选人员实际班次生效，不提前计时。推7点仅针对实际07:00班次人员，保留本周次数推荐。</p>
+      <h3>推7点和送失物</h3><p class="field-hint">7点岗位按所选人员实际班次生效。${draft.ruleVersion===2?'推7点按历史实际完成次数推荐候选，确认时按实际站位顺推。':'推7点仅针对实际07:00班次人员，保留本周次数推荐。'}</p>
       <div class="rt-row"><span>推7点</span>${sevenCount?listSelect('push7',sevenCount,early):'今天没有7点岗位'}</div>
       <div class="rt-row"><span>送失物</span>${listSelect('lost',Math.max(2,plan.lost.length),lates)}</div>
       <h3>人员角色</h3><p class="field-hint">OP及不轮岗设置仅影响轮岗安排。</p>
@@ -718,9 +718,10 @@ function settingsView() {
   const cfg = view.config;
   if (!cfg) return '<section class="empty">正在加载…</section>';
   const field = ([key, label]) => {
-    const value = cfg.settings[key];
+    const min = key==='mealThreshold'?cfg.defaults[key]:key==='mealReserveMinPeople'?1:0;
+    const value = key==='mealThreshold'?Math.max(min,cfg.settings[key]):cfg.settings[key];
     const isTime = typeof cfg.defaults[key] === 'string';
-    return `<label>${label}<input name="${key}" ${isTime ? 'type="time"' : `type="number" step="1" min="${key==='mealReserveMinPeople'?1:0}"`} value="${esc(value)}" required></label>`;
+    return `<label>${label}<input name="${key}" ${isTime ? 'type="time"' : `type="number" step="1" min="${min}"`} value="${esc(value)}" required></label>`;
   };
   return `<section class="panel"><h2>轮岗参数</h2><form id="settingsForm" class="rt-form-grid">${SETTING_LABELS.map(field).join('')}<div class="rt-row"><button type="submit" class="primary">保存参数</button></div></form></section>
     <section class="panel"><h2>线和岗位</h2><p class="field-hint">每条线按顺序列出岗位，第一个是入口岗，最后一个是出口岗。可选：openAt 定时开岗、closeAt 定时撤岗、seven 7 点岗位顺序、standby 待命线、walk 路程分钟。</p>
@@ -774,9 +775,12 @@ function memberView() {
     status = `${state === 'meal' ? '吃饭' : '休息'}至 ${hm(until)}，还剩 ${Math.max(0, Math.ceil(until - n))} 分钟`;
   }
   if (waitingInitialRest(p)) status = `班次未开始 · ${hm(p.scheduledRestStart)}自动开始休息`;
+  if (d.ruleVersion===2&&p.upcomingShift) status = `准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-n))} 分钟`;
   if (p.state === 'heading') status = `前往 ${esc(p.assign ? p.assign.line : '')} 线，约 ${hm(p.arriveAt)} 到岗`;
   if (p.state === 'away' && p.away) status = `暂离：${esc(p.away.reason)}${p.away.until !== null && p.away.until !== undefined ? `，${hm(p.away.until)} 回` : ''}`;
-  const next = assignment ? `<p>下一步：${goText(p)}，${taskTime(assignment.departAt)} 出发</p>` : '';
+  const preview = d.ruleVersion===2&&p.upcomingShift?p.previewAssign:null;
+  const next = preview ? `<p>预计 ${esc(preview.line)}线${preview.entryPost?` · ${esc(preview.entryPost)}`:''}</p>`
+    : assignment ? `<p>下一步：${goText(p)}，${taskTime(assignment.departAt)} 出发</p>` : '';
   const line = d.line&&(!rotationUsesTasks(p)||assignment||p.state==='onpost') ? `<section class="panel"><h2>${esc(d.line.id)} 线</h2><div class="rt-line">${d.line.posts.map(x => `<div class="rt-post${x.occ === p.pid ? ' me' : ''}${x.open ? '' : ' closed'}"><span class="rt-pn">${esc(x.name)}</span><span class="rt-who-name">${x.open ? esc(x.occName || '空岗') : '未开'}${x.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span></div>`).join('')}</div></section>` : '';
   const today = (d.today || []).map(s => `<span class="rt-pill">${esc(s.line)} ${hm(s.start)}-${hm(s.end)}</span>`).join('');
   const week = Object.entries(d.week_minutes || {}).sort().map(([lineId, m]) => `<span class="rt-pill">${esc(lineId)} ${Math.round(m)} 分钟</span>`).join('');

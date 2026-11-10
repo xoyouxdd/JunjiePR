@@ -52,6 +52,15 @@ function rowHTML(row,issued=false){
   return `<article class="medal-person"><div><strong>${esc(row.name)}</strong> <small>${esc(row.employee_no)}</small><span class="badge">${esc(issued&&row.status==='拟发放'?'已获得':row.status)}</span></div><p>${esc(row.reason)}${row.first_month?` · 首次参与 ${esc(row.first_month)}`:''}</p>${row.leaves.length?`<details><summary>查看请假依据（${row.leaves.length}条）</summary>${row.leaves.map(r=>`<p>${esc(r.date)} · ${esc(r.leave_type)} · ${esc(r.hours)}小时</p>`).join('')}</details>`:''}</article>`;
 }
 
+function changeEmployeeLabel(row){
+  return row.employee_no ? `${esc(row.name)} · ${esc(row.employee_no)}` : esc(row.name);
+}
+
+function confirmationList(title,rows){
+  return rows.length ? `<p><strong>${title}</strong></p><ul>${rows.map(row=>
+    `<li>${changeEmployeeLabel(row)} · ${esc(row.reason)}</li>`).join('')}</ul>` : '';
+}
+
 function issueHTML(issue){
   if(issue.redacted)return `<p>${esc(issue.reason)}</p>`;
   const parts=[issue.row?`第${issue.row}行`:'',issue.source_name,issue.source_no,issue.leave_type].filter(Boolean);
@@ -69,7 +78,7 @@ export function mountMedalManagement(host,{isCurrent=()=>true}={}){
   if(!host)return;
   let sequence=0,busy=false,data=null;
   const valid=()=>host.isConnected&&isCurrent();
-  host.innerHTML=`<section class="panel attendance-medals"><h2>月度全勤勋章</h2><p>不绑定加分。全员请假数据确认完整后，由各圈管理员分别发放。</p><label>评定月份<input data-medal-month type="month" min="2026-11" value="${esc(previousMonth()<'2026-11'?'2026-11':previousMonth())}"></label><div data-medal-body role="status">正在加载…</div></section>`;
+  host.innerHTML=`<section class="panel attendance-medals"><h2>月度全勤勋章</h2><p>不绑定加分。月结且请假数据确认完整后，由各圈管理员分别发放。</p><label>评定月份<input data-medal-month type="month" min="2026-11" value="${esc(previousMonth()<'2026-11'?'2026-11':previousMonth())}"></label><div data-medal-body role="status">正在加载…</div></section>`;
   const monthInput=host.querySelector('[data-medal-month]'),body=host.querySelector('[data-medal-body]');
   async function load(){
     const token=++sequence,month=monthInput.value;
@@ -80,8 +89,8 @@ export function mountMedalManagement(host,{isCurrent=()=>true}={}){
       const batch=result.batch;
       body.innerHTML=`<div class="medal-design-preview" data-medal-art-month="${medalMonth(month)||'00'}">${medalArt(month)}<div><span>本月勋章样式</span><strong>${esc(medalMonthLabel(month))}</strong><small>${esc(MEDAL_THEMES[Number(medalMonth(month))-1]?.[0]||'全勤荣誉')}</small></div></div>${month<'2027-01'?'<div class="notice">管理端试用月份：可以核对、发放和调整；不向员工展示或通知，不计正式累计。2027年1月起正式评定，2月起发放。</div>':''}${result.can_import?`<details><summary>全员请假数据导入与确认</summary><p>正常缺勤文件导入成功后会同步全勤勋章数据。下方可单独补导勋章数据，不改变计分或月结。</p><form data-medal-import class="form-stack"><label>处理方式<select name="mode"><option value="append">追加（相同记录不重复）</option><option value="replace">替换该月完整数据</option></select></label><label>全员事务文件<input name="workbook" type="file" accept=".xls" required></label><button type="submit">导入勋章请假数据</button></form>${batch?`<p>${esc(batch.filename)} · ${esc(batch.imported_by)} · ${esc(batch.imported_at)}<br>版本 ${result.revision} · 有效请假 ${batch.leaves} 条 · 异常 ${batch.issues.length} 条 · ${result.data_ready?'已确认完整':'待确认完整'}</p><details><summary>未纳入请假的事务代码（请核对）</summary><p>${batch.ignored_codes.map(esc).join('、')||'无'}</p><p>未知工资代码必须先核实分类，再重新替换导入，不能直接忽略。</p></details>${codeClassifications(batch,result.wage_codes||[])}${batch.issues.length?`<div class="error">异常必须处理后重新替换导入；明确归属的异常只阻断对应圈。</div><details><summary>查看导入异常（${batch.issues.length}条）</summary>${batch.issues.map(issueHTML).join('')}</details>`:''}<button type="button" data-medal-confirm ${result.data_ready?'disabled':''}>确认该月全员数据完整</button>${result.highest?'<button type="button" class="secondary" data-medal-refresh>修正当月人员圈归属快照</button>':''}`:'<p>尚未导入。全月无人请假时，也需导入包含该月正常事务的完整文件以证明月份，并确认完整。</p>'}</details>`:''}${result.highest&&result.data_ready?`<details><summary>修正单个人员的月份归属</summary><p>只修正勋章评定快照，不改变员工当前景点圈。跨圈结果由最高管理员核对相关圈后确认。</p><form data-medal-scope class="form-stack"><label>员工<select name="employee_id" required><option value="">请选择</option>${(result.roster||[]).map(r=>`<option value="${r.id}">${esc(r.name)} · ${esc(r.employee_no)}</option>`).join('')}</select></label><label>评定月份所属圈<select name="attraction_id" required>${result.circles.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><label>核实原因<input name="reason" required maxlength="500"></label><button type="submit" class="secondary">保存月份归属</button></form></details>`:''}${result.unassigned_count?`<p class="notice">${result.unassigned_count} 名人员圈归属未明确，请在现有人员管理中核实。</p>`:''}<div class="medal-circle-list">${result.items.map(item=>{
         const circle=result.circles.find(c=>c.id===item.attraction_id),counts={};item.rows.forEach(r=>{const label=item.status==='已发放'&&r.status==='拟发放'?'已获得':r.status;counts[label]=(counts[label]||0)+1;});
-        return `<section class="medal-circle" data-medal-circle="${item.attraction_id}"><h3>${esc(circle?.name)} <span class="badge">${esc(item.status)}</span></h3><p>${Object.entries(counts).map(([k,v])=>`${esc(k)} ${v}人`).join(' · ')||'本圈暂无参与人员'}</p>${item.confirmed_by?`<p>上次确认：${esc(item.confirmed_by)} · ${esc(item.confirmed_at)}</p>`:''}${item.requires_highest&&!result.highest?'<p class="field-hint">历史月份首次补发需最高管理员核对确认。</p>':''}${!item.month_ended?`<p class="field-hint">${item.trial?'试用月份允许提前测试发放，仅管理端可见。':'月份尚未结束，可以核对数据，不能发放。'}</p>`:''}${item.issues.length?`<div class="error">待处理请假记录 ${item.issues.length} 条${item.issues.map(issueHTML).join('')}</div>`:''}${item.changes.length?`<details><summary>本次发放变化（${item.changes.length}人）</summary>${item.changes.map(r=>`<p>${esc(r.name)} · ${esc(r.action)} · ${esc(r.reason)}</p>`).join('')}</details>`:''}<label>搜索姓名或工号<input data-medal-search placeholder="只筛选显示，不改变发放名单"></label><div class="medal-person-list">${item.rows.map(row=>rowHTML(row,item.status==='已发放')+(result.highest&&row.needs_identity_date?`<form data-medal-identity="${row.employee_id}" class="form-stack"><label>核实原账号创建日期<input name="first_created_on" type="date" required></label><label>核实原因<input name="reason" required maxlength="500"></label><button type="submit" class="secondary">保存原账号日期</button></form>`:'')).join('')}</div><div class="actions"><button type="button" data-medal-publish="${item.attraction_id}" ${!item.can_publish||item.status==='已发放'?'disabled':''}>${item.status==='待调整'?'确认调整':'确认本圈统一发放'}</button><button type="button" class="secondary" data-medal-history="${item.attraction_id}">查看操作记录</button></div><div data-medal-history-content></div></section>`;
-      }).join('')}</div><p class="field-hint">${esc(result.items[0]?.rule||'仅依据完整月份的有效请假数据评定。')}</p>`;
+        return `<section class="medal-circle" data-medal-circle="${item.attraction_id}"><h3>${esc(circle?.name)} <span class="badge">${esc(item.status)}</span></h3><p>${Object.entries(counts).map(([k,v])=>`${esc(k)} ${v}人`).join(' · ')||'本圈暂无参与人员'}</p>${item.confirmed_by?`<p>上次确认：${esc(item.confirmed_by)} · ${esc(item.confirmed_at)}</p>`:''}${item.requires_highest&&!result.highest?'<p class="field-hint">历史月份首次补发需最高管理员核对确认。</p>':''}${item.month_closed===false?'<p class="field-hint">月结前可核对数据，完成月结后才能确认发放。</p>':''}${item.issues.length?`<div class="error">待处理请假记录 ${item.issues.length} 条${item.issues.map(issueHTML).join('')}</div>`:''}${item.changes.length?`<details><summary>本次发放变化（${item.changes.length}人）</summary>${item.changes.map(r=>`<p>${changeEmployeeLabel(r)} · ${esc(r.action)} · ${esc(r.reason)}</p>`).join('')}</details>`:''}<label>搜索姓名或工号<input data-medal-search placeholder="只筛选显示，不改变发放名单"></label><div class="medal-person-list">${item.rows.map(row=>rowHTML(row,item.status==='已发放')+(result.highest&&row.needs_identity_date?`<form data-medal-identity="${row.employee_id}" class="form-stack"><label>核实原账号创建日期<input name="first_created_on" type="date" required></label><label>核实原因<input name="reason" required maxlength="500"></label><button type="submit" class="secondary">保存原账号日期</button></form>`:'')).join('')}</div><div class="actions"><button type="button" data-medal-publish="${item.attraction_id}" ${!item.can_publish||item.status==='已发放'?'disabled':''}>${item.status==='待调整'?'确认调整':'确认本圈统一发放'}</button><button type="button" class="secondary" data-medal-history="${item.attraction_id}">查看操作记录</button></div><div data-medal-history-content></div></section>`;
+      }).join('')}</div><p class="field-hint">${esc(result.items[0]?.rule||'依据月结后的有效请假和考勤记录评定。')}</p>`;
       wireMedalArt(body);
       bind();
     }catch(error){if(valid()&&token===sequence){body.innerHTML=`<p class="error">${esc(error.message)}</p><button type="button" data-medal-retry>重新读取</button>`;body.querySelector('[data-medal-retry]').onclick=load;}}
@@ -106,10 +115,22 @@ export function mountMedalManagement(host,{isCurrent=()=>true}={}){
     body.querySelectorAll('[data-medal-search]').forEach(input=>input.oninput=()=>{const keyword=input.value.trim().toLowerCase();input.closest('[data-medal-circle]').querySelectorAll('.medal-person').forEach(node=>node.hidden=!node.textContent.toLowerCase().includes(keyword));});
     body.querySelectorAll('[data-medal-publish]').forEach(button=>button.onclick=()=>perform(async()=>{
       const item=data.items.find(i=>i.attraction_id===Number(button.dataset.medalPublish)),circle=data.circles.find(c=>c.id===item.attraction_id);
-      const adjusting=item.status==='待调整',reason=adjusting?await promptModal('调整全勤勋章','请填写补发或撤回原因；确认后仅通知结果有变化的员工。','调整原因'):'';if(adjusting&&!reason)return;
+      const adjusting=item.status==='待调整';
+      const adjustmentPrompt=item.trial?'请填写本次调整原因。试行月份不会通知员工。':'请填写补发或撤回原因。确认后仅通知结果有变化的员工。';
+      const reason=adjusting?await promptModal('调整全勤勋章',adjustmentPrompt,'调整原因'):'';
+      if(adjusting&&!reason)return;
       const count=item.rows.filter(r=>r.status==='拟发放').length;
-      if(!await confirmModal(adjusting?'确认调整':'确认统一发放',`<p>${esc(circle.name)} · ${esc(item.month)}</p><p>数据版本 ${item.revision} · 导入时间 ${esc(item.data_imported_at||'待核对')}</p><p>符合全勤 ${count}人；${adjusting?'补发':'本次发放'} ${item.changes.filter(r=>r.action==='补发').length}人，撤回 ${item.changes.filter(r=>r.action==='撤回').length}人。</p><p>请确认该月请假数据完整，名单已核对。${item.trial?'本月为管理端试用，不通知员工、不计正式累计。':''}</p>`,'确认'))return;
-      const out=await api('/api/attendance-medals/publish',json('POST',{month:item.month,attraction_id:item.attraction_id,revision:item.revision,fingerprint:item.fingerprint,reason}));toast(`处理完成：发放${out.awarded||0}人，撤回${out.revoked||0}人`);
+      const additions=item.changes.filter(row=>row.action==='补发');
+      const withdrawals=item.changes.filter(row=>row.action==='撤回');
+      const confirmationLists=item.trial
+        ? confirmationList('待发放名单',additions)+confirmationList('待撤回名单',withdrawals)
+          +confirmationList('待移入名单',item.changes.filter(row=>row.action==='移入'))
+          +confirmationList('待移出名单',item.changes.filter(row=>row.action==='移出'))
+          +confirmationList('仅更新获奖名单',item.changes.filter(row=>row.action==='确认名单'))
+        : '';
+      if(!await confirmModal(adjusting?'确认调整':'确认统一发放',`<p>${esc(circle.name)} · ${esc(item.month)}</p><p>数据版本 ${item.revision} · 导入时间 ${esc(item.data_imported_at||'待核对')}</p><p>符合全勤 ${count}人；${adjusting?'补发':'本次发放'} ${additions.length}人，撤回 ${withdrawals.length}人。</p>${confirmationLists}<p>请确认该月请假数据完整，名单已核对。${item.trial?'本月为管理端试用，不通知员工、不计正式累计。':''}</p>`,'确认'))return;
+      const out=await api('/api/attendance-medals/publish',json('POST',{month:item.month,attraction_id:item.attraction_id,revision:item.revision,fingerprint:item.fingerprint,reason}));
+      toast(out.duplicate?'这次确认已处理':`处理完成：发放${out.awarded||0}人，撤回${out.revoked||0}人${out.moved?`，跨圈移动${out.moved}人`:''}`);
     }));
     body.querySelectorAll('[data-medal-history]').forEach(button=>button.onclick=async()=>{
       try{const out=await api('/api/attendance-medals/history?'+new URLSearchParams({month:data.month,attraction_id:button.dataset.medalHistory}));if(!valid())return;button.closest('[data-medal-circle]').querySelector('[data-medal-history-content]').innerHTML=out.items.map(r=>`<p>${esc(r.time)} · ${esc(r.operator)} · ${esc(r.action)}${r.reason?' · '+esc(r.reason):''}</p>`).join('')||'<p>暂无操作记录</p>';}catch(error){toast(error.message,true);}
@@ -119,11 +140,36 @@ export function mountMedalManagement(host,{isCurrent=()=>true}={}){
   return {refresh:load};
 }
 
+export function mountTrialMedalResults(host,{isCurrent=()=>true}={}){
+  host.innerHTML='<label>试行月份<select data-medal-trial-month><option value="2026-11">2026 年 11 月</option><option value="2026-12">2026 年 12 月</option></select></label><div data-medal-trial-results aria-live="polite"></div>';
+  const month=host.querySelector('[data-medal-trial-month]'),body=host.querySelector('[data-medal-trial-results]');
+  let sequence=0;
+  async function load(){
+    const token=++sequence;
+    const valid=()=>host.isConnected&&isCurrent()&&token===sequence;
+    body.textContent='正在加载…';
+    try{
+      const data=await api('/api/attendance-medals/manage?'+new URLSearchParams({month:month.value,trial_view:'true'}));
+      if(!valid())return;
+      body.innerHTML=data.items.map(item=>{
+        const circle=data.circles.find(entry=>entry.id===item.attraction_id);
+        return `<section class="medal-circle"><h3>${esc(circle?.name)} <span class="badge">${esc(item.status)}</span></h3>${item.status==='已发放'?`<p>${item.rows.length} 人获得</p>${item.rows.map(row=>`<p>${esc(row.name)} · ${esc(row.employee_no)}</p>`).join('')}`:''}</section>`;
+      }).join('');
+    }catch(error){if(valid())body.textContent=error.message||'读取试行结果失败';}
+  }
+  month.onchange=load;
+  load();
+}
+
+export function medalCollectionAvailable(month=null){
+  return monthNow()>='2027-02'&&(!month||month>='2027-01');
+}
+
 export async function mountMedalCollection(host,employeeId,{isCurrent=()=>true,lookup=false,month=null,compact=false}={}){
   if(!host)return;
   const token=(collectionRequests.get(host)||0)+1;collectionRequests.set(host,token);
   const valid=()=>host.isConnected&&isCurrent()&&collectionRequests.get(host)===token;
-  if(monthNow()<'2027-02'){host.innerHTML=month?'<p class="empty">全勤勋章将于2027年2月开放。</p>':'';return;}
+  if(!medalCollectionAvailable(month)){host.replaceChildren();return;}
   try{
     let data=await api('/api/attendance-medals/employees/'+encodeURIComponent(employeeId));
     if(!valid())return;

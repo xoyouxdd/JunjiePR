@@ -1,6 +1,7 @@
 import { queueExport } from './export-tasks.js';
 // Statistics hierarchy, detail navigation and filtered queries.
 import { api } from './api.js';
+import { mountTrialMedalResults } from './attendance-medals.js';
 import { beginViewRequest, pageTimeout, registerPageCleanup, render } from './context.js';
 import { confirmModal } from './dialogs.js';
 import { bindFilePreviews } from './files.js';
@@ -110,6 +111,16 @@ async function renderStatistics(){
   const canViewIssuers=['TA_GSM','GSM','AM','OM','SYSTEM_ADMIN'].includes(state.me.role_code);
   app.innerHTML=`<div class="section-gap"><section class="panel"><div class="statistics-page-heading"><h2>${canExport?'景点数据统计与月结导出':'景点数据统计'}</h2><span class="access-mode ${canExport?'can-export':'read-only'}">${canExport?'可导出':'只读'}</span></div><form id="statsFilter" class="statistics-filter"><label>月份<input name="month" type="month" value="${monthNow()}" required></label><label>景点圈<select name="attraction_id"><option value="">全部</option>${opt(state.options.employee_circles||state.options.attractions)}</select></label><label>Title<select name="title"><option value="">CM/TR全部</option><option value="CM">CM</option><option value="TR">TR</option><option value="SUPERVISOR">主管</option></select></label><label>员工搜索<input name="keyword" placeholder="姓名/员工号"></label>${canViewIssuers?'<label>管理层被认可人群<select name="issuer_population"><option value="frontline">CM/TR</option><option value="supervisor">LEAD</option><option value="all">全部人群</option></select></label><label>管理层签卡人搜索<input name="issuer_keyword" placeholder="AM、OM等签卡人姓名/工号"></label>':''}<div class="statistics-actions"><button class="primary">查询统计</button>${canExport?' <button type="button" id="exportBtn" class="secondary">导出 Excel</button>':''}</div></form>${canExport?'<div id="recentExports" class="recent-exports"><span class="field-hint">正在加载最近导出记录…</span></div>':''}</section><section class="panel statistics-views"><div class="statistics-view-tabs" role="tablist"><button type="button" class="primary" data-stats-view="month" role="tab" aria-selected="true">当月统计</button><button type="button" class="secondary" data-stats-view="trend" role="tab" aria-selected="false">月度趋势</button></div><label class="trend-span" hidden>回溯月数<select id="trendSpan">${TREND_SPANS.map(n=>`<option value="${n}"${n===6?' selected':''}>${n} 个月</option>`).join('')}</select></label></section><div id="statsResults"></div></div>`;
   const form=document.getElementById('statsFilter');
+  if(['GSM','AM','OM'].includes(state.me.base_role_code||state.me.role_code)){
+    const trial=document.createElement('details');
+    trial.className='panel attendance-medals';
+    trial.innerHTML='<summary>全勤勋章试行结果</summary><div data-statistics-medal-trial></div>';
+    form.closest('.panel').after(trial);
+    trial.ontoggle=()=>{
+      const host=trial.querySelector('[data-statistics-medal-trial]');
+      if(trial.open&&!host.hasChildNodes())mountTrialMedalResults(host,{isCurrent:()=>request.isCurrent()});
+    };
+  }
   const preferenceKey=`recognition-v2:statistics-filters:${state.me.employee_no}`,queryButton=form.querySelector('button[type="submit"],button:not([type])'),resultsHost=document.getElementById('statsResults');
   try{const saved=JSON.parse(localStorage.getItem(preferenceKey)||'{}');['month','attraction_id','title','keyword','issuer_population','issuer_keyword'].forEach(name=>{if(!Object.prototype.hasOwnProperty.call(saved,name))return;const field=form.elements[name],value=String(saved[name]??'');if(name==='month'&&!value)return;if(field&&(!field.options||[...field.options].some(option=>option.value===value)))field.value=value})}catch(_error){}
   let lastStatistics=null,loadSequence=0,disposeTrend=null,trendMode='total';

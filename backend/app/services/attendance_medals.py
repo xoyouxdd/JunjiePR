@@ -15,12 +15,17 @@ from app.attendance_medals_models import (AttendanceMedal, MedalAccountIdentity,
 from app.services.employment import employment_history
 from app.services.audit import write_audit
 from app.employee_numbers import employee_number, employee_number_aliases
-from app.v2_models import (Attraction, AuditLog, CircleTransferRequest, Employee, EmployeeMonthOrganizationSnapshot,
-    UserAccount)
+from app.month_closure import closed_month_scope_filter, month_closure_scope
+from app.v2_models import (Attraction, AuditLog, CircleTransferRequest, DeductionRecord, DeductionType,
+    Employee, EmployeeMonthOrganizationSnapshot, MonthClosure, SickLeaveRecord, UserAccount)
 
 FORMAL_START = "2027-01"
 TEST_START = "2026-11"
-RULE = "依据当月最终有效请假数据评定；任何请假影响全勤，正常休息、调休不影响，迟到早退暂不纳入。不绑定加分。"
+RULE = "月结后按当月有效记录评定。请假、违规病假、迟到、早退、早打卡、晚打卡或未打卡均影响全勤，正常休息和调休不影响。不绑定加分。"
+MEDAL_DEDUCTION_CODES = {
+    "ATT_LATE_WITHIN_30", "ATT_LATE_OVER_30", "ATT_EARLY_LEAVE_WITHIN_30", "ATT_EARLY_LEAVE_OVER_30",
+    "ATT_EARLY_CLOCK", "ATT_LATE_CLOCK", "ATT_MISSING_CLOCK", "SICK_LEAVE_VIOLATION",
+}
 NORMAL_CODES = frozenset({"正常工作", "正常出勤", "工作时间", "正常工时", "工作", "工时", "出勤", "基本工时",
     "加班", "加班时间", "正常休息", "休息", "调休", "调休假", "法定节假日", "法定假日", "节假日",
     "公休日", "假日", "本休", "调休时间", "调休工时", "法定节假日工时", "法定节假日工资", "节假日工资"})
@@ -31,8 +36,17 @@ def employee_content_visible():
 
 
 def visible_notices(db, employee_id):
+    # A withdrawal notice belongs to the same historical circle as the revoked medal.
+    settled_medal = db.query(AttendanceMedal.id).filter(
+        AttendanceMedal.employee_id == MedalNotice.employee_id, AttendanceMedal.month == MedalNotice.month,
+        _closed_month(db, AttendanceMedal),
+    ).exists()
     return db.query(MedalNotice).filter_by(employee_id=employee_id).filter(
-        MedalNotice.month >= FORMAL_START, MedalNotice.month < date.today().strftime('%Y-%m'))
+        MedalNotice.month >= FORMAL_START, MedalNotice.month < date.today().strftime('%Y-%m'), settled_medal)
+
+
+def _closed_month(db, record):
+    return db.query(MonthClosure.id).filter(closed_month_scope_filter(record.month, record.attraction_id)).exists()
 
 
 def wage_kind(code, classifications=None):
@@ -150,6 +164,10 @@ def is_admin(user):
 
 def can_manage(user):
     return is_admin(user) or user.has_role("HR_CIRCLE")
+
+
+def can_observe_trial(user, month):
+    return TEST_START <= month < FORMAL_START and (is_admin(user) or user.has_role("GSM", "AM", "OM"))
 
 
 def ensure_scope(db, user, circle_id):
@@ -416,6 +434,10 @@ def confirm_data(db, user, month, revision, refresh=False, reason=""):
 
 def preview(db, user, month, circle_id):
     ensure_scope(db, user, circle_id)
+    return _preview(db, month, circle_id, highest=is_admin(user))
+
+
+def _preview(db, month, circle_id, *, highest=False):
     start, end = month_bounds(month)
     state = db.get(MedalLeaveMonth, month)
     batch = latest_batch(db, state)
@@ -431,7 +453,7 @@ def preview(db, user, month, circle_id):
         owner = None if issue.get('identity_conflict') else assignment.get(str(issue.get('employee_id')), issue.get('circle_id'))
         if owner in valid_circles and owner != circle_id:
             continue
-        if not is_admin(user):
+        if not highest:
             employee = employees_by_id.get(issue.get('employee_id')) if owner == circle_id else None
             # A row may pair this circle's number with another person's name.
             # Only the global importer can inspect that unverified source pair.
@@ -444,8 +466,17 @@ def preview(db, user, month, circle_id):
         key = employee_number(employee.employee_no)
         number_counts[key] = number_counts.get(key, 0) + 1
     employees = [e for e in all_employees if assignment.get(str(e.id)) == circle_id]
+    employee_ids = [e.id for e in employees]
+    sick_leave_ids = {employee_id for (employee_id,) in db.query(SickLeaveRecord.employee_id).filter(
+        SickLeaveRecord.employee_id.in_(employee_ids), SickLeaveRecord.status == "active",
+        SickLeaveRecord.leave_start_date <= end, SickLeaveRecord.leave_end_date >= start,
+    ).distinct()}
+    deduction_ids = {employee_id for (employee_id,) in db.query(DeductionRecord.employee_id)
+        .join(DeductionType, DeductionType.id == DeductionRecord.deduction_type_id)
+        .filter(DeductionRecord.employee_id.in_(employee_ids), DeductionRecord.deduction_month == month,
+                DeductionRecord.status == "active", DeductionType.code.in_(MEDAL_DEDUCTION_CODES)).distinct()}
     from app.services.identity import base_roles_at
-    context = {'roles': base_roles_at(db, [e.id for e in employees], end),
+    context = {'roles': base_roles_at(db, employee_ids, end),
         'identities': {i.employee_id:i for i in db.query(MedalAccountIdentity)},
         'accounts': {a.employee_id:a for a in db.query(UserAccount)},
         'duplicate_numbers': {key for key, count in number_counts.items() if count > 1}}
@@ -457,33 +488,89 @@ def preview(db, user, month, circle_id):
             continue
         status, reason, first = qualification(db, employee, month, context)
         details = leaves_by_employee.get(employee.id, [])
-        if status == "拟发放" and details:
-            status, reason = "未获得", "当月存在有效请假记录"
+        if status == "拟发放":
+            if details or employee.id in sick_leave_ids:
+                status, reason = "未获得", "当月存在有效请假记录"
+            elif employee.id in deduction_ids:
+                status, reason = "未获得", "当月存在有效考勤异常或违规病假记录"
         rows.append({"employee_id": employee.id, "employee_no": employee.employee_no, "name": employee.name,
             "status": status, "reason": reason, "first_month": first, "leaves": details,
             "needs_identity_date": reason == '历史账号创建日期待核实'})
     ready = bool(batch and data_ready(state, all_issues))
-    fingerprint = digest(rows)
     outcome_fingerprint = digest([{'employee_id': r['employee_id'], 'status': r['status'], 'reason': r['reason']} for r in sorted(rows, key=lambda r:r['employee_id'])])
     run = db.query(MedalCircleRun).filter_by(month=month, attraction_id=circle_id).first()
     last_completed_month = (date.today().replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
-    historical_initial = month >= FORMAL_START and month < last_completed_month and run is None
+    trial = month < FORMAL_START
+    historical_initial = not trial and month < last_completed_month and run is None
     previous = {r["employee_id"]:r for r in json.loads(run.results)} if run else {}
-    changes = []
     current = {r["employee_id"]:r for r in rows}
-    for eid in sorted(set(previous) | set(current)):
-        before, after = previous.get(eid), current.get(eid)
-        if bool(before and before["status"] == "拟发放") != bool(after and after["status"] == "拟发放"):
-            changes.append({"employee_id": eid, "name": (after or before)["name"],
-                "action": "补发" if after and after["status"] == "拟发放" else "撤回",
-                "reason": after["reason"] if after else "归属已修正"})
-    closed = end < date.today().isoformat()
-    return {"month": month, "attraction_id": circle_id, "trial": month < FORMAL_START,
+    intended = {eid for eid, row in current.items() if row["status"] == "拟发放"}
+    confirmed = {eid for eid, row in previous.items() if row["status"] == "拟发放"}
+    changed_ids = confirmed ^ intended
+    awarded = set()
+    incoming = {}
+    outgoing = {}
+    if trial:
+        medals = db.query(AttendanceMedal.employee_id, AttendanceMedal.attraction_id,
+                          AttendanceMedal.status).filter_by(month=month)
+        local = AttendanceMedal.attraction_id == circle_id
+        active = AttendanceMedal.status == "awarded"
+        if highest:
+            medals = medals.filter(local | AttendanceMedal.employee_id.in_(current))
+        else:
+            medals = medals.filter(local, active)
+        for eid, owner_id, status in medals:
+            if owner_id == circle_id:
+                if status == "awarded":
+                    awarded.add(eid)
+                destination = assignment.get(str(eid))
+                if highest and destination and destination != circle_id:
+                    outgoing[eid] = destination
+            else:
+                incoming[eid] = (owner_id, status)
+        changed_ids |= awarded ^ intended
+        changed_ids.update(incoming)
+        changed_ids.update(outgoing)
+    transfer_circles = set(outgoing.values()) | {owner for owner, _ in incoming.values()}
+    circle_names = dict(db.query(Attraction.id, Attraction.name).filter(
+        Attraction.id.in_(transfer_circles))) if transfer_circles else {}
+    changes = []
+    for eid in sorted(changed_ids):
+        after = current.get(eid)
+        record = previous.get(eid) or {}
+        reason = after["reason"] if after else "归属已修正"
+        employee = employees_by_id.get(eid)
+        change = {"employee_id": eid, "name": employee.name if employee else record.get("name", ""),
+            "employee_no": employee.employee_no if employee else record.get("employee_no", ""),
+            "action": "补发" if eid in intended else "撤回",
+            "reason": reason}
+        if eid in outgoing:
+            destination = outgoing[eid]
+            destination_name = circle_names.get(destination, f"景点圈 #{destination}")
+            change.update(action="移出", target_circle_id=destination, reason=f"将移入 {destination_name}")
+        elif eid in incoming:
+            owner, status = incoming[eid]
+            source_name = circle_names.get(owner, f"景点圈 #{owner}")
+            change.update(source_circle_id=owner, target_circle_id=circle_id)
+            if (status == "awarded") == (eid in intended):
+                change.update(action="移入", reason=f"从 {source_name} 移入，保留原勋章状态")
+            else:
+                change["reason"] = f"跨圈移入后{change['action']} · 来源 {source_name} · {reason}"
+        elif trial and (eid in awarded) == (eid in intended):
+            change.update(action="确认名单", reason=f"仅更新本圈获奖名单 · {reason}")
+        changes.append(change)
+    fingerprint = digest({"month": month, "attraction_id": circle_id, "rows": rows, "changes": changes,
+                          "awarded": sorted(awarded), "incoming": incoming,
+                          "last_confirmation": run.fingerprint if run else None}) if trial else digest(rows)
+    ended = end < date.today().isoformat()
+    closed = ended and month_closure_scope(db, month, circle_id) is not None
+    needs_adjustment = run is not None and (bool(changes) if trial else run.fingerprint != outcome_fingerprint)
+    return {"month": month, "attraction_id": circle_id, "trial": trial,
         "revision": state.revision if state else 0, "fingerprint": fingerprint, "outcome_fingerprint": outcome_fingerprint,
-        "status": "待数据就绪" if not ready else "待调整" if run and run.fingerprint != outcome_fingerprint else "已发放" if run else "待确认发放",
+        "status": "待数据就绪" if not ready else "待月结" if not closed else "待调整" if needs_adjustment else "已发放" if run else "待确认发放",
         "requires_highest": historical_initial,
-        "can_publish": ready and not issues and (closed or month < FORMAL_START)
-            and not (historical_initial and not is_admin(user)) and not any(r["status"] == "待处理" for r in rows),
+        "can_publish": ready and not issues and closed
+            and not (historical_initial and not highest) and not any(r["status"] == "待处理" for r in rows),
         "rows": rows, "issues": issues, "changes": changes,
         "confirmed_by": run.confirmed_by if run else None,
         "confirmed_at": str(run.confirmed_at) if run else None,
@@ -491,19 +578,36 @@ def preview(db, user, month, circle_id):
         "data_imported_by": batch.imported_by if batch else None,
         "data_imported_at": str(batch.imported_at) if batch else None,
         "ignored_codes": json.loads(batch.ignored_codes) if batch else [],
-        "month_ended": closed, "rule": RULE}
+        "month_ended": ended, "month_closed": closed, "rule": RULE}
+
+
+def trial_results(db, month, circle_id):
+    _, end = month_bounds(month)
+    closed = end < date.today().isoformat() and month_closure_scope(db, month, circle_id) is not None
+    run = db.query(MedalCircleRun).filter_by(month=month, attraction_id=circle_id).first() if closed else None
+    result = _preview(db, month, circle_id) if run else None
+    status = result["status"] if result else "待确认发放" if closed else "待月结"
+    awarded = [row for row in result["rows"] if row["status"] == "拟发放"] if status == "已发放" else []
+    return {"attraction_id": circle_id, "status": status,
+            "rows": [{"name": row["name"], "employee_no": row["employee_no"], "status": "已获得", "leaves": []}
+                     for row in awarded],
+            "read_only": True, "issues": [], "changes": [], "month_closed": closed, "rule": RULE}
 
 
 def publish(db, user, month, circle_id, revision, fingerprint, reason=""):
     result = preview(db, user, month, circle_id)
     if result['requires_highest'] and not is_admin(user):
         raise HTTPException(403, '历史月份首次补发需由最高管理员核对确认')
-    if revision != result["revision"] or fingerprint != result["fingerprint"]:
-        raise HTTPException(409, "数据或人员资格已变化，请重新核对名单")
-    if not result["can_publish"]:
-        raise HTTPException(409, "请先确认全员数据完整、解决异常；正式月份须等待月份结束")
     run = db.query(MedalCircleRun).filter_by(month=month, attraction_id=circle_id).first()
-    if run and run.fingerprint == result['outcome_fingerprint']:
+    # Trial runs retain the latest accepted confirmation so an exact retry cannot apply a new adjustment.
+    trial_receipt = digest({"revision": revision, "fingerprint": fingerprint}) if result["trial"] else None
+    retry = trial_receipt and run and run.fingerprint == trial_receipt and result["status"] == "已发放"
+    if revision != result["revision"] or (fingerprint != result["fingerprint"] and not retry):
+        message = "发放或撤回名单已变化，请刷新并重新确认" if result["trial"] else "数据或人员资格已变化，请重新核对名单"
+        raise HTTPException(409, message)
+    if not result["can_publish"]:
+        raise HTTPException(409, "请先完成月结、确认全员数据完整并处理异常")
+    if result["status"] == "已发放":
         return {"ok": True, "duplicate": True, "awarded": 0, "revoked": 0}
     if run and not reason.strip():
         raise HTTPException(400, "调整已发放结果需要填写原因")
@@ -512,6 +616,7 @@ def publish(db, user, month, circle_id, revision, fingerprint, reason=""):
         db.add(run)
     awarded = revoked = 0
     intended = {r["employee_id"] for r in result["rows"] if r["status"] == "拟发放"}
+    transfers = {c["employee_id"]: c["target_circle_id"] for c in result["changes"] if "target_circle_id" in c}
     medals = {m.employee_id: m for m in db.query(AttendanceMedal).filter_by(month=month).all()}
     actions = []
     for row in result["rows"]:
@@ -520,6 +625,8 @@ def publish(db, user, month, circle_id, revision, fingerprint, reason=""):
         if medal and medal.attraction_id != circle_id:
             if not is_admin(user):
                 raise HTTPException(409, "跨圈历史归属纠错需由最高管理员处理")
+            if result["trial"] and transfers.get(eid) != circle_id:
+                raise HTTPException(409, "勋章移入名单已变化，请刷新并重新确认")
             medal.attraction_id = circle_id
         if eid in intended and (not medal or medal.status != "awarded"):
             if not medal:
@@ -542,8 +649,10 @@ def publish(db, user, month, circle_id, revision, fingerprint, reason=""):
             if not is_admin(user):
                 raise HTTPException(409, "存在跨圈历史归属调整，请最高管理员处理")
             if target_circle:
+                if result["trial"] and transfers.get(medal.employee_id) != target_circle:
+                    raise HTTPException(409, "勋章移出名单已变化，请刷新并重新确认")
                 medal.attraction_id = target_circle
-    run.fingerprint, run.results = result['outcome_fingerprint'], dump(result["rows"])
+    run.fingerprint, run.results = trial_receipt or result['outcome_fingerprint'], dump(result["rows"])
     run.confirmed_by, run.confirmed_at = user.name, datetime.now()
     if month >= FORMAL_START:
         for eid, message, why in actions:
@@ -553,17 +662,20 @@ def publish(db, user, month, circle_id, revision, fingerprint, reason=""):
             "revoked": revoked, "reason": reason, "trial": month < FORMAL_START,
             "historical_initial": result['requires_highest'], "results": result["rows"]})
     db.flush()
-    return {"ok": True, "awarded": awarded, "revoked": revoked, "trial": month < FORMAL_START}
+    response = {"ok": True, "awarded": awarded, "revoked": revoked, "trial": result["trial"]}
+    if transfers:
+        response["moved"] = len(transfers)
+    return response
 
 
 def collection(db, user, employee_id):
     # Trial honors never reach employee-facing APIs, including managers' public profiles.
-    medals = db.query(AttendanceMedal).filter_by(employee_id=employee_id, status="awarded").filter(
-        AttendanceMedal.month >= FORMAL_START, AttendanceMedal.month < date.today().strftime('%Y-%m')
-    ).order_by(AttendanceMedal.month.desc()).all()
-    visible = employee_content_visible()
-    if not visible:
+    if not employee_content_visible():
         return {"visible": False, "items": [], "count": 0}
+    medals = db.query(AttendanceMedal).filter_by(employee_id=employee_id, status="awarded").filter(
+        AttendanceMedal.month >= FORMAL_START, AttendanceMedal.month < date.today().strftime('%Y-%m'),
+        _closed_month(db, AttendanceMedal),
+    ).order_by(AttendanceMedal.month.desc()).all()
     result = {"visible": True, "items": [{"month": m.month, "issued_at": str(m.issued_at)} for m in medals],
               "count": len(medals), "rule": RULE}
     if user.id == employee_id:
@@ -571,7 +683,8 @@ def collection(db, user, employee_id):
             for n in visible_notices(db, employee_id).order_by(MedalNotice.id.desc()).limit(50)]
         private = []
         for run in db.query(MedalCircleRun).filter(MedalCircleRun.month >= FORMAL_START,
-                MedalCircleRun.month < date.today().strftime('%Y-%m')).order_by(MedalCircleRun.month.desc()).all():
+                MedalCircleRun.month < date.today().strftime('%Y-%m'),
+                _closed_month(db, MedalCircleRun)).order_by(MedalCircleRun.month.desc()).all():
             state = db.get(MedalLeaveMonth, run.month)
             if state and state.roster and json.loads(state.roster).get(str(employee_id)) != run.attraction_id:
                 continue
@@ -582,6 +695,9 @@ def collection(db, user, employee_id):
         previous_month = (date.today().replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
         if previous_month >= FORMAL_START and not any(r['month'] == previous_month for r in private):
             state = db.get(MedalLeaveMonth, previous_month)
-            result['pending_month'] = {'month': previous_month, 'status': '待确认发放'
-                if data_ready(state, batch_issues(db, latest_batch(db, state))) else '待数据就绪'}
+            status = '待数据就绪'
+            if data_ready(state, batch_issues(db, latest_batch(db, state))):
+                circle_id = json.loads(state.roster or '{}').get(str(employee_id))
+                status = '待确认发放' if month_closure_scope(db, previous_month, circle_id) else '待月结'
+            result['pending_month'] = {'month': previous_month, 'status': status}
     return result

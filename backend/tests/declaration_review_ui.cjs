@@ -8,7 +8,7 @@ const row={id:1,employee_id:1,employee_name:'员工LongName'.repeat(8),employee_
 const data=()=>({month:'2026-11',total_records:1,employee_count:1,levels:[{id:1,code:'STATEMENT',name:'声明',count:1}],attractions:[{id:1,name:'热力追踪'}],types:[{id:1,name:'安全',active:true},{id:2,name:'礼仪',active:true}],statuses:{已生效:1},circles:[{attraction_id:1,attraction_name:'热力追踪',record_count:1,employee_count:1,levels:[{id:1,code:'STATEMENT',name:'声明',count:1}]}],records:multiple?[row,{...row,id:2,employee_id:2,employee_no:'0283652',employee_name:'员工二'}]:[row]});
 await page.route('**/api/**',async route=>{const req=route.request();if(req.method()!=='GET'){writes.push({url:req.url(),body:req.postDataJSON()});return route.fulfill({status:failWrite?409:200,json:failWrite?{detail:'记录已变化，请刷新'}:{ok:true}});}reads.push(req.url());if(holdRead){started();await new Promise(resolve=>releaseRead=resolve);}await route.fulfill({status:failRead?503:200,json:failRead?{detail:'服务暂不可用'}:empty?{...data(),records:[],circles:[],total_records:0,employee_count:0}:data()});});
 await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.ready);
-const visible=()=>page.locator(width===390?'.declaration-mobile':'.declaration-desktop');
+const visible=()=>page.locator('.declaration-list-content');
 const open=()=>page.locator('[data-declaration-circle]').click();
 assert.equal(new URL(reads[0]).searchParams.get('status'),'current');
 assert.equal(await page.locator('[name=status]').inputValue(),'current');
@@ -97,7 +97,7 @@ await page.locator('[name=month]').fill('2026-10');await page.locator('[name=att
 // Successful exports snapshot the same filters displayed at confirmation time.
 await page.locator('#declarationExport').click();await page.evaluate(()=>document.querySelector('[name=keyword]').value='changed while confirming');await page.locator('[data-modal-confirm]').click();await page.waitForSelector('[role=dialog]',{state:'detached'});const exportRequest=writes.findLast(w=>w.url.includes('/export-tasks?'));assert.ok(exportRequest);const target=new URL(new URL(exportRequest.url).searchParams.get('target'),'http://fixture');assert.equal(target.pathname,'/api/declaration-statistics/export');assert.equal(target.search,query.search);await page.locator('[name=keyword]').fill('0183652');
 // Repeated open/close must not accumulate actions or interpret literal user content as HTML.
-for(let i=0;i<3;i++){await open();await open();}await open();assert.equal(await visible().locator('[data-correct-type]').count(),1);assert.equal(await visible().locator('.declaration-description').innerText(),row.description);assert.equal(await visible().locator('.declaration-description img').count(),0);
+for(let i=0;i<3;i++){await open();await open();}await open();await page.locator('[data-declaration-list-row] > summary').click();await visible().locator('.declaration-record').waitFor();assert.equal(await visible().locator('[data-correct-type]').count(),1);assert.equal(await visible().locator('.declaration-description').innerText(),row.description);assert.equal(await visible().locator('.declaration-description img').count(),0);
 if(width===1280){assert.ok(await visible().locator('.declaration-card-identity').evaluate(p=>p.querySelector('strong').getBoundingClientRect().right<=p.getBoundingClientRect().right+1),'long employee name overflows its card');}
 assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
 // A rejected edit keeps its modal and original selected value, and does not refresh or alter another row.

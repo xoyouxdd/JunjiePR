@@ -4,6 +4,7 @@ import { mountMedalCollection } from './attendance-medals.js';
 import { beginViewRequest, captureViewContext } from './context.js';
 import { attachmentControl, bindFilePreviews } from './files.js';
 import { esc, fmt, fmtDeduction, monthNow, prefersReducedMotion } from './format.js';
+import { updateIdentityMemberCount } from './navigation.js';
 import { coveredSickDisclosure, splitCoveredSickRecords } from './records.js';
 import { app } from './state.js';
 import { avatarMarkup } from './avatars.js';
@@ -58,6 +59,7 @@ async function renderMembers(){
     try{
       const data=await api('/api/member-score-summary?'+qs);
       if(!request.isCurrent())return;
+      updateIdentityMemberCount(data.member_count);
       document.getElementById('memberResults').innerHTML=`<div class="table-wrap member-score-wrap"><table class="member-score-table"><thead><tr><th>员工</th><th>加分</th><th>扣分</th><th>全勤分</th><th>综合分</th></tr></thead><tbody>${data.rows.map(memberScoreRow).join('')||'<tr><td colspan="5" class="empty">无直属CM/TR或无匹配员工</td></tr>'}</tbody></table></div>`;
       bindMemberScoreDetails(data);
     }catch(error){

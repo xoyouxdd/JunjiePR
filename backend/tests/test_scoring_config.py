@@ -423,10 +423,19 @@ def batch(c,code='MSP',extra=None):
     with SessionLocal() as db:
         typ=db.query(RecognitionType).filter_by(code=code).one().id
     item=dict(recognition_date=DAY,occurred_attraction_id=options['recognition_venues'][0]['id'],recognition_type_id=typ,
-              recognizer_employee_id='special:'+code,content='批量规则测试',same_day_duplicate_confirmed=True)
+              recognizer_employee_id='special:'+code,content='批量规则测试')
     if extra:item.update(extra)
-    return c.post('/api/recognitions/batch',data={'entries':json.dumps([item,item]),'idempotency_key':uuid4().hex},
-                  files={'image':('evidence.png',png(),'image/png')})
+    items = [item, item.copy()]
+    key = uuid4().hex
+    for _ in range(len(items) + 1):
+        response = c.post('/api/recognitions/batch',data={'entries':json.dumps(items),'idempotency_key':key},
+                          files={'image':('evidence.png',png(),'image/png')})
+        detail = response.json().get('detail')
+        if not isinstance(detail, dict) or detail.get('code') != 'SAME_DAY_RECOGNITION_DUPLICATE':
+            return response
+        items[detail['entry_index'] - 1].update(same_day_duplicate_confirmed=True,
+                                               same_day_duplicate_token=detail['same_day_duplicate_token'])
+    pytest.fail('Unexpected repeated batch duplicate confirmation')
 
 
 def review_as_leader(c,record_id,action='confirm'):

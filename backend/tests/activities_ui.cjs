@@ -115,6 +115,18 @@ async function run(){
     await cm.page.getByRole('dialog').waitFor({state:'hidden'});
     await cm.page.locator('.activity-wallet').getByText('25',{exact:false}).waitFor();
     await gsm.context.request.post(base+`/__fixture/end/${draw.lots[0].id}`);
+    const pointCardPage=await cm.context.newPage();
+    await pointCardPage.goto(base+'/');
+    await pointCardPage.locator('.tabs-desktop [data-tab="activityPoints"]').click();
+    const pointCard=pointCardPage.locator('#personalActivityPoints .activity-points-card');
+    await pointCard.getByText('已支出 20 点 · 奖品待领取',{exact:true}).waitFor();
+    assert.equal(await pointCard.locator('.points-amount strong').textContent(),'45');
+    for(const width of [320,390,1280]){
+      await pointCardPage.setViewportSize({width,height:1000});
+      assert(await pointCardPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`point card overflow ${width}`);
+      await pointCard.screenshot({path:path.join(output,`points-pending-${width}.png`)});
+    }
+    await pointCardPage.close();
     await gsm.page.getByRole('button',{name:'刷新',exact:true}).click();
     const gmCard=gsm.page.locator(`details[data-event="${draw.id}"]`);
     if(!await gmCard.evaluate(n=>n.open))await gmCard.locator(':scope > summary').click();

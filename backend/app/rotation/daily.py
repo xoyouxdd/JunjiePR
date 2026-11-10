@@ -15,7 +15,7 @@ from app.rotation.models import RotationDay, RotationRosterEntry, RotationSnapsh
 def capture_snapshot(db,attraction_id,state,settings,minute):
     RotationSnapshot = tables_for(db).RotationSnapshot
     if state.get('status') not in ('live','ended'):return
-    clean={k:v for k,v in state.items() if k not in ('initialDraft','initialSettings','confirmations','lastTick','dailyOpening')}
+    clean={k:v for k,v in state.items() if k not in ('initialDraft','initialSettings','confirmations','lastTick','dailyOpening','push7History')}
     encoded=json.dumps({'state':clean,'settings':settings},ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()
     digest=hashlib.sha256(encoded).hexdigest()
     db.flush()
@@ -52,6 +52,7 @@ def present(db,cfg,attraction_id,work_date,state,minute,settings=None):
     class ReadHooks:
         def week_minutes(self): return {}
     eng=S.E.Engine(state,settings or S.settings_of(cfg),PreviewHooks(ReadHooks()))
+    eng._read_projection={}
     taken=eng.targeted() if state.get('status')=='live' else {}
     persons=[S.person_view(eng,p,minute,taken) for p in state['persons'].values()]
     for p in persons:
@@ -221,7 +222,43 @@ def normalize_seven_assignments(state, previous_slots=None):
     return plan!=before
 
 
-def set_prestart_line(state,lid,active):
+def fill_new_seven_slots(state, previous_slots, settings, read_history=None):
+    if state.get('ruleVersion') != 2:
+        return
+    early_slots = S.E.open_seven_slots(state['lines'])
+    plan = state['plan']
+    assigned = set(plan['crew'].values()) | set(plan['seven'].values())
+    early = [p for p in state['persons'].values() if p['role'] == 'rotation' and p['start'] == 420
+             and not p.get('initialPool')]
+    S.E.refresh_seven_configuration_alert(state.setdefault('draftAlerts', []), early_slots, len(early))
+    available = sorted((p for p in early if p['pid'] not in assigned),
+                       key=lambda p: (-(p['end'] - p['start']), p['name'], p['pid']))
+    free = [(rank, lid, i) for rank, lid, i in early_slots if (rank, lid, i) not in previous_slots
+            and f'{lid}#{i}' not in plan['crew'] and f'{lid}#{i}' not in plan['seven']]
+    if not available or not free:
+        return
+    prior_relief = seven_relief_slots(state)
+    added = []
+    for (rank, lid, i), p in zip(free, available):
+        line = next(line for line in state['lines'] if line['id'] == lid)
+        line['posts'][i]['seven'] = rank
+        pid = p['pid']
+        plan['seven'][f'{lid}#{i}'] = pid
+        added.append(pid)
+    assigned.update(added)
+    history = read_history() if read_history else {}
+    candidates = sorted((p for p in state['persons'].values() if p['role'] == 'rotation'
+                         and p['start'] == S.E._m(settings['lineOpenAt']) and not p.get('absences')
+                         and not p.get('initialPool') and p['pid'] not in assigned and p['pid'] not in plan['push7']),
+                        key=lambda p: (S.E.push7_rank(history, p['pid']), p['name'], p['pid']))
+    bindings = {pid: plan['seven'][key] for key, pid in prior_relief.items()}
+    for target, p in zip(added, candidates):
+        plan['push7'].append(p['pid'])
+        bindings[p['pid']] = target
+    plan['push7Targets'] = bindings
+
+
+def set_prestart_line(state,lid,active, *, settings=None, read_history=None, now=None):
     if not isinstance(lid,str) or type(active) is not bool:raise S.ActionError('线路或启用状态无效')
     line=next((line for line in state['lines'] if line['id']==lid),None)
     if line is None:raise S.ActionError('线路不存在')
@@ -229,6 +266,11 @@ def set_prestart_line(state,lid,active):
         raise S.ActionError('本线还有定岗人员，请先取消定岗再停用')
     if (not line.get('standby',False))==active and line.get('active',active)==active:return False
     previous=seven_relief_slots(state)
+    previous_open=S.E.open_seven_slots(state['lines']) if state.get('ruleVersion') == 2 else ()
+    if state.get('ruleVersion') == 2 and active and now is not None:
+        from app.rotation.forecast import expire_closed_line_opening
+        for post in line['posts']:
+            expire_closed_line_opening(line, post, now)
     line.update(standby=not active,active=active)
     if not active:
         had_seven=any(key.startswith(lid+'#') for key in state['plan']['seven'])
@@ -239,7 +281,9 @@ def set_prestart_line(state,lid,active):
         normalize_seven_assignments(state,previous)
     for post in line['posts']:
         post.update(open=active and not post.get('openAt') and not post.get('draftClosed'),
-                    opened=not bool(post.get('openAt')),occ=None,since=None,manual=bool(post.get('draftClosed')))
+                    opened=bool(post.get('openExpired') or not post.get('openAt')),
+                    occ=None,since=None,manual=bool(post.get('draftClosed')))
+    fill_new_seven_slots(state, previous_open, settings or S.E.DEFAULT_SETTINGS, read_history)
     sync_prestart(state);validate_plan(state)
     return True
 
@@ -306,6 +350,9 @@ def configure_post(state, body, now, actor):
                     raise S.ActionError('加岗时间须早于撤岗时间')
             post.update(open=at is None, opened=at is None, openAt=S.E.fmt(at) if at is not None else None,
                         openRequest=at is not None, manual=False, draftClosed=False)
+            post.pop('openExpired', None)
+            post.pop('resumeOpen', None)
+            post.pop('resumeScheduled', None)
         else:
             if at is not None:
                 if not is_open and (not post.get('openAt') or at <= S.action_time(post['openAt'])):
@@ -344,6 +391,10 @@ def edit(db,attraction_id,actor,work_date,body):
     if not row or (row.status!='draft' and not live_edit):raise S.ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
     state=S.day_state(row)
     previous_slots=seven_relief_slots(state)
+    previous_open=S.E.open_seven_slots(state['lines']) if state.get('ruleVersion') == 2 and action in (
+        'draft_rename_post', 'draft_post') else ()
+    def read_push7_history():
+        return S.completed_push7(db, attraction_id, work_date)
     upload=S.roster_upload_for(db,attraction_id,work_date)
     if action=='publish' and upload and state.get('rosterUploadId') and state['rosterUploadId']!=upload.id:
         raise S.ActionError('上传班表已更新，请重新生成并核对预排后启用')
@@ -390,24 +441,31 @@ def edit(db,attraction_id,actor,work_date,body):
         from app.rotation.workflow import initialize
         initialize(engine)  # Bind 101 identity before a first prearrangement rename.
         post['name']=name
+        fill_new_seven_slots(state, previous_open, engine.S, read_push7_history)
+        if live_edit:
+            sync_prestart(state)
+        if state.get('ruleVersion') == 2:
+            validate_plan(state)
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,line['id'],name,{'from':old,'to':name,'post':body['post']})
         return
     if action=='draft_line':
         lid=body.get('line');active=body.get('active')
-        if not set_prestart_line(state,lid,active):return
+        if not set_prestart_line(state,lid,active,settings=S.settings_of(cfg),read_history=read_push7_history,
+                                 now=now if live_edit else None):return
         if live_edit:
-            sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'])
+            sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2)
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,lid,None,{'active':active})
         return
     if action == 'draft_post':
         line, post = configure_post(state, body, now if work_date == today else 0, actor)
         normalize_seven_assignments(state, previous_slots)
+        fill_new_seven_slots(state, previous_open, S.settings_of(cfg), read_push7_history)
         validate_plan(state)
         if live_edit:
             sync_prestart(state)
-            S.write_duties(db, attraction_id, work_date, state['plan'])
+            S.write_duties(db, attraction_id, work_date, state['plan'], record_push7=state.get('ruleVersion')!=2)
         S.save_day(db, row, state)
         S.DbHooks(db, attraction_id, work_date).log(action, actor, None, line['id'], post['name'],
                                                    {'change': body['change'], 'post': body['post']})
@@ -424,7 +482,7 @@ def edit(db,attraction_id,actor,work_date,body):
             validate_plan(state)
             state['plan']['push7']=[p for p in state['plan']['push7'] if p!=pid]
             if live_edit:
-                sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'])
+                sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2)
             S.save_day(db,row,state)
             S.DbHooks(db,attraction_id,work_date).log(action,actor,pid,None,None,{'source':source,'target':target})
             return
@@ -455,7 +513,7 @@ def edit(db,attraction_id,actor,work_date,body):
         assigned=set(state['plan']['crew'].values())|set(state['plan']['seven'].values())
         state['plan']['push7']=[p for p in state['plan']['push7'] if p not in assigned]
         if live_edit:
-            sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'])
+            sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2)
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,None,None,{'source':source,'target':target})
         return
@@ -472,7 +530,7 @@ def edit(db,attraction_id,actor,work_date,body):
         normalized=normalize_seven_assignments(state,None if action=='draft_list' and body.get('kind')=='push7' else previous_slots);validate_plan(state)
         if normalized:S.save_day(db,updated,state)
         if live_edit:
-            state['status']='live';sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan']);S.save_day(db,updated,state)
+            state['status']='live';sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2);S.save_day(db,updated,state)
 
 
 def sync_prestart(state):

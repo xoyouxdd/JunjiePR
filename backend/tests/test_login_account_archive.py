@@ -52,6 +52,18 @@ def managed_group(client: TestClient, group_id: int) -> dict:
     return next(group for circle in response.json()["circles"] for group in circle["groups"] if group["id"] == group_id)
 
 
+def supervisor_roster(
+    client: TestClient, month: str | None = None, keyword: str | None = None,
+) -> tuple[int, set[int]]:
+    profile = client.get("/api/me")
+    params = {key: value for key, value in {"month": month, "keyword": keyword}.items() if value is not None}
+    roster = client.get("/api/member-score-summary", params=params)
+    assert profile.status_code == roster.status_code == 200, (profile.text, roster.text)
+    data = roster.json()
+    assert data["member_count"] == profile.json()["member_count"]
+    return data["member_count"], {row["employee_id"] for row in data["rows"]}
+
+
 def mark_eligible_with_business_history() -> tuple[int, int]:
     """Create a retained recognition row and an account eligible for removal."""
     with SessionLocal() as db:
@@ -101,6 +113,9 @@ def mark_eligible_with_business_history() -> tuple[int, int]:
 def test_remove_login_after_three_days_keeps_employee_and_business_archive() -> None:
     with TestClient(app) as client:
         employee_id, account_id = mark_eligible_with_business_history()
+        login(client, "TATEST01", "isolated-test-only")
+        before_count, before_roster = supervisor_roster(client)
+        assert employee_id in before_roster
         login(client, "HR01", "isolated-admin-only")
         directory = client.get("/api/hr/employees")
         assert directory.status_code == 200, directory.text
@@ -147,6 +162,24 @@ def test_remove_login_after_three_days_keeps_employee_and_business_archive() -> 
         assert any('隔离留档测试' in str(cell.value) for row in book['签卡明细'] for cell in row)
         assert any('已删除·留档' == cell.value for row in book['员工留档标记'] for cell in row)
         assert client.put(f'/api/hr/employees/{employee_id}', json={'employment_status':'active','account_enabled':True}).status_code == 409
+        login(client, "TATEST01", "isolated-test-only")
+        after_count, after_roster = supervisor_roster(client)
+        assert after_count == before_count - 1
+        assert after_roster == before_roster - {employee_id}
+        previous_month = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        for keyword in ("TEST01", "CM甲"):
+            count, matches = supervisor_roster(client, keyword=keyword)
+            assert count == after_count and employee_id not in matches
+            count, matches = supervisor_roster(client, previous_month, keyword)
+            assert count == after_count and employee_id in matches
+        retained = client.get("/api/member-records", params={"keyword": "CMTEST01", "record_type": "recognition"})
+        assert retained.status_code == 200, retained.text
+        record_id = next(row["id"] for row in retained.json() if row["content"] == "隔离留档测试")
+        login(client, "SUPTEST01", "isolated-test-only")
+        assert client.post(f"/api/reviews/{record_id}", json={"action": "restore"}).status_code == 404
+        login(client, "TATEST01", "isolated-test-only")
+        assert client.post(f"/api/reviews/{record_id}", json={"action": "restore"}).status_code == 200
+        assert client.post(f"/api/reviews/{record_id}", json={"action": "confirm"}).status_code == 200
 
 
 def test_delete_endpoint_enforces_the_full_three_day_wait() -> None:
@@ -171,6 +204,8 @@ def test_delete_endpoint_enforces_the_full_three_day_wait() -> None:
 
 def test_legacy_active_employee_with_archived_login_is_hidden_from_management_tree() -> None:
     with TestClient(app) as client:
+        login(client, "SUPTEST01", "isolated-test-only")
+        before_count, before_roster = supervisor_roster(client)
         with SessionLocal() as db:
             employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
             employee.is_active = True
@@ -192,6 +227,17 @@ def test_legacy_active_employee_with_archived_login_is_hidden_from_management_tr
         assert closed.status_code == 200, closed.text
         with SessionLocal() as db:
             assert db.get(GroupMembership, membership_id) is not None
+        login(client, "SUPTEST01", "isolated-test-only")
+        after_count, after_roster = supervisor_roster(client)
+        assert employee_id in before_roster
+        assert after_count == before_count - 1
+        assert after_roster == before_roster - {employee_id}
+        previous_month = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        for keyword in ("TEST02", "CM乙"):
+            count, matches = supervisor_roster(client, keyword=keyword)
+            assert count == after_count and employee_id not in matches
+            count, matches = supervisor_roster(client, previous_month, keyword)
+            assert count == after_count and employee_id in matches
 
 
 def test_hr_archive_ui_and_export_marker_are_present() -> None:

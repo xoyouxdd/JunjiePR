@@ -7,12 +7,22 @@ let unknownCode=false,classified=false,classifications=0;
 let published=0,confirmed=0,imported=0,role='HR_CIRCLE',status='待确认发放',ready=true;
 const rows=[{employee_id:10,employee_no:'1700010',name:'张三 <b>员工</b>',status:'拟发放',reason:'符合资格',first_month:'2026-11',leaves:[]},
  {employee_id:11,employee_no:'1700011',name:'李四',status:'未获得',reason:'当月存在有效请假记录',first_month:'2026-11',leaves:[{date:'2027-01-02',leave_type:'事假',hours:'1'}]}];
+const trialWithdrawals=['1700011','1700012'].map(employee_no=>({
+ name:'李四',employee_no,action:'撤回',reason:'跨圈移入后撤回 · 当月存在有效请假记录'
+}));
+const trialChanges=[...trialWithdrawals,
+ {name:'王五',employee_no:'1899991',action:'移出',target_circle_id:2,reason:'将移入 矮人迷宫'},
+ {name:'赵六',employee_no:'1899992',action:'移入',source_circle_id:2,target_circle_id:1,reason:'从 矮人迷宫 移入，保留原勋章状态'},
+ {name:'钱七',employee_no:'1899993',action:'确认名单',reason:'仅更新本圈获奖名单 · 归属已修正'}
+];
 const shell=`<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/static/css/style.css"><link rel="stylesheet" href="/static/css/attendance-medals.css"><div id="tabs"></div><main id="app"></main><div id="toast"></div><script type="module">
 import {state} from '/static/js/app/state.js';import {renderSickLeaveImport} from '/static/js/app/absence.js';import {mountMedalCollection} from '/static/js/app/attendance-medals.js';
+import {renderStatistics} from '/static/js/app/statistics.js';
 state.me={id:10,permissions:['SICK_LEAVE_IMPORT'],role_code:'HR_CIRCLE'};state.options={employee_circles:[]};state.tab='sickLeaveImport';
 window.setRole=async r=>{state.me.role_code=r;state.me.permissions=r==='SYSTEM_ADMIN'?['SYSTEM_ADMIN','SICK_LEAVE_IMPORT']:['SICK_LEAVE_IMPORT'];await renderSickLeaveImport();};
 window.refreshCollection=()=>mountMedalCollection(document.getElementById('collection'),10,{lookup:true});
 window.collection=async()=>{document.getElementById('app').innerHTML='<div id="collection"></div>';await mountMedalCollection(document.getElementById('collection'),10,{lookup:true});};
+window.statistics=async r=>{state.me.role_code=r;state.me.base_role_code=r;state.me.permissions=['DATA_VIEW'];await renderStatistics();};
 await renderSickLeaveImport();window.ready=true;</script>`;
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost'),route=url.pathname;
@@ -21,9 +31,13 @@ const server=http.createServer(async(req,res)=>{
  res.setHeader('Content-Type','application/json');
  const month=url.searchParams.get('month')||'2027-01';
  if(route==='/api/sick-leave-imports/records')return res.end('{"items":[]}');
+ if(route==='/api/statistics')return res.end(JSON.stringify({month,hierarchy:[]}));
+ if(route==='/api/attendance-medals/manage'&&url.searchParams.get('trial_view')==='true'){
+  return res.end(JSON.stringify({circles:[{id:1,name:'热力追踪'}],items:[{attraction_id:1,status:month==='2026-11'?'已发放':'待月结',rows:month==='2026-11'?[{name:'试行获奖员工',employee_no:'1700010'}]:[]}]}));
+ }
  if(route==='/api/attendance-medals/manage')return res.end(JSON.stringify({month,can_import:role==='SYSTEM_ADMIN',highest:role==='SYSTEM_ADMIN',revision:1,data_ready:ready,unassigned_count:0,
   batch:role==='SYSTEM_ADMIN'?{filename:'全员.xls',imported_by:'统一导入员',imported_at:'2027-02-01',leaves:1,issues:unknownCode?[{code_type:classified?'classification_changed':'unclassified',leave_type:'SL',reason:'请核实代码后重新替换导入'}]:[],ignored_codes:['正常工作','调休']}:null,
-  wage_codes:classified?[{code:'SL',kind:'leave',revision:1}]:[],circles:[{id:1,name:'热力追踪'}],items:[{month,attraction_id:1,trial:month<'2027-01',revision:1,fingerprint:'v1',status:ready?status:'待数据就绪',can_publish:ready&&status!=='已发放',month_ended:true,rows,issues:unknownCode?[role==='SYSTEM_ADMIN'?{row:8,source_name:'敏感姓名',source_no:'1999999',reason:'需核实来源'}:{redacted:true,reason:'存在归属未明确的数据，请联系统一导入管理员处理'}]:[],changes:[{name:'张三 <b>员工</b>',action:'补发',reason:'无请假'}],rule:'依据请假数据，不绑定加分'}]}));
+  wage_codes:classified?[{code:'SL',kind:'leave',revision:1}]:[],circles:[{id:1,name:'热力追踪'}],items:[{month,attraction_id:1,trial:month<'2027-01',revision:1,fingerprint:'v1',status:ready?status:'待数据就绪',can_publish:ready&&status!=='已发放',month_ended:true,rows,issues:unknownCode?[role==='SYSTEM_ADMIN'?{row:8,source_name:'敏感姓名',source_no:'1999999',reason:'需核实来源'}:{redacted:true,reason:'存在归属未明确的数据，请联系统一导入管理员处理'}]:[],changes:role==='SYSTEM_ADMIN'&&month<'2027-01'?trialChanges:[{name:'张三 <b>员工</b>',action:'补发',reason:'无请假'}],rule:'依据请假数据，不绑定加分'}]}));
  if(route==='/api/attendance-medals/classify-code'){let body='';for await(const chunk of req)body+=chunk;const input=JSON.parse(body);assert.equal(input.code,'SL');assert.equal(input.kind,'leave');assert(input.reason);classifications++;classified=true;ready=false;return res.end('{"ok":true,"affected_months":["2027-01"]}');}
  if(route==='/api/attendance-medals/publish'){published++;status='已发放';return res.end('{"awarded":1,"revoked":0}');}
  if(route==='/api/attendance-medals/confirm-data'){confirmed++;ready=true;return res.end('{"ok":true}');}
@@ -68,6 +82,30 @@ const server=http.createServer(async(req,res)=>{
    assert(!((await page.locator('#app').textContent()).includes('敏感姓名')));assert(!((await page.locator('#app').textContent()).includes('undefined')));
    await page.locator('[data-medal-month]').fill('2026-11');await page.locator('[data-medal-month]').dispatchEvent('change');await page.getByText('管理端试用月份：',{exact:false}).waitFor();
    assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1));
+   role='SYSTEM_ADMIN';unknownCode=false;ready=true;status='待调整';
+   await page.evaluate(()=>setRole('SYSTEM_ADMIN'));
+   for(const month of ['2026-11','2026-12']){
+    await page.locator('[data-medal-month]').fill(month);
+    await page.locator('[data-medal-month]').dispatchEvent('change');
+    for(const row of trialChanges){
+     await page.getByText(`${row.name} · ${row.employee_no} · ${row.action} · ${row.reason}`,{exact:true}).waitFor({state:'attached'});
+    }
+    await page.locator('[data-medal-publish]').click();
+    const modal=page.locator('.modal-overlay:not(.is-leaving)');
+    await modal.locator('[data-modal-input]').fill('核对跨圈撤回');
+    await modal.locator('[data-modal-confirm]').click();
+    await modal.getByText(`热力追踪 · ${month}`,{exact:true}).waitFor();
+    await modal.getByText('待撤回名单',{exact:true}).waitFor();
+    await modal.getByText('待移入名单',{exact:true}).waitFor();
+    await modal.getByText('待移出名单',{exact:true}).waitFor();
+    await modal.getByText('仅更新获奖名单',{exact:true}).waitFor();
+    for(const row of trialChanges){
+     await modal.getByText(`${row.name} · ${row.employee_no} · ${row.reason}`,{exact:true}).waitFor();
+    }
+    await modal.locator('[data-modal-cancel]').click();
+    await page.waitForFunction(()=>!document.querySelector('[data-medal-month]').disabled);
+   }
+   assert.equal(published,1);
    await page.evaluate(()=>collection());await page.getByText('我的全勤勋章',{exact:false}).waitFor();
    assert.equal(await page.locator('.medal-item').count(),1);await page.locator('[data-medal-notice]').click();await page.waitForFunction(()=>!document.querySelector('[data-medal-notice]'));
    await page.getByText('查看同事已获勋章',{exact:true}).click();await page.locator('[data-medal-lookup] input').fill('李四');await page.locator('[data-medal-lookup] button').click();await page.locator('[data-medal-peer-id]').click();await page.locator('[data-medal-peer] .medal-item').waitFor();
@@ -75,6 +113,18 @@ const server=http.createServer(async(req,res)=>{
    await page.screenshot({path:path.join(out,`employee-${name}-${width}.png`),fullPage:true});
    await page.evaluate(async()=>{const NativeDate=window.NativeDate;window.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:['2026-11-07T12:00:00+08:00']));}};await refreshCollection();});
    assert.equal(await page.locator('#collection').textContent(),'','employee content is hidden before launch');
+   for(const observer of ['GSM','AM','OM']){
+    await page.evaluate(r=>statistics(r),observer);
+    await page.getByText('全勤勋章试行结果',{exact:true}).click();
+    const trial=page.locator('[data-statistics-medal-trial]');
+    await trial.getByText('试行获奖员工 · 1700010',{exact:true}).waitFor();
+    assert.equal(await trial.locator('button,[data-medal-import]').count(),0);
+    await trial.locator('[data-medal-trial-month]').selectOption('2026-12');
+    await trial.getByText('待月结',{exact:true}).waitFor();
+    assert.equal(await trial.getByText('试行获奖员工',{exact:false}).count(),0);
+   }
+   await page.evaluate(()=>statistics('TA_GSM'));
+   assert.equal(await page.getByText('全勤勋章试行结果',{exact:true}).count(),0);
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log(name+': embedded management, confirmation, trial isolation, collection privacy and 390/1280 layouts passed');await browser.close();browser=null;

@@ -1,4 +1,5 @@
 """Undo previews from audited, dependency-scoped patches, never whole-day rollback."""
+from bisect import bisect_right
 from copy import deepcopy
 import json
 
@@ -15,6 +16,48 @@ def snapshot(state):
 def _posts(state):
     return {p['key']:{'line':l['id'],'index':i,'post':p} for l in state['lines']
             for i,p in enumerate(l['posts']) if p.get('key')}
+
+
+def same_time_segment_ids(db, eng, now):
+    from app.rotation.namespace import tables_for
+    model = tables_for(db).RotationSegment
+    return [row.id for row in db.query(model.id).filter_by(
+        attraction_id=eng.h.attraction_id, work_date=eng.h.day, end_min=now)]
+
+
+def reverted_legacy_push7(db, attraction_id, events, restored):
+    """Find old successful events from before executions carried explicit IDs."""
+    from app.rotation.namespace import tables_for
+
+    days = {event.work_date for event, detail in events if event.line and not detail.get('push7_execution')}
+    days.intersection_update(restored)
+    if not days:
+        return set()
+    model = tables_for(db).RotationEvent
+    checkpoints = {day: [] for day in days}
+    ids = {day: [] for day in days}
+    for row in db.query(model.id, model.work_date, model.minute, model.detail_json).filter(
+            model.attraction_id == attraction_id, model.work_date.in_(days),
+            model.event_type == 'workflow_checkpoint').order_by(model.id):
+        ids[row.work_date].append(row.id)
+        checkpoints[row.work_date].append(row)
+    reverted = set()
+    for event, detail in events:
+        if event.work_date not in days or detail.get('push7_execution'):
+            continue
+        # The checkpoint follows the action's event in the same transaction.
+        i = bisect_right(ids[event.work_date], event.id)
+        rows = checkpoints[event.work_date]
+        if i == len(rows) or rows[i].id not in restored[event.work_date] or rows[i].minute != event.minute:
+            continue
+        target = detail.get('target') or next((m['pid'] for m in detail.get('moves', []) if m['to'] is None), None)
+        entry = json.loads(rows[i].detail_json)
+        people = entry['beforePeople']
+        before = people.get(target) or {}
+        if (event.line in entry['lines'] and event.employee_no in people and before.get('state') == 'onpost'
+                and not before.get('sevenReplaced')):
+            reverted.add(event.id)
+    return reverted
 
 
 def record(db, eng, before, action, actor, now):
@@ -36,6 +79,8 @@ def record(db, eng, before, action, actor, now):
              'beforePosts':{key:left.get(key) for key in keys},
              'beforeLines':{l['id']:{k:v for k,v in l.items() if k!='posts'} for l in before['lines'] if l['id'] in lines},
              'before101':before.get('hold101Active',False),'beforeClosed':before.get('closed',False)}
+    if 'segmentIdsAtAction' in before:
+        payload['segmentIdsAtAction'] = before['segmentIdsAtAction']
     if related_cases or any(c['line'] in lines for c in after.get('timeoutCases',{}).values()):
         payload.update(beforeCases=related_cases,beforeDemands=[d for d in before.get('timeoutDemands',[]) if d['line'] in lines],
                        beforeCaseTasks={id:t for id,t in before.get('caseTasks',{}).items() if t['line'] in lines})
@@ -66,6 +111,15 @@ def plan(db, eng, line):
 def apply(eng, undo, now):
     from app.rotation import workflow as W
     case_patches=[]
+    affected={v.split(':',1)[1] for v in undo['resources'] if v.startswith('person:')}
+    prior_sequences={}
+    current_sequences={}
+    if eng.d.get('ruleVersion') == 2:
+        current_sequences = {pid: eng.P[pid].get('confirmationSequence', 0) for pid in affected}
+        for _, entry in undo['entries']:
+            for pid, person in entry['beforePeople'].items():
+                if person is not None:
+                    prior_sequences.setdefault(pid, person.get('confirmationSequence', 0))
     for _,entry in reversed(undo['entries']):
         for pid,person in entry['beforePeople'].items():
             if person is not None:eng.P[pid]=deepcopy(person)
@@ -79,7 +133,6 @@ def apply(eng, undo, now):
         if entry['action'] in ('hold101','resume101'):eng.d['hold101Active']=entry['before101']
         if entry['action']=='set_close':eng.d['closed']=entry['beforeClosed']
         if 'beforeCases' in entry:case_patches.append(entry)
-    affected={v.split(':',1)[1] for v in undo['resources'] if v.startswith('person:')}
     for task in eng.d.get('rotationTasks',{}).values():
         if W.resources(task).intersection(undo['resources']) and (
                 task['status'] in W.ACTIVE or task.get('executedAt',-1)>=undo['minute']):
@@ -87,10 +140,19 @@ def apply(eng, undo, now):
             owner=eng.P.get(task.get('owner'))
             if owner and (owner.get('assign') or {}).get('taskId')==task['id']:owner['assign']=None
     for pid in affected:
-        p=eng.P[pid];p['confirmationSequence']=p.get('confirmationSequence',0)+1
+        p=eng.P[pid]
+        p['confirmationSequence']=max(p.get('confirmationSequence',0),current_sequences.get(pid,0))+1
         p['assign']=None;p.pop('_taskRefresh',None)
     for receipt in eng.d.get('confirmations',{}).values():
-        if receipt.get('pid') in affected and receipt.get('minute',-1)>=undo['minute']:
+        pid = receipt.get('pid')
+        if pid not in affected:
+            continue
+        sequence = receipt.get('sequence')
+        if pid in prior_sequences and sequence is not None:
+            reversed_by_undo = sequence > prior_sequences[pid]
+        else:
+            reversed_by_undo = receipt.get('minute', -1) >= undo['minute']
+        if reversed_by_undo:
             receipt['status']='reversed'
     for entry in case_patches:
         lines=set(entry['lines'])
@@ -132,14 +194,32 @@ def execute(db, eng, line, checkpoint, now, actor):
     from app.rotation.engine import ActionError
     undo=plan(db,eng,line)
     if undo['id']!=checkpoint:raise ActionError('该线路上一步已变化，请重新预览')
+    completed={p['push7Completion']['id'] for p in eng.P.values() if p.get('push7Completion')}
     affected=apply(eng,undo,now)
+    reverted_push7=sorted(completed-{p['push7Completion']['id'] for p in eng.P.values() if p.get('push7Completion')})
     model=tables_for(db).RotationSegment
     segments=db.query(model).filter(model.attraction_id==eng.h.attraction_id,model.work_date==eng.h.day,
             model.employee_no.in_(affected),model.end_min>=undo['minute']).all()
+    first_checkpoints={}
+    for _, entry in undo['entries']:
+        for pid in entry['beforePeople']:
+            first_checkpoints.setdefault(pid, entry)
+    def belongs_to_undo(segment):
+        entry = first_checkpoints.get(segment.employee_no, {})
+        if 'segmentIdsAtAction' not in entry:
+            return True
+        return (segment.end_min > entry['minute'] or
+                (segment.end_min == entry['minute'] and segment.id not in entry['segmentIdsAtAction']))
+    segments = [segment for segment in segments if belongs_to_undo(segment)]
     cancelled=[{'employee_no':s.employee_no,'line':s.line,'start':s.start_min,'end':s.end_min,'minutes':s.minutes} for s in segments]
     for segment in segments:db.delete(segment)
     db.flush()
     eng.h._week=None
     eng.h.log('workflow_restore',actor,None,line,None,
               {'checkpoints':[rid for rid,_ in undo['entries']],'cancelled_segments':cancelled,
-               'affected':sorted(affected),'reason':'现场核实后恢复'})
+               'affected':sorted(affected),'reason':'现场核实后恢复',
+               **({'reverted_push7':reverted_push7} if reverted_push7 else {})})
+    if eng.d.get('ruleVersion') == 2:
+        # The current day may still have pre-ID executions in the cached totals.
+        db.flush()
+        eng.d.pop('push7History', None)

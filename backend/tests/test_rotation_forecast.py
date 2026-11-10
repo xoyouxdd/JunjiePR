@@ -16,7 +16,7 @@ def fixture(counts=(3, 3), now=600):
         posts = []
         for i in range(count):
             pid = lid + str(i)
-            people[pid] = dict(pid=pid, name=pid, start=420, end=1200, state='onpost', role='rotation',
+            people[pid] = dict(pid=pid, name=pid, start=435, end=1200, state='onpost', role='rotation',
                                flags=[], visited=[lid], line=lid, lineStart=435, continuousStart=420,
                                ate=False, absences=[], assign=None, readyAt=None, breakKind=None)
             posts.append(dict(name=pid, occ=pid, key=pid, open=True, opened=True, manual=False, since=435))
@@ -100,21 +100,28 @@ def test_targeted_prefix_push_updates_head_only_when_target_is_last(kind, index)
     assert e.line('A')['sortAt'] == (600 if index == 2 else 435)
 
 
-def test_push7_is_direct_returns_pending_and_never_changes_sort_time():
+@pytest.mark.parametrize('index,expected,sort_time', [
+    (1, ['new0', 'A0', 'A2'], 435),
+    (2, ['new0', 'A0', 'A1'], 600),
+])
+def test_push7_chains_to_actual_worker_and_updates_sort_time_only_at_tail(index, expected, sort_time):
     e = fixture()
-    e.P['A1']['flags'] = ['7点岗', '送失物']
-    e.d['plan'].update(seven={'A#1': 'A1'}, push7=['new0'])
+    target = e.P[f'A{index}']
+    target.update(start=420, flags=['7点岗', '送失物'])
     F.plan(e, 600)
-    F.execute(e, 'new0', 600, 'test', 'A')
-    assert occupants(e) == ['A0', 'new0', 'A2']
-    assert e.P['A1']['state'] == 'pending' and e.P['A1']['flags'] == ['送失物']
-    assert e.line('A')['sortAt'] == 435
+    task = F.task_view(e, e.P['new0'], 600)
+    assert task['mode'] == 'chain' and task['push7Route']
+    assert F.execute(e, 'new0', 600, 'test', 'A', task['push7Route'])['executed']
+    assert occupants(e) == expected
+    assert target['state'] == 'pending' and target['flags'] == ['送失物'] and target['sevenReplaced']
+    assert e.line('A')['sortAt'] == sort_time
+    assert F.push7_history(e)['new0'] == (1, e.d['date'], 600)
 
 
 def test_priority_sick_then_push7_then_earliest_shift_and_later_post():
     e = fixture((4, 4))
     e.P['A0']['requestedExit'] = 'sick'
-    e.P['A1']['flags'] = ['7点岗']
+    e.P['A1'].update(start=420, flags=['7点岗'])
     e.P['A2']['end'] = 620
     e.P['B3']['end'] = 620
     F.plan(e, 600)
@@ -137,12 +144,13 @@ def test_timeout_removes_only_unconfirmed_person_and_refreshes_forecasts():
 
 def test_pool_return_and_remaining_time_and_repeat_meal_confirmation():
     e = fixture()
+    e.S['mealReserveMinPeople'] = 1
     F.pool(e, 'new0', 'away', 600, 'test')
     assert e.P['new0']['assign'] is None
     F.pool(e, 'new0', 'rest', 601, 'test', remaining=15)
     assert e.P['new0']['readyAt'] == 616
     F.pool(e, 'new0', 'meal', 602, 'test')
-    assert e.P['new0']['readyAt'] == 602 + e.S['mealMin']
+    assert e.P['new0']['readyAt'] == 601 + e.S['mealMin']
     with pytest.raises(E.ActionError, match='已进过'):
         F.pool(e, 'new0', 'meal', 603, 'test')
     F.pool(e, 'new0', 'meal', 603, 'test', repeat_meal=True)
@@ -198,6 +206,55 @@ def test_multiple_same_line_forecasts_are_independent_and_replan_after_first_exe
     assert occupants(e) == ['new0', 'new1', 'A0']
 
 
+@pytest.mark.parametrize('sick', [False, True])
+def test_each_added_post_preserves_header_even_after_higher_priority_work(sick):
+    e = fixture((4,))
+    line = e.line('A')
+    for i in (2, 3):
+        line['posts'][i].update(occ=None, openRequest=True)
+        e.P[f'A{i}'].update(state='other', line=None, manualPaused=True)
+    if sick:
+        e.P['A0']['requestedExit'] = 'sick'
+    F.plan(e, 600)
+    assert [e.P[f'new{i}']['assign']['kind'] for i in range(2 + sick)] == ['sick'] * sick + ['opening', 'opening']
+    if sick:
+        F.execute(e, 'new0', 600, 'test', 'A')
+        assert sum(bool(p.get('openRequest')) for p in line['posts']) == 2
+    for i in range(2):
+        pid = f'new{i + sick}'
+        assert e.P[pid]['assign']['kind'] == 'opening'
+        assert F.execute(e, pid, 600, 'test', 'A', expected_kind='opening')['executed']
+        assert line['sortAt'] == 435
+        assert sum(bool(p.get('openRequest')) for p in line['posts']) == 1 - i
+    assert all(occupants(e))
+
+
+def test_relief_moves_the_pending_addition_if_it_relocates_its_vacancy():
+    e = fixture((3,))
+    line = e.line('A')
+    line['posts'][1].update(occ=None, openRequest=True)
+    e.P['A1'].update(state='other', line=None, manualPaused=True)
+    e.P['A2']['requestedExit'] = 'sick'
+    F.plan(e, 600)
+    assert e.P['new1']['assign']['kind'] == 'opening'
+    F.execute(e, 'new0', 600, 'test', 'A')
+    assert occupants(e) == ['new0', 'A0', None]
+    assert [p['key'] for p in line['posts'] if p.get('openRequest')] == ['A2']
+    assert line['sortAt'] == 600  # The last-post relief has its own clock rule.
+    assert F.execute(e, 'new1', 601, 'test', 'A', expected_kind='opening')['executed']
+    assert line['sortAt'] == 600 and all(occupants(e))
+
+
+def test_manual_push_filling_an_addition_ignores_header_opt_in():
+    e = fixture((3,))
+    line = e.line('A')
+    line['posts'][2].update(occ=None, openRequest=True)
+    e.P['A2'].update(state='other', line=None, manualPaused=True)
+    F.manual_place(e, 'new0', 'A', 0, 'push', 600, 'test', update_sort_time=True)
+    assert occupants(e) == ['new0', 'A0', 'A1']
+    assert line['sortAt'] == 435 and not line['posts'][2]['openRequest']
+
+
 def test_same_shift_end_time_uses_later_post_but_earlier_shift_beats_position():
     e = fixture((4, 4))
     e.P['A1']['end'] = 610
@@ -227,15 +284,74 @@ def test_same_line_swapping_head_into_middle_updates_clock_when_requested():
     assert e.line('A')['sortAt'] == 600
 
 
-def test_manual_recovery_of_push7_clears_completed_badges_and_retains_other_flags():
+def test_manual_push7_exchange_clears_badges_but_is_not_counted_as_a_chain():
     e = fixture()
-    e.P['A1']['flags'] = ['7点岗', '送失物']
+    e.P['A1'].update(start=420, flags=['7点岗', '送失物'])
     e.P['new0']['flags'] = ['推7点']
     e.P['new0']['exception'] = {'at': 603, 'assignment': {'kind': 'push7', 'target': 'A1'}}
     e.P['new0']['state'] = 'exception'
     F.manual_place(e, 'new0', 'A', 1, 'swap', 604, 'screen')
     assert e.P['A1']['flags'] == ['送失物'] and e.P['new0']['flags'] == []
     assert not e.P['new0'].get('exception')
+    assert 'new0' not in F.push7_history(e)
+
+
+def test_manual_recovery_from_head_chains_to_the_original_middle_target_once():
+    e = fixture()
+    e.P['A1'].update(start=420, flags=['7点岗'])
+    e.P['new0'].update(state='exception', exception={'at': 603, 'assignment': {
+        'kind': 'push7', 'line': 'A', 'target': 'A1'}})
+    F.manual_place(e, 'new0', 'A', 0, 'push', 604, 'manager', update_sort_time=True)
+    assert occupants(e) == ['new0', 'A0', 'A2']
+    assert e.P['A1']['state'] == 'pending'
+    assert e.line('A')['sortAt'] == 435
+    assert F.push7_history(e)['new0'] == (1, e.d['date'], 604)
+
+
+def test_push7_history_ranks_only_currently_ready_people_and_protects_the_assigned_target():
+    e = fixture()
+    e.P['A2'].update(start=420, flags=['7点岗'])
+    e.P['new0']['readyAt'] = 599
+    e.P['new3']['readyAt'] = 601
+    e.d['push7History'] = {'new0': [4, '2026-11-01', 435],
+                          'new1': [2, '2026-11-02', 435],
+                          'new2': [2, '2026-11-01', 435]}
+    F.plan(e, 600)
+    assert e.P['new2']['assign']['kind'] == 'push7'
+    assert e.P['new0']['assign']['kind'] != 'push7'
+    a, _ = F.confirmation_plan(e, 'new0', 600)
+    assert a['line'] == 'B' and a['kind'] == 'push'
+    assert F.execute(e, 'new2', 600, 'test', 'A')['executed']
+    assert F.push7_history(e)['new2'] == (3, e.d['date'], 600)
+
+
+def test_push7_updates_same_line_route_before_any_execution():
+    e = fixture((4,))
+    e.P['A1'].update(start=420, flags=['7点岗'])
+    F.plan(e, 600)
+    original = F.task_view(e, e.P['new0'], 600)
+    e.line('A')['posts'][1]['occ'], e.line('A')['posts'][2]['occ'] = 'A2', 'A1'
+    result = F.execute(e, 'new0', 600, 'test', 'A', original['push7Route'])
+    assert result['line_changed'] and result['task']['line'] == 'A'
+    assert occupants(e) == ['A0', 'A2', 'A1', 'A3']
+    assert F.push7_history(e) == {}
+    assert F.execute(e, 'new0', 600, 'test', 'A', result['task']['push7Route'])['executed']
+    assert occupants(e) == ['new0', 'A0', 'A2', 'A3']
+
+
+def test_push7_timeout_gives_next_ready_candidate_the_route_without_recording_a_completion():
+    e = fixture((3,))
+    e.P['A2'].update(start=420, flags=['7点岗'])
+    e.P['new1']['readyAt'] = 602
+    e.P['new2']['state'] = e.P['new3']['state'] = 'pending'
+    F.tick(e, 600)
+    assert e.P['new0']['assign']['kind'] == 'push7'
+    F.tick(e, 603)
+    assert e.P['new0']['state'] == 'exception'
+    assert e.P['new1']['assign']['kind'] == 'push7'
+    assert occupants(e) == ['A0', 'A1', 'A2'] and F.push7_history(e) == {}
+    assert F.execute(e, 'new1', 603, 'test', 'A')['executed']
+    assert F.push7_history(e) == {'new1': (1, e.d['date'], 603)}
 
 
 def test_first_prearranged_person_is_never_shifted_before_their_start():
@@ -282,3 +398,4 @@ def test_scheduled_opening_is_forecast_but_cannot_execute_early_or_timeout_while
     assert e.P['new0']['timeoutAt'] == 633
     F.execute(e, 'new0', 630, 'test', 'A')
     assert occupants(e) == ['new0'] and not e.line('A').get('adding')
+    assert e.line('A')['sortAt'] == 435 and not e.line('A')['posts'][0]['openRequest']

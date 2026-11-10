@@ -43,18 +43,40 @@ def send(client, items, key):
                        files={"image": ("evidence.png", picture(), "image/png")})
 
 
+def confirm_duplicates(items, submit):
+    for _ in range(len(items) + 1):
+        result = submit()
+        detail = result.json().get("detail")
+        if not isinstance(detail, dict) or detail.get("code") != "SAME_DAY_RECOGNITION_DUPLICATE":
+            return result
+        item = items[detail.get("entry_index", 1) - 1]
+        token = detail["same_day_duplicate_token"]
+        assert item.get("same_day_duplicate_token") != token
+        item.update(same_day_duplicate_confirmed=True, same_day_duplicate_token=token)
+    pytest.fail("Unexpected repeated duplicate confirmation")
+
+
+def confirm_batch_duplicates(client, items, key):
+    return confirm_duplicates(items, lambda: send(client, items, key))
+
+
+def registration_data(items, key, batch):
+    return {"entries": json.dumps(items), "idempotency_key": key} if batch else {**items[0], "idempotency_key": key}
+
+
 @pytest.mark.parametrize('batch',[False,True])
 def test_submission_timing_tracks_image_and_commit_without_business_content(caplog,batch):
     import logging
     with TestClient(app) as client:
         login(client,'CMTEST01')
-        item=dict(entry(client,'计时诊断'),same_day_duplicate_confirmed=True)
+        item=entry(client,'计时诊断')
         with caplog.at_level(logging.INFO,logger='uvicorn.error.recognition_timing'):
             if batch:
-                response=send(client,[item],'timing-batch')
+                response=confirm_batch_duplicates(client,[item],'timing-batch')
             else:
-                response=client.post('/api/recognitions',data={**item,'idempotency_key':'timing-single'},
-                                    files={'image':('evidence.png',picture(),'image/png')})
+                response=confirm_duplicates([item], lambda: client.post(
+                    '/api/recognitions',data=registration_data([item],'timing-single',False),
+                    files={'image':('evidence.png',picture(),'image/png')}))
         assert response.status_code==200,response.text
         trace=json.loads(next(r.message.split(' ',1)[1] for r in reversed(caplog.records)
                               if r.message.startswith('recognition_request_timing ')))
@@ -75,11 +97,11 @@ def test_iphone_heif_with_jpeg_filename_can_be_registered_and_previewed(batch, f
     photo = out.getvalue()
     with TestClient(app) as client:
         login(client, "CMTEST01")
-        item = dict(entry(client, "手机照片兼容"), same_day_duplicate_confirmed=True)
+        item = entry(client, "手机照片兼容")
         key = f"iphone-photo-{format}-{batch}"
-        data = {"entries": json.dumps([item]), "idempotency_key": key} if batch else {**item, "idempotency_key": key}
-        response = client.post("/api/recognitions/batch" if batch else "/api/recognitions", data=data,
-                               files={"image": ("IMG_4845.jpeg", photo, "image/jpeg")})
+        response = confirm_duplicates([item], lambda: client.post(
+            "/api/recognitions/batch" if batch else "/api/recognitions", data=registration_data([item], key, batch),
+            files={"image": ("IMG_4845.jpeg", photo, "image/jpeg")}))
         assert response.status_code == 200, response.text
         record = response.json()["records"][0] if batch else response.json()["record"]
         with SessionLocal() as db:
@@ -102,7 +124,7 @@ def test_five_rows_one_photo_and_retry_conflict():
     with TestClient(app) as client:
         login(client, "CMTEST01")
         items = [dict(entry(client, f"表现{i}"), same_day_duplicate_confirmed=True) for i in range(5)]
-        response = send(client, items, "five")
+        response = confirm_batch_duplicates(client, items, "five")
         assert response.status_code == 200, response.text
         records = response.json()["records"]
         assert len({r["id"] for r in records}) == 5
@@ -156,14 +178,25 @@ def test_in_batch_duplicates_require_confirmation_and_quota_is_atomic():
         assert result.status_code == 409
         assert result.json()["detail"]["code"] == "SAME_DAY_RECOGNITION_DUPLICATE"
         assert result.json()["detail"]["entry_index"] == 2
-        items[1]["same_day_duplicate_confirmed"] = True
+        assert result.json()["detail"]["previous_records"][0]["batch_entry_index"] == 1
+        items[1].update(same_day_duplicate_confirmed=True,
+                        same_day_duplicate_token=result.json()["detail"]["same_day_duplicate_token"])
+        items[0]["content"] = "同批1更正"
+        changed = send(client, items, "duplicate")
+        assert changed.status_code == 409
+        changed_detail = changed.json()["detail"]
+        assert changed_detail["previous_records"][0]["content"] == "同批1更正"
+        assert changed_detail["same_day_duplicate_token"] != items[1]["same_day_duplicate_token"]
+        items[1]["same_day_duplicate_token"] = changed_detail["same_day_duplicate_token"]
+        other = send(client, [entry(client, "无关类型登记", "SAFETY")], "unrelated")
+        assert other.status_code == 200, other.text
         assert send(client, items, "duplicate").status_code == 200
         letter = entry(client, "表扬信", "COMMENDATION_LETTER")
         letter["recognizer_employee_id"] = "special:COMMENDATION_LETTER"
-        letter["same_day_duplicate_confirmed"] = True
-        result = send(client, [letter, letter], "quota")
+        result = confirm_batch_duplicates(client, [letter, letter.copy()], "quota")
         assert result.status_code == 409, result.text
         assert result.json()["detail"]["entry_index"] == 2
+        assert "每月只能获得一次" in result.json()["detail"]["message"]
         assert send(client, [letter], "quota").status_code == 200
 
 
@@ -171,7 +204,7 @@ def test_concurrent_reviews_cap_and_statistics():
     with TestClient(app) as client:
         login(client, "TRTEST01")
         items = [dict(entry(client, f"上限{i}", "COURTESY"), same_day_duplicate_confirmed=True) for i in range(5)]
-        result = send(client, items, "cap")
+        result = confirm_batch_duplicates(client, items, "cap")
         assert result.status_code == 200, result.text
         ids = [r["id"] for r in result.json()["records"]]
         def confirm(record_id):
@@ -211,7 +244,7 @@ def test_concurrent_reviews_cap_and_statistics():
 def test_later_link_reviewer_can_view_shared_photo():
     with TestClient(app) as client:
         login(client, "CMTEST01")
-        result = send(client, [dict(entry(client, f"材料{i}", "SHOW"), same_day_duplicate_confirmed=True) for i in range(2)], "photo")
+        result = confirm_batch_duplicates(client, [entry(client, f"材料{i}", "SHOW") for i in range(2)], "photo")
         assert result.status_code == 200, result.text
         records = result.json()["records"]
         login(client, "CMTEST02")
@@ -254,7 +287,11 @@ def test_legacy_attachment_migration_preserves_rows_and_is_repeatable():
 def test_concurrent_retries_and_independent_withdrawal():
     with TestClient(app) as client:
         login(client, "CMTEST02")
-        items = [dict(entry(client, f"并发{i}", "INCLUSION"), same_day_duplicate_confirmed=True) for i in range(2)]
+        items = [entry(client, f"并发{i}", "INCLUSION") for i in range(2)]
+        warning = send(client, items, "concurrent-retry")
+        assert warning.status_code == 409 and warning.json()["detail"]["entry_index"] == 2
+        items[1].update(same_day_duplicate_confirmed=True,
+                        same_day_duplicate_token=warning.json()["detail"]["same_day_duplicate_token"])
         def submit(_):
             with TestClient(app) as browser:
                 login(browser, "CMTEST02")
@@ -314,13 +351,13 @@ def test_branded_user_agent_does_not_change_upload_rules(browser, batch):
     # Server boundary test with synthetic user agents, not physical client certification.
     with TestClient(app) as client:
         login(client, "CMTEST01")
-        item = dict(entry(client, "浏览器上传边界"), same_day_duplicate_confirmed=True)
+        item = entry(client, "浏览器上传边界")
         key = f"browser-upload-{browser}-{batch}"
-        data = {"entries": json.dumps([item]), "idempotency_key": key} if batch else {**item, "idempotency_key": key}
-        data["image_client_ready"] = "1"
         photo = picture()
-        response = client.post("/api/recognitions/batch" if batch else "/api/recognitions", data=data,
-            files={"image": ("合成认可.png", photo, "image/png")}, headers={"User-Agent": f"Mozilla/5.0 {browser}/fixture"})
+        response = confirm_duplicates([item], lambda: client.post(
+            "/api/recognitions/batch" if batch else "/api/recognitions",
+            data={**registration_data([item], key, batch), "image_client_ready": "1"},
+            files={"image": ("合成认可.png", photo, "image/png")}, headers={"User-Agent": f"Mozilla/5.0 {browser}/fixture"}))
         assert response.status_code == 200, response.text
         record = response.json()["records"][0] if batch else response.json()["record"]
         assert record["status"] == "pending"
@@ -335,11 +372,17 @@ def test_branded_user_agent_does_not_change_upload_rules(browser, batch):
 def test_confirmed_missing_image_does_not_consume_key_or_create_records(batch):
     with TestClient(app) as client:
         login(client, "CMTEST01")
-        item = dict(entry(client, "缺图重传边界"), same_day_duplicate_confirmed=True)
+        item = entry(client, "缺图重传边界")
         key = f"missing-image-retry-{batch}"
-        data = {"entries": json.dumps([item]), "idempotency_key": key} if batch else {**item, "idempotency_key": key}
-        data["image_client_ready"] = "1"
         target = "/api/recognitions/batch" if batch else "/api/recognitions"
+        photo = {"image": ("fixture.png", picture(), "image/png")}
+        seed = entry(client, "已有同类登记")
+        assert confirm_batch_duplicates(client, [seed], f"{key}-seed").status_code == 200
+        warning = client.post(target, data=registration_data([item], key, batch), files=photo)
+        assert warning.status_code == 409
+        item.update(same_day_duplicate_confirmed=True,
+                    same_day_duplicate_token=warning.json()["detail"]["same_day_duplicate_token"])
+        data = {**registration_data([item], key, batch), "image_client_ready": "1"}
         with SessionLocal() as db:
             before = db.query(RecognitionRecord).count(), db.query(StoredFile).count()
             original_groups = [(r.id, r.same_day_duplicate_group, r.same_day_duplicate_sequence) for r in db.query(RecognitionRecord).order_by(RecognitionRecord.id)]
@@ -352,9 +395,8 @@ def test_confirmed_missing_image_does_not_consume_key_or_create_records(batch):
         with SessionLocal() as db:
             assert (db.query(RecognitionRecord).count(), db.query(StoredFile).count()) == before
             assert [(r.id, r.same_day_duplicate_group, r.same_day_duplicate_sequence) for r in db.query(RecognitionRecord).order_by(RecognitionRecord.id)] == original_groups
-        photo = picture()
-        first = client.post(target, data=data, files={"image": ("fixture.png", photo, "image/png")})
-        retry = client.post(target, data=data, files={"image": ("fixture.png", photo, "image/png")})
+        first = client.post(target, data=data, files=photo)
+        retry = client.post(target, data=data, files=photo)
         assert first.status_code == retry.status_code == 200
         first_row = first.json()["records"][0] if batch else first.json()["record"]
         retry_row = retry.json()["records"][0] if batch else retry.json()["record"]

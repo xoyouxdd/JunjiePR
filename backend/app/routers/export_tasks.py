@@ -87,12 +87,15 @@ def scope_key(db, user, target):
             raise HTTPException(403, "当前角色不能导出PR排名")
         from app.services.performance_rankings import pr_ranking_scope
         params = parse_qs(parts.query, keep_blank_values=True)
+        category = params.get("category", ["overall"])[-1]
+        if category == "points":
+            raise HTTPException(400, "积点榜暂不支持导出")
         raw = params.get("attraction_id", [None])[-1]
         try:
             attraction_id = int(raw) if raw is not None else None
         except ValueError:
             raise HTTPException(422, "景点圈参数无效")
-        pr_ranking_scope(db, user, attraction_id, params.get("population", ["frontline"])[-1], params.get("category", ["overall"])[-1])
+        pr_ranking_scope(db, user, attraction_id, params.get("population", ["frontline"])[-1], category)
     if path == "/api/declaration-statistics/export" and not {"DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"} <= user.permissions:
         raise HTTPException(403, "没有声明统计导出权限")
     visible = ()

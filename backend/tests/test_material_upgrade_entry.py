@@ -9,7 +9,24 @@ from fastapi.testclient import TestClient
 from test_deduction_material_concurrency import app, login, make_pdf
 from app import deduction_materials
 from app.v2_database import SessionLocal
-from app.v2_models import DeductionRecord, DeductionUpgradeRequest, MonthClosure, DeductionMaterialJob, StoredFile
+from app.v2_models import DeductionRecord, DeductionUpgradeRequest, Employee, EmployeeRoleAssignment, MonthClosure, DeductionMaterialJob, Role, StoredFile, UserAccount
+
+
+SECOND_GSM = "UPGRADEGSM02"
+
+
+def ensure_second_gsm():
+    with SessionLocal() as db:
+        if db.query(UserAccount).filter_by(login_account=SECOND_GSM).first():
+            return
+        original = db.query(UserAccount).filter_by(login_account="GSMTEST01").one()
+        employee = Employee(employee_no=SECOND_GSM, name="协助测试GSM", attraction_id=original.employee.attraction_id)
+        db.add(employee)
+        db.flush()
+        role = db.query(Role).filter_by(code="GSM").one()
+        db.add(EmployeeRoleAssignment(employee_id=employee.id, role_id=role.id, starts_on="2020-01-01"))
+        db.add(UserAccount(employee_id=employee.id, login_account=SECOND_GSM, password_hash=original.password_hash, enabled=True))
+        db.commit()
 
 
 @pytest.mark.parametrize('supplement,other,photo,failure,month',[
@@ -21,7 +38,8 @@ from app.v2_models import DeductionRecord, DeductionUpgradeRequest, MonthClosure
 def test_manager_upgrade_end_to_end(monkeypatch,supplement,other,photo,failure,month):
     monkeypatch.setattr(importlib.import_module('app.main'),'start_deduction_material_worker',lambda:None)
     with TestClient(app) as manager,TestClient(app) as alternate:
-        login(manager,'GSMTEST01');login(alternate,'TAGSMTEST01')
+        ensure_second_gsm()
+        login(manager,'GSMTEST01');login(alternate,SECOND_GSM)
         options=manager.get('/api/options').json()
         target=next(r for r in manager.get('/api/employee-targets?usage=deduction&keyword=CMTEST01').json()['items'] if r['employee_no']=='CMTEST01')
         kind=next(r for r in options['deduction_types'] if r['code']=='SICK_LEAVE_VIOLATION')
@@ -43,7 +61,7 @@ def test_manager_upgrade_end_to_end(monkeypatch,supplement,other,photo,failure,m
             endpoint='/api/deduction-upgrades'
             preview=manager.get('/api/deduction-upgrades/preview',params={k:form[k] for k in ('employee_id','deduction_type_id','occurred_on')}).json()
         assert preview['eligible'] and preview['first_record']['id']==first_id
-        reviewer=next(r for r in preview['reviewers'] if r['employee_no']==('TAGSMTEST01' if other else 'GSMTEST01'))
+        reviewer=next(r for r in preview['reviewers'] if r['employee_no']==(SECOND_GSM if other else 'GSMTEST01'))
         assert preview['default_reviewer_id']==next(r['id'] for r in preview['reviewers'] if r['employee_no']=='GSMTEST01')
         data={'reviewer_id':reviewer['id'],'expected_first_id':first_id} if supplement else {**form,'reviewer_id':reviewer['id']}
         image=BytesIO();Image.new('RGB',(16,16),'white').save(image,format='JPEG')
@@ -102,12 +120,12 @@ def test_manager_upgrade_end_to_end(monkeypatch,supplement,other,photo,failure,m
         selected=alternate if other else manager
         unselected=manager if other else alternate
         assert wid in {r['id'] for r in selected.get('/api/deduction-upgrades/pending').json()['items']}
-        assert wid not in {r['id'] for r in unselected.get('/api/deduction-upgrades/pending').json()['items']}
+        assert wid in {r['id'] for r in unselected.get('/api/deduction-upgrades/pending').json()['items']}
+        assert wid not in {r['id'] for r in unselected.get('/api/deduction-upgrades/pending?mine_only=true').json()['items']}
         decision=dict(decision='approve',result_level_id=memo['id'],issued_confirmed=True,handling_note='真实开具备忘录')
-        assert unselected.post(f'/api/deduction-upgrades/{wid}/resolve',json=decision).status_code==404
         approved=selected.post(f'/api/deduction-upgrades/{wid}/resolve',json=decision)
         assert approved.status_code==200,approved.text
-        assert selected.post(f'/api/deduction-upgrades/{wid}/resolve',json=decision).status_code==404
+        assert unselected.post(f'/api/deduction-upgrades/{wid}/resolve',json=decision).status_code==409
 
 
 def test_closed_month_blocks_material_preview_conversion_and_manager_upgrade(monkeypatch):

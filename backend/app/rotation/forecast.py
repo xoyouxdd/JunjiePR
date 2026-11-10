@@ -10,15 +10,33 @@ import json
 import math
 from uuid import uuid4
 
-from app.rotation.engine import ActionError, SHIFT_PREPARE_MINUTES
+from app.rotation.engine import ActionError, SHIFT_PREPARE_MINUTES, push7_rank
 
 EPS = 1e-8
+SHIFT_PREVIEW_MINUTES = 20
+MEAL_TO_REST_MINUTES = 20
 PRIORITY = {'sick': 0, 'push7': 1, 'off': 2, 'opening': 3, 'vacancy': 3, 'out': 4, 'push': 5}
 POOLS = {'pending', 'rest', 'meal', 'away', 'other'}
+WAITING_TO_REST = {'pending', 'walkback', 'op'}
+UNSPECIFIED_ROUTE = object()
 
 
 def enabled(eng):
     return eng.d.get('ruleVersion') == 2
+
+
+def upgrade_opening_requests(state):
+    """Previously saved V2 days only identified the line, not its new slot."""
+    changed = False
+    for line in state.get('lines', []):
+        if 'adding' not in line:
+            continue
+        if line.pop('adding'):
+            for post in line['posts']:
+                if post.get('open') and not post.get('occ'):
+                    post['openRequest'] = True
+        changed = True
+    return changed
 
 
 def initialize(eng):
@@ -26,6 +44,7 @@ def initialize(eng):
     eng.d['taskWorkflow'] = 2
     eng.d['cooperativeEntry'] = False
     eng.d.setdefault('rotationTasks', {})  # Empty compatibility container for historical readers.
+    changed = upgrade_opening_requests(eng.d) or changed
     for line in eng.d['lines']:
         if 'sortAt' not in line:
             line['sortAt'] = 0.0
@@ -47,12 +66,16 @@ def initialize(eng):
     return changed
 
 
+def scheduled_opening(post):
+    return bool(post.get('openAt') and not post.get('opened')
+                and (not post.get('manual') or post.get('resumeScheduled')))
+
+
 def indexes(line, at):
     from app.rotation.engine import _m
     result = []
     for i, post in enumerate(line['posts']):
-        opened = post.get('open') or (not post.get('opened') and not post.get('manual')
-                                       and post.get('openAt') and _m(post['openAt']) <= at + EPS)
+        opened = post.get('open') or (scheduled_opening(post) and _m(post['openAt']) <= at + EPS)
         if (line.get('active') and opened and not post.get('hold') and not post.get('hold101')
                 and not (post.get('closeAt') and _m(post['closeAt']) <= at + EPS)):
             result.append(i)
@@ -85,7 +108,11 @@ def occupant(eng, post, at):
     return None if p and p.get('state') == 'notyet' and p['start'] > at + EPS else pid
 
 
-def demand(eng, line, at, reserved, requester=None, seven_owners=None):
+def seven_target(p, *, opening_crew=False):
+    return (p['state'] == 'onpost' or opening_crew) and p['start'] == 420 and not p.get('sevenReplaced')
+
+
+def demand(eng, line, at, reserved, requester=None, seven_owners=None, *, preview_shift=False):
     """Return this line's highest eligible purpose, never a reserved person twice."""
     ix = indexes(line, at)
     if not ix:
@@ -93,13 +120,16 @@ def demand(eng, line, at, reserved, requester=None, seven_owners=None):
     needs = []
     for i in ix:
         post = line['posts'][i]
-        p = eng.P.get(post.get('occ'))
-        if not p or p.get('state') != 'onpost' or p['pid'] in reserved:
+        p = eng.P.get(occupant(eng, post, at))
+        if not p or p['pid'] in reserved:
+            continue
+        opening_crew = preview_shift and p['state'] == 'notyet' and not (p.get('manualPaused') or p.get('initialPool'))
+        if p['state'] != 'onpost' and not opening_crew:
             continue
         kind = None
         if p.get('requestedExit') == 'sick':
             kind = 'sick'
-        elif '7点岗' in p.get('flags', []) and not p.get('sevenReplaced'):
+        elif seven_target(p, opening_crew=opening_crew):
             kind = 'push7'
         elif at >= p['end'] - SHIFT_PREPARE_MINUTES:
             kind = 'off'
@@ -115,7 +145,7 @@ def demand(eng, line, at, reserved, requester=None, seven_owners=None):
                 continue
             due = p['end'] if kind == 'off' else at
             needs.append((PRIORITY[kind], due, -i, kind, p['pid']))
-    if line.get('adding'):
+    if any(line['posts'][i].get('openRequest') and not occupant(eng, line['posts'][i], at) for i in ix):
         needs.append((PRIORITY['opening'], 0, 0, 'opening', None))
     if any(not occupant(eng, line['posts'][i], at) for i in ix):
         needs.append((PRIORITY['vacancy'], 0, 0, 'vacancy', None))
@@ -133,11 +163,7 @@ def route(eng, assignment, at, entry=None):
         raise ActionError('目标线路没有参与轮岗的开放岗位')
     kind = assignment['kind']
     target = assignment.get('target')
-    if kind == 'push7':
-        ix = [i for i in ix if line['posts'][i].get('occ') == target]
-        if not ix:
-            raise ActionError('推7点目标已变化，请重新查看预排')
-    elif target:
+    if target:
         stop = next((i for i in ix if line['posts'][i].get('occ') == target), None)
         if stop is None:
             raise ActionError('接替目标已变化，请重新查看预排')
@@ -153,7 +179,7 @@ def route(eng, assignment, at, entry=None):
             if source != key:
                 moves.append({'pid': pid, 'from': source, 'to': key})
         moves.append({'pid': target, 'from': line['posts'][stop]['key'], 'to': None,
-                      'outcome': {'off': 'done', 'out': 'away', 'sick': 'sick'}[kind]})
+                      'outcome': {'off': 'done', 'out': 'away', 'sick': 'sick'}.get(kind, 'rest')})
         return moves
     moves = []
     carry = assignment['owner']
@@ -170,28 +196,106 @@ def route(eng, assignment, at, entry=None):
     return moves
 
 
+def settle_openings(line, moves, source_key=None):
+    """Clear filled additions, carrying any displaced gap along the same line."""
+    arrivals = {move['to'] for move in moves}
+    departures = {move['from'] for move in moves} | {source_key}
+    filled_keys = arrivals - departures
+    filled = [post for post in line['posts'] if post.get('openRequest') and post['key'] in filled_keys]
+    if not filled:
+        return False
+    vacated = departures - arrivals
+    for post in filled:
+        post['openRequest'] = False
+    gaps = [post for post in line['posts'] if post['key'] in vacated and not post.get('openRequest')]
+    for post in gaps[:len(filled)]:
+        post['openRequest'] = True
+    return True
+
+
 def candidates(eng, now):
     return sorted((p for p in eng.P.values() if eligible(eng, p, max(now, readiness(p)))),
                   key=lambda p: (round(readiness(p) * 60, 6), p['forecastOrder'], p['pid']))
 
 
-def plan(eng, now, *, only_pid=None):
+def preparing_shift_start(p, now):
+    return (p.get('state') == 'notyet' and p.get('role') == 'rotation' and not p.get('manualPaused')
+            and p.get('initialPool') not in ('sick', 'away') and 0 < p['start'] - now <= SHIFT_PREVIEW_MINUTES)
+
+
+def shift_previews(eng, now):
+    """Run the same planner on provisional candidates without changing live tasks."""
+    from app.rotation.engine import Engine
+
+    upcoming = [p for p in eng.P.values() if preparing_shift_start(p, now)]
+    if not upcoming or eng.d.get('closed'):
+        return {}
+    seats = {pid: key for kind in ('crew', 'seven') for key, pid in eng.d['plan'][kind].items()}
+    previews, expected_ready = {}, {}
+    for p in upcoming:
+        pid, start = p['pid'], p['start']
+        if p.get('initialPool') != 'rest' and pid in seats:
+            line, i, post = eng.plan_post(seats[pid])
+            if i in indexes(line, start) and occupant(eng, post, start) in (None, pid):
+                previews[pid] = {'line': line['id'], 'entryPost': post['name'], 'why': '开班预排'}
+                continue
+        delay = eng.S['breakMin'] if eng.opening_rest_candidate(p) else 0
+        if p.get('initialPool') == 'rest':
+            delay = 15
+        expected_ready[pid] = start + delay
+    if not expected_ready:
+        return previews
+    projected = Engine({**eng.d, 'persons': deepcopy(eng.P), 'lines': deepcopy(eng.d['lines'])}, eng.S, eng.h)
+    for pid in previews:
+        _, _, post = projected.plan_post(seats[pid])
+        post['occ'] = pid  # The normal occupancy reader ignores the seat until shift start.
+    for pid, ready_at in expected_ready.items():
+        projected.P[pid].update(state='rest', readyAt=ready_at)
+    plan(projected, now, preview_shift=True)
+    for pid in expected_ready:
+        person = projected.P[pid]
+        task = task_view(projected, person, now)
+        if person.get('assign'):
+            previews[pid] = {**person['assign'], 'entryPost': task['entryPost'] if task else None,
+                             'routes': task['routes'] if task else []}
+    return previews
+
+
+def push7_history(eng):
+    if 'push7History' not in eng.d:
+        read_history = getattr(eng.h, 'push7_history', None)
+        eng.d['push7History'] = read_history() if read_history else {}
+    history = dict(eng.d['push7History'])
+    for target in eng.P.values():
+        completion = target.get('push7Completion')
+        if completion:
+            pid = completion['owner']
+            count, day, minute = push7_rank(history, pid)
+            history[pid] = (count + 1, *max((day, minute), (eng.d['date'], completion['at'])))
+    return history
+
+
+def plan(eng, now, *, only_pid=None, preview_shift=False):
     """One global pass; a selected line's projected clock advances immediately."""
     initialize(eng)
     before = {pid: deepcopy(p.get('assign')) for pid, p in eng.P.items()}
+    seven_owners = {a['target']: pid for pid, a in before.items()
+                    if only_pid is not None and a and a.get('kind') == 'push7'
+                    and max(readiness(eng.P[pid]), a.get('notBefore', 0)) <= now + EPS}
     for p in eng.P.values():
         p['assign'] = None
     clocks = {line['id']: float(line.get('sortAt', 0)) for line in eng.d['lines']}
     reserved = set()
     seats = {line['id']: deepcopy(line) for line in eng.d['lines']}
     people = candidates(eng, now)
-    candidate_ids = {p['pid'] for p in people}
-    seven_owners = {target: owner for _, owner, target in eng._push7_pairs() if owner in candidate_ids}
     if only_pid is not None:
-        # Confirm against actual headers and occupants. Other forecasts do not
-        # reserve a line or special relief before somebody actually executes.
+        # Confirm from actual positions. Keep the fair owner's claim to an
+        # immediately available morning relief while recomputing its route.
         people = [p for p in people if p['pid'] == only_pid]
-    for p in people:
+    waiting = people.copy()
+    history = None
+    while waiting:
+        p = waiting[0]
         at = max(now, readiness(p))
         options = []
         for order, real in enumerate(eng.d['lines']):
@@ -199,29 +303,43 @@ def plan(eng, now, *, only_pid=None):
             option_at = at
             if not indexes(line, at) and line.get('active'):
                 from app.rotation.engine import _m
-                future = [_m(x['openAt']) for x in line['posts'] if x.get('openAt')
-                          and not x.get('opened') and not x.get('manual') and _m(x['openAt']) > at]
+                future = [_m(x['openAt']) for x in line['posts']
+                          if scheduled_opening(x) and _m(x['openAt']) > at]
                 if future:
                     option_at = min(future)
             if not p.get('manualRestored') and not eng.can_board(p, option_at, now):
                 continue
-            purpose = demand(eng, line, option_at, reserved, p['pid'], seven_owners)
+            purpose = demand(eng, line, option_at, reserved, p['pid'], seven_owners, preview_shift=preview_shift)
             if not purpose:
                 continue
             ix = indexes(line, option_at)
+            if not purpose['target'] and seven_owners:
+                occupied = [occupant(eng, line['posts'][i], option_at) for i in ix]
+                if all(occupied) and seven_owners.get(occupied[-1], p['pid']) != p['pid']:
+                    continue
             if option_at >= max(q['end'] for q in eng.P.values()) - eng.S.get('closeStopPush', 20) and purpose['priority'] == 5:
                 continue
             key = (option_at > at + EPS, purpose['priority'], purpose.get('due', 0), purpose.get('position', 0),
                    clocks[line['id']], -len(ix), order)
             options.append((key, real, purpose, option_at))
         if not options:
+            waiting.pop(0)
             continue
-        _, line, purpose, at = min(options, key=lambda x: x[0])
+        _, line, purpose, option_at = min(options, key=lambda x: x[0])
         kind = purpose['kind']
+        if kind == 'push7' and only_pid is None:
+            if history is None:
+                history = push7_history(eng)
+            # Existing readiness and stable tie order break a complete tie.
+            p = min((q for q in waiting if max(now, readiness(q)) <= at + EPS
+                     and (q.get('manualRestored') or eng.can_board(q, option_at, now))),
+                    key=lambda q: push7_rank(history, q['pid']))
+        waiting.remove(p)
+        at = option_at
         why = {'sick': '推病假', 'push7': '推7点', 'off': '推下班', 'opening': '顺推加岗',
                'vacancy': '补空岗', 'out': '推出圈', 'push': '普通顺推'}[kind]
         p['assign'] = {'owner': p['pid'], 'line': line['id'], 'kind': kind, 'target': purpose.get('target'),
-                       'mode': 'push7' if kind == 'push7' else 'chain' if purpose.get('target') else 'push',
+                       'mode': 'chain' if purpose.get('target') else 'push',
                        'why': why, 'departAt': max(readiness(p), at if at > max(now, readiness(p)) else readiness(p)),
                        'allowedAt': max(readiness(p), at if at > max(now, readiness(p)) else readiness(p)),
                        'notBefore': at if at > max(now, readiness(p)) else 0, 'forecast': True}
@@ -230,7 +348,7 @@ def plan(eng, now, *, only_pid=None):
         projected = seats[line['id']]
         projected_ix = indexes(projected, at)
         target_i = next((i for i in projected_ix if projected['posts'][i].get('occ') == purpose.get('target')), None)
-        advances_clock = kind not in {'push7', 'opening'} and (not purpose.get('target') or target_i == projected_ix[-1])
+        advances_clock = kind != 'opening' and (not purpose.get('target') or target_i == projected_ix[-1])
         # Only the virtual occupancy advances. Actual positions are never touched.
         shadow = deepcopy(p['assign'])
         original = eng.d['lines']
@@ -246,7 +364,7 @@ def plan(eng, now, *, only_pid=None):
         for move in moves:
             if move['to']:
                 bykey[move['to']]['occ'] = move['pid']
-        projected['adding'] = False
+        settle_openings(projected, moves)
         if advances_clock:
             clocks[line['id']] = at
     # Shared display group only; members always execute independently.
@@ -290,7 +408,9 @@ def task_view(eng, p, now):
             'batchSize': a.get('batchSize', 1), 'line': a['line'], 'entryPost': next(x['name'] for x in before if x['key'] == moves[0]['to']),
             'sortAt': float(line.get('sortAt', 0)), 'participatingPosts': len(indexes(line, at)), 'reason': a['why'],
             'allowedAt': a.get('allowedAt', readiness(p)), 'deadlineAt': deadline(eng, p, now, a.get('notBefore', 0)), 'status': 'forecast',
-            'mode': a['mode'], 'routes': W.route_view(eng, fake), 'beforePosts': before, 'afterPosts': after,
+            'kind': a['kind'], 'mode': a['mode'], 'routes': W.route_view(eng, fake), 'beforePosts': before, 'afterPosts': after,
+            'push7Route': hashlib.sha256(json.dumps(moves, sort_keys=True).encode()).hexdigest()
+            if a['kind'] == 'push7' else None,
             'transferredFromName': None}
 
 
@@ -326,6 +446,25 @@ def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, a
     p = eng.person(pid)
     if eng.held(pid):
         raise ActionError('请先解除定岗')
+    if destination == 'meal' and p['state'] != 'meal' and not eng.meal_eligible(p):
+        raise ActionError('此人班次未达到用餐工时要求')
+    converting_rest = destination == 'meal' and p['state'] in ('rest', 'ready')
+    break_start = now
+    credited_rest = None
+    if converting_rest:
+        if p.get('ate'):
+            raise ActionError('此人今天已吃饭，无法将本次休息改为吃饭')
+        if p.get('readyAt') is None or now + EPS >= p['readyAt']:
+            raise ActionError('本次休息已结束，请按当前轮岗安排处理')
+        break_start = p.get('breakStart')
+        if break_start is None:
+            break_start = p.get('arriveAnchor')
+        break_start = now if break_start is None else break_start
+        credited_rest = min(eng.S['mealMin'], max(0, now - break_start))
+        remaining = eng.S['mealMin'] - credited_rest
+        options = eng.meal_options(p, now, meal_minutes=remaining)
+        if not (options['canChoose'] or options['forced']):
+            raise ActionError('当前不满足吃饭条件或轮岗储备不足，继续原休息')
     if destination == 'meal' and p.get('ate') and not repeat_meal:
         raise ActionError('此人已进过吃饭区，是否继续？')
     old_exception = p.pop('exception', None)
@@ -339,25 +478,27 @@ def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, a
         duration = float(remaining) if remaining is not None else eng.S['mealMin' if destination == 'meal' else 'breakMin']
         if not math.isfinite(duration) or not 0 <= duration <= 24 * 60:
             raise ActionError('剩余时间须在0至1440分钟内')
-        p.update(readyAt=now + duration, timeoutAt=now + duration + 3, breakStart=now,
-                 breakKind=destination, arriveAnchor=now)
+        p.update(readyAt=now + duration, timeoutAt=now + duration + 3, breakStart=break_start,
+                 breakKind=destination, arriveAnchor=break_start)
         if destination == 'meal':
             p['ate'] = True
     elif destination == 'away':
         p['away'] = {'reason': '出圈', 'until': None}
     elif destination == 'other':
         p['manualPaused'] = True
-    eng.h.log('pool_move', actor, pid, None, None, {'pool': destination, 'remaining': remaining,
-                                                    'endedException': old_exception})
+    detail = {'pool': destination, 'remaining': remaining, 'endedException': old_exception}
+    if credited_rest is not None:
+        detail['credited_rest'] = credited_rest
+    eng.h.log('pool_move', actor, pid, None, None, detail)
     plan(eng, now)
 
 
-def execute_moves(eng, p, assignment, moves, now, actor, manual=False):
+def execute_moves(eng, p, assignment, moves, now, actor, manual=False, source_key=None):
     from app.rotation import workflow as W
     line = eng.line(assignment['line'])
     ix = indexes(line, now)
     target_index = next((i for i in ix if line['posts'][i].get('occ') == assignment.get('target')), None)
-    update_sort = assignment['kind'] not in {'push7', 'opening'} and (not assignment.get('target') or target_index == ix[-1])
+    update_sort = assignment['kind'] != 'opening' and (not assignment.get('target') or target_index == ix[-1])
     locations = {post['key']: (L, i, post) for L in eng.d['lines'] for i, post in enumerate(L['posts'])}
     for move in moves:
         q = eng.P[move['pid']]
@@ -384,8 +525,12 @@ def execute_moves(eng, p, assignment, moves, now, actor, manual=False):
             post.update(occ=q['pid'], since=now)
             eng._enter(q, line, now)
             q['departedAt'] = now
+    completion = None
     if assignment['kind'] == 'push7':
-        W.clear_completed_seven_badges(eng, {'template': {'mode': 'push7', 'target': assignment.get('target')}}, p['pid'])
+        target = eng.P[assignment['target']]
+        completion = uuid4().hex
+        target['push7Completion'] = {'id': completion, 'owner': p['pid'], 'at': now}
+        W.clear_completed_seven_badges(eng, {'template': {'mode': 'push7', 'target': target['pid']}}, p['pid'])
     elif manual:
         for move in moves:
             if not move['to'] and '7点岗' in eng.P[move['pid']].get('flags', []):
@@ -393,15 +538,18 @@ def execute_moves(eng, p, assignment, moves, now, actor, manual=False):
         p['flags'] = [flag for flag in p.get('flags', []) if flag != '推7点']
     if update_sort and not manual:
         line['sortAt'] = now
-    line['adding'] = False
+    filled_opening = settle_openings(line, moves, source_key)
     evidence = p.pop('exception', None)
     detail = {'purpose': assignment['kind'], 'moves': moves, 'timeout': evidence}
+    if completion:
+        detail.update(push7_execution=completion, target=assignment['target'])
     if manual:
-        detail['update_sort_time'] = assignment.get('update_sort_time', False)
+        detail['update_sort_time'] = bool(assignment.get('update_sort_time') and not filled_opening)
     eng.h.log('manual_forecast_complete' if manual else 'depart', actor, p['pid'], line['id'], None, detail)
     p['confirmationSequence'] = p.get('confirmationSequence', 0) + 1
     p.pop('timeoutAt', None)
     plan(eng, now)
+    return filled_opening
 
 
 def confirmation_plan(eng, pid, now):
@@ -416,7 +564,7 @@ def confirmation_plan(eng, pid, now):
             eng.P[key]['assign'] = assignment
 
 
-def execute(eng, pid, now, actor, expected_line):
+def execute(eng, pid, now, actor, expected_line, expected_push7=UNSPECIFIED_ROUTE, *, expected_kind=None):
     p = eng.person(pid)
     if p.get('exception') or p['state'] == 'exception':
         raise ActionError('已超时，请由大屏、主管、TR或经理拖拽安排')
@@ -426,12 +574,14 @@ def execute(eng, pid, now, actor, expected_line):
     predicted_line = (p.get('assign') or {}).get('line')
     a, task = confirmation_plan(eng, pid, now)
     if not a:
-        raise ActionError('当前全部线路关闭或没有可参与的开放岗位')
+        raise ActionError('当前没有可确认的轮岗路线，请刷新查看安排')
     if now + EPS < a.get('notBefore', 0):
         raise ActionError('尚未到计划加岗时间')
-    if expected_line != a['line']:
+    route_changed = expected_push7 is not UNSPECIFIED_ROUTE and expected_push7 != task['push7Route']
+    opening_changed = expected_kind not in (None, a['kind']) and 'opening' in (expected_kind, a['kind'])
+    if expected_line != a['line'] or route_changed or opening_changed:
         waiting = []
-        if predicted_line == expected_line:
+        if predicted_line == expected_line and expected_line != a['line']:
             for previous in candidates(eng, now):
                 if previous['pid'] == pid:
                     break
@@ -442,6 +592,21 @@ def execute(eng, pid, now, actor, expected_line):
     moves = route(eng, a, now)
     execute_moves(eng, p, a, moves, now, actor)
     return {'ok': True, 'line_changed': False, 'executed': True}
+
+
+def expire_closed_line_opening(line, post, now):
+    """A scheduled addition only gets one chance, at its due time."""
+    from app.rotation.engine import _m
+
+    if line.get('active') or not post.get('openAt') or post.get('open') or post.get('openExpired'):
+        return
+    # Older states could already mark the missed schedule checked while leaving its request set.
+    pending = (scheduled_opening(post) or post.get('resumeScheduled')
+               or (post.get('opened') and not post.get('manual') and post.get('openRequest')))
+    if pending and now >= _m(post['openAt']):
+        post.update(open=False, opened=True, openRequest=False, openExpired=True, draftClosed=True, manual=True)
+        post.pop('resumeScheduled', None)
+        post.pop('resumeOpen', None)
 
 
 def tick(eng, now):
@@ -456,13 +621,14 @@ def tick(eng, now):
     eng._freeze_daily_opening(now)
     seats = {pid: key for key, pid in eng.d['plan']['crew'].items()}
     seven = {pid: key for key, pid in eng.d['plan']['seven'].items()}
+    arriving_relief = []
     for line in eng.d['lines']:
         for i, post in enumerate(line['posts']):
-            if post.get('openAt') and not post.get('opened') and now >= _m(post['openAt']):
-                post['opened'] = True
-                if line['active'] and not post.get('manual'):
-                    post['open'] = True
-                    line['adding'] = True
+            expire_closed_line_opening(line, post, now)
+            if line['active'] and scheduled_opening(post) and now >= _m(post['openAt']):
+                post.update(open=True, opened=True, openRequest=True, manual=False, closedAuto=False)
+                post.pop('draftClosed', None)
+                post.pop('resumeScheduled', None)
             if post.get('closeAt') and post.get('open') and not post.get('closedAuto') and now >= _m(post['closeAt']):
                 if not post.get('hold') and not post.get('hold101'):
                     close_post(eng, line, i, now, 'system')
@@ -476,15 +642,21 @@ def tick(eng, now):
                     pool(eng, p['pid'], initial, now, 'system', remaining=15 if initial == 'rest' else None)
                 continue
             eng._shift_start(p, now, seats, seven)
-            if p['state'] == 'ready' and p['pid'] not in eng.d['plan']['push7']:
-                p.update(state='pending', readyAt=None)
+            if p['state'] == 'ready':
+                if p['pid'] not in eng.d['plan']['push7']:
+                    p.update(state='pending', readyAt=None)
+                elif p['start'] == 435:
+                    arriving_relief.append(p)
             if p['state'] == 'onpost':
                 L, i = eng.find_post(p['pid'])
+                opening = L['posts'][i].pop('openRequest', False)
                 ix = indexes(L, now)
-                if ix and i == ix[0]:
+                if not opening and ix and i == ix[0]:
                     L['sortAt'] = float(p['start'])
         if p['state'] == 'op' and now >= _m(eng.S['opReleaseAt']):
             p.update(state='pending', readyAt=None)
+        if p['state'] == 'meal' and p.get('readyAt') is not None and now + EPS >= p['readyAt'] - MEAL_TO_REST_MINUTES:
+            p.update(state='rest', breakKind='meal_rest')
         if p['state'] == 'away' and (p.get('away') or {}).get('until') is not None and now >= p['away']['until']:
             for a in p.get('absences', []):
                 if a['end'] == p['away']['until']:
@@ -500,6 +672,13 @@ def tick(eng, now):
             remove(eng, p, now)
             p['state'] = 'done'
     plan(eng, now)
+    unused_relief = [p for p in arriving_relief if p['state'] == 'ready'
+                     and (p.get('assign') or {}).get('kind') not in ('push7', 'sick')]
+    for p in unused_relief:
+        p['flags'] = [flag for flag in p.get('flags', []) if flag != '推7点']
+        eng.start_opening_rest(p, now)
+    if unused_relief:
+        plan(eng, now)
     available = any(indexes(L, now) for L in eng.d['lines'])
     paused_at = eng.d.get('forecastPausedAt')
     if not available and paused_at is None:
@@ -530,7 +709,7 @@ def close_post(eng, line, i, now, actor):
         if p.get('state') == 'onpost':
             remove(eng, p, now)
             p.update(state='pending', readyAt=None, breakStart=None, breakKind=None)
-    post.update(open=False, occ=None, manual=True, closedAuto=True, draftClosed=True)
+    post.update(open=False, occ=None, manual=True, closedAuto=True, draftClosed=True, openRequest=False)
     line['sortAt'] = now
     eng.h.log('post_close', actor, None, line['id'], post['name'], {})
 
@@ -563,7 +742,8 @@ def manual_place(eng, pid, lid, i, mode, now, actor, *, update_sort_time=False):
         raise ActionError('是否更新表头轮岗时间必须为布尔值')
     p = eng.person(pid)
     line, i, post = eng.post(lid, i)
-    if not line.get('active') or i not in indexes(line, now):
+    participating = indexes(line, now)
+    if not line.get('active') or i not in participating:
         raise ActionError('目标岗位未开放或已定岗')
     if eng.held(pid):
         raise ActionError('请先解除定岗')
@@ -573,6 +753,14 @@ def manual_place(eng, pid, lid, i, mode, now, actor, *, update_sort_time=False):
     if mode not in ('push', 'swap'):
         raise ActionError('请选择顺推或直接交换')
     original = post.get('occ')
+    assignment = {'owner': pid, 'line': lid, 'kind': 'push', 'update_sort_time': update_sort_time}
+    from_head = mode == 'push' and source_line is None and i == participating[0]
+    original_task = (p.get('exception') or {}).get('assignment') or {}
+    if from_head and original_task.get('kind') == 'push7' and original_task.get('line') == lid:
+        target = eng.P.get(original_task.get('target'))
+        if target and seven_target(target) and target.get('requestedExit') != 'sick' and any(
+                line['posts'][j].get('occ') == target['pid'] for j in participating):
+            assignment.update(kind='push7', target=target['pid'])
     before_heads = head_occupants(eng, now)
     source_key = source_line['posts'][source_i]['key'] if source_line is not None else None
     continuous_start = p.get('continuousStart') if p.get('state') == 'onpost' else None
@@ -586,7 +774,14 @@ def manual_place(eng, pid, lid, i, mode, now, actor, *, update_sort_time=False):
         if original:
             moves.append({'pid': original, 'from': post['key'], 'to': source_key, 'outcome': 'rest'})
     else:
-        moves = route(eng, {'owner': pid, 'line': lid, 'kind': 'push'}, now, entry=i)
+        moves = route(eng, assignment, now, entry=i)
+        if from_head and not moves[-1]['to']:
+            relieved = eng.P[moves[-1]['pid']]
+            if seven_target(relieved) and relieved.get('requestedExit') != 'sick':
+                assignment.update(kind='push7', target=relieved['pid'])
+        if assignment['kind'] == 'push7':
+            update_sort_time = update_sort_time and moves[-1]['from'] == line['posts'][participating[-1]]['key']
+            assignment['update_sort_time'] = update_sort_time
     # Cross-line swaps need each destination's actual line, not the entry line.
     if source_key and mode == 'swap' and original:
         q = eng.P[original]
@@ -597,8 +792,9 @@ def manual_place(eng, pid, lid, i, mode, now, actor, *, update_sort_time=False):
                   {'fromLine': lid, 'fromPost': post['name'], 'with': pid})
         post['occ'] = None
         moves = [moves[0]]
-    execute_moves(eng, p, {'line': lid, 'kind': 'push', 'update_sort_time': update_sort_time}, moves, now, actor, manual=True)
-    update_manual_sort_times(eng, before_heads, now, actor, update_sort_time)
+    filled_opening = execute_moves(eng, p, assignment, moves, now, actor, manual=True,
+                                   source_key=source_key if source_line is line else None)
+    update_manual_sort_times(eng, before_heads, now, actor, update_sort_time and not filled_opening)
     plan(eng, now)
 
 

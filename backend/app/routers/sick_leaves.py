@@ -9,12 +9,12 @@ from sqlalchemy import or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, require_permissions
+from app.deduction_policy import checked_upgrade_reviewer
 from app.v2_database import get_db
-from app.v2_models import DeductionLevel, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, SickLeaveRecord, StoredFile, UserAccount
-from app.v2_services import current_group_for_employee, ensure_month_attendance, recalculate_attendance, remove_upload_file, role_at, save_upload, write_audit
+from app.v2_models import DeductionLevel, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, SickLeaveRecord, StoredFile
+from app.v2_services import current_group_for_employee, ensure_month_attendance, recalculate_attendance, remove_upload_file, save_upload, write_audit
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
 from app.routers._shared import (
-    UPGRADE_REVIEWER_CODES,
     client_ip,
     deduction_payload,
     ensure_deduction_type_allowed,
@@ -211,11 +211,7 @@ async def create_sick_leave(
             raise_pending_material_conflict(existing_pending_material)
         first_statement = statement_upgrade_candidate(db, target.id, violation_type.id, leave_start_date)
         if first_statement:
-            reviewer = db.get(Employee, violation_reviewer_id) if violation_reviewer_id else None
-            reviewer_role = role_at(db, reviewer.id) if reviewer else None
-            reviewer_account = db.query(UserAccount).filter_by(employee_id=reviewer.id, enabled=True).first() if reviewer else None
-            if not reviewer or not reviewer_role or reviewer_role.code not in UPGRADE_REVIEWER_CODES or not reviewer.is_active or not reviewer_account:
-                raise HTTPException(400, "检测到3个月内可升级的违规病假声明，请选择在职且账号启用的GSM或TA GSM审核")
+            checked_upgrade_reviewer(db, violation_reviewer_id)
     file_row = violation_file_row = None
     violation_source_rows: list[StoredFile] = []
     try:
@@ -241,6 +237,8 @@ async def create_sick_leave(
         db.add(row)
         db.flush()
         if is_violation:
+            if first_statement:
+                reviewer = checked_upgrade_reviewer(db, violation_reviewer_id)
             violation_needs_processing = False
             if violation_photo_mode:
                 violation_source_rows = await stage_photo_materials(db, list(violation_document_images or []), user.id)

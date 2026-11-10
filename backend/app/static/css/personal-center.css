@@ -53,9 +53,6 @@
 .personal-points .points-pass-main{margin:20px 0 17px}
 .personal-points .points-amount strong{font-size:44px}
 .personal-points .points-pass-mark{flex-basis:46px;width:46px}
-.personal-points .activity-points-balances{padding-top:12px;gap:30px}
-.personal-points .activity-points-balances strong{font-size:18px}
-.personal-points .points-note{display:none}
 .personal-points .activity-points-card .points-detail{margin-top:12px}
 .personal-points .activity-points-card .points-detail>summary{min-height:36px;font-size:12px}
 .personal-center .personal-records{grid-column:1/-1;padding:13px 18px;margin:0;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:none}

@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
+import json
 from threading import Event
 
 import pytest
@@ -53,6 +54,7 @@ def alternate_photo():
 
 @pytest.mark.parametrize(("sender", "recipient"), [
     ("SUPTEST01", "CMTEST01"), ("SUPTEST01", "TRTEST01"), ("GSMTEST01", "SUPTEST01"),
+    ("TAGSMTEST01", "SUPTEST01"), ("TATEST01", "CMTEST02"),
 ])
 def test_active_recognition_credits_before_read_and_is_private(sender, recipient):
     with TestClient(app) as client:
@@ -61,20 +63,45 @@ def test_active_recognition_credits_before_read_and_is_private(sender, recipient
         prior = inbox(client)["unread_count"]
         login(client, sender)
         first_form = active_form(client, recipient, "SAFETY", f"inbox-{recipient}-safety")
-        missing_image = client.post("/api/recognitions", data=first_form)
-        assert missing_image.status_code == 400
-        records = [send(client, first_form)]
+        if recipient == "CMTEST01":
+            first_form["recognizer_employee_id"] = str(employee_id("GSMTEST01"))
+        text_only = client.post("/api/recognitions", data=first_form)
+        assert text_only.status_code == 200, text_only.text
+        records = [text_only.json()["record"]]
+        retry = client.post("/api/recognitions", data=first_form)
+        assert retry.json()["record"]["id"] == records[0]["id"]
+        added_photo = client.post("/api/recognitions", data=first_form, files={"image": alternate_photo()})
+        assert added_photo.status_code == 409
+        assert added_photo.json()["detail"]["code"] == "IDEMPOTENCY_PAYLOAD_CONFLICT"
         for kind in ("COURTESY", "INCLUSION"):
             records.append(send(client, active_form(client, recipient, kind, f"inbox-{recipient}-{kind}")))
-        assert send(client, first_form)["id"] == records[0]["id"]
-        assert all(row["status"] == "confirmed" and row["has_image"] for row in records)
+        assert all(row["status"] == "confirmed" for row in records)
+        assert [row["has_image"] for row in records] == [False, True, True]
         read_url = f"/api/recognition-inbox/{records[1]['id']}/read"
         assert client.post(read_url).status_code == 404
         login(client, recipient)
         assert inbox(client)["unread_count"] == prior + 3
         credited = sum(row["credited_fraction"] for row in records)
         assert credited > 0
-        assert client.get("/api/dashboard").json()["recognition_score"] == pytest.approx(before + credited)
+        dashboard = client.get("/api/dashboard").json()
+        assert dashboard["recognition_score"] == pytest.approx(before + credited)
+        home_row = next(row for row in dashboard["records"] if row["id"] == records[0]["id"])
+        assert home_row["entry_label"] == f"加分人：{records[0]['operator_name']}（主动发信）"
+
+        if recipient == "CMTEST01":
+            assert home_row["recognizer_name"] != home_row["operator_name"]
+            self_form = {key: value for key, value in first_form.items()
+                         if key not in {"active_recognition", "same_day_duplicate_confirmed"}}
+            self_form.update(idempotency_key="inbox-self-duplicate", content="本人登记核对")
+            warning = client.post("/api/recognitions", data=self_form,
+                                  files={"image": ("proof.png", png_bytes(), "image/png")})
+            assert warning.status_code == 409, warning.text
+            detail = warning.json()["detail"]
+            assert detail["code"] == "SAME_DAY_RECOGNITION_DUPLICATE"
+            assert "别人主动发来" in detail["message"]
+            previous = next(row for row in detail["previous_records"] if row["id"] == records[0]["id"])
+            assert previous["active_sender"] == home_row["operator_name"]
+            assert client.get("/api/dashboard").json()["recognition_score"] == pytest.approx(before + credited)
 
         detail = client.post(read_url)
         assert detail.status_code == 200, detail.text
@@ -85,8 +112,28 @@ def test_active_recognition_credits_before_read_and_is_private(sender, recipient
         assert client.post(read_url).status_code == 200
         items = inbox(client)["items"]
         assert not next(item for item in items if item["id"] == records[1]["id"])["unread"]
-        assert items[-1]["id"] == records[1]["id"]
+        new_ids = {row["id"] for row in records}
+        assert [row["id"] for row in items if row["id"] in new_ids][-1] == records[1]["id"]
+        text_detail = client.post(f"/api/recognition-inbox/{records[0]['id']}/read").json()
+        assert text_detail["content"] == first_form["content"] and not text_detail["image_url"]
+        assert text_detail["credited_score"] == records[0]["credited_fraction"]
         assert client.get("/api/dashboard").json()["recognition_score"] == pytest.approx(before + credited)
+
+
+@pytest.mark.parametrize(("sender", "target"), [
+    ("SUPTEST01", "SUPTEST01"),
+    ("TATEST01", "SUPTEST01"),
+    ("AMTEST01", "CMTEST01"),
+    ("GSMTEST01", "TAGSMTEST01"),
+    ("OMTEST01", "CMTEST01"),
+    ("CMTEST01", "TRTEST01"),
+])
+def test_active_recognition_rejects_out_of_scope_targets(sender, target):
+    with TestClient(app) as client:
+        login(client, sender)
+        form = active_form(client, target, "SAFETY", f"active-denied-{sender}-{target}")
+        form["recognizer_employee_id"] = str(employee_id("GSMTEST01"))
+        assert client.post("/api/recognitions", data=form).status_code == 403
 
 
 @pytest.mark.parametrize("sender", ["GSMTEST01", "AMTEST01", "OMTEST01"])
@@ -107,6 +154,10 @@ def test_poc_inbox_uses_the_reason_and_does_not_require_a_photo(sender):
         detail = response.json()
         assert detail["content"] == "验证专项来信原文"
         assert detail["credited_score"] == 2 and detail["poc_period"] and not detail["image_url"]
+        dashboard = client.get("/api/dashboard").json()
+        home_row = next(row for row in dashboard["records"] if row["id"] == record_id)
+        assert home_row["entry_label"] == f"加分人：{home_row['operator_name']}（POC特别贡献）"
+        assert home_row["credited_fraction"] == 2
         login(client, sender)
         assert client.delete(f"/api/recognitions/{record_id}").status_code == 200
         entries = client.get("/api/my-entries").json()["items"]
@@ -122,6 +173,132 @@ def test_poc_inbox_uses_the_reason_and_does_not_require_a_photo(sender):
         login(client, "SUPTEST01")
         detail = client.post(f"/api/recognition-inbox/{replacement.json()['record']['id']}/read").json()
         assert detail["reissued"] and detail["credited_score"] == 1 and detail["content"] == "更正专项理由"
+
+
+@pytest.mark.parametrize("kind", ["MSP", "COMMENDATION_LETTER"])
+@pytest.mark.parametrize(("recipient", "batch"), [("TRTEST01", False), ("CMTEST02", True)])
+def test_self_submission_detects_fixed_signer_in_active_letter(kind, recipient, batch):
+    key = f"fixed-signer-{kind}-{recipient}"
+    with TestClient(app) as client:
+        login(client, "SUPTEST01")
+        form = active_form(client, recipient, kind, f"{key}-letter")
+        letter = client.post("/api/recognitions", data=form)
+        assert letter.status_code == 200, letter.text
+        original = letter.json()["record"]
+        assert original["credited_fraction"] == 3
+
+        login(client, recipient)
+        before = client.get("/api/dashboard").json()
+        entry = {field: form[field] for field in ("recognition_date", "occurred_attraction_id",
+                                                  "recognition_type_id", "recognizer_employee_id")}
+        entry["content"] = "固定签卡本人登记"
+
+        def submit(token=None):
+            data = {**entry, "same_day_duplicate_confirmed": token is not None}
+            if token:
+                data["same_day_duplicate_token"] = token
+            if batch:
+                return client.post("/api/recognitions/batch", data={"entries": json.dumps([data]), "idempotency_key": key},
+                                   files={"image": ("proof.png", png_bytes(), "image/png")})
+            return client.post("/api/recognitions", data={**data, "idempotency_key": key},
+                               files={"image": ("proof.png", png_bytes(), "image/png")})
+
+        warning = submit()
+        assert warning.status_code == 409, warning.text
+        detail = warning.json()["detail"]
+        assert detail["code"] == "SAME_DAY_RECOGNITION_DUPLICATE"
+        assert any(row["id"] == original["id"] and row["active_sender"] == original["operator_name"]
+                   for row in detail["previous_records"])
+        assert client.get("/api/dashboard").json()["records"] == before["records"]
+
+        confirmed = submit(detail["same_day_duplicate_token"])
+        if kind == "COMMENDATION_LETTER":
+            assert confirmed.status_code == 409 and "每月只能获得一次" in confirmed.text
+            assert client.get("/api/dashboard").json()["records"] == before["records"]
+        else:
+            assert confirmed.status_code == 200, confirmed.text
+            body = confirmed.json()
+            record = body["records"][0] if batch else body["record"]
+            assert record["status"] == "pending" and record["fraction"] == 3
+        assert client.get("/api/dashboard").json()["recognition_score"] == before["recognition_score"]
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_self_duplicate_confirmation_refreshes_when_manager_sends_during_prompt(batch):
+    recipient = "CMTEST01" if batch else "TRTEST01"
+    key = f"duplicate-snapshot-{batch}"
+    with TestClient(app) as member, TestClient(app) as manager:
+        login(member, recipient)
+        login(manager, "GSMTEST01")
+        active = active_form(manager, recipient, "MSP", f"{key}-active")
+        entry = {field: active[field] for field in ("recognition_date", "occurred_attraction_id",
+                                                   "recognition_type_id", "recognizer_employee_id")}
+        # Keep this sequence separate from other same-day fixtures.
+        entry["recognition_date"] = active["recognition_date"] = (date.today() + timedelta(days=1)).isoformat()
+
+        def submit(entries, request_key):
+            photo = {"image": ("proof.png", png_bytes(), "image/png")}
+            if batch:
+                return member.post("/api/recognitions/batch", data={"entries": json.dumps(entries), "idempotency_key": request_key},
+                                   files=photo)
+            return member.post("/api/recognitions", data={**entries[0], "idempotency_key": request_key}, files=photo)
+
+        earlier = submit([{**entry, "content": "员工先登记的表现"}], f"{key}-first")
+        assert earlier.status_code == 200, earlier.text
+        earlier_row = earlier.json()["records"][0] if batch else earlier.json()["record"]
+        items = [{**entry, "content": "员工另一次表现"}]
+        if batch:
+            show = active_form(manager, recipient, "SHOW", f"{key}-unused")
+            items.insert(0, {**entry, "content": "同批的其他类型", "recognition_type_id": show["recognition_type_id"],
+                             "recognizer_employee_id": show["recognizer_employee_id"]})
+
+        warning = submit(items, key)
+        assert warning.status_code == 409, warning.text
+        old = warning.json()["detail"]
+        assert old["code"] == "SAME_DAY_RECOGNITION_DUPLICATE"
+        assert [row["id"] for row in old["previous_records"]] == [earlier_row["id"]]
+        items[-1]["same_day_duplicate_confirmed"] = True
+        assert submit(items, key).json()["detail"]["same_day_duplicate_token"] == old["same_day_duplicate_token"]
+        active["content"] = "确认期间新收到的主动发信"
+        sent = manager.post("/api/recognitions", data=active)
+        assert sent.status_code == 200, sent.text
+        letter = sent.json()["record"]
+        items[-1].update(same_day_duplicate_confirmed=True, same_day_duplicate_token=old["same_day_duplicate_token"])
+        refreshed = submit(items, key)
+        assert refreshed.status_code == 409, refreshed.text
+        updated = refreshed.json()["detail"]
+        assert updated["code"] == "SAME_DAY_RECOGNITION_DUPLICATE"
+        assert updated["same_day_duplicate_token"] != old["same_day_duplicate_token"]
+        if batch:
+            assert updated["entry_index"] == 2
+        assert any(row["id"] == letter["id"] and row["active_sender"] == letter["operator_name"]
+                   for row in updated["previous_records"])
+        with SessionLocal() as db:
+            assert not db.query(SubmissionRequest).filter_by(request_key=key).first()
+            assert not db.query(RecognitionRecord).filter(
+                RecognitionRecord.employee_id == earlier_row["employee_id"],
+                RecognitionRecord.content.in_([item["content"] for item in items]),
+            ).first()
+            assert db.get(RecognitionRecord, letter["id"]).credited_fraction == 3
+        items[-1]["same_day_duplicate_token"] = updated["same_day_duplicate_token"]
+        accepted = submit(items, key)
+        assert {row["id"] for row in updated["previous_records"]} == {earlier_row["id"], letter["id"]}
+        assert accepted.status_code == 200, accepted.text
+        pending = accepted.json()["records"][-1] if batch else accepted.json()["record"]
+        assert pending["status"] == "pending" and pending["fraction"] == 3 and pending["credited_fraction"] == 0
+        items[-1]["same_day_duplicate_token"] = old["same_day_duplicate_token"]
+        replay = submit(items, key)
+        assert replay.status_code == 200, replay.text
+        assert (replay.json()["records"][-1] if batch else replay.json()["record"])["id"] == pending["id"]
+        with SessionLocal() as db:
+            reviewer = db.query(UserAccount).filter_by(employee_id=db.get(RecognitionRecord, pending["id"]).assigned_reviewer_id).one()
+            reviewer_account = reviewer.login_account
+        login(manager, reviewer_account)
+        review = manager.post(f"/api/reviews/{pending['id']}", json={"action": "confirm"})
+        assert review.status_code == 200, review.text
+        with SessionLocal() as db:
+            row = db.get(RecognitionRecord, pending["id"])
+            assert row.status == "confirmed" and row.credited_fraction == 3
 
 
 def test_other_ordinary_categories_and_withdrawn_letters():
@@ -376,7 +553,8 @@ def test_parallel_same_day_submissions_need_confirmation(monkeypatch, mode):
         login(first, recipient)
         expected_credit = 0 if mode == "self" else first_record["credited_fraction"]
         assert first.get("/api/dashboard").json()["recognition_score"] == pytest.approx(before + expected_credit)
-        confirmed = second.post(url, data={**second_form, "same_day_duplicate_confirmed": "true"}, files=files)
+        confirmed = second.post(url, data={**second_form, "same_day_duplicate_confirmed": "true",
+                                          "same_day_duplicate_token": detail["same_day_duplicate_token"]}, files=files)
         assert confirmed.status_code == 200, confirmed.text
         record = confirmed.json()["record"]
         assert record["same_day_duplicate_sequence"] == 2

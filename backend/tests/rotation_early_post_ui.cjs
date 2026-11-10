@@ -12,7 +12,7 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
   const ok=async response=>{assert(response.ok(),await response.text());return response.json();};
   await ok(await context.request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}}));
   await ok(await context.request.post(base+'/api/rotation/enter',{data:{account:'7777777'}}));
-  await ok(await context.request.put(base+'/api/rotation/config',{data:{lines:[{id:'A',posts:[{name:'小C',seven:1},{name:'普通岗1'},{name:'普通岗2'}]},{id:'B',posts:[{name:'迎宾'},{name:'快迎'},{name:'普通岗3'}]},...['D2','E'].map(id=>({id,standby:true,posts:Array.from({length:5},(_,i)=>({name:'备用'+i}))}))]}}));
+  await ok(await context.request.put(base+'/api/rotation/config',{data:{lines:[{id:'A',posts:[{name:'小C'},{name:'普通岗1'},{name:'普通岗2'}]},{id:'B',posts:[{name:'普通岗3'},{name:'快迎'},{name:'普通岗4'}]},...['D2','E'].map(id=>({id,standby:true,posts:Array.from({length:5},(_,i)=>({name:'备用'+i}))}))]}}));
   const date='2026-10-06',url=base+'/api/rotation/daily/'+date;
   const before=await ok(await context.request.get(url));await ok(await context.request.post(url,{data:{action:'draft_generate',revision:before.revision}}));
   await page.goto(base+'/rotation');await page.locator('[data-tab=draft]').click();

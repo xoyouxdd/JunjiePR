@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.v2_auth import current_user
+from app.v2_auth import current_user, load_user_identity
 from app.v2_database import get_db
 from app.attendance_medals_models import MedalLeaveMonth, MedalNotice, MedalWageCode
 from app.services import attendance_medals as medals
@@ -61,6 +61,15 @@ def locked(db, operation):
         raise
 
 
+def current_operator(db, user):
+    account_id = getattr(user.account, "id", None)
+    account = db.get(UserAccount, account_id, populate_existing=True) if account_id is not None else None
+    employee = db.get(Employee, user.id, populate_existing=True)
+    if not account or not account.enabled or account.employee_id != user.id or not employee or not employee.is_active:
+        raise HTTPException(401, "账号不可用")
+    return load_user_identity(db, employee, account)
+
+
 def private(response):
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Vary"] = "Cookie"
@@ -72,21 +81,27 @@ def require_employee_account(db, user):
 
 
 @router.get("/attendance-medals/manage")
-def manage(month: str, response: Response, db=Depends(get_db), user=Depends(current_user)):
+def manage(month: str, response: Response, trial_view: bool = False, db=Depends(get_db), user=Depends(current_user)):
     private(response)
     medals.month_bounds(month)
-    if not medals.can_manage(user) and not ("SICK_LEAVE_IMPORT" in user.permissions):
+    can_manage = medals.can_manage(user)
+    can_import = medals.is_admin(user) or ("SICK_LEAVE_IMPORT" in user.permissions and not user.has_role("HR_CIRCLE"))
+    can_observe = medals.can_observe_trial(user, month)
+    if not (can_manage or can_import or can_observe) or (trial_view and not can_observe):
         raise HTTPException(403, "没有全勤勋章管理权限")
     circles = db.query(Attraction).filter_by(employee_circle=True, active=True).order_by(Attraction.id).all()
     if not medals.is_admin(user) and user.has_role("HR_CIRCLE"):
         circles = [c for c in circles if c.id == user.employee.attraction_id]
-    can_import = medals.is_admin(user) or ("SICK_LEAVE_IMPORT" in user.permissions and not user.has_role("HR_CIRCLE"))
-    items = [medals.preview(db, user, month, c.id) for c in circles] if medals.can_manage(user) else []
+    circle_info = [{"id": c.id, "name": c.name} for c in circles]
+    if trial_view or (can_observe and not (can_manage or can_import)):
+        return {"month": month, "circles": circle_info, "can_import": False,
+                "items": [medals.trial_results(db, month, c.id) for c in circles]}
+    items = [medals.preview(db, user, month, c.id) for c in circles] if can_manage else []
     state = db.get(MedalLeaveMonth, month)
     batch = medals.latest_batch(db, state)
     issues = medals.batch_issues(db, batch)
     assignment = json.loads(state.roster) if state and state.roster else medals.roster(db, month)
-    return {"month": month, "circles": [{"id": c.id, "name": c.name} for c in circles], "items": items,
+    return {"month": month, "circles": circle_info, "items": items,
         "can_import": can_import, "highest": medals.is_admin(user),
         "revision": state.revision if state else 0,
         "data_ready": medals.data_ready(state, issues),
@@ -156,7 +171,7 @@ def confirm_data(payload: Confirmation, db=Depends(get_db), user=Depends(current
 
 @router.post("/attendance-medals/publish")
 def publish(payload: Publication, db=Depends(get_db), user=Depends(current_user)):
-    return locked(db, lambda: medals.publish(db, user, payload.month, payload.attraction_id,
+    return locked(db, lambda: medals.publish(db, current_operator(db, user), payload.month, payload.attraction_id,
         payload.revision, payload.fingerprint, payload.reason))
 
 
@@ -232,10 +247,11 @@ def repair_identity(payload: IdentityRepair, db=Depends(get_db), user=Depends(cu
 def repair_scope(payload: ScopeRepair, db=Depends(get_db), user=Depends(current_user)):
     def operation():
         from app.services.audit import write_audit
-        if not medals.is_admin(user):
+        operator = current_operator(db, user)
+        if not medals.is_admin(operator):
             raise HTTPException(403, "仅最高管理员可修正历史圈归属")
         medals.month_bounds(payload.month)
-        medals.ensure_scope(db, user, payload.attraction_id)
+        medals.ensure_scope(db, operator, payload.attraction_id)
         if not db.get(Employee, payload.employee_id) or not payload.reason.strip():
             raise HTTPException(400, "请确认员工并填写修正原因")
         state = db.get(MedalLeaveMonth, payload.month)
@@ -245,11 +261,11 @@ def repair_scope(payload: ScopeRepair, db=Depends(get_db), user=Depends(current_
         before = assignment.get(str(payload.employee_id))
         assignment[str(payload.employee_id)] = payload.attraction_id
         state.roster = medals.dump(assignment)
-        write_audit(db, user.employee, "修正全勤勋章月份归属", "attendance_medal_circle", payload.attraction_id,
+        write_audit(db, operator.employee, "修正全勤勋章月份归属", "attendance_medal_circle", payload.attraction_id,
             before={"attraction_id": before}, after={"month": payload.month, "employee_id": payload.employee_id,
                 "attraction_id": payload.attraction_id, "reason": payload.reason})
         if before and before != payload.attraction_id:
-            write_audit(db, user.employee, "修正全勤勋章月份归属", "attendance_medal_circle", before,
+            write_audit(db, operator.employee, "修正全勤勋章月份归属", "attendance_medal_circle", before,
                 after={"month": payload.month, "employee_id": payload.employee_id,
                        "attraction_id": payload.attraction_id, "reason": payload.reason})
         return {"ok": True}

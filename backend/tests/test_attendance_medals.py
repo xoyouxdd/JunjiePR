@@ -17,11 +17,13 @@ from sqlalchemy.pool import StaticPool
 from app.database.connection import Base, get_db
 from app.database.reference_data import seed_reference_data
 from app.routers import attendance_medals as routes, sick_leave_import
+from app.routers.attendance_medals import current_operator
 from app.services import attendance_medals as service
 from app.v2_auth import V2User, current_user
 from app.v2_models import (Attraction, Employee, UserAccount, Role, EmployeeRoleAssignment, AuditLog,
     AttendanceMonthlyScore, SickLeaveRecord, MedalAccountIdentity, MedalLeaveMonth,
-    MedalLeaveBatch, MedalCircleRun, AttendanceMedal, MedalNotice)
+    MedalLeaveBatch, MedalCircleRun, AttendanceMedal, MedalNotice, DeductionLevel, DeductionRecord,
+    DeductionType, MonthClosure, StoredFile)
 
 
 class Clock(date):
@@ -35,6 +37,7 @@ class Clock(date):
 def system(monkeypatch):
     monkeypatch.setattr(service, 'date', Clock)
     monkeypatch.setattr(routes, 'date', Clock)
+    monkeypatch.setattr(routes, 'current_operator', lambda db, user: user)
     Clock.value = date(2027, 2, 2)
     engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
     @event.listens_for(engine, 'connect')
@@ -43,6 +46,9 @@ def system(monkeypatch):
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     seed_reference_data(db)
+    db.add_all(MonthClosure(closure_month=month, status='closed')
+               for month in ('2026-11', '2026-12', '2027-01'))
+    db.commit()
     circles = db.query(Attraction).filter_by(employee_circle=True).order_by(Attraction.id).all()[:3]
     roles = {r.code:r for r in db.query(Role).all()}
     index = 0
@@ -168,10 +174,637 @@ def test_trial_never_visible_or_notified_and_future_month_blocked(system):
     Clock.value=date(2026,11,7)
     assert client.get(f'/api/attendance-medals/employees/{person.id}').json()=={'visible':False,'items':[],'count':0}
     assert client.get('/api/attendance-medals/people',params={'keyword':'张'}).json()['items']==[]
-    item=preview(client,circles[0],'2026-11');assert item['can_publish']
+    item=preview(client,circles[0],'2026-11');assert not item['can_publish']
     Clock.value=date(2027,1,7)
     dataset(db);confirm(client)
     assert not preview(client,circles[0])['can_publish']
+
+
+def test_month_close_gates_publication_and_trial_observers_are_read_only(system):
+    db,client,circles,person,make,switch,hrs,importer,admin=system
+    db.query(MonthClosure).delete()
+    db.commit()
+    month='2026-11'
+    dataset(db,month);confirm(client,month)
+    item=preview(client,circles[0],month)
+    assert item['status']=='待月结' and not item['can_publish']
+    assert publish(client,item).status_code==409
+
+    scoped=MonthClosure(closure_month=month,attraction_id=circles[0].id,status='closed')
+    db.add(scoped);db.commit()
+    assert not preview(client,circles[1],month)['can_publish']
+    item=preview(client,circles[0],month)
+    assert item['can_publish'] and publish(client,item).status_code==200
+    assert db.query(MedalNotice).count()==0
+
+    for role in ('GSM','AM','OM','SYSTEM_ADMIN'):
+        viewer=admin if role=='SYSTEM_ADMIN' else importer if role=='GSM' else make(role,role=role)
+        switch(viewer,role,{'SYSTEM_ADMIN'} if role=='SYSTEM_ADMIN' else set())
+        response=client.get('/api/attendance-medals/manage',params={'month':month,'trial_view':True})
+        assert response.status_code==200,response.text
+        data=response.json()
+        assert response.headers['Cache-Control']=='private, no-store' and not data['can_import']
+        assert data['items'][0]['status']=='已发放' and data['items'][0]['read_only']
+        assert any(row['employee_no']==person.employee_no for row in data['items'][0]['rows'])
+        assert data['items'][1]['status']=='待月结' and not data['items'][1]['rows']
+        assert all(not row['leaves'] for row in data['items'][0]['rows'])
+        if role!='SYSTEM_ADMIN':assert publish(client,item).status_code==403
+
+    switch(hrs[0],'HR_CIRCLE',{'SICK_LEAVE_IMPORT'})
+    scoped_view=client.get('/api/attendance-medals/manage',params={'month':month}).json()
+    assert [row['attraction_id'] for row in scoped_view['items']]==[circles[0].id]
+    for role in ('CM','TR','TA_SUPERVISOR','SUPERVISOR','TA_GSM'):
+        switch(make(role,role=role),role,set())
+        assert client.get('/api/attendance-medals/manage',params={'month':month,'trial_view':True}).status_code==403
+
+    scoped.status='open';db.commit()
+    switch(importer,'GSM',{'SICK_LEAVE_IMPORT'})
+    reopened=client.get('/api/attendance-medals/manage',params={'month':month,'trial_view':True}).json()
+    assert reopened['items'][0]['status']=='待月结' and not reopened['items'][0]['rows']
+
+    switch();dataset(db);confirm(client)
+    assert not preview(client,circles[0])['can_publish']
+    db.add(MonthClosure(closure_month='2027-01',status='closed'));db.commit()
+    assert preview(client,circles[0])['can_publish']
+
+
+def test_formal_medal_visibility_tracks_reopen_without_changing_awards_or_scores(system):
+    db, client, circles, person, make, switch, *_ = system
+    peer = make('另一个景点圈员工', circle=1)
+    Clock.value = date(2027, 3, 2)
+    february = MonthClosure(closure_month='2027-02', status='closed')
+    january = db.query(MonthClosure).filter_by(closure_month='2027-01').one()
+    db.add_all([february, MonthClosure(closure_month='2027-02', attraction_id=circles[1].id, status='closed')])
+    db.commit()
+    for month in ('2026-12', '2027-01', '2027-02'):
+        dataset(db, month)
+        confirm(client, month)
+        for circle in circles[:2]:
+            response = publish(client, preview(client, circle, month))
+            assert response.status_code == 200, response.text
+
+    path = f'/api/attendance-medals/employees/{person.id}'
+    switch(person, 'CM', set())
+    original = client.get(path).json()
+    assert original['count'] == 2
+    notice = db.query(MedalNotice).filter_by(employee_id=person.id, month='2027-02').one()
+    read_path = f'/api/attendance-medals/notices/{notice.id}/read'
+
+    february.status = 'reopened'
+    db.commit()
+    own = client.get(path).json()
+    assert own['count'] == 1 and [item['month'] for item in own['items']] == ['2027-01']
+    assert [item['month'] for item in own['assessments']] == ['2027-01']
+    assert len(own['notices']) == 1 and own['notices'][0]['id'] != notice.id
+    assert own['pending_month'] == {'month': '2027-02', 'status': '待月结'}
+    assert client.post(read_path).status_code == 404
+    switch(peer, 'CM', set())
+    assert client.get(path).json()['count'] == 1
+    assert client.get(f'/api/attendance-medals/employees/{peer.id}').json()['count'] == 2
+
+    january.status = 'reopened'
+    db.commit()
+    assert client.get(path).json()['count'] == 0
+    february.status = 'closed'
+    db.commit()
+    switch(person, 'CM', set())
+    restored = client.get(path).json()
+    assert restored['count'] == 1 and restored['items'] == [original['items'][0]]
+    assert restored['assessments'] == [original['assessments'][0]]
+    assert restored['notices'] == [original['notices'][0]]
+    assert client.post(read_path).status_code == 200
+    assert db.query(AttendanceMedal).filter_by(employee_id=person.id, status='awarded').count() == 3
+    assert db.query(MedalNotice).filter_by(employee_id=person.id).count() == 2
+    assert db.query(AttendanceMonthlyScore).count() == db.query(DeductionRecord).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+def test_trial_reclose_restores_winners_when_only_ineligibility_reason_changes(system, month):
+    db, client, circles, person, make, switch, hrs, importer, admin = system
+    circle = circles[0]
+    winner = make('全勤员工')
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    level = db.query(DeductionLevel).filter_by(code='STATEMENT').one()
+    kind = db.query(DeductionType).filter_by(code='ATT_LATE_WITHIN_30').one()
+    pdf = StoredFile(storage_key='late.pdf', original_filename='late.pdf', extension='.pdf',
+        mime_type='application/pdf', file_size=1, sha256='0'*64, uploaded_by=admin.id, status='active')
+    db.add(pdf)
+    db.flush()
+    db.add(DeductionRecord(employee_id=person.id, employee_no=person.employee_no, employee_name=person.name,
+        employee_role_snapshot='CM', attraction_id_snapshot=circle.id, deduction_type_id=kind.id,
+        deduction_type_name=kind.name, deduction_level_id=level.id, deduction_level_name=level.name,
+        points=Decimal('1'), occurred_on=f'{month}-05', deduction_month=month, description='迟到',
+        document_file_id=pdf.id, submitter_id=admin.id, submitter_name=admin.name, submitter_role_snapshot='GSM',
+        permission_scope_snapshot='测试', status='active'))
+    db.commit()
+    dataset(db, month)
+    confirm(client, month)
+    before = preview(client, circle, month)
+    assert publish(client, before).status_code == 200
+    run = db.query(MedalCircleRun).filter_by(month=month, attraction_id=circle.id).one()
+    published_snapshot = run.results
+
+    def observed():
+        switch(importer, 'GSM', set())
+        response = client.get('/api/attendance-medals/manage', params={'month': month, 'trial_view': True})
+        assert response.status_code == 200, response.text
+        return next(item for item in response.json()['items'] if item['attraction_id'] == circle.id)
+
+    original = observed()
+    assert original['status'] == '已发放'
+    winners = {row['employee_no'] for row in original['rows']}
+    assert winner.employee_no in winners and person.employee_no not in winners
+    closure.status = 'open'
+    db.commit()
+    assert not observed()['rows']
+    switch()
+    dataset(db, month, leaves=[dict(leave(person), date=f'{month}-05')])
+    confirm(client, month)
+    closure.status = 'closed'
+    db.commit()
+    assert observed() == original
+
+    switch(hrs[0], 'HR_CIRCLE', set())
+    after = preview(client, circle, month)
+    old_row = next(row for row in before['rows'] if row['employee_id'] == person.id)
+    new_row = next(row for row in after['rows'] if row['employee_id'] == person.id)
+    assert old_row['status'] == new_row['status'] == '未获得'
+    assert old_row['reason'] != new_row['reason'] and not after['changes']
+    assert after['status'] == '已发放'
+    assert publish(client, after).json() == {'ok': True, 'duplicate': True, 'awarded': 0, 'revoked': 0}
+    assert run.results == published_snapshot
+    assert db.query(DeductionRecord).one().points == Decimal('1')
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+def test_trial_reclose_hides_stale_winners_until_scoped_hr_confirms(system, month):
+    db, client, circles, person, make, switch, hrs, importer, _ = system
+    eligible = make('仍符合资格')
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    dataset(db, month)
+    confirm(client, month)
+    assert publish(client, preview(client, circles[0], month)).status_code == 200
+
+    def observed():
+        switch(importer, 'GSM', set())
+        response = client.get('/api/attendance-medals/manage', params={'month': month, 'trial_view': True})
+        assert response.status_code == 200, response.text
+        return next(item for item in response.json()['items'] if item['attraction_id'] == circles[0].id)
+
+    original = observed()
+    winners = {row['employee_no'] for row in original['rows']}
+    assert {person.employee_no, eligible.employee_no} <= winners
+    closure.status = 'reopened'
+    db.commit()
+    hidden = observed()
+    assert hidden['status'] == '待月结' and not hidden['rows']
+    closure.status = 'closed'
+    db.commit()
+    assert observed() == original
+
+    closure.status = 'reopened'
+    db.commit()
+    switch()
+    dataset(db, month, leaves=[dict(leave(person), date=f'{month}-05')])
+    closure.status = 'closed'
+    db.commit()
+    hidden = observed()
+    assert hidden['status'] == '待数据就绪' and not hidden['rows']
+    switch()
+    confirm(client, month)
+    hidden = observed()
+    assert hidden['status'] == '待调整' and not hidden['rows']
+    switch(hrs[1], 'HR_CIRCLE', set())
+    assert publish(client, dict(preview(client, circles[1], month), attraction_id=circles[0].id)).status_code == 403
+    switch(hrs[0], 'HR_CIRCLE', set())
+    adjustment = preview(client, circles[0], month)
+    assert adjustment['status'] == '待调整'
+    assert publish(client, adjustment, reason='确认补录请假').json()['revoked'] == 1
+    confirmed = observed()
+    assert confirmed['status'] == '已发放'
+    assert {row['employee_no'] for row in confirmed['rows']} == winners - {person.employee_no}
+    switch(eligible, 'CM', set())
+    assert client.get(f'/api/attendance-medals/employees/{eligible.id}').json()['count'] == 0
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+def test_trial_cross_circle_reclose_requires_target_hr_to_revoke_moved_medal(system, month):
+    db, client, circles, person, make, switch, hrs, importer, _ = system
+    source, target = circles[:2]
+    winner = make('目标圈全勤员工', circle=1)
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    dataset(db, month)
+    confirm(client, month)
+    for circle in (source, target):
+        assert publish(client, preview(client, circle, month)).status_code == 200
+    medal = db.query(AttendanceMedal).filter_by(employee_id=person.id, month=month).one()
+    assert medal.attraction_id == source.id and medal.status == 'awarded'
+
+    def observe_target():
+        switch(importer, 'GSM', set())
+        response = client.get('/api/attendance-medals/manage', params={'month': month, 'trial_view': True})
+        assert response.status_code == 200, response.text
+        return next(item for item in response.json()['items'] if item['attraction_id'] == target.id)
+
+    original = observe_target()
+    assert original['status'] == '已发放'
+    assert [row['employee_no'] for row in original['rows']] == [winner.employee_no]
+    closure.status = 'open'
+    db.commit()
+    assert not observe_target()['rows']
+
+    switch()
+    dataset(db, month, leaves=[dict(leave(person), date=f'{month}-05')])
+    confirm(client, month)
+    response = client.post('/api/attendance-medals/repair-scope', json={
+        'month': month, 'employee_id': person.id, 'attraction_id': target.id, 'reason': '核实历史归属'})
+    assert response.status_code == 200, response.text
+    closure.status = 'closed'
+    db.commit()
+    assert observe_target() == original
+    switch()
+    assert publish(client, preview(client, source, month), reason='确认来源圈调整').status_code == 200
+    assert medal.attraction_id == target.id and medal.status == 'awarded'
+
+    pending = observe_target()
+    assert pending['status'] == '待调整' and not pending['rows']
+    switch(hrs[1], 'HR_CIRCLE', set())
+    adjustment = preview(client, target, month)
+    assert [(change['employee_id'], change['action']) for change in adjustment['changes']] == [(person.id, '撤回')]
+    switch(hrs[0], 'HR_CIRCLE', set())
+    assert publish(client, adjustment, reason='越圈确认').status_code == 403
+    switch(hrs[1], 'HR_CIRCLE', set())
+    response = publish(client, adjustment, reason='撤回已失去资格的勋章')
+    assert response.status_code == 200 and response.json()['revoked'] == 1, response.text
+    assert medal.status == 'revoked'
+    assert publish(client, adjustment).json()['duplicate'] is True
+    assert observe_target() == original
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+@pytest.mark.parametrize('target_already_published', [False, True])
+def test_trial_cross_circle_confirmation_rejects_old_withdrawal_list(system, month, target_already_published):
+    db, client, circles, person, make, switch, hrs, *_ = system
+    source, target = circles[:2]
+    peer = make('目标圈原获奖员工', circle=1)
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    dataset(db, month)
+    confirm(client, month)
+    assert publish(client, preview(client, source, month)).status_code == 200
+    if target_already_published:
+        assert publish(client, preview(client, target, month)).status_code == 200
+    closure.status = 'open'
+    db.commit()
+    dataset(db, month, leaves=[dict(leave(employee), date=f'{month}-05') for employee in (person, peer)])
+    confirm(client, month)
+    response = client.post('/api/attendance-medals/repair-scope', json={
+        'month': month, 'employee_id': person.id, 'attraction_id': target.id, 'reason': '核实历史归属'})
+    assert response.status_code == 200, response.text
+    closure.status = 'closed'
+    db.commit()
+
+    switch(hrs[1], 'HR_CIRCLE', set())
+    stale = preview(client, target, month)
+    assert stale['status'] == ('待调整' if target_already_published else '待确认发放')
+    previously_seen = {peer.id} if target_already_published else set()
+    assert {(change['employee_id'], change['action']) for change in stale['changes']} == {
+        (employee_id, '撤回') for employee_id in previously_seen}
+    switch()
+    assert publish(client, preview(client, source, month), reason='确认来源圈调整').status_code == 200
+
+    switch(hrs[1], 'HR_CIRCLE', set())
+    response = publish(client, stale, reason='确认旧名单')
+    assert response.status_code == 409 and '刷新' in response.json()['detail'], response.text
+    medals = db.query(AttendanceMedal).filter_by(month=month, attraction_id=target.id).all()
+    expected = previously_seen | {person.id}
+    assert {medal.employee_id for medal in medals if medal.status == 'awarded'} == expected
+    fresh = preview(client, target, month)
+    assert fresh['rows'] == stale['rows'] and fresh['revision'] == stale['revision']
+    assert fresh['fingerprint'] != stale['fingerprint']
+    assert {(change['employee_id'], change['action']) for change in fresh['changes']} == {
+        (employee_id, '撤回') for employee_id in expected}
+    response = publish(client, fresh, reason='重新核对后确认')
+    assert response.status_code == 200 and response.json()['revoked'] == len(expected), response.text
+    assert publish(client, stale, reason='重试旧名单').status_code == 409
+    assert publish(client, fresh, reason='重新核对后确认').json() == {
+        'ok': True, 'duplicate': True, 'awarded': 0, 'revoked': 0}
+    assert {medal.status for medal in medals} == {'revoked'}
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+@pytest.mark.parametrize('source_moves_after_preview', [False, True])
+def test_trial_highest_target_confirmation_identifies_same_name_withdrawals(system, month, source_moves_after_preview):
+    db, client, circles, person, make, switch, hrs, importer, _ = system
+    source, target, other_source = circles[:3]
+    same_name = make(person.name, circle=2)
+    winner = make('目标圈全勤员工', circle=1)
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    dataset(db, month)
+    confirm(client, month)
+    for circle in (source, target, other_source):
+        assert publish(client, preview(client, circle, month)).status_code == 200
+    medals = {medal.employee_id: medal for medal in db.query(AttendanceMedal).filter(
+        AttendanceMedal.month == month, AttendanceMedal.employee_id.in_((person.id, same_name.id)))}
+    closure.status = 'open'
+    db.commit()
+    dataset(db, month, leaves=[dict(leave(employee), date=f'{month}-05') for employee in (person, same_name)])
+    confirm(client, month)
+    for employee in (person, same_name):
+        response = client.post('/api/attendance-medals/repair-scope', json={
+            'month': month, 'employee_id': employee.id, 'attraction_id': target.id, 'reason': '核实历史归属'})
+        assert response.status_code == 200, response.text
+    closure.status = 'closed'
+    db.commit()
+
+    before = preview(client, target, month)
+    assert before['status'] == '待调整'
+    expected = [(employee.id, employee.name, employee.employee_no, '撤回') for employee in (person, same_name)]
+    assert [(c['employee_id'], c['name'], c['employee_no'], c['action']) for c in before['changes']] == expected
+    assert all('跨圈移入后撤回' in c['reason'] for c in before['changes'])
+    switch(hrs[1], 'HR_CIRCLE', set())
+    assert not preview(client, target, month)['changes']
+    assert publish(client, before, reason='尝试跨圈确认').status_code == 409
+    assert medals[person.id].attraction_id == source.id and medals[same_name.id].attraction_id == other_source.id
+    assert all(medal.status == 'awarded' for medal in medals.values())
+    switch()
+
+    if source_moves_after_preview:
+        assert publish(client, preview(client, source, month), reason='确认来源圈归属').status_code == 200
+        response = publish(client, before, reason='确认旧预览')
+        assert response.status_code == 409 and '刷新' in response.json()['detail'], response.text
+        assert medals[person.id].attraction_id == target.id and medals[same_name.id].attraction_id == other_source.id
+        assert all(medal.status == 'awarded' for medal in medals.values())
+        current = preview(client, target, month)
+        assert [(c['employee_id'], c['name'], c['employee_no'], c['action']) for c in current['changes']] == expected
+        assert '跨圈移入后撤回' not in current['changes'][0]['reason']
+        assert '跨圈移入后撤回' in current['changes'][1]['reason']
+    else:
+        current = before
+    response = publish(client, current, reason='确认目标圈撤回')
+    assert response.status_code == 200 and response.json()['revoked'] == 2, response.text
+    assert all(medal.attraction_id == target.id and medal.status == 'revoked' for medal in medals.values())
+    assert publish(client, current).json()['duplicate'] is True
+    switch(importer, 'GSM', set())
+    response = client.get('/api/attendance-medals/manage', params={'month': month, 'trial_view': True})
+    observed = next(item for item in response.json()['items'] if item['attraction_id'] == target.id)
+    assert observed['status'] == '已发放'
+    assert [row['employee_no'] for row in observed['rows']] == [winner.employee_no]
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+def test_trial_cross_circle_confirmation_refreshes_changed_employee_number(system, month):
+    from app.routers import employees
+
+    db, client, circles, person, make, switch, hrs, _, admin = system
+    client.app.include_router(employees.router, prefix='/api')
+    source, target = circles[:2]
+    same_name = make(person.name, circle=1)
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    dataset(db, month)
+    confirm(client, month)
+    for circle in (source, target):
+        assert publish(client, preview(client, circle, month)).status_code == 200
+    medal = db.query(AttendanceMedal).filter_by(employee_id=person.id, month=month).one()
+    closure.status = 'open'
+    db.commit()
+    dataset(db, month, leaves=[dict(leave(person), date=f'{month}-05')])
+    confirm(client, month)
+    response = client.post('/api/attendance-medals/repair-scope', json={
+        'month': month, 'employee_id': person.id, 'attraction_id': target.id, 'reason': '核实历史归属'})
+    assert response.status_code == 200, response.text
+    closure.status = 'closed'
+    db.commit()
+
+    old_source = preview(client, source, month)
+    old_target = preview(client, target, month)
+    old_number = person.employee_no
+    assert old_source['changes'][0]['employee_no'] == old_target['changes'][0]['employee_no'] == old_number
+    switch(admin, 'SYSTEM_ADMIN', {'SYSTEM_ADMIN', 'HR_MANAGE'})
+    new_number = '1899991'
+    response = client.post(f'/api/hr/employees/{person.id}/employee-number', json={
+        'new_employee_no': new_number, 'reason': '核实员工新工号'})
+    assert response.status_code == 200, response.text
+    for stale in (old_source, old_target):
+        response = publish(client, stale, reason='确认旧工号预览')
+        assert response.status_code == 409 and '刷新' in response.json()['detail'], response.text
+        assert medal.attraction_id == source.id and medal.status == 'awarded'
+
+    fresh_source = preview(client, source, month)
+    identity = (person.id, person.name, new_number)
+    assert [(c['employee_id'], c['name'], c['employee_no'], c['action']) for c in fresh_source['changes']] == [
+        (*identity, '移出')]
+    response = publish(client, fresh_source, reason='按新工号确认来源圈')
+    assert response.status_code == 200 and response.json()['revoked'] == 0, response.text
+    assert medal.attraction_id == target.id and medal.status == 'awarded'
+    assert publish(client, fresh_source).json()['duplicate'] is True
+
+    switch(hrs[1], 'HR_CIRCLE', set())
+    fresh_target = preview(client, target, month)
+    assert [(c['employee_id'], c['name'], c['employee_no'], c['action']) for c in fresh_target['changes']] == [
+        (*identity, '撤回')]
+    response = publish(client, fresh_target, reason='按新工号确认撤回')
+    assert response.status_code == 200 and response.json()['revoked'] == 1, response.text
+    assert publish(client, fresh_target).json()['duplicate'] is True
+    assert medal.status == 'revoked'
+    assert db.query(AttendanceMedal).filter_by(employee_id=same_name.id, month=month).one().status == 'awarded'
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+def test_trial_source_confirmation_refreshes_changed_destination(system, month):
+    db, client, circles, person, _, switch, hrs, *_ = system
+    source, original_target, new_target = circles[:3]
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    dataset(db, month)
+    confirm(client, month)
+    for circle in circles[:3]:
+        assert publish(client, preview(client, circle, month)).status_code == 200
+    medal = db.query(AttendanceMedal).filter_by(employee_id=person.id, month=month).one()
+    closure.status = 'open'
+    db.commit()
+    dataset(db, month, leaves=[dict(leave(person), date=f'{month}-05')])
+    confirm(client, month)
+
+    def repair(destination):
+        response = client.post('/api/attendance-medals/repair-scope', json={
+            'month': month, 'employee_id': person.id, 'attraction_id': destination.id, 'reason': '核实历史归属'})
+        assert response.status_code == 200, response.text
+
+    repair(original_target)
+    closure.status = 'closed'
+    db.commit()
+    stale = preview(client, source, month)
+    repair(new_target)
+    response = publish(client, stale, reason='确认旧目标圈')
+    assert response.status_code == 409 and '刷新' in response.json()['detail'], response.text
+    assert medal.attraction_id == source.id and medal.status == 'awarded'
+    assert [(c['employee_id'], c['action'], c['target_circle_id'], c['reason']) for c in stale['changes']] == [
+        (person.id, '移出', original_target.id, f'将移入 {original_target.name}')]
+
+    fresh = preview(client, source, month)
+    assert fresh['rows'] == stale['rows'] and fresh['revision'] == stale['revision']
+    assert [(c['employee_id'], c['action'], c['target_circle_id'], c['reason']) for c in fresh['changes']] == [
+        (person.id, '移出', new_target.id, f'将移入 {new_target.name}')]
+    response = publish(client, fresh, reason='核对新目标圈')
+    assert response.status_code == 200 and response.json()['revoked'] == 0, response.text
+    assert medal.attraction_id == new_target.id and medal.status == 'awarded'
+    assert publish(client, fresh).json()['duplicate'] is True
+    switch(hrs[2], 'HR_CIRCLE', set())
+    target = preview(client, new_target, month)
+    assert [(c['employee_id'], c['action']) for c in target['changes']] == [(person.id, '撤回')]
+    assert publish(client, target, reason='确认撤回').json()['revoked'] == 1
+    assert medal.status == 'revoked' and publish(client, target).json()['duplicate'] is True
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+@pytest.mark.parametrize(('old_status', 'eligible', 'source_first', 'action'), [
+    ('awarded', True, False, '移入'), ('revoked', False, False, '移入'),
+    ('revoked', True, False, '补发'), ('awarded', True, True, '确认名单'),
+])
+def test_trial_cross_circle_confirmation_matches_existing_medal_state(system, month, old_status, eligible, source_first, action):
+    db, client, circles, person, make, switch, hrs, importer, _ = system
+    source, target = circles[:2]
+    winner = make('目标圈原获奖员工', circle=1)
+    closure = db.query(MonthClosure).filter_by(closure_month=month).one()
+    dataset(db, month)
+    confirm(client, month)
+    for circle in (source, target):
+        assert publish(client, preview(client, circle, month)).status_code == 200
+    medal = db.query(AttendanceMedal).filter_by(employee_id=person.id, month=month).one()
+    leave_row = dict(leave(person), date=f'{month}-05')
+    if old_status == 'revoked':
+        dataset(db, month, leaves=[leave_row])
+        confirm(client, month)
+        assert publish(client, preview(client, source, month), reason='确认来源圈撤回').json()['revoked'] == 1
+
+    closure.status = 'open'
+    db.commit()
+    dataset(db, month, leaves=[] if eligible else [leave_row])
+    confirm(client, month)
+    response = client.post('/api/attendance-medals/repair-scope', json={
+        'month': month, 'employee_id': person.id, 'attraction_id': target.id, 'reason': '核实历史归属'})
+    assert response.status_code == 200, response.text
+    closure.status = 'closed'
+    db.commit()
+
+    if source_first:
+        response = publish(client, preview(client, source, month), reason='确认来源圈移出')
+        assert response.status_code == 200 and response.json()['moved'] == 1, response.text
+        switch(hrs[1], 'HR_CIRCLE', set())
+    incoming = preview(client, target, month)
+    assert incoming['status'] == '待调整'
+    assert [(c['employee_id'], c['action']) for c in incoming['changes']] == [(person.id, action)]
+    if not source_first:
+        assert incoming['changes'][0]['source_circle_id'] == source.id
+        assert incoming['changes'][0]['target_circle_id'] == target.id
+        switch(hrs[1], 'HR_CIRCLE', set())
+        assert publish(client, incoming, reason='尝试跨圈确认').status_code == 409
+        assert medal.attraction_id == source.id and medal.status == old_status
+        switch()
+    response = publish(client, incoming, reason='核对移入名单')
+    assert response.status_code == 200, response.text
+    assert response.json()['awarded'] == int(action == '补发') and response.json()['revoked'] == 0
+    assert response.json().get('moved', 0) == int(not source_first)
+    assert medal.attraction_id == target.id and medal.status == ('awarded' if eligible else 'revoked')
+    assert publish(client, incoming).json()['duplicate'] is True
+    if old_status == 'awarded' and not source_first:
+        source_after = preview(client, source, month)
+        assert [(c['employee_id'], c['action']) for c in source_after['changes']] == [(person.id, '确认名单')]
+        response = publish(client, source_after, reason='同步来源圈获奖名单')
+        assert response.status_code == 200 and response.json()['revoked'] == 0, response.text
+        assert medal.attraction_id == target.id and medal.status == 'awarded'
+    switch(importer, 'GSM', set())
+    response = client.get('/api/attendance-medals/manage', params={'month': month, 'trial_view': True})
+    observed = next(item for item in response.json()['items'] if item['attraction_id'] == target.id)
+    expected = {winner.employee_no}
+    if eligible:
+        expected.add(person.employee_no)
+    assert observed['status'] == '已发放' and {r['employee_no'] for r in observed['rows']} == expected
+    assert db.query(MedalNotice).count() == db.query(AttendanceMonthlyScore).count() == 0
+
+
+@pytest.mark.parametrize('month', ['2026-11', '2026-12'])
+@pytest.mark.parametrize('operation', ['publish', 'repair-scope'])
+def test_trial_cross_circle_rechecks_highest_role_under_write_lock(system, monkeypatch, month, operation):
+    db, client, circles, person, _, _, _, _, admin = system
+    source, target, other = circles[:3]
+    dataset(db, month)
+    confirm(client, month)
+    assert publish(client, preview(client, source, month)).status_code == 200
+    stale_identity = V2User(admin, db.query(UserAccount).filter_by(employee_id=admin.id).one(),
+                            db.query(Role).filter_by(code='SYSTEM_ADMIN').one(), {'SYSTEM_ADMIN'})
+    client.app.dependency_overrides[current_user] = lambda: stale_identity
+
+    def read_under_lock(session, user):
+        assert session.connection().connection.driver_connection.in_transaction
+        return current_operator(session, user)
+
+    monkeypatch.setattr(routes, 'current_operator', read_under_lock)
+    path = '/api/attendance-medals/repair-scope'
+    payload = {'month': month, 'employee_id': person.id, 'attraction_id': target.id, 'reason': '核实归属'}
+    assert client.post(path, json=payload).status_code == 200
+    pending = preview(client, source, month)
+    locked = routes.locked
+
+    def revoke_before_lock(session, callback):
+        assignment = session.query(EmployeeRoleAssignment).filter_by(employee_id=admin.id).one()
+        assignment.role_id = session.query(Role.id).filter_by(code='HR_CIRCLE').scalar()
+        session.commit()
+        return locked(session, callback)
+
+    monkeypatch.setattr(routes, 'locked', revoke_before_lock)
+    if operation == 'publish':
+        response = publish(client, pending, reason='尝试继续跨圈处理')
+        assert response.status_code == 409, response.text
+    else:
+        response = client.post(path, json={**payload, 'attraction_id': other.id})
+        assert response.status_code == 403, response.text
+    medal = db.query(AttendanceMedal).filter_by(employee_id=person.id, month=month).one()
+    assert medal.attraction_id == source.id and medal.status == 'awarded'
+    assert json.loads(db.get(MedalLeaveMonth, month).roster)[str(person.id)] == target.id
+
+
+def test_only_effective_attendance_exceptions_and_leave_disqualify(system):
+    db,client,circles,person,make,switch,*_=system
+    month='2027-01'
+    level=db.query(DeductionLevel).filter_by(code='STATEMENT').one()
+    pdf=StoredFile(storage_key='attendance-medal-proof.pdf',original_filename='proof.pdf',extension='.pdf',
+                   mime_type='application/pdf',file_size=1,sha256='0'*64,uploaded_by=person.id,status='active')
+    db.add(pdf);db.flush()
+    expected={person.id:'拟发放'}
+    types=['ATT_LATE_WITHIN_30','ATT_LATE_OVER_30','ATT_EARLY_LEAVE_WITHIN_30','ATT_EARLY_LEAVE_OVER_30',
+           'ATT_EARLY_CLOCK','ATT_LATE_CLOCK','ATT_MISSING_CLOCK','SICK_LEAVE_VIOLATION']
+    cases=[(code,'active',month,'未获得') for code in types]+[
+        (code,'active',month,'拟发放') for code in ('SAFETY','COURTESY','SHOW','ATT_REMOTE_CLOCK')
+    ]+[
+        ('ATT_MISSING_CLOCK','void',month,'拟发放'),('ATT_LATE_CLOCK','pending_material',month,'拟发放'),
+        ('ATT_LATE_CLOCK','active','2026-12','拟发放'),
+    ]
+    for code,state,record_month,status in cases:
+        employee=make(code+' '+state)
+        kind=db.query(DeductionType).filter_by(code=code).one()
+        db.add(DeductionRecord(employee_id=employee.id,employee_no=employee.employee_no,employee_name=employee.name,
+            employee_role_snapshot='CM',attraction_id_snapshot=circles[0].id,deduction_type_id=kind.id,
+            deduction_type_name=kind.name,deduction_level_id=level.id,deduction_level_name=level.name,points=Decimal('0'),
+            occurred_on=record_month+'-05',deduction_month=record_month,description='测试考勤',document_file_id=pdf.id,
+            submitter_id=person.id,submitter_name=person.name,submitter_role_snapshot='GSM',permission_scope_snapshot='测试',status=state))
+        expected[employee.id]=status
+    for state,status in [('active','未获得'),('void','拟发放'),('covered','拟发放')]:
+        employee=make('跨月病假 '+state)
+        db.add(SickLeaveRecord(employee_id=employee.id,attendance_month='2026-12',leave_start_date='2026-12-30',
+            leave_end_date='2027-01-02',leave_days=2,charged_days=0,status=state,submitted_by=person.id,submitted_by_name=person.name))
+        expected[employee.id]=status
+    db.commit()
+    dataset(db,month);confirm(client,month)
+    item=preview(client,circles[0],month)
+    actual={row['employee_id']:row['status'] for row in item['rows']}
+    assert {employee_id:actual[employee_id] for employee_id in expected}==expected
 
 
 def test_account_qualification_history_disabled_rebuilt_and_rehire(system):

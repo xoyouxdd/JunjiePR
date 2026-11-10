@@ -8,7 +8,7 @@ from app.v2_auth import V2User
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, DeductionUpgradeRequest, Employee, MonthClosure, RecognitionRecord
 from datetime import date, datetime, timedelta
 from fastapi import HTTPException
-from sqlalchemy import event, or_, text
+from sqlalchemy import and_, event, or_, text
 from sqlalchemy.orm import Session
 
 
@@ -30,14 +30,19 @@ def month_close_period_policy(month: str) -> dict:
     }
 
 
-def month_closure_scope(db: Session, month: str, attraction_id: int | None) -> MonthClosure | None:
-    query = db.query(MonthClosure).filter(
+def closed_month_scope_filter(month, attraction_id):
+    scope = MonthClosure.attraction_id.is_(None)
+    if attraction_id is not None:
+        scope = or_(scope, MonthClosure.attraction_id == attraction_id)
+    return and_(
         MonthClosure.closure_month == month,
         MonthClosure.status == "closed",
+        scope,
     )
-    if attraction_id is None:
-        return query.filter(MonthClosure.attraction_id.is_(None)).first()
-    return query.filter(or_(MonthClosure.attraction_id.is_(None), MonthClosure.attraction_id == attraction_id)).order_by(
+
+
+def month_closure_scope(db: Session, month: str, attraction_id: int | None) -> MonthClosure | None:
+    return db.query(MonthClosure).filter(closed_month_scope_filter(month, attraction_id)).order_by(
         MonthClosure.attraction_id.is_(None).desc()
     ).first()
 
@@ -117,7 +122,11 @@ def month_close_work_queries(db: Session, month: str, attraction_id: int | None)
         DeductionRecord, DeductionRecord.id == DeductionUpgradeRequest.second_deduction_id
     ).filter(
         DeductionRecord.deduction_month == month,
-        DeductionUpgradeRequest.status == "pending",
+        or_(
+            DeductionUpgradeRequest.status == "pending",
+            and_(DeductionUpgradeRequest.status == "awaiting_material",
+                 DeductionRecord.material_status == "ready", DeductionRecord.upgrade_state == "awaiting_reviewer"),
+        ),
     )
     if attraction_id is not None:
         upgrade_query = upgrade_query.filter(DeductionRecord.attraction_id_snapshot == attraction_id)
@@ -153,7 +162,7 @@ def month_close_checklist(db: Session, month: str, attraction_id: int | None) ->
     return [
         {"code": "recognition_review", "name": "待复核签卡", "count": pending_recognitions, "target": None, "responsible": "请联系对应主管完成复核"},
         {"code": "deduction_material", "name": "待补/生成失败材料", "count": unresolved_materials, "target": None, "responsible": "请联系登记人或主管补充材料"},
-        {"code": "deduction_upgrade", "name": "待升级工单", "count": upgrade_requests, "target": None, "responsible": "请联系被分配的TA GSM或GSM处理"},
+        {"code": "deduction_upgrade", "name": "待升级工单", "count": upgrade_requests, "target": None, "responsible": "请联系有审核权限的GSM处理"},
         {"code": "deduction_follow_up", "name": "重复违规待跟进", "count": follow_ups, "target": None, "responsible": "请联系对应主管完成跟进"},
         {"code": "circle_transfer", "name": "待确认跨圈调动", "count": pending_transfers, "target": "circleTransfers", "responsible": "由目标景点圈HR确认"},
     ]

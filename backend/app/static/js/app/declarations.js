@@ -15,8 +15,22 @@ function declarationLevelTone(code){if(Object.prototype.hasOwnProperty.call(decl
 
 function declarationStatusBadge(value){const tone=value==='已生效'?'ok':value==='已作废'?'danger':'warn';return `<span class="badge status-chip ${tone}">${esc(value)}</span>`;}
 
-function declarationRecordDetails(rows,levels=[],types=[],readOnly=false){
-  if(!rows.length)return '<div class="empty">当前范围没有符合条件的记录</div>';
+function currentDeclarationUpgrade(row){
+  return row.upgrade_links?.find(link=>['awaiting_material','pending','approved'].includes(link.status));
+}
+
+function declarationWorkLabel(link){
+  return link.status_name||({rejected:'审核不通过',approved:'已升级',pending:'待审核',awaiting_material:'待材料就绪'})[link.status]||link.status;
+}
+
+function declarationAssociationButtons(link,rowId){
+  const labels={source_first:'首次声明',source_second:'第二次声明'};
+  return link.records.filter(item=>item.id!==rowId).map(item=>
+    `<button type="button" class="declaration-related-link" data-declaration-related="${item.id}">${esc(labels[item.role]||'对应'+item.level_name)} #${item.id} ↗</button>`
+  ).join('');
+}
+
+function declarationRecordCard(row,levels=[],types=[],readOnly=false){
   const material=row=>row.document_url?`<button type="button" class="secondary declaration-material" data-file-preview="${esc(row.document_url)}" data-file-kind="pdf" data-file-title="${esc(row.employee_name)}的处分材料">查看材料</button> <a class="secondary declaration-material" href="${esc(portalPath(row.document_url))}" download>下载材料</a>`:'<span class="field-hint">暂无可查看材料</span>';
   const standalone=row=>!row.upgrade_request_id&&!row.upgrade_role&&!row.upgrade_links?.length;
   const admin=()=>!readOnly&&has('SYSTEM_ADMIN');
@@ -25,16 +39,36 @@ function declarationRecordDetails(rows,levels=[],types=[],readOnly=false){
   const actions=row=>admin()&&standalone(row)&&(editable(row)||row.raw_status==='void')?`<button type="button" class="secondary declaration-status-action" data-declaration-action="${row.raw_status==='void'?'restore':'void'}" data-record-id="${row.id}">${row.raw_status==='void'?'还原':'作废'}</button>`:'';
   const level=row=>editable(row)?`<select class="declaration-level-select" aria-label="修改${esc(row.employee_name)}的处分等级" data-correct-level="${row.id}" data-original-level="${row.level_id}">${levels.filter(x=>Object.hasOwn(declarationLevelTones,x.code)).map(x=>`<option value="${x.id}" ${x.id===row.level_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:`<span class="badge declaration-level tone-${declarationLevelTone(row.level_code)}">${esc(row.level_name)}</span>`;
   const classification=row=>`<div class="declaration-classification"><label><span>类型</span>${type(row)}</label><label><span>等级</span>${level(row)}</label></div>`;
-  const workflow=row=>`<dl class="declaration-workflow"><div><dt>材料</dt><dd>${esc(row.material_status)}</dd></div><div><dt>审核 / 升级</dt><dd>${esc(row.upgrade_status)}</dd></div></dl>`;
-  const operations=row=>`<div class="declaration-operations"><div class="declaration-material-actions">${material(row)}</div>${actions(row)}</div>`;
-  const relation=row=>row.upgrade_links?.length?row.upgrade_links.map(link=>`<div class="declaration-link-row"><span class="field-hint">工单 #${link.request_id} · ${esc(({rejected:'审核不通过',approved:'已升级',pending:'待审核',awaiting_material:'待材料就绪'})[link.status]||link.status)}</span><span>${link.role==='result'?'升级来源':link.role==='source_first'?(link.status==='approved'?'首次声明 · 已参与升级':link.status==='rejected'?'首次声明 · 升级未通过':'首次声明 · 待升级审核'):'第二次声明 · 用于升级'}</span>${link.records.filter(item=>item.id!==row.id).map(item=>`<button type="button" class="declaration-related-link" data-declaration-related="${item.id}">${item.role==='source_first'?'首次声明':item.role==='source_second'?'第二次声明':'对应'+esc(item.level_name||'升级结果')} #${item.id} ↗</button>`).join('')}</div>`).join(''):`<span class="field-hint">${row.upgrade_role||row.upgrade_request_id?'升级关联待核对':row.raw_status==='void'?'已作废 · 不参与有效升级':'无升级关联'}</span>`;
-  const score=row=>{
-    let reason=row.raw_status==='void'?'本条已作废，不计入绩效扣分，原记录和材料留档。':row.raw_status!=='active'?'本条尚未生效，当前不扣分。':row.upgrade_role==='source_second'?'本条是触发升级的第二次声明，不单独扣分；请查看对应备忘录或警告。':row.upgrade_role==='source_first'?(row.actual_points>0?'首次声明的扣分保留；对应备忘录或警告的扣分单独列示。':'首次声明单独计分，是否扣分按本条所属月份判断。'):row.upgrade_role==='result'?'由两张原声明升级生成，实际扣分按本条所属月份判断。':'实际扣分按本条记录所属月份及业务状态判断。';
-    if(row.loa_excluded)reason+=' 本条所属月份为 LOA，不计入该月绩效，原登记分数保留。';
-    return `<section class="declaration-score" aria-label="本条记录计分说明"><div class="declaration-score-summary"><strong class="declaration-score-status">${esc(row.score_status||row.business_status)}</strong><p class="declaration-score-reason">${esc(reason)}</p></div><div class="declaration-score-values"><span class="declaration-performance-score">计入绩效扣分 <strong>${Number.isFinite(row.actual_points)?(row.actual_points?'−'+row.actual_points:'0'):'—'}</strong> 分</span><span class="declaration-registered-score">原登记分数 ${Number.isFinite(row.registered_points)?esc(row.registered_points):'—'} 分</span>${row.deduction_month?`<small>所属月份 ${esc(row.deduction_month)}</small>`:''}</div></section>`;
-  };
-  const content=rows.map(row=>`<article class="declaration-record ${row.upgrade_role==='result'?'declaration-upgrade-result':''}" data-declaration-record="${row.id}"><header class="declaration-record-heading"><div class="declaration-card-identity"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small><span class="field-hint">${esc(row.level_name)} #${row.id}</span><span class="declaration-record-state">记录状态 ${declarationStatusBadge(row.business_status)}</span></div></header><div class="declaration-record-context"><span>${esc(row.attraction_name)}</span><time>事件日期 ${esc(row.occurred_on)}</time>${row.deduction_month?`<span>绩效月份 ${esc(row.deduction_month)}</span>`:''}</div>${score(row)}${classification(row)}<div class="declaration-record-content"><span class="declaration-field-caption">事件内容</span><p class="declaration-description">${esc(row.description)}</p></div>${workflow(row)}${row.raw_status==='void'&&row.void_reason?`<p class="declaration-void-note">作废原因：${esc(row.void_reason)}</p>`:''}<div class="declaration-card-bottom"><div class="declaration-registration"><span class="declaration-field-caption">登记信息</span><strong>${esc(row.submitter_name)}</strong><time>${esc(row.submitted_at)}</time></div>${operations(row)}</div><footer class="declaration-links">${relation(row)}${row.counted_in_statistics===false?'<span class="field-hint">升级来源留档 · 不单独计入汇总和导出</span>':''}</footer></article>`).join('');
-  return `<div class="declaration-desktop declaration-cards">${content}</div><div class="declaration-mobile declaration-cards">${content}</div>`;
+  const history=(row.upgrade_links||[]).filter(link=>link.status==='rejected').map(link=>
+    `<div class="declaration-link-row"><span>工单 #${link.request_id} · ${esc(declarationWorkLabel(link))}</span>${declarationAssociationButtons(link,row.id)}</div>`
+  ).join('');
+  let reason=row.raw_status==='void'?'本条已作废，不计入绩效扣分，原记录和材料留档。':row.raw_status!=='active'?'本条尚未生效，当前不扣分。':row.upgrade_role==='source_second'?'本条是触发升级的第二次声明，不单独扣分；请查看对应备忘录或警告。':row.upgrade_role==='source_first'?(row.actual_points>0?'首次声明的扣分保留；对应备忘录或警告的扣分单独列示。':'首次声明单独计分，是否扣分按本条所属月份判断。'):row.upgrade_role==='result'?'由两张原声明升级生成，实际扣分按本条所属月份判断。':'实际扣分按本条记录所属月份及业务状态判断。';
+  if(row.loa_excluded)reason+=' 本条所属月份为 LOA，不计入该月绩效，原登记分数保留。';
+  const points=Number.isFinite(row.actual_points)?(row.actual_points?'−'+row.actual_points:'0'):'—';
+  return `<article class="declaration-record ${row.upgrade_role==='result'?'declaration-upgrade-result':''}" data-declaration-record="${row.id}"><header class="declaration-record-heading"><div class="declaration-card-identity"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small><span class="field-hint">${esc(row.level_name)} #${row.id}</span>${declarationStatusBadge(row.business_status)}</div></header>
+    <div class="declaration-record-context"><time>事件日期 ${esc(row.occurred_on)}</time>${row.deduction_month?`<span>绩效月份 ${esc(row.deduction_month)}</span>`:''}</div>${classification(row)}
+    <p class="declaration-description">${esc(row.description)}</p>
+    <section class="declaration-score" aria-label="本条记录计分说明"><span class="declaration-score-status">${esc(row.score_status||row.business_status)}</span><span class="declaration-performance-score">实际扣分 <strong>${points}</strong> 分</span></section>
+    <div class="declaration-operations"><div class="declaration-material-actions">${material(row)}</div>${actions(row)}</div>
+    <details class="declaration-card-details"><summary>详情${history?'及审核历史':''}</summary><div class="declaration-record-context"><span>${esc(row.attraction_name)}</span><span>${esc(row.submitter_name)} · ${esc(row.submitted_at)}</span><span>${esc(row.material_status)}</span></div>
+    <p class="declaration-score-reason">${esc(reason)}</p><p class="declaration-registered-score">原登记分数 ${Number.isFinite(row.registered_points)?esc(row.registered_points):'—'} 分</p>
+    ${row.void_reason?`<p class="declaration-void-note">作废原因：${esc(row.void_reason)}</p>`:''}${history}</details></article>`;
+}
+
+function declarationRecordDetails(row,levels,types,related,group){
+  const work=currentDeclarationUpgrade(row);
+  const member=role=>related.get(work?.records.find(item=>item.role===role)?.id);
+  const left=member('source_first')||row;
+  const right=work?`<header class="declaration-upgrade-heading"><strong>工单 #${work.request_id}</strong><span class="badge warn">${esc(declarationWorkLabel(work))}</span></header>
+    <div class="declaration-upgrade-records" data-declaration-upgrade-records>${['source_second','result'].map(role=>{
+      const record=member(role);
+      if(!record||record.id===left.id)return '';
+      const label=role==='source_second'?'第二张声明':record.level_name;
+      return `<details class="declaration-upgrade-member" name="${esc(group)}-links-${row.id}" data-declaration-member="${record.id}"${record.id===row.id?' open':''}>
+        <summary class="declaration-summary"><strong>${esc(label)} #${record.id}</strong><time datetime="${esc(record.occurred_on)}">${esc(record.occurred_on)}</time></summary>
+        ${declarationRecordCard(record,levels,types,true)}</details>`;
+    }).join('')}</div>`:left.upgrade_slot_open?`<div class="declaration-upgrade-placeholder"><strong>等待第二张声明</strong><p>三个月内如有符合规则的第二张声明，可发起升级。</p></div>`:'';
+  return `<section class="declaration-pair" data-declaration-pair="${left.id}"><div class="declaration-original">${declarationRecordCard(left,levels,types,left.id!==row.id)}</div><aside class="declaration-upgrade-side" data-declaration-side${right?' data-default-side':' hidden'}>${right}<div data-declaration-relation-view class="declaration-relation-view" aria-live="polite" hidden></div></aside></section>`;
 }
 
 async function renderDeclarationStatistics(){
@@ -56,23 +90,63 @@ async function renderDeclarationStatistics(){
     const details=data.detail_records||data.records;
     const related=new Map([...details,...(data.related_records||[])].map(row=>[row.id,row]));
     const bindRelations=detail=>{
-      const area=detail.querySelector('[data-declaration-relation-view]');
-      let trigger=null;
+      const triggers=new WeakMap();
       detail.onclick=event=>{
+        const summary=event.target.closest('[data-declaration-member] > summary');
+        const member=summary?.parentElement;
+        if(member&&!member.open&&matchMedia('(max-width: 760px)').matches){
+          // The native accordion closes its previous member above this summary.
+          requestAnimationFrame(()=>{
+            if(!member.open||!member.closest('[data-declaration-list-row][open]')||!summary.getClientRects().length)return;
+            const top=Math.max(0,document.querySelector('.app-topbar')?.getBoundingClientRect().bottom??0);
+            const tabs=document.getElementById('tabs');
+            const bottom=tabs?.getClientRects().length?tabs.getBoundingClientRect().top:innerHeight;
+            const summaryTop=summary.getBoundingClientRect().top;
+            const headingBottom=member.querySelector('.declaration-record-heading').getBoundingClientRect().bottom;
+            if(summaryTop<top||headingBottom>bottom)window.scrollBy({top:summaryTop-top-8,behavior:'instant'});
+          });
+        }
         const button=event.target.closest('[data-declaration-related],[data-declaration-relation-close]');
         if(!button)return;
-        if(button.hasAttribute('data-declaration-relation-close')){area.hidden=true;trigger?.focus({preventScroll:true});return;}
+        const pair=button.closest('[data-declaration-pair]');
+        const side=pair.querySelector('[data-declaration-side]');
+        const area=side.querySelector('[data-declaration-relation-view]');
+        const records=side.querySelector('[data-declaration-upgrade-records]');
+        if(button.hasAttribute('data-declaration-relation-close')){
+          area.hidden=true;
+          area.replaceChildren();
+          if(records)records.hidden=false;
+          side.hidden=!side.hasAttribute('data-default-side');
+          triggers.get(area)?.focus({preventScroll:true});
+          return;
+        }
         const row=related.get(Number(button.dataset.declarationRelated));
         if(!row)return;
-        if(!area.contains(button))trigger=button;
+        if(!area.contains(button))triggers.set(area,button);
+        const links=(row.upgrade_links||[]).filter(link=>link.status!=='rejected').map(link=>declarationAssociationButtons(link,row.id)).join('');
+        side.hidden=false;
         area.hidden=false;
-        area.innerHTML=`<div class="declaration-relation-heading"><h3>关联记录 · ${esc(row.level_name)} #${row.id}</h3><span class="field-hint">关联查看不受当前月份、等级或类型筛选限制</span><button type="button" class="secondary" data-declaration-relation-close>收起关联</button></div>${declarationRecordDetails([row],data.levels,data.types,true)}`;
+        if(records)records.hidden=true;
+        area.innerHTML=`<div class="declaration-relation-heading"><h3>关联记录 · ${esc(row.level_name)} #${row.id}</h3><button type="button" class="secondary" data-declaration-relation-close>收起关联</button></div>${declarationRecordCard(row,data.levels,data.types,true)}${links?`<div class="declaration-link-row declaration-upgrade-links">${links}</div>`:''}`;
         bindFilePreviews(area);
-        area.scrollIntoView({block:'nearest'});
-        area.querySelector('[data-declaration-relation-close]')?.focus({preventScroll:true});
+        area.querySelector('[data-declaration-relation-close]').focus({preventScroll:true});
+        if(matchMedia('(max-width: 760px)').matches)area.scrollIntoView({block:'nearest'});
       };
     };
-    const openDetails=(detail,rows)=>{detail.innerHTML='<div data-declaration-relation-view class="declaration-relation-view" aria-live="polite" hidden></div>'+declarationRecordDetails(rows,data.levels,data.types);bindFilePreviews(detail);bindLevelCorrections(detail,data);bindRelations(detail);};
+    const openDetails=(detail,rows)=>{
+      const group=`declaration-list-${detail.dataset.declarationCircleDetail??detail.dataset.declarationLevelDetail}`;
+      detail.innerHTML=rows.length?rows.map(row=>`<details class="declaration-list-row" data-declaration-list-row="${row.id}" name="${esc(group)}">
+        <summary class="declaration-summary"><span class="declaration-summary-person"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small><time datetime="${esc(row.occurred_on)}">${esc(row.occurred_on)}</time></span><span class="declaration-summary-action"><span>查看内容 ›</span><span>收起内容 ⌃</span></span></summary>
+        <div class="declaration-cards declaration-list-content"></div></details>`).join(''):'<div class="empty">当前范围没有符合条件的记录</div>';
+      detail.querySelectorAll('[data-declaration-list-row]').forEach((item,index)=>{
+        const content=item.lastElementChild;
+        item.addEventListener('toggle',()=>{
+          if(!item.open||content.hasChildNodes())return;
+          content.innerHTML=declarationRecordDetails(rows[index],data.levels,data.types,related,group);
+          bindFilePreviews(content);bindLevelCorrections(content,data);bindRelations(content);
+        });
+      });
+    };
     const cards=`<div class="declaration-kpis"><div class="trend-card declaration-total"><span class="trend-card-label">总记录数</span><strong>${data.total_records}</strong></div><div class="trend-card declaration-total"><span class="trend-card-label">涉及人数</span><strong>${data.employee_count}</strong></div>${data.levels.map(row=>`<div class="trend-card declaration-kpi tone-${declarationLevelTone(row.code)}"><span class="trend-card-label">${esc(row.name)}</span><strong>${row.count}</strong></div>`).join('')}</div>`;
     const statuses=`<div class="declaration-statuses">${Object.entries(data.statuses).map(([name,count])=>`<span class="declaration-status-count">${declarationStatusBadge(name)}<strong>${count} 条</strong></span>`).join('')}</div>`;
     const displayCircles=[...data.circles];
@@ -81,9 +155,9 @@ async function renderDeclarationStatistics(){
       const key=circle.attraction_id===null?'none':String(circle.attraction_id);
       const rows=details.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===key);
       const displayLevels=data.levels.filter(level=>rows.some(row=>row.level_id===level.id)).map(level=>({...level,count:circle.levels.find(item=>item.id===level.id)?.count||0,details:rows.filter(row=>row.level_id===level.id).length}));
-      return `<section class="declaration-circle"><button type="button" class="declaration-circle-toggle" data-declaration-circle="${esc(key)}" aria-expanded="false"><strong>${esc(circle.attraction_name)}</strong><span>${circle.record_count} 条计入汇总 · ${rows.length} 张卡片</span><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-circle-detail="${esc(key)}" hidden></div><div class="declaration-levels">${displayLevels.map(level=>`<div class="declaration-level-item"><button type="button" class="declaration-level-toggle tone-${declarationLevelTone(level.code)}" data-declaration-level="${esc(key)}:${level.id}" aria-expanded="false"><span>${esc(level.name)}</span><strong>${level.count} 条计入汇总 · ${level.details} 张卡片</strong><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-level-detail="${esc(key)}:${level.id}" hidden></div></div>`).join('')}</div></section>`;
+      return `<section class="declaration-circle"><button type="button" class="declaration-circle-toggle" data-declaration-circle="${esc(key)}" aria-expanded="false"><strong>${esc(circle.attraction_name)}</strong><span>${circle.record_count} 条计入汇总 · ${rows.length} 条明细</span><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-circle-detail="${esc(key)}" hidden></div><div class="declaration-levels">${displayLevels.map(level=>`<div class="declaration-level-item"><button type="button" class="declaration-level-toggle tone-${declarationLevelTone(level.code)}" data-declaration-level="${esc(key)}:${level.id}" aria-expanded="false"><span>${esc(level.name)}</span><strong>${level.count} 条计入汇总 · ${level.details} 条明细</strong><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-level-detail="${esc(key)}:${level.id}" hidden></div></div>`).join('')}</div></section>`;
     }).join('')||'<div class="empty">当前筛选范围暂无声明登记记录</div>';
-    host.innerHTML=`<section class="panel"><h2>月度汇总</h2><p class="statistics-scope">${esc(data.month)} · ${data.total_records} 条记录；点击景点圈或处分等级可展开明细，再次点击收起。</p>${cards}${statuses}<div class="declaration-circle-list">${circles}</div></section>`;
+    host.innerHTML=`<section class="panel"><h2>月度汇总</h2><p class="statistics-scope">${esc(data.month)} · ${data.total_records} 条记录；展开景点圈或处分等级查看列表，点击单条查看内容。</p>${cards}${statuses}<div class="declaration-circle-list">${circles}</div></section>`;
     host.querySelectorAll('[data-declaration-circle]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationCircle,detail=host.querySelector(`[data-declaration-circle-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;button.setAttribute('aria-expanded',String(open));if(open)openDetails(detail,details.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===key));else detail.replaceChildren();});
     host.querySelectorAll('[data-declaration-level]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationLevel,[circleId,levelId]=key.split(':'),detail=host.querySelector(`[data-declaration-level-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;button.setAttribute('aria-expanded',String(open));if(open)openDetails(detail,details.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===circleId&&String(row.level_id)===levelId));else detail.replaceChildren();});
   };

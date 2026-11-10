@@ -116,6 +116,11 @@ def test_formal_and_acting_leaders_split_reviewing_and_viewing() -> None:
         assert record_id not in {row["id"] for row in client.get("/api/reviews").json()["items"]}
         viewed = client.get("/api/member-records", params={"record_type": "recognition"}).json()
         assert record_id in {row["id"] for row in viewed}
+        summary = client.get("/api/member-score-summary")
+        assert summary.status_code == 200, summary.text
+        roster = summary.json()
+        assert employee_id("CMTEST01") in {row["employee_id"] for row in roster["rows"]}
+        assert roster["member_count"] == client.get("/api/me").json()["member_count"] < len(roster["rows"])
         login(client, "TATEST01")
         assert record_id in {row["id"] for row in client.get("/api/reviews").json()["items"]}
         assert client.post(f"/api/reviews/{record_id}", json={"action": "confirm"}).status_code == 200

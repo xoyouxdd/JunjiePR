@@ -36,6 +36,25 @@ def read_event(db, event_id, user):
     return event
 
 
+def pending_redemption(db, employee_id):
+    count, cost, title, state = db.query(
+        func.count(ActivityAward.id), func.sum(ActivityAward.cost),
+        func.max(Activity.title), func.max(ActivityAward.state),
+    ).select_from(ActivityAward).join(ActivityLot).join(Activity).filter(
+        ActivityAward.employee_id == employee_id,
+        ActivityAward.cost > 0,
+        ActivityAward.state.in_(("pending", "ready", "issued", "disputed")),
+    ).one()
+    if not count:
+        return None
+    return {
+        "count": count,
+        "cost": cost,
+        "title": title if count == 1 else None,
+        "state": state if count == 1 else None,
+    }
+
+
 def listing(db, user, page, page_size, view):
     query = scoped(db, user)
     if view == 'manage':

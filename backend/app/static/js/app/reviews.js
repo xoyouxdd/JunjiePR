@@ -82,28 +82,49 @@ function bindReviewActions(showHistory=false,offset=0){
   });
 }
 
-function upgradeReviewCards(items){
-  return items.map(row=>`<article class="group-card" data-upgrade="${row.id}"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge warn">待审核</span></div><p>${esc(row.deduction_type)} · 提交人：${esc(row.submitted_by)} · ${esc(row.created_at)}</p><p><strong>A1：</strong>${esc(row.first_record?.occurred_on||'')} · ${esc(row.first_record?.description||'')} ${attachmentControl(row.first_record?.document_url||'','查看A1声明',row.first_record?.document_preview_kind||'')}</p><p><strong>A2：</strong>${esc(row.second_record?.occurred_on||'')} · ${esc(row.second_record?.description||'')} ${attachmentControl(row.second_record?.document_url||'','查看A2声明',row.second_record?.document_preview_kind||'')}</p><p class="field-hint">${esc(row.minimum_level_error||'仅两张原声明参与升级；结果按实际开具的备忘录或一级警告确认。')}</p><div class="actions"><button type="button" class="secondary" data-upgrade-transfer="${row.id}">转交工单</button><button type="button" class="danger" data-upgrade-reject="${row.id}">不通过</button><button type="button" class="primary" data-upgrade-approve="${row.id}" ${row.minimum_level_error?'disabled':''}>同意升级</button></div></article>`).join('')||'<p class="empty">暂无声明升级待审核工单</p>';
+function upgradeReviewCards(items, assisting=false){
+  return items.map(row=>`<article class="group-card" data-upgrade="${row.id}"><div class="record-line"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge warn">待审核</span></div><p>${esc(row.deduction_type)} · 指定审核人：${esc(row.reviewer_name)} · 提交人：${esc(row.submitted_by)} · ${esc(row.created_at)}</p><p><strong>A1：</strong>${esc(row.first_record?.occurred_on||'')} · ${esc(row.first_record?.description||'')} ${attachmentControl(row.first_record?.document_url||'','查看A1声明',row.first_record?.document_preview_kind||'')}</p><p><strong>A2：</strong>${esc(row.second_record?.occurred_on||'')} · ${esc(row.second_record?.description||'')} ${attachmentControl(row.second_record?.document_url||'','查看A2声明',row.second_record?.document_preview_kind||'')}</p><p class="field-hint">${esc(row.minimum_level_error||'仅两张原声明参与升级；结果按实际开具的备忘录或一级警告确认。')}</p><div class="actions"><button type="button" class="danger" data-upgrade-reject="${row.id}">${assisting?'协助判定不通过':'不通过'}</button><button type="button" class="primary" data-upgrade-approve="${row.id}" ${row.minimum_level_error?'disabled':''}>${assisting?'协助同意升级':'同意升级'}</button></div></article>`).join('')||'<p class="empty">暂无声明升级待审核工单</p>';
+}
+
+function upgradeReviewWorkspace(data){
+  const items=data.items||[],mine=items.filter(row=>row.reviewer_id===state.me.id);
+  const assisting=items.filter(row=>row.reviewer_id!==state.me.id);
+  const notices=(data.notices||[]).map(row=>{
+    const outcome=row.status==='approved'?(row.result_level?'审核通过 · 已开具'+row.result_level:'审核通过'):'审核不通过';
+    return `<article class="group-card" data-upgrade-notice="${row.id}"><div class="record-line"><strong>${esc(row.employee_name)} · 工单 #${row.id}</strong><span class="badge">已处理</span></div><p>${esc(row.resolved_by_name)} 已协助处理 · ${esc(outcome)}</p><p class="field-hint">${esc(row.resolved_at)}</p><button type="button" class="secondary" data-dismiss-upgrade-notice="${row.id}">关闭提醒</button></article>`;
+  }).join('');
+  return `${notices?`<h3>协助结果</h3>${notices}`:''}<h3>我的待审核</h3>${upgradeReviewCards(mine)}<h3>可协助</h3>${upgradeReviewCards(assisting,true)}`;
 }
 
 function bindUpgradeReviewActions(root,refresh){const page=captureViewContext();
+  const showError=error=>{
+    toast(error.message,true);
+    if(error.detail?.code==='UPGRADE_ALREADY_RESOLVED')page.refresh(refresh);
+  };
+  root.querySelectorAll('[data-dismiss-upgrade-notice]').forEach(button=>button.onclick=async()=>{
+    button.disabled=true;
+    try{
+      await api('/api/deduction-upgrades/'+button.dataset.dismissUpgradeNotice+'/dismiss-notice',json('POST',{}));
+      page.refresh(refresh);
+    }catch(error){toast(error.message,true);}
+    finally{button.disabled=false;}
+  });
   const levels=(state.options.deduction_levels||[]).filter(x=>['MEMO','WARNING_1'].includes(x.code));
   bindFilePreviews(root);
-  root.querySelectorAll('[data-upgrade-transfer]').forEach(button=>button.onclick=async()=>{const reviewers=await api('/api/deduction-upgrades/reviewers');if(!page.isCurrent())return;const options=reviewers.items||[];const id=await selectModal('转交声明升级工单','请选择新的审核 MOD（GSM / TA GSM）。',options.map(x=>({id:x.id,label:`${x.name} · ${x.employee_no} · ${x.role_name}`})),'下一步');if(!id)return;const reason=await promptModal('转交说明','请输入转交原因（必填）','转交原因','确认转交');if(!reason)return;try{await api('/api/deduction-upgrades/'+button.dataset.upgradeTransfer+'/transfer',json('POST',{reviewer_id:id,reason}));toast('工单已转交');page.refresh(refresh)}catch(error){toast(error.message,true)}});
-  root.querySelectorAll('[data-upgrade-reject]').forEach(button=>button.onclick=async()=>{const note=await promptModal('不通过声明升级','请填写处理说明（必填）','处理说明','确认不通过');if(!note)return;try{await api('/api/deduction-upgrades/'+button.dataset.upgradeReject+'/resolve',json('POST',{decision:'reject',handling_note:note}));toast('工单已处理，第二条声明已作废');page.refresh(refresh)}catch(error){toast(error.message,true)}});
-  root.querySelectorAll('[data-upgrade-approve]').forEach(button=>button.onclick=async()=>{const levelId=await selectModal('选择升级结果','请选择真实开具的处分结果。',levels.map(x=>({id:x.id,label:`${x.name} · ${fmt(x.points)}分`})),'下一步');if(!levelId)return;const note=await promptModal('处理说明','请输入处理说明（必填）','处理说明','下一步');if(!note)return;const done=await confirmModal('确认真实处分已完成开具',`<p>请确认已完成真实备忘录或一级警告开具。</p><p>确认后系统将生效扣分，第二条声明不计分。</p>`,'是，已完成开具并继续');if(!done)return;try{await api('/api/deduction-upgrades/'+button.dataset.upgradeApprove+'/resolve',json('POST',{decision:'approve',result_level_id:levelId,handling_note:note,issued_confirmed:true}));toast('升级处分已生效');page.refresh(refresh)}catch(error){toast(error.message,true)}});
+  root.querySelectorAll('[data-upgrade-reject]').forEach(button=>button.onclick=async()=>{const note=await promptModal('不通过声明升级','请填写处理说明（必填）','处理说明','确认不通过');if(!note)return;try{await api('/api/deduction-upgrades/'+button.dataset.upgradeReject+'/resolve',json('POST',{decision:'reject',handling_note:note}));toast('工单已处理，第二条声明已作废');page.refresh(refresh)}catch(error){showError(error)}});
+  root.querySelectorAll('[data-upgrade-approve]').forEach(button=>button.onclick=async()=>{const levelId=await selectModal('选择升级结果','请选择真实开具的处分结果。',levels.map(x=>({id:x.id,label:`${x.name} · ${fmt(x.points)}分`})),'下一步');if(!levelId)return;const note=await promptModal('处理说明','请输入处理说明（必填）','处理说明','下一步');if(!note)return;const done=await confirmModal('确认真实处分已完成开具',`<p>请确认已完成真实备忘录或一级警告开具。</p><p>确认后系统将生效扣分，第二条声明不计分。</p>`,'是，已完成开具并继续');if(!done)return;try{await api('/api/deduction-upgrades/'+button.dataset.upgradeApprove+'/resolve',json('POST',{decision:'approve',result_level_id:levelId,handling_note:note,issued_confirmed:true}));toast('升级处分已生效');page.refresh(refresh)}catch(error){showError(error)}});
 }
 
 async function renderUpgradeReview(){
   const request=beginViewRequest();
-  const data=await api('/api/deduction-upgrades/pending'),items=data.items||[];
+  const data=await api('/api/deduction-upgrades/pending');
   if(!request.isCurrent())return;
-  if(!request.write(`<section class="panel"><h2>待审核 · 声明升级审核</h2><p>该页面已并入“待办中心”的待审核标签，此入口仅用于兼容已打开页面。</p><div class="governance-case-list">${upgradeReviewCards(items)}</div></section>`))return;
+  if(!request.write(`<section class="panel"><h2>待审核 · 声明升级审核</h2><p>该页面已并入“待办中心”的待审核标签，此入口仅用于兼容已打开页面。</p><div class="governance-case-list">${upgradeReviewWorkspace(data)}</div></section>`))return;
   bindUpgradeReviewActions(app,renderUpgradeReview);
 }
 
 function upgradeRecoveryCards(items){
-  return items.map(row=>`<article class="group-card" data-upgrade-recovery="${row.id}"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><p>审核经理已失效：${esc(row.reviewer_name)} · ${esc(row.status_name)}</p><p>原声明和材料保留，重新指派后继续处理。</p><button type="button" class="secondary" data-recover-upgrade="${row.id}">重新选择审核经理</button></article>`).join('');
+  return items.map(row=>`<article class="group-card" data-upgrade-recovery="${row.id}"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><p>${row.awaiting_reviewer?'原指定审核经理':'审核经理已失效'}：${esc(row.reviewer_name)} · ${esc(row.status_name)}</p><p>${row.awaiting_reviewer?'PDF 已生成，重新指派后可直接进入审核。':'原声明和材料保留，重新指派后继续处理。'}</p><button type="button" class="secondary" data-recover-upgrade="${row.id}">重新选择审核经理</button></article>`).join('');
 }
 
 function bindUpgradeRecoveryActions(root,data,refresh){
@@ -113,7 +134,7 @@ function bindUpgradeRecoveryActions(root,data,refresh){
     if(!row)return;
     const id=await selectModal('重新指派审核经理','原声明、材料和历史记录将保留。',(data.reviewers||[]).map(r=>({id:r.id,label:`${r.name} · ${r.employee_no} · ${r.role_name}`})),'下一步');
     if(!id||!page.isCurrent())return;
-    const reason=await promptModal('重新指派原因','请说明原经理失效后的接手原因。','原因','确认重新指派');
+    const reason=await promptModal('重新指派原因','请说明重新指派的原因。','原因','确认重新指派');
     if(!reason||!page.isCurrent())return;
     button.disabled=true;
     try{await api('/api/deduction-upgrades/'+row.id+'/recover',json('POST',{reviewer_id:Number(id),expected_reviewer_id:row.reviewer_id,expected_status:row.status,reason}));toast('审核经理已重新指派');page.refresh(refresh);}
@@ -124,4 +145,4 @@ function bindUpgradeRecoveryActions(root,data,refresh){
 function renderSupervisorReview(){reviewApiBase='/api/supervisor-reviews';return renderReview();}
 function renderFrontlineReview(){reviewApiBase='/api/reviews';return renderReview();}
 
-export { bindUpgradeReviewActions, bindUpgradeRecoveryActions, upgradeRecoveryCards, renderFrontlineReview, renderSupervisorReview, renderUpgradeReview, upgradeReviewCards };
+export { bindUpgradeReviewActions, bindUpgradeRecoveryActions, upgradeRecoveryCards, renderFrontlineReview, renderSupervisorReview, renderUpgradeReview, upgradeReviewCards, upgradeReviewWorkspace };
