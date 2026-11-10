@@ -111,7 +111,7 @@ def test_prestart_unseated_seven_and_seven_fifteen_rest_timers_start_at_own_shif
 def test_scheduled_opening_is_reserved_but_cannot_execute_before_allowed_time():
     day='2026-10-08';pid='9100001'
     with TestClient(app) as manager,TestClient(app) as member:
-        setup(manager,day,[{'name':'迎宾','openAt':'08:15'}],[(pid,'加岗人员','07:15-16:15')],time='08:12')
+        setup(manager,day,[{'name':'定时加岗测试岗','openAt':'08:15'}],[(pid,'加岗人员','07:15-16:15')],time='08:12')
         login(member,'TRTEST01');enter(member,pid)
         p=ok(member.get('/api/rotation/me'))['person']
         assert p['assign']['departAt']==495 and not p['canDepart']
@@ -119,7 +119,7 @@ def test_scheduled_opening_is_reserved_but_cannot_execute_before_allowed_time():
         ok(clock(manager,action='jump',minutes=3))
         p=ok(member.get('/api/rotation/me'))['person'];assert p['task']['allowedAt']==495 and p['task']['deadlineAt']==498
         result=ok(member.post('/api/rotation/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}))
-        assert result['result']['status']=='executed' and result['result']['post']=='迎宾'
+        assert result['result']['status']=='executed' and result['result']['post']=='定时加岗测试岗'
 
 
 def test_personal_confirmation_and_manager_share_receipt_without_impersonation():
