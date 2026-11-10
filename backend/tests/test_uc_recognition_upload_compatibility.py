@@ -58,7 +58,7 @@ def test_recognition_rebuilds_file_payload_and_has_browser_compatibility_fallbac
     assert "function recognitionImageIssueMessage(form)" in script
     assert "当前浏览器不支持本次图片上传" in script
     assert "请先选择认可图片后提交。" in script
-    assert "toast(recognitionImageFailureMessage(x)||x.message,true)" in script
+    assert "toast(recognitionImageFailureMessage(error)||error.message,true)" in script
 
 
 def test_recognition_validation_returns_auditable_confirmed_compatibility_error() -> None:
