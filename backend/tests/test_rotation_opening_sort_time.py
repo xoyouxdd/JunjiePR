@@ -13,8 +13,7 @@ from test_rotation_forecast_api import rotation, current, board, act, person, DA
 def opening_engine(header=435):
     eng = fixture()
     eng.line('A')['sortAt'] = header
-    eng.line('A')['posts'].append(dict(name='新增岗位',key='new-post',occ=None,open=True,opened=True,manual=False,since=None))
-    eng.line('A')['adding'] = True
+    eng.line('A')['posts'].append(dict(name='新增岗位',key='new-post',occ=None,open=True,opened=True,manual=False,since=None,openRequest=True))
     return eng
 
 
@@ -25,7 +24,7 @@ def test_opening_keeps_actual_header_and_clears_only_completed_demand(header):
     assert eng.P['new0']['assign']['kind'] == 'opening'
     assert eng.d['lines'] == before
     assert F.execute(eng,'new0',600,'test','A')['executed']
-    assert eng.line('A')['sortAt'] == header and not eng.line('A')['adding']
+    assert eng.line('A')['sortAt'] == header and not eng.line('A')['posts'][-1].get('openRequest')
     assert occupants(eng) == ['new0','A0','A1','A2']
     assert eng.P['new0']['state'] == 'onpost' and eng.P['new0']['assign'] is None
     assert eng.P['new0']['lineStart'] == eng.line('A')['posts'][0]['since'] == 600
@@ -58,7 +57,7 @@ def test_manual_drag_keeps_its_separate_explicit_option_on_an_adding_line(reques
     eng = opening_engine()
     F.manual_place(eng,'new0','A',0,'push',600,'test',update_sort_time=requested)
     assert eng.line('A')['sortAt'] == (600 if requested else 435)
-    assert not eng.line('A')['adding']
+    assert not eng.line('A')['posts'][-1].get('openRequest')
 
 
 def add_day_post(r):
