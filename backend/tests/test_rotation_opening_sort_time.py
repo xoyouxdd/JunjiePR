@@ -53,10 +53,11 @@ def test_overnight_opening_keeps_header_and_uses_actual_post_time():
 
 
 @pytest.mark.parametrize('requested',[False,True])
-def test_manual_drag_keeps_its_separate_explicit_option_on_an_adding_line(requested):
+def test_manual_drag_filling_opening_keeps_header_regardless_of_option(requested):
     eng = opening_engine()
     F.manual_place(eng,'new0','A',0,'push',600,'test',update_sort_time=requested)
-    assert eng.line('A')['sortAt'] == (600 if requested else 435)
+    assert eng.line('A')['sortAt'] == 435
+    assert occupants(eng) == ['new0','A0','A1','A2']
     assert not eng.line('A')['posts'][-1].get('openRequest')
 
 
