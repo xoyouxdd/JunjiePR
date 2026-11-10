@@ -26,7 +26,7 @@ async function main(){try{
     const board=async()=>(await ok(await request.get(base+'/api/rotation/board'))).day;
     for(let i=0;i<2;i++){
       const name='顺序验证'+i;
-      await post({action:'add_person',temporary:true,name,start:'07:00',end:'20:00'});
+      await post({action:'add_person',temporary:true,name,start:'07:15',end:'20:00'});
       const pid=(await board()).persons.find(p=>p.name===name).pid;
       await post({action:'pool',pid,pool:'rest'});await post({action:'break_time',pid,remaining:0});
     }
