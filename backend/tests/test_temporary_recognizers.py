@@ -297,7 +297,8 @@ def test_temporary_issuer_and_operator_do_not_count_as_leader_signers(setup, leg
 def test_rehire_cancels_old_upcoming_qualification_and_keeps_historical_recognition(setup, monkeypatch):
     client, eid, circle, number = setup
     today = date.today()
-    day, past = today.isoformat(), (today-timedelta(days=10)).isoformat()
+    day = today.isoformat()
+    past = min(today - timedelta(days=10), today.replace(day=1) - timedelta(days=1)).isoformat()
     last = (today.replace(day=28)+timedelta(days=4)).replace(day=1)-timedelta(days=1)
     assert save(client, eid, sorted({day,last.isoformat()})).status_code == 200
     with SessionLocal() as db:
