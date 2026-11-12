@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from sqlalchemy import update
+from sqlalchemy import tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
@@ -13,7 +14,7 @@ from app.backup_management import backup_todo_dismissed, claim_manual_backup, he
 from app.score_queries import month_score_employee_ids
 from app.month_closure import month_close_period_policy, month_close_work_queries, reserve_month_write
 from app.services.monthly_ranks import capture_month_ranks, prepare_rank_attendance
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, direct_member_ids, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
+from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
 from app.routers._shared import (
     MATERIAL_COLLABORATOR_CODES,
     MONTH_CLOSE_EFFECTIVE_DATE,
@@ -116,16 +117,22 @@ def action_center_wait_hours(submitted_at: datetime, now: datetime) -> float:
     return round(max(0, (now - submitted_at).total_seconds()) / 3600, 1)
 
 
-def action_center_recognition_details(db: Session, rows: list[RecognitionRecord], now: datetime) -> list[dict]:
-    reviewer_ids = {row.assigned_reviewer_id for row in rows if row.assigned_reviewer_id}
+def action_center_recognition_details(
+    db: Session, rows: list[RecognitionRecord], now: datetime, *, current_reviewer: V2User | None = None,
+) -> list[dict]:
+    reviewer_ids = {row.assigned_reviewer_id for row in rows if row.assigned_reviewer_id} if current_reviewer is None else set()
     reviewers = {
         employee.id: employee
         for employee in db.query(Employee).filter(Employee.id.in_(reviewer_ids)).all()
     } if reviewer_ids else {}
     details = []
     for row in rows:
-        reviewer = reviewers.get(row.assigned_reviewer_id)
-        reviewer_role = role_at(db, reviewer.id) if reviewer else None
+        if current_reviewer is None:
+            reviewer = reviewers.get(row.assigned_reviewer_id)
+            reviewer_role = role_at(db, reviewer.id) if reviewer else None
+        else:
+            reviewer = current_reviewer.employee
+            reviewer_role = current_reviewer.role
         group = current_group_for_employee(db, row.employee_id)
         details.append({
             "group_name": group.name if group else "未分组",
@@ -222,14 +229,13 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
         if pending_supervisor:
             items.append(action_center_item("supervisor_review", "主管待复核签卡", pending_supervisor, "supervisorReview", "warning", "主管本人提交的签卡由任一正式GSM复核（不限景点圈）；代理TA GSM期间的签卡也可由AM复核，不含本人，OM不能复核。"))
 
-    if role_code in LEADER_CODES:
-        member_ids = direct_member_ids(db, user.id)
-        pending_reviews = db.query(RecognitionRecord).filter(
-            RecognitionRecord.employee_id.in_(member_ids) if member_ids else RecognitionRecord.id == -1,
-            RecognitionRecord.status == "pending",
-        ).count()
+    if "REVIEW_DIRECT" in user.permissions:
+        from app.routers.recognitions import direct_review_query
+
+        pending_reviews = direct_review_query(db, user.id, pending=True).count()
         if pending_reviews:
             items.append(action_center_item("recognition_review", "待复核签卡", pending_reviews, "review", "warning", "直属组员提交的签卡等待复核。"))
+    if role_code in LEADER_CODES:
         follow_ups = db.query(DeductionFollowUp).filter(
             DeductionFollowUp.supervisor_id == user.id,
             DeductionFollowUp.status == "pending",
@@ -338,8 +344,41 @@ def retry_backup(background_tasks: BackgroundTasks, request: Request, db: Sessio
     return {"ok": True, "message": "手动备份已开始；此操作不会创建或修复每日计划任务"}
 
 
+def recognition_detail_page(query, page_size: int, cursor: str | None, direction: str):
+    timestamp, record_id = RecognitionRecord.submitted_at, RecognitionRecord.id
+    order_key = tuple_(timestamp, record_id)
+    if cursor is None:
+        rows = query.order_by(timestamp, record_id).limit(page_size).all()
+    else:
+        try:
+            submitted_at, raw_id = cursor.split("|")
+            anchor = datetime.fromisoformat(submitted_at), int(raw_id)
+            if anchor[0].tzinfo is not None or not 0 < anchor[1] < 2**63:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(400, "翻页位置无效，请重新打开明细") from None
+        if direction == "previous":
+            rows = query.filter(order_key < anchor).order_by(timestamp.desc(), record_id.desc()).limit(page_size).all()
+            rows.reverse()
+        else:
+            rows = query.filter(order_key > anchor).order_by(timestamp, record_id).limit(page_size).all()
+
+    previous_cursor = next_cursor = None
+    if rows:
+        first, last = rows[0], rows[-1]
+        if query.filter(order_key < (first.submitted_at, first.id)).first() is not None:
+            previous_cursor = f"{first.submitted_at.isoformat()}|{first.id}"
+        if query.filter(order_key > (last.submitted_at, last.id)).first() is not None:
+            next_cursor = f"{last.submitted_at.isoformat()}|{last.id}"
+    return rows, previous_cursor, next_cursor
+
+
 @router.get("/action-center/{item_type}/details")
-def action_center_details(item_type: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+def action_center_details(
+    item_type: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100),
+    cursor: str | None = Query(None, max_length=64), direction: Literal["next", "previous"] = "next",
+    db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
     """Expose only the concrete records behind a visible action-center item."""
     now = datetime.now()
     role_code = user.role.code
@@ -417,14 +456,18 @@ def action_center_details(item_type: str, page: int = Query(1, ge=1), page_size:
         return {"type": item_type, "title": "在职CM/TR待分组明细", "items": rows}
 
     if item_type == "recognition_review":
-        if role_code not in LEADER_CODES:
+        if "REVIEW_DIRECT" not in user.permissions:
             raise HTTPException(403, "当前账号不能查看直属签卡复核明细")
-        member_ids = direct_member_ids(db, user.id)
-        rows = db.query(RecognitionRecord).filter(
-            RecognitionRecord.employee_id.in_(member_ids) if member_ids else RecognitionRecord.id == -1,
-            RecognitionRecord.status == "pending",
-        ).order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc()).limit(500).all()
-        return {"type": item_type, "title": "待复核签卡明细", "items": action_center_recognition_details(db, rows, now)}
+        if page > 1 and cursor is None:
+            raise HTTPException(400, "翻页位置已变更，请刷新并重新打开明细")
+        from app.routers.recognitions import direct_review_query
+
+        query = direct_review_query(db, user.id, pending=True)
+        total = query.count()
+        rows, previous_cursor, next_cursor = recognition_detail_page(query, page_size, cursor, direction)
+        return {"type": item_type, "title": "待复核签卡明细", "total": total, "page_size": page_size,
+                "previous_cursor": previous_cursor, "next_cursor": next_cursor,
+                "items": action_center_recognition_details(db, rows, now, current_reviewer=user)}
 
     if item_type == "overdue_review":
         if role_code != "SYSTEM_ADMIN":

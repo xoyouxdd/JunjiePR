@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.role_constants import FRONTLINE_CODES, GSM_CODES, LEADER_CODES
 from app.services.audit import write_audit
-from app.services.identity import base_role_at, duty_code_at, role_at, roles_at
+from app.services.identity import base_role_at, base_roles_at, duties_at_bulk, duty_code_at, role_at, roles_at
 from app.v2_models import (
     Employee, GroupLeaderAssignment, GroupMembership, ManagementScope,
     RecognitionRecord, Role, WorkGroup,
@@ -177,11 +177,7 @@ def _active_leader_query(db: Session, group_id: int, on_date: str | None = None)
 
 def active_group_leader(db: Session, group_id: int, on_date: str | None = None) -> GroupLeaderAssignment | None:
     """The leader running the group: the acting leader if any, else the formal one."""
-    return (
-        _active_leader_query(db, group_id, on_date)
-        .order_by(ACTING_LEADER_FIRST, GroupLeaderAssignment.starts_on.desc(), GroupLeaderAssignment.id.desc())
-        .first()
-    )
+    return active_group_leaders_bulk(db, [group_id], on_date)[group_id]
 
 
 def group_leader_of_type(db: Session, group_id: int, leader_type: str, on_date: str | None = None) -> GroupLeaderAssignment | None:
@@ -304,8 +300,19 @@ def active_group_leaders_bulk(db: Session, group_ids: list[int] | set[int], on_d
         )
         .all()
     )
+    # The duty can end before the lifecycle job closes its group assignment.
+    acting_ids = {row.leader_employee_id for row in rows if row.leader_type == "acting"}
+    base_roles = base_roles_at(db, acting_ids, value)
+    duties = duties_at_bulk(db, acting_ids, value)
+    acting_eligible = {
+        employee_id for employee_id in acting_ids
+        if any(role and role.code in LEADER_CODES
+               for role in [base_roles.get(employee_id), *duties.get(employee_id, [])[:1]])
+    }
     resolved: dict[int, GroupLeaderAssignment | None] = {group_id: None for group_id in ids}
     for row in rows:
+        if row.leader_type == "acting" and row.leader_employee_id not in acting_eligible:
+            continue
         if resolved.get(row.group_id) is None:
             resolved[row.group_id] = row
     return resolved
@@ -382,9 +389,10 @@ def direct_member_ids(
     if formal_groups:
         # An acting leader inside the group they run is reviewed by its formal leader.
         formal_members = members_of([group.id for group in formal_groups])
+        running_leaders = active_group_leaders_bulk(db, [group.id for group in formal_groups], today)
         for group in formal_groups:
-            acting = group_leader_of_type(db, group.id, "acting", today)
-            if acting and acting.leader_employee_id in formal_members:
+            acting = running_leaders[group.id]
+            if acting and acting.leader_type == "acting" and acting.leader_employee_id in formal_members:
                 result.add(acting.leader_employee_id)
         if include_overseen:
             # 原组长 may view (not review) the members of groups run by an acting leader.

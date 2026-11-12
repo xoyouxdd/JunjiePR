@@ -112,36 +112,130 @@ const originalWishes=[
 '愿你对未来有期待，也能安心过好眼前的一天。',
 '遇到值得开心的事，不妨认真感受那一刻。',
 '愿你的每一份真诚，都有温暖的落点。',
-'谢谢你成为团队里独一无二的一员。'
+'谢谢你成为团队里独一无二的一员。',
+
+// 普通的一天
+'要是今天出门早，希望到地方时，刚好能喝上一口热的。',
+'刚到一个不熟的地方，旁边有人说一句「我带你去」，心里就踏实多了。',
+'有人说「这儿有我呢」，那一刻，手里的事就能放心放一放。',
+'希望你今天也能听见一句「你要用的东西，我都给你留好了」。',
+'同事多说一句「这个放在右边那格」，接下来就能少找半天。这样的小事也挺暖的。',
+'如果今天碰上不熟悉的事，希望旁边刚好有个人肯慢慢跟你讲。',
+'谁都有头一回。有人愿意等你多看一眼、多问一句，那就挺好。',
+'希望你今天出门一路顺，路上还能碰见点让你高兴的小事。',
+'忙起来之前，能有几分钟坐着喝口水，也挺舒服的。',
+'希望你今天和同事凑到一块儿，有事好商量，闲下来也有话聊。',
+'愿你今天在路上碰见熟悉的人，隔着几步就笑着打了招呼。',
+'要是今天的安排临时变了，希望忙完以后，还能留点时间做自己想做的事。',
+'有人愿意把自己当初也问过的问题，再耐心讲一遍。刚来的时候，碰上这样的同事真好。',
+'希望你忙完手上这一阵，刚好有人走过来说「辛苦了，剩下的我来」。',
+'和第一次一起做事的人，也有可能越忙越默契，后来一个眼神就懂了。',
+'要是早上没顾上吃东西，希望你过一会儿就能吃上一口热乎的。',
+'希望今天走路不赶，鞋穿着舒服，伸手要拿的东西也刚好在手边。',
+'好几天没见的同事，一碰面就说「哎，你回来啦」。听见这句，心里会热一下。',
+'希望今天手里的事能一件件做完，中间还能有点空喘口气。',
+'希望你今天抬头的时候，刚好看见一片好看的天，也刚好有空多看两眼。',
+
+// 忙的时候，有人搭把手
+'忙不过来的时候，希望刚好有人走过来问一句「要不要我帮忙？」',
+'谢谢你忙着自己的事，还记得回头问一句：「你那边还好吗？」',
+'有时还没开口，同事已经把你要的东西递过来了。有人跟你想到一块儿，真好。',
+'队伍一下子长了，这时有人说「这边我来，你先忙手上的」，听着就安心。',
+'同一件事讲了好多遍，希望你忙完能喝口水，歇歇嗓子。',
+'有时候同事只是顺手递了样东西，就帮你解了围。有人留意到你忙不过来，感觉挺好。',
+'希望今天有位客人走出两步，又回过头跟你说了声谢谢。',
+'下雨的时候，希望刚好有人往里挪一点，给你让个淋不到雨的位置。',
+'天热的时候，希望你歇脚的地方有阴凉，水也在手边。',
+'忙完一阵再抬头，发现同事还在身边。那一眼就挺踏实的。',
+'谢谢你看见旁边的人腾不开手，顺手把那件小事接了过去。',
+'好几件事挤到一块儿时，有人说「咱俩一起弄」，一下就没那么慌了。',
+'排队的人多起来时，希望你们还能隔着几步喊一句「这边有我」。',
+'谢谢你愿意把客人着急问的那件事慢慢讲明白。希望忙完这一阵，你也能歇会儿。',
+'希望今天有个小朋友特别认真地跟你说「谢谢」，认真得让你都笑了。',
+'一时答不上来时，旁边有人说「等一下，我知道找谁问」。有个搭档真好。',
+'大家都在忙的时候，还有人看见你那边需要帮忙。希望你今天也遇到这样的同事。',
+'要是今天有人替你挡了阵风，或帮你照看了一会儿，希望你们也能找个空聊两句。',
+'希望最忙的那阵过去以后，你和同事还能开两句玩笑。',
+'大家把事情交给你很放心。也希望你身边有个人，让你交给他也一样放心。',
+
+// 吃口饭，歇一会儿
+'希望你今天吃饭的时候，饭还是热的，也有时间慢慢吃。',
+'希望今天有几分钟，想看手机就看一会儿，想安静坐着也行。',
+'吃完饭一看，居然还有几分钟能靠一会儿。希望你今天也有这样的空当。',
+'那杯水要是放了半天，希望这会儿刚好能想起来，喝上几口。',
+'站久了能坐下来的那一刻，腿一下就松了。希望你今天有这么一会儿。',
+'走了一天，回家换上拖鞋的时候，整个人都能松下来一点。',
+'晚班辛苦了。希望走出去的那一刻，你就能慢下来，想想回家做点什么。',
+'希望你下班刚好赶上那趟车，上车一看，还有个空位。',
+'要是今天回得晚，希望进门的时候屋里暖暖的，还能吃上口热的。',
+'希望你忙完往外走的时候，心里惦记的是晚饭想吃什么。',
+'希望你下班路上买到喜欢吃的那样东西，回家打开还是热的。',
+'今天已经赶了好几趟。希望最后这一段路，可以慢慢走。',
+'要是鞋袜被雨打湿了，回家换上干袜子的那一下，应该特别舒服。',
+'忙完想跟同事聊两句就聊两句，想戴上耳机一个人走也挺好。',
+'希望你回到家，换上舒服的衣服，还有点时间做自己喜欢的事。',
+'希望你今晚洗个舒服的热水澡，躺下没多久就睡着了。',
+'明天要是休息，希望今晚想到不用赶早，心里就已经松快一点。',
+'希望你忙完往外走时，天还没黑，刚好赶上一点好看的晚霞。',
+'今天在外面说了好多话的话，希望回去有空放首喜欢的歌，安安静静地听完。',
+'希望你回家路上收到一句「到了说一声」。有人惦记你平安到家，挺暖的。',
+
+// 遇到不顺的时候
+'有句话说完才觉得没说好，谁都有这种时候。希望它今天就慢慢过去了。',
+'有件事一时想不明白也正常。说不定哪天跟熟悉的人聊两句，就想通了。',
+'要是今天受了点委屈，希望有人能听你说完，还问一句「后来呢？」',
+'谁都有手忙脚乱的时候。这时有人说一句「没事，我陪你理一下」，心里就能松一点。',
+'累得不想说话的时候，希望你能跟一个坐在旁边也不用找话说的人待一会儿。',
+'做得不顺的那一小段，跟那些做得挺好的时候一样，都只是今天的一部分。',
+'碰到心里没底的事，希望刚好有个熟悉的人愿意陪你过一遍。',
+'有句话在心里憋了一天的话，希望今天能碰见一个听了也懂你的人。',
+'有人看见你已经很认真了，还特意跟你说一声。希望今天也有人这样跟你说。',
+'忙到一转头就忘了要拿什么，太正常了。希望你还有空停一下，喝两口水。',
+'安排临时变了，前面花的心思也算数。希望后面的事能比预想中顺一点。',
+'要是今天有点憋气，希望走出去吹吹风，心里能松一点。',
+'那阵特别难熬的时候，希望有人愿意在旁边陪一会儿。安静坐着也好。',
+'今天要是还有件事没做完，希望它先留在那儿，你能踏实吃顿饭。',
+'希望你说「我想歇一下」的时候，有人回你一句「行，我在这儿」。',
+'有时两个人都忙，说的话没对上。过一会儿，能找到个空当好好聊两句就好。',
+'希望今天有人看到你忙完了，顺口问一句「刚才累坏了吧？」',
+'如果今天过得有点乱，希望回头想想，还能记起中间有一小段其实挺好。',
+'有件事一直惦记着，希望你能把它写在纸上，或者跟谁说两句，心里先放下一点。',
+'要是这几天没睡好，希望今晚能早一点睡着，醒来的时候人轻松些。',
+
+// 日常里的小开心
+'今天有人随手帮了你一下的话，希望那一点好心情能陪你久一点。',
+'希望你路过同事身边时，刚好听到一句好笑的，也跟着乐了一会儿。',
+'同事递来一杯饮料，说「我记得你不喝冰的」。有人记得这点小事，真的会开心。',
+'希望你哪天翻到一条旧消息，还会为了当初那件事再笑一遍。',
+'好久没碰面的同事，见了面还能很自然地问一句「最近怎么样」。这就挺好。',
+'希望今天走到树下时，刚好有风吹过来，能凉快一会儿。',
+'希望哪天有人随口跟你说「跟你一起忙，我挺放心的」。这句话听着真舒服。',
+'同事分来的小零食，忙完才想起来还有。拆开一看，刚好是喜欢的口味。',
+'有人忙完自己的事，又多问了一句「你这边还要帮忙吗？」这一句有时真能解围。',
+'希望今天有个人叫住你，只是为了告诉你一件好笑的事。',
+'希望你忙完还有心情看一集喜欢的剧，看到好笑的地方就笑出声。',
+'忙里顺手拍到的那片天空，哪天再翻出来看，也许还会想起当时吹过来的风。',
+'希望你打开手机，刚好收到一条跟工作无关、又让你高兴的消息。',
+'刚来的时候，有人带着走了一趟，连东西放在哪儿也说了。过了很久，可能还记得那个人。',
+'希望这周有一天醒来，你看了眼时间，发现还能翻个身再睡半小时。',
+'和同事一起忙完一件费劲的事，两个人互相看一眼，说「总算弄好了」。这一刻值得高兴一下。',
+'听见「给你也留了一份」，还没看见是什么，心里就先高兴了一点。',
+'希望你今天跟别人说了几次「辛苦啦」，也有人回头跟你说一声「你也辛苦了」。',
+'你顺手帮过的那个忙，对你可能就一会儿。对方后来想起来，也许还记得那时候有人帮了他。',
+'希望回头想起今天，你还能记得一件跟工作无关、光是想起来就有点高兴的小事。'
 ];
 const combinedTotal=openings.length*endings.length,total=combinedTotal+originalWishes.length;
 function dayKey(){const d=new Date();return `${d.getFullYear()}-${d.getMonth()+1}-${d.getDate()}`;}
 function read(key){try{return JSON.parse(localStorage.getItem(key))||{};}catch(_){return {};}}
-function save(key,value){try{localStorage.setItem(key,JSON.stringify(value));}catch(_){}}
+function save(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true;}catch(_){return false;}}
+function validId(value){return Number.isInteger(value)&&value>=0&&value<total;}
+function wishText(id){return id<combinedTotal?openings[Math.floor(id/endings.length)]+endings[id%endings.length]:originalWishes[id-combinedTotal];}
 function choose(history){const recent=new Set(history.slice(-90)),preferOriginal=Math.random()<0.5;let candidates=[];for(let i=preferOriginal?combinedTotal:0;i<(preferOriginal?total:combinedTotal);i++)if(!recent.has(i))candidates.push(i);if(!candidates.length)for(let i=0;i<total;i++)if(!recent.has(i))candidates.push(i);return candidates[Math.floor(Math.random()*candidates.length)];}
-function mountDailyWish(host,userId,{integrated=false}={}){
-  if(!host)return ()=>{};
-  const target=integrated?host.querySelector('.skin-story-wish-host'):host;
-  if(!target)return ()=>{};
-  const key=`fz-daily-wish-v1-${userId}`,stored=read(key),today=dayKey();
-  const validId=value=>Number.isInteger(value)&&value>=0&&value<total;
-  const previous=host._dailyWishContext,storedId=stored.day===today&&validId(stored.id)?stored.id:null;
-  if(previous&&previous.userId===String(userId)&&previous.integrated===integrated&&previous.target===target&&previous.canvas.isConnected&&previous.day===today&&(storedId===null||storedId===previous.id))return host._disposeDailyWish;
-  host._disposeDailyWish?.();
-  let currentDay=today;
-  let history=Array.isArray(stored.history)?stored.history.filter(n=>Number.isInteger(n)&&n>=0&&n<total).slice(-90):[];
-  let id=storedId===null?choose(history):storedId;
-  const remember=()=>{history=history.filter(n=>n!==id);history.push(id);history=history.slice(-90);save(key,{day:currentDay,id,history});};remember();
-  const content='<div class="daily-wish-body"><span class="daily-wish-kicker">FZ · 今日小祝福</span><div class="daily-wish-card"><p data-wish-text aria-hidden="true"></p><canvas data-wish-scratch aria-hidden="true"></canvas></div><div class="daily-wish-actions"><button type="button" class="secondary" data-wish-reveal>直接查看</button><button type="button" class="secondary" data-wish-next>换一句</button></div><p class="daily-wish-note">祝福仅供放松，与积分和考核无关。</p><span class="wish-status" data-wish-status role="status" aria-live="polite"></span></div>';
-  target.innerHTML=integrated?content:'<details class="daily-wish"><summary><span aria-hidden="true">✦</span><strong>今日小祝福</strong><small>给自己一点温柔</small></summary>'+content+'</details>';
-  host.hidden=false;host.dataset.dailyWish='';
-  const text=target.querySelector('[data-wish-text]'),canvas=target.querySelector('canvas'),ctx=canvas.getContext('2d'),revealButton=target.querySelector('[data-wish-reveal]'),nextButton=target.querySelector('[data-wish-next]');
-  let revealed=false,drawing=false,last=null,width=0,height=0,disposed=false,hasScratches=false;
-  const mountContext={userId:String(userId),integrated,target,canvas,get day(){return currentDay;},get id(){return id;}};
-  host._dailyWishContext=mountContext;
-  const writeText=()=>{text.textContent=id<combinedTotal?openings[Math.floor(id/endings.length)]+endings[id%endings.length]:originalWishes[id-combinedTotal];};writeText();
+function bindScratchCard(canvas,caption,reveal,beforeScratch){
+  const ctx=canvas.getContext('2d');
+  let drawing=false,last=null,width=0,height=0,disposed=false,hasScratches=false;
   function draw(force=false){
-    if(disposed||revealed||!ctx)return;
+    if(disposed||canvas.hidden||!ctx)return;
     const rect=canvas.getBoundingClientRect();if(!rect.width||!rect.height)return;
     if(!force&&rect.width===width&&rect.height===height)return;
     let mask=null;
@@ -151,28 +245,177 @@ function mountDailyWish(host,userId,{integrated=false}={}){
     if(mask){ctx.drawImage(mask,0,0,width,height);return;}
     const gradient=ctx.createLinearGradient(0,0,width,height);gradient.addColorStop(0,'#eee6cd');gradient.addColorStop(.5,'#ddd5ba');gradient.addColorStop(1,'#f2ead3');ctx.fillStyle=gradient;ctx.fillRect(0,0,width,height);
     ctx.strokeStyle='#ae9b6a55';ctx.lineWidth=1;for(let x=-height;x<width;x+=14){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x+height,height);ctx.stroke();}
-    ctx.fillStyle='#5c6049';ctx.font='500 13px system-ui';ctx.textAlign='center';ctx.fillText('轻轻刮开',width/2,height/2-2);ctx.font='11px system-ui';ctx.fillText('收下今天的小祝福',width/2,height/2+19);
+    ctx.fillStyle='#5c6049';ctx.font='500 13px system-ui';ctx.textAlign='center';ctx.fillText('轻轻刮开',width/2,height/2-2);ctx.font='11px system-ui';ctx.fillText(caption,width/2,height/2+19);
   }
-  function reset(){writeText();revealed=false;hasScratches=false;drawing=false;last=null;canvas.hidden=false;text.setAttribute('aria-hidden','true');revealButton.disabled=false;revealButton.textContent='直接查看';target.querySelector('[data-wish-status]').textContent='新的祝福已准备好';draw(true);}
+  function reset(){
+    canvas.hidden=false;
+    hasScratches=false;
+    drawing=false;
+    width=height=0;
+    draw(true);
+  }
+  function scratch(event){if(!drawing||canvas.hidden||!ctx)return;hasScratches=true;const rect=canvas.getBoundingClientRect(),point={x:event.clientX-rect.left,y:event.clientY-rect.top};ctx.globalCompositeOperation='destination-out';ctx.strokeStyle='#000000';ctx.lineWidth=32;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo((last||point).x,(last||point).y);ctx.lineTo(point.x,point.y);ctx.stroke();last=point;}
+  function start(event){beforeScratch?.();if(canvas.hidden||!ctx)return;drawing=true;last=null;canvas.setPointerCapture(event.pointerId);scratch(event);}
+  function end(){if(!drawing)return;drawing=false;last=null;if(!ctx||!canvas.width||!canvas.height)return;const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;let blank=0,count=0;for(let i=3;i<pixels.length;i+=64){count++;if(pixels[i]<64)blank++;}if(count&&blank/count>.32)reveal();}
+  canvas.addEventListener('pointerdown',start);canvas.addEventListener('pointermove',scratch);canvas.addEventListener('pointerup',end);canvas.addEventListener('pointercancel',end);
+  const observer=new ResizeObserver(()=>draw());observer.observe(canvas);
+  return {draw,reset,dispose(){disposed=true;observer.disconnect();canvas.removeEventListener('pointerdown',start);canvas.removeEventListener('pointermove',scratch);canvas.removeEventListener('pointerup',end);canvas.removeEventListener('pointercancel',end);}};
+}
+function mountDailyWish(host,userId,{integrated=false}={}){
+  if(!host)return ()=>{};
+  const target=integrated?host.querySelector('.skin-story-wish-host'):host;
+  if(!target)return ()=>{};
+  const key=`fz-daily-wish-v1-${userId}`,stored=read(key),today=dayKey();
+  const favoritesKey=`fz-daily-wish-favorites-v1-${userId}`;
+  const previous=host._dailyWishContext,storedId=stored.day===today&&validId(stored.id)?stored.id:null;
+  if(previous&&previous.userId===String(userId)&&previous.integrated===integrated&&previous.target===target&&previous.canvas.isConnected&&previous.day===today&&(storedId===null||storedId===previous.id))return host._disposeDailyWish;
+  host._disposeDailyWish?.();
+  let currentDay=today;
+  let history=Array.isArray(stored.history)?stored.history.filter(validId).slice(-90):[];
+  let id=storedId===null?choose(history):storedId;
+  const remember=()=>{history=history.filter(n=>n!==id);history.push(id);history=history.slice(-90);save(key,{day:currentDay,id,history});};remember();
+  const content=`<div class="daily-wish-body">
+    <span class="daily-wish-kicker">FZ · 今日小祝福</span>
+    <div class="daily-wish-card"><p data-wish-text aria-hidden="true"></p><canvas data-wish-scratch aria-hidden="true"></canvas></div>
+    <div class="daily-wish-actions">
+      <button type="button" class="secondary" data-wish-reveal>直接查看</button>
+      <button type="button" class="secondary" data-wish-next>换一句</button>
+      <button type="button" class="secondary" data-wish-favorite aria-label="收藏这句祝福" aria-pressed="false" hidden>收藏</button>
+      <button type="button" class="secondary" data-wish-favorites-toggle aria-expanded="false">我的收藏</button>
+    </div>
+    <p class="daily-wish-favorite-error" data-wish-favorite-error role="alert" hidden></p>
+    <section class="daily-wish-favorites" aria-label="我的收藏" data-wish-favorites hidden>
+      <div class="daily-wish-favorites-heading">
+        <p class="daily-wish-favorites-note">收藏保存在当前浏览器。</p>
+        <button type="button" class="secondary" data-wish-favorites-draw hidden>翻一张</button>
+      </div>
+      <p class="daily-wish-favorites-empty" data-wish-favorites-empty>刮开后，喜欢的话可以留在这里。</p>
+      <div data-wish-favorites-card hidden>
+        <div class="daily-wish-card"><p data-wish-replay-text aria-hidden="true"></p><canvas data-wish-replay-scratch aria-hidden="true"></canvas></div>
+        <div class="daily-wish-actions">
+          <button type="button" class="secondary" data-wish-replay-reveal>直接查看收藏</button>
+          <button type="button" class="secondary" data-wish-replay-back>返回收藏</button>
+        </div>
+      </div>
+      <ul data-wish-favorites-list></ul>
+    </section>
+    <p class="daily-wish-note">祝福仅供放松，与积分和考核无关。</p>
+    <span class="wish-status" data-wish-status role="status" aria-live="polite"></span>
+  </div>`;
+  target.innerHTML=integrated?content:'<details class="daily-wish"><summary><span aria-hidden="true">✦</span><strong>今日小祝福</strong><small>给自己一点温柔</small></summary>'+content+'</details>';
+  host.hidden=false;host.dataset.dailyWish='';
+  const text=target.querySelector('[data-wish-text]'),canvas=target.querySelector('[data-wish-scratch]'),revealButton=target.querySelector('[data-wish-reveal]'),nextButton=target.querySelector('[data-wish-next]');
+  const favoriteButton=target.querySelector('[data-wish-favorite]'),favoritesToggle=target.querySelector('[data-wish-favorites-toggle]');
+  const favoritesPanel=target.querySelector('[data-wish-favorites]'),favoritesList=target.querySelector('[data-wish-favorites-list]');
+  const favoritesEmpty=target.querySelector('[data-wish-favorites-empty]'),favoriteError=target.querySelector('[data-wish-favorite-error]');
+  const replayButton=target.querySelector('[data-wish-favorites-draw]'),replayCard=target.querySelector('[data-wish-favorites-card]');
+  const replayText=target.querySelector('[data-wish-replay-text]'),replayCanvas=target.querySelector('[data-wish-replay-scratch]');
+  const replayReveal=target.querySelector('[data-wish-replay-reveal]'),replayBack=target.querySelector('[data-wish-replay-back]');
+  const status=target.querySelector('[data-wish-status]');
+  let revealed=false,disposed=false,replayId=null;
+  const dailyScratch=bindScratchCard(canvas,'收下今天的小祝福',reveal,synchronizeDay);
+  const favoriteScratch=bindScratchCard(replayCanvas,'再读一句收藏的祝福',revealReplay);
+  const mountContext={userId:String(userId),integrated,target,canvas,get day(){return currentDay;},get id(){return id;}};
+  host._dailyWishContext=mountContext;
+  const writeText=()=>{text.textContent=wishText(id);};writeText();
+  function readFavorites(){
+    const storedFavorites=read(favoritesKey);
+    return Array.isArray(storedFavorites)?[...new Set(storedFavorites.filter(validId))]:[];
+  }
+  function renderFavorites(ids){
+    const collected=ids.includes(id);
+    favoriteButton.hidden=!revealed;
+    favoriteButton.setAttribute('aria-pressed',String(collected));
+    favoriteButton.textContent=collected?'已收藏':'收藏';
+    replayButton.hidden=ids.length===0;
+    if(replayId!==null&&!ids.includes(replayId))replayId=null;
+    replayCard.hidden=replayId===null;
+    favoritesList.hidden=replayId!==null;
+    if(favoritesPanel.hidden)return;
+    favoritesEmpty.hidden=ids.length>0;
+    favoritesList.replaceChildren(...ids.map((favoriteId,index)=>{
+      const item=document.createElement('li');
+      const quote=document.createElement('p');
+      quote.textContent=wishText(favoriteId);
+      const remove=document.createElement('button');
+      remove.type='button';
+      remove.className='secondary';
+      remove.textContent='移除';
+      remove.setAttribute('aria-label',`移除第 ${index+1} 条收藏`);
+      remove.onclick=()=>{
+        if(changeFavorite(favoriteId,false)){
+          const next=favoritesList.querySelectorAll('button')[index];
+          (next||favoritesList.querySelector('li:last-child button')||favoritesToggle).focus();
+        }
+      };
+      item.append(quote,remove);
+      return item;
+    }));
+  }
+  function changeFavorite(favoriteId,add){
+    const otherIds=readFavorites().filter(savedId=>savedId!==favoriteId);
+    const next=add?[favoriteId,...otherIds]:otherIds;
+    if(!save(favoritesKey,next)){
+      favoriteError.textContent='浏览器暂时存不了收藏，请稍后再试。';
+      favoriteError.hidden=false;
+      return false;
+    }
+    favoriteError.hidden=true;
+    renderFavorites(next);
+    status.textContent=add?'已收藏这句祝福':'已移除收藏';
+    return true;
+  }
+  function revealReplay(){
+    if(disposed||replayId===null||replayCanvas.hidden)return;
+    replayCanvas.hidden=true;
+    replayText.removeAttribute('aria-hidden');
+    replayReveal.hidden=true;
+    status.textContent=replayText.textContent;
+  }
+  function drawFavorite(){
+    const ids=readFavorites();
+    if(!ids.length){renderFavorites(ids);return;}
+    replayId=ids[Math.floor(Math.random()*ids.length)];
+    replayText.textContent=wishText(replayId);
+    replayText.setAttribute('aria-hidden','true');
+    replayReveal.hidden=false;
+    renderFavorites(ids);
+    favoriteScratch.reset();
+    status.textContent='翻出了一张收藏的祝福，轻轻刮开看看。';
+  }
+  function reset(){writeText();revealed=false;text.setAttribute('aria-hidden','true');revealButton.disabled=false;revealButton.textContent='直接查看';favoriteButton.hidden=true;favoriteError.hidden=true;status.textContent='新的祝福已准备好';dailyScratch.reset();}
   function synchronizeDay(){
     const nextDay=dayKey();if(disposed||nextDay===currentDay)return false;
     const latest=read(key);if(Array.isArray(latest.history))history=latest.history.filter(validId).slice(-90);
     currentDay=nextDay;id=latest.day===nextDay&&validId(latest.id)?latest.id:choose(history);remember();reset();return true;
   }
-  function reveal(){if(disposed)return;synchronizeDay();if(revealed)return;revealed=true;canvas.hidden=true;text.removeAttribute('aria-hidden');revealButton.disabled=true;revealButton.textContent='已收下祝福';target.querySelector('[data-wish-status]').textContent=text.textContent;}
-  function scratch(event){if(!drawing||revealed||!ctx)return;hasScratches=true;const rect=canvas.getBoundingClientRect(),point={x:event.clientX-rect.left,y:event.clientY-rect.top};ctx.globalCompositeOperation='destination-out';ctx.strokeStyle='#000000';ctx.lineWidth=32;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();ctx.moveTo((last||point).x,(last||point).y);ctx.lineTo(point.x,point.y);ctx.stroke();last=point;}
-  const start=event=>{synchronizeDay();if(revealed||!ctx)return;drawing=true;last=null;canvas.setPointerCapture(event.pointerId);scratch(event);};
-  const end=()=>{if(!drawing)return;drawing=false;last=null;if(!ctx||!canvas.width||!canvas.height)return;const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;let blank=0,count=0;for(let i=3;i<pixels.length;i+=64){count++;if(pixels[i]<64)blank++;}if(count&&blank/count>.32)reveal();};
-  canvas.addEventListener('pointerdown',start);canvas.addEventListener('pointermove',scratch);canvas.addEventListener('pointerup',end);canvas.addEventListener('pointercancel',end);
+  function reveal(){if(disposed)return;synchronizeDay();if(revealed)return;revealed=true;canvas.hidden=true;text.removeAttribute('aria-hidden');revealButton.disabled=true;revealButton.textContent='已收下祝福';renderFavorites(readFavorites());status.textContent=text.textContent;}
   revealButton.onclick=reveal;
   nextButton.onclick=()=>{if(!synchronizeDay()){id=choose(history);remember();reset();}};
-  const onResize=()=>draw(),observer=new ResizeObserver(onResize);observer.observe(canvas);
-  const details=target.querySelector('details'),onToggle=()=>{if(details?.open)draw();};details?.addEventListener('toggle',onToggle);if(integrated)draw();
+  favoriteButton.onclick=()=>{
+    if(!synchronizeDay()&&revealed)changeFavorite(id,!readFavorites().includes(id));
+  };
+  favoritesToggle.onclick=()=>{
+    favoritesPanel.hidden=!favoritesPanel.hidden;
+    favoritesToggle.setAttribute('aria-expanded',String(!favoritesPanel.hidden));
+    favoriteError.hidden=true;
+    renderFavorites(readFavorites());
+  };
+  replayButton.onclick=drawFavorite;
+  replayReveal.onclick=()=>{revealReplay();replayBack.focus();};
+  replayBack.onclick=()=>{
+    replayId=null;
+    renderFavorites(readFavorites());
+    (replayButton.hidden?favoritesToggle:replayButton).focus();
+  };
+  const onStorage=event=>{if(event.key===favoritesKey||event.key===null)renderFavorites(readFavorites());};
+  window.addEventListener('storage',onStorage);
+  const details=target.querySelector('details'),onToggle=()=>{if(details?.open)dailyScratch.draw();};details?.addEventListener('toggle',onToggle);if(integrated)dailyScratch.draw();
   const onVisible=()=>{if(!document.hidden)synchronizeDay();};
   // The next button owns its day rollover; capturing it here would choose twice.
   const onActivity=event=>{if(event.target?.closest?.('[data-wish-next]'))return;synchronizeDay();};
   host.addEventListener('pointerdown',onActivity,true);host.addEventListener('keydown',onActivity,true);document.addEventListener('visibilitychange',onVisible);window.addEventListener('focus',onVisible);
-  const dispose=()=>{disposed=true;observer.disconnect();canvas.removeEventListener('pointerdown',start);canvas.removeEventListener('pointermove',scratch);canvas.removeEventListener('pointerup',end);canvas.removeEventListener('pointercancel',end);details?.removeEventListener('toggle',onToggle);host.removeEventListener('pointerdown',onActivity,true);host.removeEventListener('keydown',onActivity,true);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('focus',onVisible);revealButton.onclick=null;nextButton.onclick=null;if(host._dailyWishContext===mountContext){delete host._dailyWishContext;delete host._disposeDailyWish;}};
+  const dispose=()=>{disposed=true;dailyScratch.dispose();favoriteScratch.dispose();details?.removeEventListener('toggle',onToggle);host.removeEventListener('pointerdown',onActivity,true);host.removeEventListener('keydown',onActivity,true);document.removeEventListener('visibilitychange',onVisible);window.removeEventListener('focus',onVisible);window.removeEventListener('storage',onStorage);revealButton.onclick=null;nextButton.onclick=null;favoriteButton.onclick=null;favoritesToggle.onclick=null;replayButton.onclick=null;replayReveal.onclick=null;replayBack.onclick=null;favoritesList.replaceChildren();if(host._dailyWishContext===mountContext){delete host._dailyWishContext;delete host._disposeDailyWish;}};
   host._disposeDailyWish=dispose;return dispose;
 }
 export { mountDailyWish };

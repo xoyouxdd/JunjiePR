@@ -6,6 +6,11 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.13.1", "date": "2026-11-13", "status": "candidate",
+     "items": [
+         {"summary": "今日小祝福新增收藏", "detail": "新增日常祝福。刮开后可在当前浏览器收藏，也可以从收藏中翻出一句重新刮开。", "audiences": ["all"]},
+         {"summary": "直属组员待复核明细", "detail": "待办数量、分页明细和复核队列使用同一范围。代理主管职务结束后，组员复核按当前有效负责人处理。", "audiences": ["all"], "permissions": ["REVIEW_DIRECT"]},
+     ]},
     {"version": "2026.11.10.1", "date": "2026-11-10", "status": "candidate",
      "items": [
          {"summary": "个人积点卡", "detail": "活动相关名称统一为积点，个人积点卡显示累计获得。已支出且兑换待完成的活动会在卡片下方提示。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"]},

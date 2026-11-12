@@ -25,6 +25,10 @@ function menuItems() {
   else if (r==='HR_CIRCLE') {items.push(['hrEmployees','员工管理'],['monthClose','月结'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置'],['prRankings','PR排名数据']);}
   else if (r==='HR_ADMIN') {items.push(['hrEmployees','员工管理'],['hrGroups','小组管理'],['circleTransfers','跨圈调动'],['logs','审计日志'],['hrScores','分值设置']);}
   else if (has('DATA_VIEW')) items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
+  if (r==='TA_GSM'&&state.me.base_role_code==='SUPERVISOR'&&state.me.led_groups?.some(group=>group.leader_type==='formal')){
+    if(has('REVIEW_DIRECT'))items.push(['review','复核']);
+    if(has('MEMBER_RECORDS'))items.push(['members','组员记录']);
+  }
   if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(['CM','TR','SUPERVISOR','TA_SUPERVISOR','TA_GSM','GSM','AM','OM'].includes(state.me.base_role_code||r))items.push(['activityPoints','我的积点卡']);
   if(!state.me.rotation_temporary)items.push(['activities','活动中心']);

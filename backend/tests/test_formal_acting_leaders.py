@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.v2_database import SessionLocal  # noqa: E402
-from app.v2_models import Employee, GroupLeaderAssignment, WorkGroup  # noqa: E402
+from app.v2_models import Employee, EmployeeActingDuty, GroupLeaderAssignment, Role, WorkGroup  # noqa: E402
 from app.v2_services import current_leader_for_employee, groups_led_by  # noqa: E402
 
 
@@ -203,3 +203,82 @@ def test_acting_leader_inside_the_group_is_reviewed_by_its_formal_leader() -> No
             assert current_leader_for_employee(db, employee_id("CMTEST01")).employee_no == "TAGSMTEST01"
             assert group_id not in {group.id for group in groups_led_by(db, ta_id)}
             assert group_id in {group.id for group in groups_led_by(db, employee_id("TAGSMTEST01"))}
+
+
+def test_ta_gsm_reviews_own_group_without_an_effective_acting_leader(monkeypatch) -> None:
+    from app import v2_auth
+
+    monkeypatch.setattr(v2_auth, "maybe_process_role_expirations", lambda db: None)
+    with TestClient(app) as client, TestClient(app) as proxy:
+        group_id = ta_group_id()
+        member_id, acting_id = employee_id("CMTEST01"), employee_id("TATEST01")
+
+        def queue_ids(reviewer=client):
+            response = reviewer.get("/api/reviews")
+            assert response.status_code == 200, response.text
+            return {row["id"] for row in response.json()["items"]}
+
+        def todo_details(reviewer):
+            response = reviewer.get("/api/action-center")
+            assert response.status_code == 200, response.text
+            count = sum(item["count"] for item in response.json()["items"] if item["type"] == "recognition_review")
+            response = reviewer.get("/api/action-center/recognition_review/details")
+            assert response.status_code == 200, response.text
+            details = {row["id"]: row for row in response.json()["items"]}
+            assert count == len(details)
+            assert set(details) == queue_ids(reviewer)
+            return details
+
+        login(client, "HR01", "HR123")
+        response = set_leaders(client, group_id, "TAGSMTEST01", "TATEST01")
+        assert response.status_code == 200, response.text
+        response = set_leaders(client, group_id, "TAGSMTEST01", None)
+        assert response.status_code == 200, response.text
+        login(client, "TRTEST01")
+        unstaffed = self_recognize(client, "SUPTEST01", "ta-gsm-no-acting")
+        login(client, "TAGSMTEST01")
+        assert unstaffed in queue_ids()
+        assert todo_details(client)[unstaffed]["reviewer_no"] == "TAGSMTEST01"
+        assert client.post(f"/api/reviews/{unstaffed}", json={"action": "confirm"}).status_code == 200
+
+        login(client, "HR01", "HR123")
+        response = set_leaders(client, group_id, "TAGSMTEST01", "TATEST01")
+        assert response.status_code == 200, response.text
+        login(client, "CMTEST01")
+        handoff = self_recognize(client, "GSMTEST01", "ta-gsm-expiry-handoff")
+        login(proxy, "TATEST01")
+        assert todo_details(proxy)[handoff]["reviewer_no"] == "TATEST01"
+        login(client, "TAGSMTEST01")
+        assert handoff not in todo_details(client)
+        assert client.post(f"/api/reviews/{handoff}", json={"action": "confirm"}).status_code == 404
+        roster = client.get("/api/member-score-summary").json()["rows"]
+        assert member_id in {row["employee_id"] for row in roster}
+        identity = client.get("/api/me").json()
+        assert identity["role_code"] == "TA_GSM" and identity["base_role_code"] == "SUPERVISOR"
+        assert {"id": group_id, "name": "热力追踪B组", "leader_type": "formal"} in identity["led_groups"]
+
+        with SessionLocal() as db:
+            role_id = db.query(Role.id).filter_by(code="TA_SUPERVISOR").scalar()
+            duty = db.query(EmployeeActingDuty).filter_by(employee_id=acting_id, role_id=role_id, status="active").one()
+            duty.ends_on = date.today().isoformat()
+            db.commit()
+        assert handoff not in queue_ids()
+        assert handoff in todo_details(proxy)
+
+        with SessionLocal() as db:
+            duty = db.query(EmployeeActingDuty).filter_by(employee_id=acting_id, role_id=role_id, status="active").one()
+            yesterday = (date.today() - timedelta(days=1)).isoformat()
+            duty.starts_on = min(duty.starts_on, yesterday)
+            duty.ends_on = yesterday
+            db.commit()
+            assignment = db.query(GroupLeaderAssignment).filter_by(
+                group_id=group_id, leader_type="acting", status="active").one()
+            assert assignment.ends_on is None
+            assert current_leader_for_employee(db, member_id).employee_no == "TAGSMTEST01"
+
+        assert todo_details(client)[handoff]["reviewer_no"] == "TAGSMTEST01"
+        assert proxy.get("/api/action-center/recognition_review/details").status_code == 403
+        assert all(item["type"] != "recognition_review" for item in proxy.get("/api/action-center").json()["items"])
+        assert proxy.post(f"/api/reviews/{handoff}", json={"action": "confirm"}).status_code == 403
+        assert client.post(f"/api/reviews/{handoff}", json={"action": "confirm"}).status_code == 200
+        assert handoff not in todo_details(client)

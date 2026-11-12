@@ -298,3 +298,86 @@ def test_statistics_detail_response_keeps_employee_identity_for_title() -> None:
     assert detail["employee_name"]
     assert detail["employee_no"] == "CMTEST01"
     assert detail["role_name"]
+
+
+def test_direct_review_action_details_paginate_every_pending_record() -> None:
+    from app.v2_models import RecognitionInboxItem, RecognitionRecord, RecognitionType
+
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            employee = db.query(Employee).filter_by(employee_no="CMTEST02").one()
+            outside = db.query(Employee).filter_by(employee_no="TRTEST01").one()
+            leader = db.query(Employee).filter_by(employee_no="SUPTEST01").one()
+            kind = db.query(RecognitionType).filter_by(code="SAFETY").one()
+            submitted = datetime.now()
+            values = dict(
+                employee_id=employee.id, employee_no=employee.employee_no, employee_name=employee.name,
+                employee_role_snapshot="CM", home_attraction_id=employee.attraction_id,
+                occurred_attraction_id=employee.attraction_id, recognition_date="2026-10-01",
+                recognition_month="2026-10", recognition_type_id=kind.id,
+                recognition_type_name=kind.name, content="分页用例", recognizer_employee_id=leader.id,
+                recognizer_name=leader.name, recognizer_role_snapshot="主管", operator_employee_id=employee.id,
+                operator_name=employee.name, source="self", fraction=1, submitted_at=submitted,
+            )
+            pending = [RecognitionRecord(**values) for _ in range(501)]
+            read_only = RecognitionRecord(**values)
+            db.add_all([*pending, read_only, RecognitionRecord(**values, status="confirmed"),
+                        RecognitionRecord(**{**values, "employee_id": outside.id,
+                                             "employee_no": outside.employee_no, "employee_name": outside.name})])
+            db.flush()
+            db.add(RecognitionInboxItem(recognition_id=read_only.id))
+            expected = [row.id for row in pending]
+            db.commit()
+
+        login(client, "SUPTEST01")
+        action = client.get("/api/action-center")
+        assert action.status_code == 200, action.text
+        assert [item["count"] for item in action.json()["items"] if item["type"] == "recognition_review"] == [501]
+        path = "/api/action-center/recognition_review/details"
+        collected = []
+        cursor = None
+        for page in range(1, 12):
+            response = client.get(path, params={"cursor": cursor} if cursor else {})
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert (data["total"], data["page_size"]) == (501, 50)
+            collected.extend(row["id"] for row in data["items"])
+            if page == 1:
+                first_detail = data
+            if page == 10:
+                tenth_detail = data
+            cursor = data["next_cursor"]
+            assert bool(cursor) == (page < 11)
+        assert collected == expected
+        assert client.get(path, params={"page": 2}).status_code == 400
+        previous = client.get(path, params={"cursor": data["previous_cursor"], "direction": "previous"}).json()
+        assert [row["id"] for row in previous["items"]] == expected[450:500]
+        first = client.get("/api/reviews", params={"limit": 500}).json()
+        last = client.get("/api/reviews", params={"limit": 500, "offset": 500}).json()
+        assert first["total"] == last["total"] == 501
+        assert [row["id"] for row in first["items"] + last["items"]] == collected
+
+        for record_id in (expected[0], expected[49]):
+            reviewed = client.post(f"/api/reviews/{record_id}", json={"action": "confirm"})
+            assert reviewed.status_code == 200, reviewed.text
+
+        # The first page shifted and its last record was processed too.
+        second = client.get(path, params={"cursor": first_detail["next_cursor"]}).json()
+        assert [row["id"] for row in second["items"]] == expected[50:100]
+        previous = client.get(path, params={"cursor": second["previous_cursor"], "direction": "previous"}).json()
+        assert [row["id"] for row in previous["items"]] == expected[1:49]
+
+        tail = client.get(path, params={"cursor": tenth_detail["next_cursor"]}).json()
+        assert tail["total"] == 499
+        assert [row["id"] for row in tail["items"]] == [expected[500]]
+        assert tail["next_cursor"] is None
+        back = client.get(path, params={"cursor": tail["previous_cursor"], "direction": "previous"}).json()
+        assert [row["id"] for row in back["items"]] == expected[450:500]
+        assert [item["count"] for item in client.get("/api/action-center").json()["items"]
+                if item["type"] == "recognition_review"] == [499]
+        assert client.get("/api/reviews").json()["total"] == 499
+        reviewed = client.post(f"/api/reviews/{expected[-1]}", json={"action": "confirm"})
+        assert reviewed.status_code == 200, reviewed.text
+        exhausted = client.get(path, params={"cursor": tenth_detail["next_cursor"]}).json()
+        assert exhausted["total"] == 498 and exhausted["items"] == []
+        assert client.get(path).json()["items"][0]["id"] == expected[1]

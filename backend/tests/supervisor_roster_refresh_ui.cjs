@@ -10,15 +10,21 @@ const shell=`<!doctype html><meta charset="utf-8"><meta name="viewport" content=
 <header><div id="userBadge"></div></header><div id="tabs"></div><main id="app"></main>
 <script type="module">
 import {state} from '/static/js/app/state.js';
+import {configureViews} from '/static/js/app/context.js';
 import {renderMembers} from '/static/js/app/members.js';
 import {renderTabs,renderUserBadge} from '/static/js/app/navigation.js';
-const role=new URLSearchParams(location.search).get('role');
+import {renderFrontlineReview} from '/static/js/app/reviews.js';
+import {renderActionCenter} from '/static/js/app/operations.js';
+const params=new URLSearchParams(location.search);
+const role=params.get('role');
 state.me={id:1,name:'测试主管',employee_no:'1700010',role_code:role,role_name:role,
   base_role_code:role==='TA_SUPERVISOR'?'CM':role,permissions:[],member_count:2};
-state.tab='members';
+state.tab=params.has('actionCenter')?'actionCenter':'members';
+configureViews({members:renderMembers,review:renderFrontlineReview,actionCenter:renderActionCenter});
 renderUserBadge();
 renderTabs();
-await renderMembers();
+if(state.tab==='actionCenter'&&params.has('actionCenter'))await renderActionCenter();
+else if(role!=='TA_GSM')await renderMembers();
 window.rosterReady=true;
 </script>`;
 
@@ -125,6 +131,111 @@ async function checkRoster(browser,base,role){
   }
 }
 
+async function checkTaGsmNavigation(browser,base){
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  try{
+    await page.route('**/api/reviews?*',route=>route.fulfill({json:{items:[],total:0}}));
+    await page.route('**/api/member-score-summary?*',route=>route.fulfill({json:{rows:[retained],member_count:1}}));
+    await page.goto(base+'/?role=TA_GSM');
+    await page.waitForFunction(()=>window.rosterReady);
+    const desktop=page.locator('.tabs-desktop');
+    const configure=fixture=>page.evaluate(async fixture=>{
+      const {state}=await import('/static/js/app/state.js');
+      const {renderTabs}=await import('/static/js/app/navigation.js');
+      Object.assign(state.me,fixture);
+      renderTabs();
+    },fixture);
+    const formalGroup={id:1,name:'测试小组',leader_type:'formal'};
+    const permissions=['REVIEW_DIRECT','MEMBER_RECORDS'];
+    for(const fixture of [
+      {base_role_code:'SUPERVISOR',led_groups:[],permissions},
+      {base_role_code:'CM',led_groups:[formalGroup],permissions},
+      {base_role_code:'SUPERVISOR',led_groups:[formalGroup],permissions:[]},
+    ]){
+      await configure(fixture);
+      assert.equal(await desktop.locator('[data-tab=review],[data-tab=members]').count(),0);
+    }
+    await configure({base_role_code:'SUPERVISOR',led_groups:[formalGroup],permissions});
+    await desktop.getByRole('button',{name:'复核',exact:true}).click();
+    await page.locator('.review-page').waitFor();
+    await desktop.getByRole('button',{name:'组员记录',exact:true}).click();
+    await page.locator('[data-member-row="12"]').waitFor();
+    await page.setViewportSize({width:390,height:900});
+    await page.locator('[data-open-more]').click();
+    const drawer=page.locator('.mobile-more-drawer');
+    await drawer.getByRole('button',{name:'复核',exact:true}).click();
+    await page.locator('.review-page').waitFor();
+    await page.locator('[data-open-more]').click();
+    await drawer.getByRole('button',{name:'组员记录',exact:true}).click();
+    await page.locator('[data-member-row="12"]').waitFor();
+  }finally{
+    await page.close();
+  }
+}
+
+async function checkReviewDetailsPagination(browser,base){
+  const page=await browser.newPage({viewport:{width:390,height:900}});
+  const rows=Array.from({length:501},(_,index)=>({
+    id:index+1,employee_name:'签卡 '+(index+1),employee_no:'1700011',
+    recognition_type:'安全',reviewer_name:'测试主管',waiting_hours:0,
+  }));
+  let pending=rows;
+  try{
+    await page.route('**/api/action-center',route=>route.fulfill({json:{
+      total:rows.length,items:[{type:'recognition_review',title:'待复核签卡',tab:'review',count:rows.length}],
+    }}));
+    await page.route('**/api/deduction-upgrades/recovery',route=>route.fulfill({json:{items:[]}}));
+    await page.route('**/api/action-center/recognition_review/details*',route=>{
+      const params=new URL(route.request().url()).searchParams;
+      const page_size=Number(params.get('page_size')||50);
+      const anchor=Number(params.get('cursor')||0);
+      const previous=params.get('direction')==='previous';
+      const candidates=pending.filter(row=>previous?row.id<anchor:row.id>anchor);
+      const items=previous?candidates.slice(-page_size):candidates.slice(0,page_size);
+      const first=items[0]?.id,last=items.at(-1)?.id;
+      return route.fulfill({json:{type:'recognition_review',title:'待复核签卡明细',
+        total:pending.length,page_size,items,
+        previous_cursor:pending.some(row=>row.id<first)?String(first):null,
+        next_cursor:pending.some(row=>row.id>last)?String(last):null}});
+    });
+    await page.goto(base+'/?role=SUPERVISOR&actionCenter');
+    await page.waitForFunction(()=>window.rosterReady);
+    const opener=page.getByRole('button',{name:'查看明细',exact:true});
+    await opener.click();
+    const detail=page.locator('.action-center-detail');
+    const next=detail.getByRole('button',{name:'下一页',exact:true});
+    const previous=detail.getByRole('button',{name:'上一页',exact:true});
+    const names=detail.locator('tbody td:first-child strong');
+    const collected=[];
+    await detail.getByText('本页 50 条 · 共 501 条',{exact:true}).waitFor();
+    assert(await previous.isDisabled());
+    collected.push(...await names.allTextContents());
+    pending=rows.filter(row=>row.id!==1&&row.id!==50);
+    for(let number=1;number<=10;number++){
+      await next.click();
+      await detail.getByText('签卡 '+(number*50+1),{exact:true}).waitFor();
+      collected.push(...await names.allTextContents());
+    }
+    assert.deepEqual(collected,rows.map(row=>row.employee_name));
+    assert(await next.isDisabled());
+    assert.deepEqual(await names.allTextContents(),['签卡 501']);
+    assert.equal(await page.locator('.action-count b').textContent(),'499');
+    await previous.click();
+    await detail.getByText('签卡 451',{exact:true}).waitFor();
+    assert.deepEqual(await names.allTextContents(),rows.slice(450,500).map(row=>row.employee_name));
+    pending=pending.filter(row=>row.id!==501);
+    await next.click();
+    await detail.getByText('此方向已无待复核签卡',{exact:true}).waitFor();
+    await detail.getByRole('button',{name:'从头查看',exact:true}).click();
+    await detail.getByText('签卡 2',{exact:true}).waitFor();
+    await detail.getByRole('button',{name:'关闭',exact:true}).click();
+    await opener.click();
+    await detail.getByText('签卡 2',{exact:true}).waitFor();
+  }finally{
+    await page.close();
+  }
+}
+
 async function main(){
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
@@ -133,7 +244,11 @@ async function main(){
       const browser=await engine.launch({headless:true,...options});
       try{
         for(const role of ['SUPERVISOR','TA_SUPERVISOR'])await checkRoster(browser,base,role);
+        await checkTaGsmNavigation(browser,base);
+        await checkReviewDetailsPagination(browser,base);
         console.log(name+': both supervisors refreshed the header and open mobile drawer without reloading');
+        console.log(name+': TA GSM group review and roster navigation passed on desktop and mobile');
+        console.log(name+': review details reached item 501 without omissions or duplicates');
       }finally{await browser.close();}
     }
   }finally{

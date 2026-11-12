@@ -379,14 +379,32 @@ html[data-skin] .skin-story-wish::before{content:'';position:absolute;inset:7px;
 .skin-story-wish-host{position:relative;z-index:2;max-width:calc(100% - 165px);}
 .skin-story-wish .daily-wish-kicker{display:block;margin-bottom:10px;color:#e3d4af;font-size:11px;letter-spacing:.06em;}
 .skin-story-wish .daily-wish-card{position:relative;display:flex;align-items:center;min-height:90px;overflow:hidden;border-radius:9px;}
-.skin-story-wish [data-wish-text]{margin:0;padding:10px 12px;color:#f9e8bc;font-size:20px;font-weight:600;line-height:1.7;overflow-wrap:anywhere;}
+.skin-story-wish :is([data-wish-text],[data-wish-replay-text]){margin:0;padding:10px 12px;color:#f9e8bc;font-size:20px;font-weight:600;line-height:1.7;overflow-wrap:anywhere;}
 .skin-story-wish canvas{position:absolute;inset:0;display:block;width:100%;height:100%;touch-action:none;border-radius:9px;}
 .skin-story-wish canvas[hidden]{display:none;}
 .skin-story-wish .daily-wish-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px;}
 html[data-skin] .skin-story-wish .daily-wish-actions button.secondary{width:auto;min-height:36px;padding:6px 9px;border:0;border-radius:6px;background:#ffffff09;color:#f6e6be;font-size:11px;}
 .skin-story-wish .daily-wish-note{margin:7px 0 0;color:#d3cdb8;font-size:10px;line-height:1.6;}
+.daily-wish-body [hidden]{display:none!important;}
+.daily-wish-body .daily-wish-actions{flex-wrap:wrap;}
+.daily-wish-actions [data-wish-favorite][aria-pressed="true"]{font-weight:700;}
+html[data-skin] .skin-story-wish .daily-wish-actions button.secondary:is([aria-pressed="true"],[aria-expanded="true"]){background:#f6e6be;color:#3f3520;}
+.daily-wish-favorites{margin-top:10px;padding:9px 11px;border:1px solid currentColor;border-radius:9px;font-size:13px;line-height:1.65;}
+.skin-story-wish .daily-wish-favorites{border-color:#f6e6be4d;background:#18150f29;color:#f6e6be;}
+.daily-wish-favorites p{margin:0;color:inherit;overflow-wrap:anywhere;}
+.daily-wish-favorites .daily-wish-favorites-note{font-size:11px;margin-bottom:4px;}
+.daily-wish-favorites-heading{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px;margin-bottom:6px;}
+.daily-wish-favorites-heading button.secondary{width:auto;min-height:36px;padding:5px 9px;font-size:12px;}
+.daily-wish-favorites ul{margin:0;padding:0;list-style:none;}
+.daily-wish-favorites li{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #8885;}
+.daily-wish-favorites li p{flex:1;min-width:0;}
+.daily-wish-favorites li button.secondary{flex:none;width:auto;min-height:36px;padding:5px 8px;font-size:12px;}
+html[data-skin] .skin-story-wish .daily-wish-favorites button.secondary{background:#ffffff12;color:#f6e6be;}
+html[data-skin] .skin-story-wish .daily-wish-favorites-heading button.secondary{background:#f6e6be;color:#3f3520;}
+.daily-wish-favorite-error{margin:7px 0 0;font-size:12px;line-height:1.6;}
 .wish-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
 .skin-story-wish .skin-story-art{width:145px;right:18px;}
+.skin-story-wish:has([data-wish-favorites]:not([hidden])) .skin-story-art{top:22px;transform:none;}
 .skin-story-wish .skin-medal-art{display:block;width:145px;height:145px;right:0;top:7px;}
 html[data-skin="circle"] .skin-story-wish .skin-medal-art{display:none;}
 .skin-story-wish .skin-portrait-front{width:112px;height:122px;right:3px;top:20px;}
@@ -410,7 +428,7 @@ html[data-header-artwork="medal"] .skin-story-wish .skin-portrait{display:none;}
   html[data-skin] .skin-story-wish:not([hidden]){min-height:0;margin-bottom:14px;padding:17px 14px 12px;border-radius:13px;}
   .skin-story-wish-host{max-width:calc(100% - 100px);}
   .skin-story-wish .daily-wish-card{min-height:99px;}
-  .skin-story-wish [data-wish-text]{padding:10px 8px;font-size:18px;line-height:1.65;}
+  .skin-story-wish :is([data-wish-text],[data-wish-replay-text]){padding:10px 8px;font-size:18px;line-height:1.65;}
   html[data-skin] .skin-story-wish .daily-wish-actions button.secondary{min-height:40px;padding:7px 9px;}
   .skin-story-wish .skin-story-art{width:95px;right:8px;}
   .skin-story-wish .skin-medal-art{width:105px;height:112px;right:-6px;top:22px;}
@@ -422,5 +440,5 @@ html[data-header-artwork="medal"] .skin-story-wish .skin-portrait{display:none;}
   html[data-skin] .app-topbar #userBadge{gap:5px;}
   html[data-skin] .app-topbar .identity-portrait{width:26px;height:26px;flex-basis:26px;}
   html[data-skin] .app-topbar .identity-name{font-size:12px;}
-  .skin-story-wish [data-wish-text]{font-size:17px;}
+  .skin-story-wish :is([data-wish-text],[data-wish-replay-text]){font-size:17px;}
 }

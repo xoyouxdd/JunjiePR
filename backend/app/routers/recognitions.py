@@ -864,6 +864,19 @@ def entered_recognitions(month: str | None = None, db: Session = Depends(get_db)
     return [recognition_payload(row) for row in query.order_by(RecognitionRecord.submitted_at.desc()).limit(500).all()]
 
 
+def direct_review_query(db: Session, reviewer_id: int, *, pending: bool):
+    member_ids = direct_member_ids(db, reviewer_id)
+    query = db.query(RecognitionRecord).filter(RecognitionRecord.employee_id.in_(member_ids))
+    if pending:
+        return query.filter(
+            RecognitionRecord.status == "pending",
+            ~select(RecognitionInboxItem.recognition_id).where(
+                RecognitionInboxItem.recognition_id == RecognitionRecord.id
+            ).exists(),
+        )
+    return query.filter(RecognitionRecord.status.in_(("confirmed", "rejected")))
+
+
 @router.get("/reviews")
 def reviews(
     view: Literal["queue", "history"] = "queue",
@@ -872,21 +885,10 @@ def reviews(
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("REVIEW_DIRECT")),
 ):
-    member_ids = direct_member_ids(db, user.id)
-    query = (
-        db.query(RecognitionRecord)
-        .filter(
-            RecognitionRecord.employee_id.in_(member_ids) if member_ids else RecognitionRecord.id == -1,
-        )
-    )
+    query = direct_review_query(db, user.id, pending=view == "queue")
     if view == "history":
-        query = query.filter(RecognitionRecord.status.in_(("confirmed", "rejected")))
         query = query.order_by(RecognitionRecord.submitted_at.desc(), RecognitionRecord.id.desc())
     else:
-        query = query.filter(
-            RecognitionRecord.status == "pending",
-            ~select(RecognitionInboxItem.recognition_id).where(RecognitionInboxItem.recognition_id == RecognitionRecord.id).exists(),
-        )
         query = query.order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc())
     total = query.count()
     rows = query.offset(offset).limit(limit).all()

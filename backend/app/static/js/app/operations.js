@@ -24,7 +24,48 @@ function actionCenterDetailHtml(detail){
   }
   if(detail.type==='ungrouped_employee')return `<section class="panel action-center-detail"><div class="statistics-detail-heading"><div><h3>${esc(detail.title)}</h3><span>请在员工管理中为以下员工分配主管。</span></div><button type="button" class="secondary" data-close-action-detail>关闭</button></div><div class="table-wrap"><table><thead><tr><th>员工</th><th>角色</th><th>景点圈</th><th>未分组起算日</th><th>待分组时长</th><th>计算依据</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.employee_name)}</strong><br><small>${esc(row.employee_no)}</small></td><td>${esc(row.role_name)}</td><td>${esc(row.attraction_name)}</td><td>${esc(row.unassigned_since||'—')}</td><td>${row.waiting_days===null||row.waiting_days===undefined?'—':`${Number(row.waiting_days)}天`}</td><td>${esc(row.waiting_basis||'—')}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">当前没有待分组员工</td></tr>'}</tbody></table></div></section>`;
   const overdue=detail.type==='overdue_review';
-  return `<section class="panel action-center-detail"><div class="statistics-detail-heading"><div><h3>${esc(detail.title)}</h3><span>${overdue?'已筛选等待超过48小时的签卡。':'按提交时间从早到晚展示。'}</span></div><button type="button" class="secondary" data-close-action-detail>关闭</button></div><div class="table-wrap"><table><thead><tr><th>员工</th><th>景点圈</th><th>签卡</th><th>员工提交时间</th><th>等待复核</th><th>应复核人</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.employee_name)}</strong><br><small>${esc(row.employee_no)}</small></td><td>${esc(row.attraction_name)}${row.group_name?`<br><small>${esc(row.group_name)}</small>`:''}</td><td>${esc(row.recognition_date)} · ${esc(row.recognition_type)}</td><td>${esc(row.submitted_at)}</td><td>${actionCenterWaiting(row.waiting_hours)}</td><td><strong>${esc(row.reviewer_name)}</strong>${row.reviewer_no?`<br><small>${esc(row.reviewer_no)}${row.reviewer_role_name?` · ${esc(row.reviewer_role_name)}`:''}</small>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">当前没有待复核签卡</td></tr>'}</tbody></table></div></section>`;
+  const restart=detail.type==='recognition_review'&&!rows.length&&detail.total>0;
+  const pager=detail.type==='recognition_review'&&(detail.previous_cursor||detail.next_cursor||restart)
+    ? `<div class="pagination" data-recognition-detail-pagination>
+      <button type="button" class="secondary" data-detail-prev ${detail.previous_cursor?'':'disabled'}>上一页</button>
+      <span>本页 ${rows.length} 条 · 共 ${detail.total} 条</span>
+      <button type="button" class="secondary" data-detail-next ${detail.next_cursor?'':'disabled'}>下一页</button>
+      ${restart?'<button type="button" class="secondary" data-detail-restart>从头查看</button>':''}
+    </div>`
+    : '';
+  return `<section class="panel action-center-detail"><div class="statistics-detail-heading"><div><h3>${esc(detail.title)}</h3><span>${overdue?'已筛选等待超过48小时的签卡。':'按提交时间从早到晚展示。'}</span></div><button type="button" class="secondary" data-close-action-detail>关闭</button></div><div class="table-wrap"><table><thead><tr><th>员工</th><th>景点圈</th><th>签卡</th><th>员工提交时间</th><th>等待复核</th><th>应复核人</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.employee_name)}</strong><br><small>${esc(row.employee_no)}</small></td><td>${esc(row.attraction_name)}${row.group_name?`<br><small>${esc(row.group_name)}</small>`:''}</td><td>${esc(row.recognition_date)} · ${esc(row.recognition_type)}</td><td>${esc(row.submitted_at)}</td><td>${actionCenterWaiting(row.waiting_hours)}</td><td><strong>${esc(row.reviewer_name)}</strong>${row.reviewer_no?`<br><small>${esc(row.reviewer_no)}${row.reviewer_role_name?` · ${esc(row.reviewer_role_name)}`:''}</small>`:''}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">'+(restart?'此方向已无待复核签卡':'当前没有待复核签卡')+'</td></tr>'}</tbody></table></div>${pager}</section>`;
+}
+
+function bindRecognitionDetailPagination(host,detail,request,closeDetail){
+  const count=host.closest('.action-center-item')?.querySelector('.action-count b');
+  if(count&&Number.isInteger(detail.total))count.textContent=detail.total;
+  const pager=host.querySelector('[data-recognition-detail-pagination]');
+  if(!pager)return;
+  const controls=[...pager.querySelectorAll('button:not(:disabled)')];
+  const isCurrent=()=>request.isCurrent()&&!host.hidden&&host.contains(pager);
+  const loadPage=async (cursor,direction)=>{
+    controls.forEach(button=>{button.disabled=true;});
+    try{
+      const params=new URLSearchParams({page_size:detail.page_size});
+      if(cursor){
+        params.set('cursor',cursor);
+        params.set('direction',direction);
+      }
+      const data=await api('/api/action-center/recognition_review/details?'+params);
+      if(!isCurrent())return;
+      host.innerHTML=actionCenterDetailHtml(data);
+      host.querySelector('[data-close-action-detail]').onclick=closeDetail;
+      bindRecognitionDetailPagination(host,data,request,closeDetail);
+    }catch(error){
+      if(isCurrent())toast(error.message,true);
+    }finally{
+      if(isCurrent())controls.forEach(button=>{button.disabled=false;});
+    }
+  };
+  pager.querySelector('[data-detail-prev]').onclick=()=>loadPage(detail.previous_cursor,'previous');
+  pager.querySelector('[data-detail-next]').onclick=()=>loadPage(detail.next_cursor,'next');
+  const restart=pager.querySelector('[data-detail-restart]');
+  if(restart)restart.onclick=()=>loadPage();
 }
 
 async function renderActionCenter(openPane){
@@ -57,6 +98,9 @@ async function renderActionCenter(openPane){
   document.getElementById('refreshActionCenter').onclick=()=>render();
   const closeDetail=button=>{const host=button.closest('.action-center-item').querySelector('.action-center-inline-detail');host.innerHTML='';host.hidden=true;button.textContent=button.dataset.actionDetails?'查看明细':'立即查看';button.setAttribute('aria-expanded','false');};
   app.querySelectorAll('[data-action-tab]').forEach(button=>button.onclick=async()=>{if(button.dataset.actionType==='recognition_review'&&!button.dataset.actionDetails){state.reviewFocus=true;state.tab=button.dataset.actionTab;renderTabs();render();return;}const detailTypes=new Set(['backup_health','ungrouped_employee','recognition_review','overdue_review','deduction_follow_up']);if(!detailTypes.has(button.dataset.actionType)){if(button.dataset.actionType==='deduction_material')state.pendingMaterialScope='all';if(button.dataset.actionType==='learning_access')state.learningApprovals=true;if(button.dataset.actionTab==='announcements'){let workspace=announcementWorkspaces.get(state.me.id);if(!workspace){workspace={view:'pending',category:'',q:'',page:1,draft:null};announcementWorkspaces.set(state.me.id,workspace);}workspace.view=button.dataset.actionType==='announcement_receipt'?'pending':'messages';workspace.page=1;workspace.q='';workspace.category='';}state.tab=button.dataset.actionTab;renderTabs();render();return;}if(button.getAttribute('aria-expanded')==='true'){closeDetail(button);return;}button.disabled=true;try{const detail=await api('/api/action-center/'+encodeURIComponent(button.dataset.actionType)+'/details');if(!request.isCurrent())return;app.querySelectorAll('[data-action-tab][aria-expanded="true"]').forEach(closeDetail);const host=button.closest('.action-center-item').querySelector('.action-center-inline-detail');host.innerHTML=actionCenterDetailHtml(detail);host.hidden=false;
+if(detail.type==='recognition_review'){
+  bindRecognitionDetailPagination(host,detail,request,()=>closeDetail(button));
+}
 if(detail.type==='deduction_follow_up'){
   let detailPage=1,detailSequence=0;
   const showWork=async(pageNumber,initial)=>{const serial=++detailSequence;try{const data=initial||await api('/api/action-center/deduction_follow_up/details?page='+pageNumber);if(!request.isCurrent()||!host.isConnected||host.hidden||serial!==detailSequence)return;detailPage=data.page||pageNumber;host.innerHTML=actionCenterDetailHtml(data);host.querySelector('[data-work-prev]').onclick=()=>showWork(detailPage-1);host.querySelector('[data-work-next]').onclick=()=>showWork(detailPage+1);host.querySelectorAll('[data-follow-up-register]').forEach(link=>link.onclick=()=>{const row=data.items.find(item=>item.id===Number(link.dataset.followUpRegister));state.followUpEntry=row;state.registerMode='proxy';state.tab='register';renderTabs();render();});}catch(error){toast(error.message,true)}};

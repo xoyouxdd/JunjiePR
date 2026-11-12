@@ -59,7 +59,81 @@ const server=http.createServer((req,res)=>{
   await check('closed employee and HR dialogs release cleanup',async()=>{const base=await page.evaluate(()=>review.cleanupCount());for(const role of ['CM','HR_CIRCLE']){await page.evaluate(async role=>{const {state}=await import('./static/js/app/state.js');state.me.role_code=role;state.me.base_role_code=role;(await import('./static/js/app/navigation.js')).renderUserBadge();},role);for(let i=0;i<4;i++){await page.locator('#appearanceBtn').click();await page.locator('[data-avatar-dialog-close],[data-appearance-close]').click();await page.locator('[data-avatar-dialog],[data-appearance-dialog]').waitFor({state:'detached'});}assert.equal(await page.evaluate(()=>review.cleanupCount()),base);}});
   await check('navigation closes dialog without skipping other cleanup',async()=>{await page.locator('#appearanceBtn').click();await page.evaluate(async()=>{const {registerPageCleanup}=await import('./static/js/app/context.js');window.reviewCleanupProbe=0;registerPageCleanup(()=>window.reviewCleanupProbe++);await review.navigate('home');});await page.locator('[data-avatar-dialog],[data-appearance-dialog]').waitFor({state:'detached'});assert.equal(await page.evaluate(()=>window.reviewCleanupProbe),1);assert.equal(await page.locator('.app-frame[inert]').count(),0);assert.equal(await page.evaluate(()=>document.body.style.overflow),'');});
   await check('user-scoped storage stays separate',async()=>{const original=await page.evaluate(()=>localStorage.getItem('fz-daily-wish-v1-1'));await page.evaluate(()=>review.user(2));await page.locator('[data-wish-next]').click();assert.equal(await page.evaluate(()=>localStorage.getItem('fz-daily-wish-v1-1')),original);assert(await page.evaluate(()=>!!localStorage.getItem('fz-daily-wish-v1-2')));});
-  await check('blocked storage preserves current in-memory card',async()=>{await page.evaluate(()=>{Storage.prototype.getItem=()=>{throw Error('blocked');};Storage.prototype.setItem=()=>{throw Error('blocked');};});await page.locator('[data-wish-reveal]').click();assert(await page.evaluate(()=>{const c=document.querySelector('[data-wish-scratch]');review.mount();return c===document.querySelector('[data-wish-scratch]')&&c.hidden;}));});
+  await check('new wish and favorites survive reload and stay account scoped',async()=>{
+   await page.setViewportSize({width:320,height:850});
+   await page.evaluate(()=>{
+    const now=new Date(),day=now.getFullYear()+'-'+(now.getMonth()+1)+'-'+now.getDate();
+    localStorage.setItem('fz-daily-wish-v1-1',JSON.stringify({day,id:2199,history:[2000,2199]}));
+   });
+   await page.reload();await page.waitForFunction(()=>window.reviewReady);
+   const favorite=page.locator('[data-wish-favorite]'),toggle=page.locator('[data-wish-favorites-toggle]');
+   const panel=page.locator('[data-wish-favorites]'),list=panel.locator('li');
+   const expected='希望回头想起今天，你还能记得一件跟工作无关、光是想起来就有点高兴的小事。';
+   assert(await favorite.isHidden());
+   await toggle.click();assert(await panel.locator('[data-wish-favorites-empty]').isVisible());
+   await page.locator('[data-wish-reveal]').click();
+   assert.equal(await page.locator('[data-wish-text]').innerText(),expected);
+   await favorite.click();assert.equal(await favorite.getAttribute('aria-pressed'),'true');
+   assert.equal(await list.locator('p').innerText(),expected);
+   assert(await panel.evaluate(node=>node.scrollWidth<=node.clientWidth));
+   await page.locator('[data-wish-next]').click();assert(await favorite.isHidden());
+   assert.equal(await list.locator('p').innerText(),expected);
+   await page.reload();await page.waitForFunction(()=>window.reviewReady);
+   await toggle.click();assert.equal(await list.locator('p').innerText(),expected);
+   await page.evaluate(()=>review.user(2));await toggle.click();assert.equal(await list.count(),0);
+   await page.evaluate(()=>review.user(1));await toggle.click();assert.equal(await list.count(),1);
+   await list.getByRole('button').click();assert.equal(await list.count(),0);
+   assert.equal(await toggle.evaluate(node=>node===document.activeElement),true);
+   assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('fz-daily-wish-favorites-v1-1'))),[]);
+  });
+  await check('flip a favorite scratch card without changing the daily wish',async()=>{
+   await page.setViewportSize({width:320,height:850});
+   await page.reload();await page.waitForFunction(()=>window.reviewReady);
+   const toggle=page.locator('[data-wish-favorites-toggle]'),flip=page.getByRole('button',{name:'翻一张'});
+   const list=page.locator('[data-wish-favorites-list]'),card=page.locator('[data-wish-favorites-card]');
+   const mask=page.locator('[data-wish-replay-scratch]'),quote=page.locator('[data-wish-replay-text]');
+   const dailyKey='fz-daily-wish-v1-1',favoriteKey='fz-daily-wish-favorites-v1-1';
+   const stored=key=>page.evaluate(name=>localStorage.getItem(name),key);
+   await toggle.click();assert(await flip.isHidden());
+   await page.locator('[data-wish-reveal]').click();
+   const daily=await stored(dailyKey),dailyText=await page.locator('[data-wish-text]').innerText();
+   await page.evaluate(key=>{
+    localStorage.setItem(key,JSON.stringify([2140,2000]));
+    window.dispatchEvent(new StorageEvent('storage',{key}));
+   },favoriteKey);
+   assert(await flip.isVisible());
+   const pick=number=>flip.evaluate((button,result)=>{
+    const random=Math.random;
+    try{Math.random=()=>result;button.click();}finally{Math.random=random;}
+   },number);
+   await pick(0);
+   assert(await list.isHidden());assert(await mask.isVisible());
+   assert.equal(await quote.getAttribute('aria-hidden'),'true');
+   assert.equal(await quote.innerText(),'希望你今天吃饭的时候，饭还是热的，也有时间慢慢吃。');
+   assert(await card.evaluate(node=>node.scrollWidth<=node.clientWidth));
+   await mask.scrollIntoViewIfNeeded();
+   const box=await mask.boundingBox();
+   await page.mouse.move(box.x+12,box.y+12);await page.mouse.down();
+   for(let y=12;y<box.height;y+=20){
+    await page.mouse.move(box.x+12,box.y+y);
+    await page.mouse.move(box.x+box.width-12,box.y+y,{steps:4});
+   }
+   await page.mouse.up();await mask.waitFor({state:'hidden'});
+   assert.equal(await quote.getAttribute('aria-hidden'),null);
+   await pick(0.99);
+   assert(await mask.isVisible());
+   assert.equal(await quote.innerText(),'愿你今天遇到的人，都能给彼此多一点耐心。');
+   await page.getByRole('button',{name:'直接查看收藏'}).click();assert(await mask.isHidden());
+   await page.getByRole('button',{name:'返回收藏'}).click();
+   assert(await card.isHidden());assert(await list.isVisible());
+   assert.equal(await stored(dailyKey),daily);
+   assert.equal(await stored(favoriteKey),'[2140,2000]');
+   assert.equal(await page.locator('[data-wish-text]').innerText(),dailyText);
+   assert(await page.locator('[data-wish-scratch]').isHidden());
+   await list.getByRole('button').first().click();assert(await flip.isVisible());
+   await list.getByRole('button').first().click();assert(await flip.isHidden());
+  });
+  await check('blocked storage preserves current in-memory card',async()=>{await page.reload();await page.waitForFunction(()=>window.reviewReady);await page.evaluate(()=>{Storage.prototype.getItem=()=>{throw Error('blocked');};Storage.prototype.setItem=()=>{throw Error('blocked');};});await page.locator('[data-wish-reveal]').click();assert(await page.evaluate(()=>{const c=document.querySelector('[data-wish-scratch]');review.mount();return c===document.querySelector('[data-wish-scratch]')&&c.hidden;}));});
   assert.deepEqual(errors,[]);await browser.close();browser=null;
  }
  console.log(JSON.stringify({result:failures.length?'FAIL':'PASS',checks:results,failures},null,2));assert.deepEqual(failures,[]);
