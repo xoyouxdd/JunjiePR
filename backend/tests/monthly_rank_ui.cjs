@@ -365,8 +365,8 @@ async function main(){
     expectedQueryFailure=true;
     await page.route(dashboardRoute,failureHandler);
     await page.locator('#homeMonthSelect').selectOption(month());
-    await page.locator('[role="alert"]').waitFor();
-    assert((await page.locator('[role="alert"]').textContent()).includes('测试服务暂不可用'));
+    await page.getByRole('alert').waitFor();
+    assert((await page.getByRole('alert').textContent()).includes('测试服务暂不可用'));
     assert.equal(await page.locator('.member-score-items').count(),0);
     await page.locator('#homeQueryRetry').click();
     await page.locator('#homeRankView').waitFor();await showRank(page);
