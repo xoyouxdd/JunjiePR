@@ -418,6 +418,18 @@ def test_seven_post_accepts_another_shift_and_post_swap_carries_assignment(rotat
         with pytest.raises(S.ActionError): edit(rotation, action=bad)
 
 
+def confirm_later_shift_entry(engine, pid, start):
+    from app.rotation import forecast
+
+    person = engine.P[pid]
+    assert forecast.awaiting_shift_entry(person)
+    assert person['continuousStart'] is None and engine.find_post(pid)[0] is None
+    projected, _ = forecast.confirmation_plan(engine, pid, start)
+    assert projected is not None
+    assert forecast.execute(engine, pid, start, 'test', projected['line'])['executed']
+
+
+
 @pytest.mark.parametrize('post_name',['小C','迎宾','快迎1'])
 @pytest.mark.parametrize('shift_start',[435,540])
 def test_other_shift_on_early_post_keeps_own_clock_and_is_not_push7_target(rotation,post_name,shift_start):
@@ -443,6 +455,8 @@ def test_other_shift_on_early_post_keeps_own_clock_and_is_not_push7_target(rotat
     eng.publish(419,'test');eng.tick(420)
     assert eng.P[later]['state']=='notyet' and eng.P[later]['continuousStart'] is None
     eng.tick(shift_start)
+    if shift_start > 435:
+        confirm_later_shift_entry(eng, later, shift_start)
     assert eng.P[later]['state']=='onpost' and eng.P[later]['continuousStart']==shift_start
     assert '7点岗' not in eng.P[later]['flags'] and eng._push7_pairs()==[]
 
@@ -490,6 +504,7 @@ def test_same_prestart_person_change_matches_daily_board_and_published_plan(rota
         assert sum(p['occ']==later for line in lines for p in line['posts'])==1
     assert board.P[later]['continuousStart'] is None
     board.tick(540)
+    confirm_later_shift_entry(board, later, 540)
     assert board.P[later]['state']=='onpost' and board.P[later]['continuousStart']==540
     assert '7点岗' not in board.P[later]['flags']
 
@@ -536,6 +551,8 @@ def test_prestart_swap_only_posts_keeps_staff_and_does_not_transfer_seven_duty(r
     assert board.P[later]['continuousStart'] is None
     start=state['persons'][later]['start']
     board.tick(start)
+    if not second_seven:
+        confirm_later_shift_entry(board, later, start)
     assert board.P[later]['continuousStart']==start
     assert ('7点岗' in board.P[later]['flags']) is second_seven
 
