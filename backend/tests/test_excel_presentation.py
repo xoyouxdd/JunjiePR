@@ -122,7 +122,8 @@ def test_ranking_export_fetches_all_rows_beyond_old_5000_limit(monkeypatch):
         calls.append(args[9])  # page_size, after db/user/date/filter/page arguments
         return {"total": 5002, "rows": list(range(min(args[9], 5002)))}
 
-    def builder(db, data, category):
+    def builder(db, data, category, *, keyword):
+        assert keyword == ""
         received.extend(data["rows"])
         return Workbook()
 
