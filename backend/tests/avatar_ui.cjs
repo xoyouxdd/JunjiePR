@@ -1,5 +1,5 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),output=path.resolve(__dirname,'../../output/avatar-generation-20261028');
 fs.mkdirSync(output,{recursive:true});
 const catalog=JSON.parse(fs.readFileSync(path.join(root,'images/avatars/catalog.json'),'utf8'));

@@ -1,6 +1,6 @@
 // Waiting-match bookkeeping must not push the shared board below the fold.
 const fs=require('fs'),path=require('path'),assert=require('node:assert/strict');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),source=fs.readFileSync(path.join(root,'js/rotation-workflow.js'),'utf8');
 const render=source.slice(source.indexOf('function workflowTimeoutBanner('),source.indexOf('async function workflowHandleTimeout('));
 (async()=>{for(const [engine,type,opts] of [['edge',chromium,{channel:'msedge'}],['webkit',webkit,{}]]){const browser=await type.launch({...opts,headless:true});try{const page=await browser.newPage({viewport:{width:1920,height:1080}});await page.setContent('<main id=alerts></main><section id=board>轮岗岗位与人员</section>');await page.addScriptTag({content:`const RT={modalOpen:false,submitting:false,editingPost:false,data:{day:{timeoutCases:[]}}},me={name:'测试主管'},workflowTimeoutSeen=new Set();const esc=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));window.notices=[];const confirmBox=(...args)=>notices.push(args);const workflowHandleTimeout=()=>{};${render};window.renderBanner=workflowTimeoutBanner;`});

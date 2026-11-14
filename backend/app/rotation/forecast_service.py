@@ -3,8 +3,11 @@ from copy import deepcopy
 import math
 from uuid import uuid4
 
+from sqlalchemy import insert
+
 from app.rotation import forecast as F
-from app.rotation.engine import ActionError
+from app.rotation.engine import ActionError, Engine
+from app.rotation.namespace import tables_for
 
 MANUAL = {'pool', 'break_time', 'shift', 'sort_time', 'all_close', 'place', 'sick', 'add_person'}
 
@@ -27,9 +30,45 @@ def work_clock(cfg, day, minute):
     return day, minute
 
 
+class BatchRecords:
+    def __init__(self, hooks):
+        self.events = []
+        self.segments = []
+        self.push7_history = hooks.push7_history
+
+    def log(self, typ, actor, pid, line, post, detail):
+        self.events.append((typ, actor, pid, line, post, deepcopy(detail)))
+
+    def segment(self, pid, line, start, end):
+        self.segments.append((pid, line, start, end))
+
+
+def apply_batch(eng, now, start, booked):
+    """Calculate on a private copy, then persist final state and ordered records."""
+    hooks = eng.h
+    records = BatchRecords(hooks)
+    trial = Engine(deepcopy(eng.d), eng.S, records)
+    F.run_batch(trial, now, start, [trial.P[p['pid']] for p in booked])
+
+    db = hooks.db
+    tables = tables_for(db)
+    if records.events or records.segments:
+        # Preserve the order of already queued records, such as a due closure.
+        db.flush()
+        connection = db.connection()
+        if records.events:
+            connection.execute(insert(tables.RotationEvent.__table__),
+                               [hooks.event_values(*entry) for entry in records.events])
+        if records.segments:
+            connection.execute(insert(tables.RotationSegment.__table__),
+                               [hooks.segment_values(*entry) for entry in records.segments])
+            hooks.invalidate_week_minutes()
+    eng.d.update(trial.d)
+
+
 def advance(db, cfg, row, state, target):
     """Jump between meaningful boundaries, not 15-second replay steps."""
-    from app.rotation import service as S, daily as D
+    from app.rotation import service as S, daily as D, history as H
     from app.rotation.engine import _m, rotation_end
     eng, hooks = S.engine_for(db, cfg, row, state)
     previous = min(float(state.get('lastTick', target)), target)
@@ -39,7 +78,12 @@ def advance(db, cfg, row, state, target):
         changed = bool(D.fill_prestart_spares(state)) or changed
     while True:
         hooks.now = t
-        step_changed = F.tick(eng, t)
+        batch_before = H.snapshot(eng.d) if F.due_batch(eng, t) else None
+        if batch_before is not None:
+            batch_before['existingSegmentIds'] = H.existing_segment_ids(db, eng, t)
+        step_changed = F.tick(eng, t, advance_batches=True, execute_batch=apply_batch)
+        if batch_before is not None:
+            H.record(db, eng, batch_before, 'batch_depart', 'system', t)
         changed = step_changed or changed
         if step_changed:
             D.capture_snapshot(db, row.attraction_id, state, S.settings_of(cfg), t)
@@ -47,7 +91,10 @@ def advance(db, cfg, row, state, target):
             break
         boundaries = [target, rotation_end(state)]
         for p in eng.P.values():
-            boundaries.extend([p['start'], p['end'] - 25, p['end']])
+            boundaries.extend([p['start'], p['end'] - 30, p['end'] - 25, p['end']])
+            if F.batch_member(eng, p):
+                boundaries.extend([p['start'] - F.BATCH_CHECK_IN_MINUTES,
+                                   p['start'] - F.BATCH_LEAD_MINUTES])
             if p.get('readyAt') is not None:
                 boundaries.extend([p['readyAt'], p.get('timeoutAt', p['readyAt'] + 3)])
                 if p['state'] == 'meal':
@@ -63,6 +110,7 @@ def advance(db, cfg, row, state, target):
     if not changed and state['status'] == 'live':
         # Both preparation windows can open without changing a person's state.
         changed = any((eng.preparing_shift_end(p, t) and not eng.preparing_shift_end(p, previous))
+                      or (F.can_check_in(eng, p, t) != F.can_check_in(eng, p, previous))
                       or (F.preparing_shift_start(p, t) and not F.preparing_shift_start(p, previous))
                       for p in eng.P.values())
     if changed:
@@ -72,6 +120,34 @@ def advance(db, cfg, row, state, target):
     return changed
 
 
+def batch_result_view(result):
+    if not result.get('line'):
+        return result
+    title = f"{result['line']}线 · {result['post']}"
+    if 'handoff' not in result:
+        if result.get('pushes'):
+            title += f" · {result['pushes']}推"
+        return {**result, 'heading': title, 'instruction': '、'.join(result.get('special', []))}
+    handoff = result['handoff']
+    if not handoff:
+        return {**result, 'heading': title, 'instruction': ''}
+    outcome = handoff['outcome']
+    who = f"通知原{handoff['post']}的{handoff['name']}"
+    if outcome == 'post':
+        steps = handoff['steps']
+        if steps > 0:
+            title += f' · {steps}推'
+        instruction = f"{who}去{handoff['destination']}"
+    elif outcome == 'done':
+        title += ' · 推下班'
+        instruction = f'{who}下班'
+    elif outcome in ('sick', 'away'):
+        instruction = f"{who}{'下岗休病假' if outcome == 'sick' else '出圈'}"
+    else:
+        instruction = f'{who}下岗，回休息室'
+    return {**result, 'heading': title, 'instruction': instruction}
+
+
 def notices(eng, now):
     if eng.d.get('status') != 'live':
         return {}
@@ -79,6 +155,12 @@ def notices(eng, now):
     for p in eng.P.values():
         state = p['state']
         a = p.get('assign')
+        if F.can_check_in(eng, p, now) and not F.checked_in(p):
+            out[(p['pid'], 'step')] = ('batch_check_in', '请确认已到', '班前三分钟截止签到，签到后由系统统一排岗。')
+        if p.get('batchResult'):
+            result = batch_result_view(p['batchResult'])
+            text = '。'.join(filter(None, (result['heading'], result['instruction']))) if result.get('line') else '本批岗位已排满，自动休息15分钟。'
+            out[(p['pid'], 'batch')] = ('batch_result', '批量上岗结果', text)
         if state in F.WAITING_TO_REST:
             out[(p['pid'], 'step')] = ('arrive', '请选择休息或吃饭', '确认后开始餐休并显示预计线路。')
         elif state in {'rest', 'meal', 'ready'} and a:
@@ -131,6 +213,9 @@ def person_view(eng, p, now):
                and now + F.EPS >= (p.get('assign') or {}).get('notBefore', 0)
                and now < F.deadline(eng, p, now, (p.get('assign') or {}).get('notBefore', 0)))
     actions = ['arrive'] if p['state'] in F.WAITING_TO_REST else ['depart'] if task else []
+    check_in = F.can_check_in(eng, p, now) and not F.checked_in(p)
+    if check_in:
+        actions.append('batch_check_in')
     flags = [flag for flag in p.get('flags', []) if flag not in ('推7点', '7点岗')]
     if F.seven_target(p):
         flags.append('7点岗')
@@ -147,12 +232,16 @@ def person_view(eng, p, now):
             projection['shift_previews'] = F.shift_previews(eng, now)
         preview = projection['shift_previews'].get(p['pid'])
     return {**deepcopy(p), 'flags': flags, 'task': task, 'taskTimeout': None, 'timeoutCase': None, 'timeoutPending': None,
+            'batchResult': batch_result_view(deepcopy(p['batchResult'])) if p.get('batchResult') else None,
             'entryHold': None, 'entryGroup': None, 'assignmentLocked': False,
             'post': L['posts'][i]['name'] if L else None, 'postIndex': i,
             'postHold': (L['posts'][i].get('hold') or L['posts'][i].get('hold101')) if L else None,
             'canDepart': can, 'canArrive': p['state'] in F.WAITING_TO_REST,
             'departureRoutes': task['routes'] if task else [], 'departureBlocked': None,
-            'previewAssign': deepcopy(preview), 'upcomingShift': upcoming, 'arrivalOutcome': None,
+            'previewAssign': deepcopy(preview), 'upcomingShift': upcoming,
+            'awaitingShiftEntry': eng.d['status'] == 'live' and F.awaiting_shift_entry(p),
+            'canBatchCheckIn': check_in,
+            'batchCheckedIn': upcoming and F.checked_in(p), 'arrivalOutcome': None,
             'preparing': preparing,
             'continuousMinutes': max(0, now - p['continuousStart']) if p.get('continuousStart') is not None and L else 0,
             'mealEligible': eng.meal_eligible(p), 'mealOptions': eng.meal_options(p, now),
@@ -181,6 +270,7 @@ def add_person(db, eng, body, now, actor):
     p.update(temporary=temporary, continuousStart=None, forecastOrder=uuid4().hex,
              state='notyet' if now < start else 'pending' if now < end else 'other',
              manualPaused=now >= end)
+    eng.__dict__.pop('_forecast_shift_counts', None)
 
 
 def action(db, cfg, row, eng, body, now, actor):
@@ -190,17 +280,22 @@ def action(db, cfg, row, eng, body, now, actor):
     if getattr(actor, 'kind', None) == 'screen' and act not in S.SCREEN_ALLOWED_ACTIONS:
         raise ActionError('休息室大屏只可确认去休息或去轮岗')
     if getattr(actor, 'kind', None) == 'member':
-        if act not in {'arrive', 'depart'} or actor.member_employee_no != pid:
+        if act not in {'arrive', 'depart', 'batch_check_in'} or actor.member_employee_no != pid:
             raise ActionError('只能确认本人轮岗')
     token = body.get('confirmation_token')
-    if act in {'arrive', 'depart'}:
+    if act in {'arrive', 'depart', 'batch_check_in'}:
         p = eng.person(pid)
         if not isinstance(token, str) or token != F.token(eng, p, act):
             raise S.ConfirmationConflict('人员状态已变化，请刷新后重新确认')
     before = H.snapshot(eng.d)
-    before['segmentIdsAtAction'] = H.same_time_segment_ids(db, eng, now)
+    before['existingSegmentIds'] = H.existing_segment_ids(db, eng, now)
     result = {'ok': True, 'executed': True}
-    if act == 'depart':
+    if act == 'batch_check_in':
+        if not F.can_check_in(eng, p, now):
+            raise ActionError('当前不在本班次签到时间内')
+        p['batchCheckedInFor'] = p['start']
+        eng.h.log('batch_check_in', actor, pid, None, None, {'start': p['start']})
+    elif act == 'depart':
         if body.get('group_confirm'):
             raise ActionError('多人预排必须逐人确认上岗')
         result = F.execute(eng, pid, now, actor, body.get('expected_line'),
@@ -268,6 +363,8 @@ def action(db, cfg, row, eng, body, now, actor):
         start, end = shift_values(body)
         old = [p['start'], p['end']]
         p.update(start=start, end=end)
+        eng.__dict__.pop('_forecast_shift_counts', None)
+        p.pop('batchCheckedInFor', None)
         p['confirmationSequence'] = p.get('confirmationSequence', 0) + 1
         if p['state'] in {'rest', 'meal', 'ready'} and start > F.readiness(p):
             p.update(readyAt=start, timeoutAt=start + 3)
@@ -282,7 +379,7 @@ def action(db, cfg, row, eng, body, now, actor):
         offset = body.get('day_offset', 0)
         if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 2:
             raise ActionError('排序时间日期不正确')
-        L['sortAt'] = clock_value(body.get('time')) + offset * 1440
+        F.set_sort_time(L, clock_value(body.get('time')) + offset * 1440)
         eng.h.log('sort_time', actor, None, L['id'], None, {'before': old, 'after': L['sortAt']})
     elif act == 'place':
         # A shared snapshot protects against duplicate drag submissions and stale previews.
@@ -332,6 +429,7 @@ def action(db, cfg, row, eng, body, now, actor):
             post.pop('resumeOpen', None)
             post.pop('resumeScheduled', None)
             post.update(closeAt=None, closedAuto=False)
+            post.pop('closeAfterRelief', None)
             if immediate:
                 L['active'] = True
         elif body.get('closeAt'):
@@ -339,6 +437,7 @@ def action(db, cfg, row, eng, body, now, actor):
             if at <= now or at >= rotation_end(eng.d):
                 raise ActionError('计划撤岗时间须晚于当前时间且早于轮岗结束')
             post.update(closeAt=time_text, closedAuto=False)
+            post.pop('closeAfterRelief', None)
         else:
             post.pop('resumeOpen', None)
             post.pop('resumeScheduled', None)
@@ -422,8 +521,8 @@ def action(db, cfg, row, eng, body, now, actor):
     F.tick(eng, now)
     if act != 'restore_line':
         H.record(db, eng, before, act, actor, now)
-    if act in {'arrive', 'depart'}:
-        if act == 'arrive':
+    if act in {'arrive', 'depart', 'batch_check_in'}:
+        if act != 'depart':
             eng.P[pid]['confirmationSequence'] = eng.P[pid].get('confirmationSequence', 0) + 1
         p = eng.P[pid]
         L, i = eng.find_post(pid)

@@ -82,6 +82,7 @@
 .rt-pool-add { margin-left:auto; font-size:12px; }
 [data-f-pool] h2 { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
 [data-f-head] { flex-wrap:wrap; gap:4px; }
+.rt-post.rt-batch-on-post { background-color:var(--surface-raised, #ecfdf5); border-inline-start:4px solid #168368; }
 [data-f-slot] .rt-who-name { min-width:0; overflow-wrap:anywhere; }
 [data-f-slot] button.rt-who-name { border:0; background:transparent; padding:0; min-height:0; font:inherit; color:inherit; box-shadow:none; }
 .rt-line-head.g-A { background: var(--line-a); }

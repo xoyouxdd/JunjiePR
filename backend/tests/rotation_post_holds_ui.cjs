@@ -1,6 +1,6 @@
 // Real local API and board scripts, synthetic accounts and roster only.
 const assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs'),net=require('node:net');
-const {spawn}=require('node:child_process'),{chromium,webkit,firefox}=require('playwright');
+const {spawn}=require('node:child_process'),{chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),out=path.join(root,'.handover_review/rotation-post-holds-20261024');
 fs.mkdirSync(out,{recursive:true});let server,browser,log='';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));

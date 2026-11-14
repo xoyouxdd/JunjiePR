@@ -178,13 +178,25 @@ def refresh_due(db):
 
 @router.get('')
 def listing(response: Response, page: int = Query(1, ge=1), page_size: int = Query(10, ge=1, le=50),
-            view: Literal['all', 'mine', 'manage', 'sign'] = 'all', db=Depends(get_db), user=Depends(current_user)):
+            view: Literal['all', 'mine', 'manage', 'sign'] = 'all', event_id: int | None = Query(None, ge=1),
+            db=Depends(get_db), user=Depends(current_user)):
     response.headers['Cache-Control'] = 'private, no-store'
     response.headers['Vary'] = 'Cookie'
     refresh_due(db)
     from app.services.activity_queries import listing as read_listing
     db.execute(text('BEGIN'))
-    return read_listing(db, user, page, page_size, view)
+    return read_listing(db, user, page, page_size, view, event_id)
+
+
+@router.get('/pending-redemptions')
+def read_pending_redemptions(response: Response, page: int = Query(1, ge=1),
+                             page_size: int = Query(10, ge=1, le=50), db=Depends(get_db),
+                             user=Depends(current_user)):
+    from app.services.activity_queries import pending_redemptions
+    response.headers.update({'Cache-Control': 'private, no-store', 'Vary': 'Cookie'})
+    refresh_due(db)
+    db.execute(text('BEGIN'))
+    return pending_redemptions(db, user.id, page, page_size)
 
 
 @router.get('/{event_id}')

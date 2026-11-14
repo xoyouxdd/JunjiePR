@@ -1,7 +1,7 @@
 'use strict';
 // Actual screen templates, renderer and CSS; synthetic data, no business writes.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),out=path.resolve(__dirname,'../../.handover_review');
 function fixture(){
   const persons=[],names=['林晓晨','陈雨欣','李佳宁','王思远','周乐怡','张明轩','黄子涵','许嘉宁','赵雨桐','杨文昊'];let seq=0;

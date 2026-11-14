@@ -1,6 +1,6 @@
 // Targeted lifecycle review. Real modules + strict CSP; no backend or business data.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict'),{createHash}=require('node:crypto');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const html=fs.readFileSync(path.join(root,'index.html'),'utf8').replaceAll('__STATIC_CACHE_VERSION__','appearance-review').replace(/<script type="module"[^>]*><\/script>/,'<script type="module" src="review-harness.js"></script>');
 const map=/<script type="importmap">([\s\S]*?)<\/script>/.exec(html)[1];

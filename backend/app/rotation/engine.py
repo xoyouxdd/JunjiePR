@@ -399,7 +399,11 @@ class Engine:
 
     def can_board(self, p, arrival, now):
         """到岗时距下班/出圈必须大于 noBoardBefore 分钟。"""
-        t, _, _ = self.leave_at(p, now)
+        t, kind, _ = self.leave_at(p, now)
+        if kind == 'off' and self.d.get('ruleVersion') == 2:
+            from app.rotation import forecast
+            if forecast.late_shift(self, p):
+                return arrival < t
         return t - arrival > self.S['noBoardBefore']
 
     def targeted(self):
@@ -561,12 +565,12 @@ class Engine:
             changed = W.plan(self, now) or changed
         return changed
 
-    def _freeze_daily_opening(self, now):
+    def _freeze_daily_opening(self, now, *, freeze_at=None):
         if self.d.get('dailyOpening') or not self.P:
             return False
         first = min(p['start'] for p in self.P.values())
         # Never fabricate an opening snapshot from an already running legacy day.
-        if now < first or any(p['state'] not in ('notyet', 'excluded') for p in self.P.values()):
+        if now < (first if freeze_at is None else freeze_at) or any(p['state'] not in ('notyet', 'excluded') for p in self.P.values()):
             return False
         excluded = {'dailyOpening', 'initialDraft', 'initialSettings', 'confirmations', 'entryVotes'}
         state = deepcopy({k: v for k, v in self.d.items() if k not in excluded})
@@ -640,7 +644,7 @@ class Engine:
         if (L['posts'][i].get('hold') or L['posts'][i].get('hold101')):
             raise ActionError('该人员正在定岗，请先取消定岗')
         if p.get('lineStart') is not None:
-            self.h.segment(p['pid'], L['id'], p['lineStart'], now)
+            self.h.segment(p['pid'], L['id'], p['lineStart'], max(now, p['lineStart']))
         p['lastDeparture'] = {'line': L['id'], 'post': L['posts'][i]['name']}
         p['line'] = None
         p['lineStart'] = None
@@ -1127,6 +1131,10 @@ class Engine:
 
     # -------- 大屏操作
     def preparing_shift_end(self, p, now):
+        if self.d.get('ruleVersion') == 2:
+            from app.rotation.forecast import late_shift
+            if late_shift(self, p):
+                return False
         return p['state'] == 'onpost' and p['end'] - now <= SHIFT_PREPARE_MINUTES
 
     def shift_finishes_on_exit(self, p, now):

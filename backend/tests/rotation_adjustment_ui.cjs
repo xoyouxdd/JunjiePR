@@ -1,6 +1,6 @@
  'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 async function main(){
  const browser=await chromium.launch({channel:'msedge',headless:true});

@@ -1,7 +1,7 @@
 // Real upload helpers + browser multipart encoder + an HTTP receiving endpoint.
 // Fault injection models API failures; it does not impersonate a physical phone.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jQ8kAAAAASUVORK5CYII=','base64');
 const received=[],checks=[],missing=new Map();let missingResponses=0;

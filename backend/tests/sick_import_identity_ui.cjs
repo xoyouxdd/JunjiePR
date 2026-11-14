@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const matched=[{file_employee_no:'01836527',source_name:'Jason',system_employee_no:'1836527',system_name:'张森 Jason <b>测试</b>',match_method:'工号匹配、姓名包含匹配'},
  {file_employee_no:'1836527',source_name:'张森',system_employee_no:'1836527',system_name:'张森 Jason',match_method:'工号匹配、姓名包含匹配'}];

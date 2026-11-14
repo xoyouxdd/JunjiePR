@@ -5,7 +5,7 @@ const path=require('node:path');
 const fs=require('node:fs');
 const net=require('node:net');
 const {spawn}=require('node:child_process');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const backend=path.resolve(__dirname,'..');
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 

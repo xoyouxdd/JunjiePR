@@ -337,22 +337,24 @@ def export_pr_rankings(
 ):
     if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
         raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
-    if category == "points":
-        raise HTTPException(400, "积点榜暂不支持导出")
     data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id, population)
     if data["total"] > len(data["rows"]):
         data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, data["total"], attraction_id, population)
     if data["total"] != len(data["rows"]):
         raise HTTPException(409, "排名数据已变化，请重新导出以取得完整记录")
-    wb = build_pr_rankings_workbook(db, data, category)
+    wb = build_pr_rankings_workbook(db, data, category, keyword=keyword)
     watermark_workbook(wb, user.employee.employee_no)
     output = BytesIO()
     save_export_workbook(wb, output)
     output.seek(0)
-    write_audit(db, user.employee, "导出PR排名", "pr_ranking_export", category, after={"start_date": start_date, "end_date": end_date, "subtype_id": subtype_id, "sort_by": sort_by, "keyword": keyword, "row_count": len(data["rows"]), "attraction_id": data.get("attraction_id", attraction_id), "population": population})
+    export_title = "积点榜" if category == "points" else "PR排名"
+    write_audit(db, user.employee, f"导出{export_title}", "pr_ranking_export", category, after={"start_date": start_date, "end_date": end_date, "subtype_id": subtype_id, "sort_by": sort_by, "keyword": keyword, "row_count": len(data["rows"]), "attraction_id": data.get("attraction_id", attraction_id), "population": population})
     db.commit()
     ascii_filename = f"pr_rankings_{category}_{start_date}_{end_date}.xlsx"
-    display_filename = f"PR排名_{category}_{start_date}_{end_date}.xlsx"
+    display_filename = (
+        f"积点榜_{data['attraction_name']}_{'LEAD' if population == 'supervisor' else 'CM-TR'}_{start_date}_{end_date}.xlsx"
+        if category == "points" else f"PR排名_{category}_{start_date}_{end_date}.xlsx"
+    )
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": content_disposition(ascii_filename, display_filename)})
 
 

@@ -1,7 +1,7 @@
 'use strict';
 // Real page/API with delayed responses: preserve the board, scroll, rules and stale-write guards.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net');
-const {spawn}=require('node:child_process'),{chromium,webkit}=require('playwright');
+const {spawn}=require('node:child_process'),{chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'rotation-refresh-'));
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 let server,browser,log='';

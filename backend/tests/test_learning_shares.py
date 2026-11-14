@@ -15,7 +15,7 @@ os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='HR123'
 from fastapi.testclient import TestClient
 from app.main import app
 from app.v2_database import SessionLocal, FILE_DIR
-from app.v2_models import Attraction, Employee, Role, EmployeeRoleAssignment, GroupMembership
+from app.v2_models import Attraction, Employee, Role, EmployeeActingDuty, EmployeeRoleAssignment, GroupMembership
 from app.learning_models import LearningShare, LearningRevision, LearningAccess, LearningReaction, LearningAsset, LearningDraft, LearningFeedback
 
 
@@ -187,6 +187,131 @@ def test_publish_scope_locked_metadata_and_no_todo_pollution(client):
     assert listing['locked'] and listing['title']=='交接攻略' and 'body' not in listing and 'assets' not in listing
     assert c.get(f'/api/learning/{s["id"]}').status_code==403
     assert c.put(f'/api/learning/{s["id"]}/reaction',json={'liked':True,'starred':True}).status_code==403
+
+
+@pytest.mark.parametrize('account', ['TRTEST01','SUPTEST01','GSMTEST01','TATEST01','TAGSMTEST01'])
+def test_publishers_create_and_confirm_only_in_their_home_circle(client, account):
+    c = client
+    login(c, account)
+    home = next(circle['id'] for circle in options(c)['circles'] if circle['own'])
+    other = other_circle(c)
+    assert options(c)['can_publish']
+    share = create(c, circle_id=other)
+    draft = ok(c.post('/api/learning/drafts', json={'title':'新草稿','body':'待发布','circle_id':other}))
+    published = ok(c.post(f'/api/learning/drafts/{draft["id"]}/publish', json={'expected_version':draft['version']}))
+    path = f'/api/learning/{share["id"]}'
+    for share_id in [share['id'], published['id']]:
+        detail = ok(c.get(f'/api/learning/{share_id}'))
+        assert detail['circle_id'] == home and detail['owner_id'] == detail['publisher_id']
+        assert detail['can_review']
+    editor = 'GSMTEST01' if account != 'GSMTEST01' else 'SUPTEST01'
+    login(c, editor)
+    revision = ok(c.post(path+'/revisions', json={'title':'修改','body':'新版','summary':'补充'}))
+    assert revision['status'] == 'pending'
+    decision = path+f'/revisions/{revision["id"]}/decision'
+    assert c.post(decision, json={'action':'approve','expected_version':1}).status_code == 403
+    assert ok(c.get(path))['body'] == '旧公开内容'
+    login(c, account)
+    ok(c.post(decision, json={'action':'approve','expected_version':1}))
+    assert ok(c.post(path+'/revisions',json={'title':'负责人更新','body':'负责人新版','summary':'补充','expected_version':2}))['status'] == 'published'
+
+
+@pytest.mark.parametrize('account', ['AMTEST01','OMTEST01','CMTEST02','HR01'])
+def test_non_publishers_cannot_create_new_shares_or_drafts(client, account):
+    c = client
+    if account == 'HR01':
+        ok(c.post('/api/login',json={'employee_no':account,'password':'HR123'}))
+    else:
+        login(c, account)
+    assert not options(c)['can_publish']
+    for path in ['/api/learning','/api/learning/drafts']:
+        assert c.post(path,json={'title':'新攻略','body':'正文'}).status_code == 403
+
+
+def test_expired_acting_owner_handover_and_cross_circle_limits(client):
+    c = client
+    home = next(circle['id'] for circle in options(c)['circles'] if circle['own'])
+    other = other_circle(c)
+    login(c,'TATEST01')
+    first = create(c)
+    path = f'/api/learning/{first["id"]}'
+    publisher = ok(c.get(path))['owner_id']
+    draft = ok(c.post('/api/learning/drafts',json={'title':'保留草稿','body':'待发布内容'}))
+    with SessionLocal() as db:
+        people = {e.employee_no:e.id for e in db.query(Employee).filter(Employee.employee_no.in_(
+            ['SUPTEST01','GSMTEST01','TAGSMTEST01','TRTEST01']))}
+        duty = db.query(EmployeeActingDuty).filter_by(employee_id=publisher).one()
+        old_dates = duty.starts_on,duty.ends_on
+        today = datetime.now().date()
+        yesterday = (today-timedelta(days=1)).isoformat()
+        duty.starts_on = today.isoformat()
+        duty.ends_on = today.isoformat()
+        duty_id = duty.id
+        db.get(Employee,people['TRTEST01']).attraction_id = other
+        db.commit()
+    try:
+        login(c,'SUPTEST01')
+        revision = ok(c.post(path+'/revisions',json={'title':'修改','body':'交接后发布','summary':'补充'}))
+        decision = path+f'/revisions/{revision["id"]}/decision'
+        owners = f'/api/learning/owners?circle_id={home}'
+        assert publisher in {employee['id'] for employee in ok(c.get(owners))['items']}
+        login(c,'TATEST01')
+        assert options(c)['can_publish'] and ok(c.get(path))['can_review']
+        with SessionLocal() as db:
+            duty = db.get(EmployeeActingDuty,duty_id)
+            duty.starts_on = duty.ends_on = yesterday
+            db.commit()
+        assert not options(c)['can_publish'] and options(c)['pending_revisions'] == 0
+        assert not ok(c.get(path))['can_review']
+        assert c.post(decision,json={'action':'approve','expected_version':1}).status_code == 403
+        assert c.post(f'/api/learning/drafts/{draft["id"]}/publish',json={'expected_version':1}).status_code == 403
+        with SessionLocal() as db:
+            assert db.get(LearningDraft,draft['id']).body == '待发布内容'
+        login(c,'SUPTEST01')
+        eligible = {employee['id'] for employee in ok(c.get(owners))['items']}
+        assert {people['SUPTEST01'],people['GSMTEST01'],people['TAGSMTEST01']} <= eligible
+        assert publisher not in eligible and people['TRTEST01'] not in eligible
+        assert c.get(f'/api/learning/owners?circle_id={other}').status_code == 403
+        for employee_id in [publisher, people['TRTEST01']]:
+            assert c.post(path+'/transfer',json={'employee_id':employee_id,'reason':'交接','expected_version':1}).status_code == 400
+        login(c,'TRTEST01')
+        assert c.post(path+'/transfer',json={'employee_id':people['GSMTEST01'],'reason':'交接','expected_version':1}).status_code == 403
+        assert c.post(path+'/revisions',json={'title':'跨圈','body':'正文','summary':'补充'}).status_code == 403
+        login(c,'SUPTEST01')
+        ok(c.post(path+'/transfer',json={'employee_id':people['GSMTEST01'],'reason':'代理到期','expected_version':1}))
+        login(c,'GSMTEST01')
+        detail = ok(c.get(path))
+        assert detail['owner_id'] == people['GSMTEST01'] and detail['publisher_id'] == publisher
+        assert detail['version'] == 1 and detail['body'] == '旧公开内容' and detail['can_review']
+        ok(c.post(decision,json={'action':'approve','expected_version':1}))
+        assert ok(c.get(path))['body'] == '交接后发布'
+    finally:
+        with SessionLocal() as db:
+            duty = db.get(EmployeeActingDuty,duty_id)
+            duty.starts_on,duty.ends_on = old_dates
+            db.commit()
+
+
+def test_expired_acting_gsm_keeps_base_supervisor_publication(client):
+    c = client
+    login(c,'TAGSMTEST01')
+    share = create(c)
+    path = f'/api/learning/{share["id"]}'
+    with SessionLocal() as db:
+        duty = db.query(EmployeeActingDuty).filter_by(employee_id=ok(c.get(path))['owner_id']).one()
+        old_dates = duty.starts_on,duty.ends_on
+        duty_id = duty.id
+        duty.starts_on = duty.ends_on = (datetime.now().date()-timedelta(days=1)).isoformat()
+        db.commit()
+    try:
+        assert ok(c.get('/api/me'))['role_code'] == 'SUPERVISOR'
+        assert options(c)['can_publish'] and ok(c.get(path))['can_review']
+        assert create(c)['id'] != share['id']
+    finally:
+        with SessionLocal() as db:
+            duty = db.get(EmployeeActingDuty,duty_id)
+            duty.starts_on,duty.ends_on = old_dates
+            db.commit()
 
 
 def test_collaborative_revision_owner_review_and_stale_version(client):

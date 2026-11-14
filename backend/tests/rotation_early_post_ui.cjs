@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs'),os=require('node:os'),net=require('node:net');
-const {spawn}=require('node:child_process'),{chromium,webkit}=require('playwright');
+const {spawn}=require('node:child_process'),{chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r,ms));let server,browser,log='';
 (async()=>{try{
  const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));

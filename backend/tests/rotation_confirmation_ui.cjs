@@ -3,7 +3,7 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.join(__dirname,'../app/static');
 async function main(){
   const browser=await chromium.launch({channel:'msedge',headless:true});

@@ -1,6 +1,6 @@
 // Real ranking renderer and menu function; isolated API responses, no live account access.
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 assert.match(fs.readFileSync(path.join(root,'js/app/rankings.js'),'utf8'),/import \{ toast \} from '\.\/toast\.js'/);
 const ranking=fs.readFileSync(path.join(root,'js/app/rankings.js'),'utf8').replace(/^import .*\r?\n/gm,'').replace(/^export .*$/gm,'');

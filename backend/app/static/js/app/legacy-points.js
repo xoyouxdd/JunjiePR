@@ -13,7 +13,7 @@ export async function mountLegacyPoints(host,request,{onApplied=()=>{}}={}){
     host.innerHTML=`<section class="panel legacy-points-panel" aria-label="历史积点补录"><header class="legacy-heading"><div><span class="legacy-eyebrow">历史积点</span><h2>补录与核对</h2></div><span class="legacy-access">正式GSM</span></header>
       <div class="legacy-toolbar"><label>景点圈<select data-legacy-circle aria-label="选择景点圈">${options.circles.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label><div class="legacy-actions"><button type="button" class="secondary" data-legacy-export>导出名单</button><button type="button" class="primary" data-legacy-upload>导入预览</button><input type="file" accept=".xlsx" data-legacy-file hidden></div></div>
       <div class="legacy-roster-heading"><span data-legacy-count></span><label><input type="checkbox" data-legacy-archived>含已归档</label></div><div data-legacy-roster></div>
-      <p class="legacy-help">只填黄色列；留空不变，填0核定为0。重复导入不重复加点。</p><p class="legacy-status" data-legacy-status role="status" aria-live="polite"></p><div data-legacy-preview></div></section>`;
+      <p class="legacy-help">按圈导出和导入。只填黄色 H 列（核定总数）和 I 列（备注），修正须备注。</p><p class="legacy-status" data-legacy-status role="status" aria-live="polite"></p><div data-legacy-preview></div></section>`;
     const circle=host.querySelector('[data-legacy-circle]'),archive=host.querySelector('[data-legacy-archived]');
     const status=text=>{if(valid())host.querySelector('[data-legacy-status]').textContent=text;};
     const lock=locked=>{busy=locked;host.querySelectorAll('.legacy-toolbar button,.legacy-toolbar select,[data-legacy-archived],[data-legacy-apply],[data-legacy-view]').forEach(el=>el.disabled=locked);};
@@ -29,7 +29,7 @@ export async function mountLegacyPoints(host,request,{onApplied=()=>{}}={}){
     async function loadRoster(){
       const token=++sequence;resetPreview();page=1;
       rows=[];host.querySelector('[data-legacy-roster]').replaceChildren();host.querySelector('[data-legacy-count]').textContent='';
-      if(!circle.value){status('没有可管理的景点圈。');lock(true);return;}
+      if(!circle.value){status('暂无开放历史积点补录的景点圈。');lock(true);return;}
       lock(true);status('正在读取名单…');
       try{const result=await api('/api/activity-points/legacy/roster?circle_id='+encodeURIComponent(circle.value));if(!valid()||token!==sequence)return;rows=result.items;renderRoster();status('');}
       catch(error){if(valid()&&token===sequence){status(error.message);host.querySelector('[data-legacy-roster]').innerHTML='<button type="button" class="secondary" data-legacy-roster-retry>重新读取名单</button>';host.querySelector('[data-legacy-roster-retry]').onclick=loadRoster;}}
@@ -48,7 +48,7 @@ export async function mountLegacyPoints(host,request,{onApplied=()=>{}}={}){
       host.querySelector('[data-legacy-apply]')?.addEventListener('click',async()=>{
         if(busy||!preview)return;
         const selected=preview;
-        if(!await confirmModal('确认历史积点入账',`<p>${esc(circle.selectedOptions[0].textContent)}：补入 ${selected.summary.increase} 点，冲回 ${selected.summary.decrease} 点。</p><p>仅按差额入账，PR分值不变。</p>`,'确认入账'))return;
+        if(!await confirmModal('确认历史积点入账',`<p>${esc(selected.circle_name)}：补入 ${selected.summary.increase} 点，冲回 ${selected.summary.decrease} 点。</p><p>仅按差额入账，PR分值不变。</p>`,'确认入账'))return;
         if(!valid()||preview!==selected)return;
         lock(true);status('正在入账…');
         try{const result=await api('/api/activity-points/legacy/apply',json('POST',{preview_id:selected.preview_id}));if(!valid())return;await loadRoster();if(!valid())return;status(`已完成：${result.changed} 人，补入 ${result.increase} 点，冲回 ${result.decrease} 点。`);await onApplied();}
@@ -74,7 +74,7 @@ export async function mountLegacyPoints(host,request,{onApplied=()=>{}}={}){
     host.querySelector('[data-legacy-upload]').onclick=()=>{if(!busy){file.value='';file.click();}};
     file.onchange=async()=>{
       if(busy||!file.files[0])return;resetPreview();lock(true);status('正在核对Excel…');
-      try{const form=new FormData();form.append('file',file.files[0]);const result=await api('/api/activity-points/legacy/preview?circle_id='+encodeURIComponent(circle.value),{method:'POST',body:form});if(!valid())return;preview=result;renderPreview(result);status(file.files[0].name);}
+      try{const form=new FormData();form.append('file',file.files[0]);const result=await api('/api/activity-points/legacy/preview?circle_id='+encodeURIComponent(circle.value),{method:'POST',body:form});if(!valid())return;preview=result;renderPreview(result);status(`${result.circle_name} · ${file.files[0].name}`);}
       catch(error){if(valid())status(error.message);}
       finally{if(valid())lock(false);}
     };

@@ -1,6 +1,6 @@
 // Reproduce tall workflow content using the real screen shell and styles.
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const shell=fs.readFileSync(path.join(root,'rotation-screen.html'),'utf8').replace(/<link[^>]*>/g,'').replace(/<script[\s\S]*?<\/script>/g,'');
 const css=['style.css','rotation.css'].map(file=>fs.readFileSync(path.join(root,'css',file),'utf8')).join('\n');

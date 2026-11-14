@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app.v2_auth import current_user
 from app.v2_database import get_db
-from app.v2_models import AuditLog
+from app.v2_models import Attraction, AuditLog
 from app.services import activity_points as points
 from app.services import legacy_points as legacy
 
@@ -94,10 +94,11 @@ def legacy_export(circle_id: int, include_archived: bool = False, db=Depends(get
         if not include_archived:
             rows = [r for r in rows if r['status'] == '在职']
             batch.roster_json = json.dumps(rows, ensure_ascii=False)
-        return workbook(batch, rows)
-    content = legacy_locked(db, operation)
+        circle_name = db.get(Attraction, batch.circle_id).name
+        return workbook(batch, rows, circle_name), circle_name
+    content, circle_name = legacy_locked(db, operation)
     return Response(content, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        headers={'Content-Disposition': "attachment; filename*=UTF-8''"+quote('历史积点补录名单.xlsx'),
+        headers={'Content-Disposition': "attachment; filename*=UTF-8''"+quote(f'历史积点补录_{circle_name}.xlsx'),
                  'Cache-Control': 'private, no-store', 'Vary': 'Cookie'})
 
 

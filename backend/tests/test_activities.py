@@ -104,7 +104,7 @@ def test_multi_pool_view_insufficient_guarantee_and_refund(client):
     assert client.post(f"/api/activities/lots/{cheap['id']}/join", json=body).json() == first.json()
     card = client.get('/api/activity-points/me').json()
     assert card['available'] == 5 and card['earned'] == 45
-    assert card['pending_redemption'] == {'count': 2, 'cost': 40, 'title': None, 'state': None}
+    assert card['pending_redemption'] == {'count': 2, 'cost': 40, 'title': None, 'state': None, 'event_id': None}
     body['count'] = 1
     assert client.post(f"/api/activities/lots/{cheap['id']}/join", json=body).status_code == 409
     expire(cheap['id'])
@@ -127,7 +127,7 @@ def test_multi_pool_view_insufficient_guarantee_and_refund(client):
     login(client, 'CMTEST01')
     card = client.get('/api/activity-points/me').json()
     assert card['available'] == 25 and card['earned'] == 45
-    assert card['pending_redemption'] == {'count': 1, 'cost': 20, 'title': event['title'], 'state': 'issued'}
+    assert card['pending_redemption'] == {'count': 1, 'cost': 20, 'title': event['title'], 'state': 'issued', 'event_id': event['id']}
     with SessionLocal() as db:
         assert db.query(AuditLog).filter_by(action='活动缺货退款', entity_id=str(event['id'])).count() == 1
 

@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const startup=`import {state,app} from '/static/js/app/state.js';
 import {openDeductionMaterialRetry,deductionMaterialPickerMarkup} from '/static/js/app/deduction-materials.js';

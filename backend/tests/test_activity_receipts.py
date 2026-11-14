@@ -58,7 +58,7 @@ def test_two_party_signature_and_archive_are_atomic_and_employee_only(client):
     assert post(client,f'awards/{award_id}/fulfill',action='refund',reason='不能直接退').status_code == 409
     body = signing_payload(client,award_id)
     card = client.get('/api/activity-points/me').json()
-    assert card['pending_redemption'] == {'count': 1, 'cost': 20, 'title': event['title'], 'state': 'issued'}
+    assert card['pending_redemption'] == {'count': 1, 'cost': 20, 'title': event['title'], 'state': 'issued', 'event_id': event['id']}
     path = f'/api/activities/awards/{award_id}/sign'
     login(client,'CMTEST02')
     assert client.post(path,json=body).status_code == 403

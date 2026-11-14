@@ -1,12 +1,14 @@
 """Live scope checks shared by shares, attachments and group-leader approvals."""
-from datetime import datetime
+from datetime import date, datetime
 from fastapi import HTTPException
 from app.v2_models import Attraction, Employee, UserAccount
 from app.learning_models import LearningAccess, LearningShare
 from app.services.organization import current_leader_for_employee, direct_member_ids
-from app.services.identity import base_role_at
+from app.services.identity import base_roles_at, duties_at_bulk
 
 MANAGERS = {'SUPERVISOR', 'TA_SUPERVISOR', 'TA_GSM', 'GSM', 'AM', 'OM', 'SYSTEM_ADMIN'}
+PUBLISHER_ROLES = {'TR', 'SUPERVISOR', 'GSM'}
+ACTING_PUBLISHER_ROLES = {'TA_SUPERVISOR', 'TA_GSM'}
 
 
 def eligible(user):
@@ -55,15 +57,32 @@ def require_read(db, user, share):
         raise HTTPException(403, '资料未开放、已下架或查看权限已到期')
 
 
-def owner_can_publish(db, user, share):
-    return share.owner_id == user.id and user.employee.attraction_id == share.circle_id and user.has_role('TR')
+def publisher_identity(base_role, duties):
+    return bool(base_role and (base_role.code in PUBLISHER_ROLES
+                               or any(role.code in ACTING_PUBLISHER_ROLES for role in duties)))
 
 
-def active_tr(db, employee_id, circle_id):
-    e = db.get(Employee, employee_id)
-    r = base_role_at(db, employee_id) if e else None
-    return bool(e and e.is_active and e.attraction_id == circle_id and r and r.code == 'TR'
-                and db.query(UserAccount.id).filter_by(employee_id=employee_id, enabled=True).first())
+def can_publish(user, circle_id):
+    return user.employee.attraction_id == circle_id and publisher_identity(user.base_role, user.duty_roles)
+
+
+def owner_can_publish(user, share):
+    return share.owner_id == user.id and can_publish(user, share.circle_id)
+
+
+def eligible_publishers(db, circle_id, employee_id=None):
+    query = db.query(Employee).join(UserAccount, UserAccount.employee_id == Employee.id).filter(
+        Employee.attraction_id == circle_id, Employee.is_active.is_(True), UserAccount.enabled.is_(True),
+    )
+    if employee_id is not None:
+        query = query.filter(Employee.id == employee_id)
+    employees = query.order_by(Employee.name, Employee.id).all()
+    ids = [employee.id for employee in employees]
+    today = date.today()
+    base_roles = base_roles_at(db, ids, today)
+    duties = duties_at_bulk(db, ids, today)
+    return [employee for employee in employees
+            if publisher_identity(base_roles.get(employee.id), duties.get(employee.id, []))]
 
 
 def approvable_ids(db, user):

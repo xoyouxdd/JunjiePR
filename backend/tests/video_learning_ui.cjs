@@ -1,7 +1,7 @@
 // Real isolated API + real FFmpeg media; no production data or service.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net');
 const {spawn}=require('node:child_process');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'fz-video-ui-'));
 const engines=(process.env.VIDEO_TEST_ENGINES||'edge').split(',');
 const layoutOnly=process.env.VIDEO_TEST_LAYOUT_ONLY==='1';

@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),net=require('node:net');
-const {spawn}=require('node:child_process');const {chromium}=require('playwright');
+const {spawn}=require('node:child_process');const {chromium}=require('./support/browser-runtime.cjs');
 const backend=path.resolve(__dirname,'..'),output=path.resolve(backend,'../output/legacy-points');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 (async()=>{
@@ -42,6 +42,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
    const panel=page.locator('.legacy-points-panel');await panel.scrollIntoViewIfNeeded();await page.evaluate(()=>scrollBy(0,-140));
    await panel.screenshot({path:path.join(output,`legacy-preview-${width}.png`)});
   }
+  await page.setViewportSize({width:390,height:900});
   await page.locator('[data-legacy-apply]').click();await page.getByRole('dialog').waitFor();
   await page.getByRole('dialog').getByRole('button',{name:'确认入账',exact:true}).click();
   await page.locator('[data-legacy-status]').filter({hasText:'已完成：2 人'}).waitFor();

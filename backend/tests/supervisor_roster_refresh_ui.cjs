@@ -2,7 +2,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const http=require('node:http');
 const path=require('node:path');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 
 const root=path.resolve(__dirname,'../app/static');
 const shell=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">

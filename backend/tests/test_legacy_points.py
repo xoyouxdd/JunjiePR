@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from test_supervisor_performance import app, SessionLocal, login, employee_id
 from app.activity_points_models import ActivityPointsEntry, LegacyPointsBalance
-from app.v2_models import Attraction, Employee, EmployeeRoleAssignment, Role, UserAccount, AuditLog
+from app.v2_models import Attraction, Employee, EmployeeRoleAssignment, ManagementScope, Role, UserAccount, AuditLog
 from app.services import legacy_points as legacy
 from app.services.legacy_points_xlsx import cell, tag
 
@@ -85,6 +85,62 @@ def number(eid):
     with SessionLocal() as db:return db.get(Employee, eid).employee_no
 
 
+def test_formal_gsm_can_export_and_import_all_three_circles_without_scope_configuration(system):
+    from urllib.parse import unquote
+
+    client, circles, people = system
+    names = ['热力追踪', '矮人迷宫', '小熊罐子']
+    actor = employee_id('GSMTEST01')
+    with SessionLocal() as db:
+        lead = db.get(Employee, people[1])
+        bear = db.get(Employee, people[2])
+        lead.attraction_id = circles[names[1]]
+        bear.attraction_id = circles[names[2]]
+        bear.is_active, bear.terminated_on = True, None
+        assert db.query(ManagementScope).filter(
+            ManagementScope.employee_id == actor,
+            ManagementScope.attraction_id.in_([circles[name] for name in names[1:]]),
+        ).count() == 0
+        db.commit()
+    options = client.get('/api/activity-points/legacy/options').json()['circles']
+    assert {c['name'] for c in options} == set(names)
+    uploads = []
+    for name, person, points in zip(names, people, [18, 12, 7]):
+        circle = circles[name]
+        response = client.post('/api/activity-points/legacy/export', params={'circle_id': circle})
+        assert response.status_code == 200, response.text
+        assert f'历史积点补录_{name}.xlsx' in unquote(response.headers['content-disposition'])
+        book = load_workbook(BytesIO(response.content))
+        sheet = book['名单']
+        assert sheet['A1'].value == f'历史积点补录名单 · {name}'
+        assert sheet['C3'].value == '所属景点圈'
+        assert [sheet['H3'].value, sheet['I3'].value] == ['核定历史积点总数（填写）', '备注（修正必填）']
+        row = row_for(response.content, number(person))
+        assert sheet[f'H{row}'].fill.fgColor == sheet['H3'].fill.fgColor
+        assert sheet[f'H{row}'].fill.fgColor != sheet[f'G{row}'].fill.fgColor
+        assert all(r[2] == name for r in sheet.iter_rows(min_row=4, values_only=True) if r[0])
+        book.close()
+        uploads.append(edit(response.content, {f'H{row}': points}))
+
+    for index, (name, content, points) in enumerate(zip(names, uploads, [18, 12, 7])):
+        circle = circles[name]
+        wrong_circle = circles[names[(index + 1) % len(names)]]
+        rejected = client.post('/api/activity-points/legacy/preview', params={'circle_id': wrong_circle},
+                               files={'file': ('名单.xlsx', content)})
+        assert rejected.status_code == 409 and '不一致' in rejected.json()['detail']
+        result = preview(client, circle, content)
+        assert result['circle_name'] == name and result['summary']['increase'] == points
+        assert apply(client, result).json()['changed'] == 1
+        assert apply(client, result).json()['duplicate'] is True
+        replay = preview(client, circle, content)
+        assert not replay['errors'] and not replay['can_apply']
+    with SessionLocal() as db:
+        for person, points in zip(people, [18, 12, 7]):
+            assert db.get(LegacyPointsBalance, person).total == points
+            entries = db.query(ActivityPointsEntry).filter_by(employee_id=person, kind='legacy_import').all()
+            assert [e.delta for e in entries] == [points]
+
+
 def test_formal_gsm_only_and_scope(system):
     client, circles, people = system
     for account in ['CMTEST01', 'SUPTEST01', 'TAGSMTEST01', 'AMTEST01']:
@@ -95,8 +151,9 @@ def test_formal_gsm_only_and_scope(system):
     assert client.post('/api/login', json={'employee_no': 'HR01', 'password': 'HR123'}).status_code == 200
     assert client.get('/api/activity-points/legacy/options').status_code == 403
     login(client, 'GSMTEST01')
-    assert client.get('/api/activity-points/legacy/options').json()['circles'] == [{'id': circles['热力追踪'], 'name': '热力追踪'}]
-    assert client.post('/api/activity-points/legacy/export', params={'circle_id': circles['矮人迷宫']}).status_code == 403
+    options = client.get('/api/activity-points/legacy/options').json()['circles']
+    assert {circle['name'] for circle in options} == set(legacy.START_POLICY)
+    assert client.post('/api/activity-points/legacy/export', params={'circle_id': 0}).status_code == 403
 
 
 def test_roster_cutoffs_archived_and_export_round_trip(system):
@@ -290,16 +347,14 @@ def test_all_import_endpoints_reject_nonformal_accounts(system):
         assert db.get(LegacyPointsBalance, people[0]) is None
 
 
-def test_management_scope_revoked_after_preview_blocks_confirmation(system):
-    from app.v2_models import ManagementScope
+def test_circle_deactivated_after_preview_blocks_confirmation(system):
     client, circles, people = system
     circle = circles['热力追踪']
     content = export(client, circle); row = row_for(content, number(people[0]))
     pending = preview(client, circle, edit(content, {f'H{row}': 18}))
     with SessionLocal() as db:
-        scope = db.query(ManagementScope).filter_by(employee_id=employee_id('GSMTEST01'), attraction_id=circle).one()
-        scope_id, original_end = scope.id, scope.ends_on
-        scope.ends_on = '2025-12-31'; db.commit()
+        db.get(Attraction, circle).active = False
+        db.commit()
     try:
         assert apply(client, pending).status_code == 403
         assert client.post('/api/activity-points/legacy/preview', params={'circle_id': circle},
@@ -308,7 +363,8 @@ def test_management_scope_revoked_after_preview_blocks_confirmation(system):
             assert db.get(LegacyPointsBalance, people[0]) is None
     finally:
         with SessionLocal() as db:
-            db.get(ManagementScope, scope_id).ends_on = original_end; db.commit()
+            db.get(Attraction, circle).active = True
+            db.commit()
 
 
 def test_two_different_previews_confirm_concurrently_without_overwrite(system):

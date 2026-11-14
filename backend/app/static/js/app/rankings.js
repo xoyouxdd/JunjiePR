@@ -105,12 +105,18 @@ async function renderPrRankings(){
     subfilters.querySelectorAll('[data-pr-sort]').forEach(button=>button.onclick=()=>{const subtype=subfilters.querySelector('[name=subtype_id]')?.value;sortBy=button.dataset.prSort;page=1;renderSubfilters();const selector=subfilters.querySelector('[name=subtype_id]');if(selector&&subtype)selector.value=subtype;load()});
   };
   const params=()=>{const qs=new URLSearchParams([...new FormData(form)].filter(([,value])=>value));qs.set('category',category);qs.set('population',form.elements.population.value);qs.set('sort_by',sortBy);qs.set('page',String(page));qs.set('page_size','20');const subtype=subfilters.querySelector('[name=subtype_id]')?.value;if(subtype)qs.set('subtype_id',subtype);return qs};
-  const updateExportState=()=>{const button=document.getElementById('prExport');if(!button)return;button.hidden=category==='points';button.disabled=exportBusy||button.hidden;};
+  const updateExportState=()=>{const button=document.getElementById('prExport');if(button)button.disabled=exportBusy;};
   const load=async()=>{if(!request.isCurrent())return;const requestId=++requestSequence;results.innerHTML='<div class="empty">正在加载排名…</div>';try{const data=await api('/api/pr-rankings?'+params());if(requestId!==requestSequence||!request.isCurrent())return;results.innerHTML=prRankingTable(data);results.querySelectorAll('[data-pr-page]').forEach(button=>button.onclick=()=>{page=Number(button.dataset.prPage);load()})}catch(error){if(requestId===requestSequence&&request.isCurrent())results.innerHTML=`<div class="error">${esc(error.message)}</div>`}};
   document.getElementById('prCategoryTabs').querySelectorAll('[data-pr-category]').forEach(button=>button.onclick=()=>{category=button.dataset.prCategory;sortBy=['leader','gsm_leader'].includes(category)?'count':'score';page=1;document.querySelectorAll('[data-pr-category]').forEach(item=>item.classList.toggle('active',item===button));configurePopulation();renderSubfilters();updateExportState();load()});
   form.onsubmit=event=>{event.preventDefault();page=1;load()};
+  form.elements.attraction_id.onchange=()=>{
+    if(category==='points'&&form.reportValidity()){
+      page=1;
+      load();
+    }
+  };
   form.elements.population.onchange=()=>{if(category==='gsm_leader')gsmPopulation=form.elements.population.value;else if(category!=='leader')scorePopulation=form.elements.population.value;page=1;load()};
-  if(canExport)document.getElementById('prExport').onclick=async()=>{if(exportBusy||category==='points')return;exportBusy=true;updateExportState();try{await queueExport('/api/pr-rankings/export?'+params());if(request.isCurrent())toast('已加入导出任务');}catch(error){if(request.isCurrent())toast(error.message,true);}finally{exportBusy=false;if(request.isCurrent())updateExportState();}};
+  if(canExport)document.getElementById('prExport').onclick=async()=>{if(exportBusy||!form.reportValidity())return;exportBusy=true;updateExportState();try{await queueExport('/api/pr-rankings/export?'+params());if(request.isCurrent())toast('已加入导出任务');}catch(error){if(request.isCurrent())toast(error.message,true);}finally{exportBusy=false;if(request.isCurrent())updateExportState();}};
   configurePopulation();renderSubfilters();updateExportState();await load();
 }
 

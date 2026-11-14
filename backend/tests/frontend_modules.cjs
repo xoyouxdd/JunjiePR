@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const {createHash} = require('node:crypto');
-const {chromium, webkit, firefox} = require('playwright');
+const {chromium, webkit, firefox} = require('./support/browser-runtime.cjs');
 
 // Serve the real app shell and its complete native-module graph. All API data
 // below is synthetic; the test does not start the backend or open its database.

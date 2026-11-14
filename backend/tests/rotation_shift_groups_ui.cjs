@@ -1,6 +1,6 @@
 // Real shared renderer/CSS, isolated people; no backend or production connection.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 (async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{
  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.setContent('<body class="rotation-page"><main id="rtApp" class="rt-workflow-board"></main></body>');

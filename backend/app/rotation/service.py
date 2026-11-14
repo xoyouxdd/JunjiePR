@@ -411,6 +411,9 @@ class DbHooks:
 
     def log(self, typ, actor, pid, line, post, detail):
         RotationEvent = tables_for(self.db).RotationEvent
+        self.db.add(RotationEvent(**self.event_values(typ, actor, pid, line, post, detail)))
+
+    def event_values(self, typ, actor, pid, line, post, detail):
         if hasattr(actor, "kind"):
             actor_type, actor_id, actor_name = ('employee' if getattr(actor,'formal',False) and getattr(actor,'entered_by',None) else 'adjustment' if getattr(actor,'adjustment',False) else actor.kind), actor.actor_id, actor.name
             if getattr(actor,'formal',False) and getattr(actor,'temporary',False): actor_type='temporary'
@@ -423,7 +426,7 @@ class DbHooks:
             from app.rotation.temporary import was_temporary
             if metadata.get('temporary') or not metadata and was_temporary(self.db,self.attraction_id,pid,datetime.now()):
                 detail={**(detail or {}),'rotation_temporary':True}
-        self.db.add(RotationEvent(
+        return dict(
             attraction_id=self.attraction_id,
             work_date=self.day,
             minute=self.now,
@@ -435,15 +438,21 @@ class DbHooks:
             line=line,
             post=post,
             detail_json=_dumps(detail) if detail else None,
-        ))
+        )
 
     def segment(self, pid, line, start, end):
         RotationSegment = tables_for(self.db).RotationSegment
-        self.db.add(RotationSegment(
+        self.db.add(RotationSegment(**self.segment_values(pid, line, start, end)))
+        self.invalidate_week_minutes()
+
+    def invalidate_week_minutes(self):
+        self._week = None
+
+    def segment_values(self, pid, line, start, end):
+        return dict(
             attraction_id=self.attraction_id, work_date=self.day, employee_no=pid, line=line,
             start_min=start, end_min=end, minutes=max(0.0, end - start),
-        ))
-        self._week = None
+        )
 
     def week_minutes(self):
         if self._week is None:
@@ -984,7 +993,10 @@ def lines_view(eng: E.Engine) -> list[dict]:
         if post.get('occ'):return post['occ']
         key=f"{line['id']}#{index}"
         pid=eng.d['plan']['seven'].get(key) or eng.d['plan']['crew'].get(key)
-        return pid if line.get('active') and eng.P.get(pid,{}).get('state')=='notyet' else None
+        worker = eng.P.get(pid, {})
+        if worker and str(round(worker['start'] * 60)) in eng.d.get('completedShiftBatches', {}):
+            return None
+        return pid if line.get('active') and worker.get('state') == 'notyet' else None
     return [{
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
         "sortAt": L.get('sortAt', 0),
@@ -1209,10 +1221,10 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
         raise ActionError("只能查看自己的确认结果")
     return {"confirmed": bool(result) and result.get('status') not in ('reversed','superseded'), "result": result}
 
-SCREEN_ACTIONS = {"arrive", "depart", "entry_return", "entry_adjust"}
-SCREEN_ALLOWED_ACTIONS = {"arrive", "depart"}
+SCREEN_ACTIONS = {"arrive", "depart", "entry_return", "entry_adjust", "batch_check_in"}
+SCREEN_ALLOWED_ACTIONS = {"arrive", "depart", "batch_check_in"}
 LIVE_ACTIONS = {
-    "arrive", "depart", "entry_return", "entry_adjust", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
+    "arrive", "depart", "entry_return", "entry_adjust", "batch_check_in", "undo", "post", "line", "away", "back", "reassign", "leave", "flag",
     "set_close", "fix_undo_depart", "fix_remove", "fix_place", "add_person", "plan_place", "move", "post_order", "post_hold",
 }
 LIVE_ACTIONS.update({'rename_post','hold101','restore_line'})
@@ -1299,6 +1311,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         if state.get('ruleVersion') == 2:
             from app.rotation.forecast_service import action as forecast_action
             return forecast_action(db, cfg, row, eng, body, now, actor)
+        if act == 'batch_check_in':
+            raise ActionError('当前轮岗日不支持班前签到')
         from app.rotation import history as H, workflow as W
         checkpoint_before=H.snapshot(state)
         pid = body.get("pid")

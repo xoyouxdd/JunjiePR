@@ -52,10 +52,63 @@ def test_points_board_reuses_pr_scope_and_filters_but_only_counts_earned(client)
     assert client.get(url, params={**params, 'population': 'supervisor'}).json()['rows'][0]['score'] == 2
     assert client.get(url, params={**params, 'keyword': '排名合成1-CM'}).json()['total'] == 0
     assert client.get(url, params={**params, 'population': 'all'}).status_code == 400
-    assert client.get(url+'/export', params=params).status_code == 400
+    exported = workbook(client.get(url+'/export', params=params))
+    assert exported.active['G5'].value == 12
+    exported.close()
     for account in ['TAGSMTEST01', 'CMTEST01', 'HR-HEAT', 'HR01']:
         login(client, account)
         assert client.get(url, params=params).status_code == 403
+        assert client.get(url+'/export', params=params).status_code == 403
+
+
+def test_points_export_matches_all_circles_page_and_background_download(client):
+    from urllib.parse import urlencode, unquote
+
+    login(client, 'GSMTEST01')
+    params = {**BASE, 'category': 'points', 'population': 'supervisor', 'keyword': '排名合成'}
+    url = '/api/pr-rankings'
+    page = client.get(url, params=params).json()
+    assert {r['attraction_name'] for r in page['rows']} == {'热力追踪', '矮人迷宫', '小熊罐子'}
+    response = client.get(url+'/export', params=params)
+    assert '积点榜_全部景点圈_LEAD_' in unquote(response.headers['content-disposition'])
+    direct = workbook(response)
+    sheet = direct['积点榜']
+    assert sheet.freeze_panes == 'D5'
+    assert sheet.auto_filter.ref == f"A4:G{4+page['total']}"
+    assert sheet['B5'].data_type == 's'
+    assert sheet['G5'].data_type == 'n'
+    expected = [(r['rank'], r['employee_no'], r['employee_name'], r['role_name'],
+                 r['attraction_name'], r['group_label'], r['score']) for r in page['rows']]
+    assert list(sheet.iter_rows(min_row=5, values_only=True)) == expected
+    assert ('员工搜索', '排名合成') in list(direct['导出说明'].values)
+
+    circle = next(r for r in page['rows'] if r['attraction_name'] == '矮人迷宫')
+    with SessionLocal() as db:
+        other_circle_id = db.get(Employee, circle['employee_id']).attraction_id
+    other = workbook(client.get(url+'/export', params={**params, 'attraction_id': other_circle_id}))
+    assert [r[4] for r in other.active.iter_rows(min_row=5, values_only=True)] == ['矮人迷宫']
+    other.close()
+
+    empty = workbook(client.get(url+'/export', params={**params, 'keyword': '没有匹配的员工'}))
+    assert empty.active['A5'].value == '当前条件下暂无排名数据'
+    empty.close()
+
+    target = url+'/export?'+urlencode(params)
+    queued = client.post('/api/export-tasks', params={'target': target})
+    assert queued.status_code == 202, queued.text
+    job_id = queued.json()['id']
+    for _ in range(200):
+        job = next(r for r in client.get('/api/export-tasks').json()['items'] if r['id'] == job_id)
+        if job['status'] in {'completed', 'failed'}:
+            break
+        time.sleep(.05)
+    assert job['status'] == 'completed', job
+    background = workbook(client.get(job['download_url']))
+    assert list(background.active.values) == list(sheet.values)
+    background.close()
+    direct.close()
+    login(client, 'HR-HEAT')
+    assert client.post('/api/export-tasks', params={'target': target}).status_code == 403
 
 ACCOUNTS=['HR-HEAT','HR-DWARF','HR-BEAR']
 CATEGORIES=['overall','recognition','deduction','absence','leader','gsm_leader']

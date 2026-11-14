@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { chromium } = require('playwright');
+const { chromium } = require('./support/browser-runtime.cjs');
 const {frontendFunctionSource} = require('./frontend_source.js');
 
 (async () => {

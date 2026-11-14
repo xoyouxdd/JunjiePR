@@ -3,17 +3,20 @@ import { esc } from './format.js';
 import { beginViewRequest } from './context.js';
 import { state } from './state.js';
 import { mountLegacyPoints } from './legacy-points.js';
+import { gotoTab } from './navigation.js';
 
 function redemptionNote(redemption){
   if(!redemption)return '';
   const states={pending:'等待开奖',ready:'奖品待领取',issued:'奖品待签收',disputed:'签收异常待处理'};
   const title=redemption.title||`${redemption.count} 笔活动待完成`;
   const status=states[redemption.state];
-  return `<aside class="points-redemption" aria-label="活动兑换备注">
+  const single=redemption.count===1&&Number.isSafeInteger(redemption.event_id);
+  const action=single?({ready:'查看领取',issued:'查看签收'}[redemption.state]||'查看活动'):'查看待处理';
+  return `<button type="button" class="points-redemption" data-points-destination="${single?redemption.event_id:'pending'}">
     <span class="points-redemption-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
-    <div><strong>${esc(title)}</strong><small>已支出 ${esc(redemption.cost)} 点${status?' · '+status:''}</small></div>
-    <span class="points-redemption-status">兑换待完成</span>
-  </aside>`;
+    <span class="points-redemption-copy"><strong>${esc(title)}</strong><small>已支出 ${esc(redemption.cost)} 点${status?' · '+status:''}</small></span>
+    <span class="points-redemption-status">${action} ›</span>
+  </button>`;
 }
 
 export async function renderActivityPoints(){
@@ -42,14 +45,22 @@ export async function mountActivityPoints(host,request){
           </div>
         </div>
         ${redemptionNote(data.pending_redemption)}
+        <div class="points-detail-bar">
         <details class="points-detail"><summary><span>积点明细<span class="points-detail-count">${esc(data.total)} 笔</span></span><span class="points-detail-chevron" aria-hidden="true"></span></summary>
         <div class="activity-points-list">${data.items.length?data.items.map(item=>`<article><span class="points-entry-icon ${item.delta<0?'is-negative':''}" aria-hidden="true">${item.delta<0?'−':'+'}</span><div><strong>${esc(item.category)} · ${esc(item.signer_name)}</strong><small>${esc(item.business_date)} · ${item.origin==='legacy_import'?'历史补录'+(item.cutoff?' · 截至'+esc(item.cutoff):''):item.origin==='activity'?'活动消费或退款':item.origin==='historical_backfill'?'历史补计':'认可同步'}${item.delta<0&&item.origin!=='activity'?' · 撤销或调整':''}</small></div><b class="${item.delta<0?'points-negative':''}">${item.delta>0?'+':''}${esc(item.delta)} 点</b></article>`).join(''):'<p class="empty">还没有积点记录，收到有效的上级认可后会自动累计。</p>'}</div>
         ${pages>1?`<div class="activity-points-pages"><button type="button" class="secondary" data-points-prev ${page<=1?'disabled':''}>上一页</button><span>${page} / ${pages}</span><button type="button" class="secondary" data-points-next ${page>=pages?'disabled':''}>下一页</button></div>`:''}</details>
-        </section>`;
+        <button type="button" class="points-center-link" data-points-destination="all">去活动中心 ›</button>
+        </div></section>`;
       const details=host.querySelector('details');
       if(page>1)details.open=true;
       host.querySelector('[data-points-prev]')?.addEventListener('click',()=>load(page-1));
       host.querySelector('[data-points-next]')?.addEventListener('click',()=>load(page+1));
+      host.querySelectorAll('[data-points-destination]').forEach(button=>button.onclick=()=>{
+        const destination=button.dataset.pointsDestination;
+        state.activityDestination={from:state.tab, filter:destination==='pending'?'pending':'all',
+          eventId:Number(destination)||null};
+        gotoTab('activities');
+      });
     }catch(error){
       if(!request.isCurrent()||current!==sequence||!host.isConnected)return;
       host.innerHTML=`<section class="panel activity-points-card"><h2>我的积点卡</h2><p class="error" role="alert">${esc(error.message)}</p><button type="button" class="secondary" data-points-retry>重新查询</button></section>`;

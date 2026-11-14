@@ -18,11 +18,11 @@ def _posts(state):
             for i,p in enumerate(l['posts']) if p.get('key')}
 
 
-def same_time_segment_ids(db, eng, now):
+def existing_segment_ids(db, eng, now):
     from app.rotation.namespace import tables_for
     model = tables_for(db).RotationSegment
-    return [row.id for row in db.query(model.id).filter_by(
-        attraction_id=eng.h.attraction_id, work_date=eng.h.day, end_min=now)]
+    return [row.id for row in db.query(model.id).filter(
+        model.attraction_id == eng.h.attraction_id, model.work_date == eng.h.day, model.end_min >= now)]
 
 
 def reverted_legacy_push7(db, attraction_id, events, restored):
@@ -79,8 +79,8 @@ def record(db, eng, before, action, actor, now):
              'beforePosts':{key:left.get(key) for key in keys},
              'beforeLines':{l['id']:{k:v for k,v in l.items() if k!='posts'} for l in before['lines'] if l['id'] in lines},
              'before101':before.get('hold101Active',False),'beforeClosed':before.get('closed',False)}
-    if 'segmentIdsAtAction' in before:
-        payload['segmentIdsAtAction'] = before['segmentIdsAtAction']
+    if 'existingSegmentIds' in before:
+        payload['existingSegmentIds'] = before['existingSegmentIds']
     if related_cases or any(c['line'] in lines for c in after.get('timeoutCases',{}).values()):
         payload.update(beforeCases=related_cases,beforeDemands=[d for d in before.get('timeoutDemands',[]) if d['line'] in lines],
                        beforeCaseTasks={id:t for id,t in before.get('caseTasks',{}).items() if t['line'] in lines})
@@ -206,6 +206,8 @@ def execute(db, eng, line, checkpoint, now, actor):
             first_checkpoints.setdefault(pid, entry)
     def belongs_to_undo(segment):
         entry = first_checkpoints.get(segment.employee_no, {})
+        if 'existingSegmentIds' in entry:
+            return segment.id not in entry['existingSegmentIds']
         if 'segmentIdsAtAction' not in entry:
             return True
         return (segment.end_min > entry['minute'] or

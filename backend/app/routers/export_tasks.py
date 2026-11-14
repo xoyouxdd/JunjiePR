@@ -69,6 +69,8 @@ def target_kind(target):
               "/api/declaration-statistics/export": "声明统计 Excel",
               "/api/hr-monthly-reports/export": "月报 PPTX"}
     if parts.path in labels:
+        if parts.path == "/api/pr-rankings/export" and parse_qs(parts.query, keep_blank_values=True).get("category", [None])[-1] == "points":
+            return parts, "积点榜 Excel"
         return parts, labels[parts.path]
     if re.fullmatch(r"/api/announcements/[1-9]\d*/(?:export|followup-export)", parts.path):
         return parts, "公告签收报告"
@@ -88,8 +90,6 @@ def scope_key(db, user, target):
         from app.services.performance_rankings import pr_ranking_scope
         params = parse_qs(parts.query, keep_blank_values=True)
         category = params.get("category", ["overall"])[-1]
-        if category == "points":
-            raise HTTPException(400, "积点榜暂不支持导出")
         raw = params.get("attraction_id", [None])[-1]
         try:
             attraction_id = int(raw) if raw is not None else None

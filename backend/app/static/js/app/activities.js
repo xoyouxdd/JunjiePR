@@ -7,6 +7,7 @@ import { toast } from './toast.js';
 import { newSubmissionKey as key } from './submission.js';
 import { prizePhotoFields, bindPrizePhotos, uploadPrizePhotos } from './activity-photo.js';
 import { signActivityAward, viewActivityReceipt } from './activity-signature.js';
+import { gotoTab } from './navigation.js';
 
 const labels={draft:'草稿',published:'已发布',completed:'已结案',cancelled:'已取消',open:'开放',settled:'已开奖 / 成交',unsold:'流拍',pending:'待开奖',ready:'待领取',claimed:'旧核销（无签名）',issued:'已发放，待签收',disputed:'签收异常',signed:'已签收',refunded:'已退款',expired:'逾期关闭'};
 const stamp=value=>String(value||'').replace('T',' ').slice(0,16);
@@ -79,19 +80,60 @@ async function createDialog(){
 
 export async function renderActivities(){
   const request=beginViewRequest();
+  const destination=state.activityDestination;
+  state.activityDestination=null;
   if(!request.write('<section id="activitiesPage" class="activities-page"><p class="empty">正在查询活动…</p></section>'))return;
-  const host=document.getElementById('activitiesPage');let data,filter='all',sequence=0,page=1,displayedFilter='all';
+  const host=document.getElementById('activitiesPage');
+  let data,filter=destination?.filter||'all',sequence=0,page=1,displayedFilter='all';
+  let focusedEvent=destination?.eventId||null,displayedEvent=null,returnToPending=false;
+  let revealDestination=Boolean(destination);
   const details=new Map(),recordViews=new Map(),opened=new Set(),detailLoads=new Map();
+  if(focusedEvent)opened.add(focusedEvent);
   const pager=(current,total,size,kind,id='')=>{const pages=Math.max(1,Math.ceil(total/size));return `<nav class="activity-pagination" aria-label="${kind==='list'?'活动':'核销记录'}分页"><button type="button" class="secondary" data-page-kind="${kind}" data-page-event="${id}" data-page="${current-1}" ${current<=1?'disabled':''}>上一页</button><span>${current} / ${pages} · ${total}${kind==='list'?'场':'条'}</span><button type="button" class="secondary" data-page-kind="${kind}" data-page-event="${id}" data-page="${current+1}" ${current>=pages?'disabled':''}>下一页</button></nav>`;};
   const active=()=>request.isCurrent()&&host.isConnected;
+  const backLink=()=>returnToPending
+    ? '<button type="button" class="secondary" data-activity-back>‹ 返回待处理活动</button>'
+    : destination?.from?'<button type="button" class="secondary" data-activity-back>‹ 返回积点卡</button>':'';
+  function bindBack(){
+    host.querySelector('[data-activity-back]')?.addEventListener('click',()=>{
+      if(returnToPending){
+        focusedEvent=null;returnToPending=false;filter='pending';opened.clear();revealDestination=true;load();
+      }else gotoTab(destination.from);
+    });
+  }
+  function paintPending(result){
+    const rows=result.items.map(item=>`<li class="activity-pending-row">
+      <div><strong>${esc(item.title)}</strong><small>${esc({issued:'待签收'}[item.state]||labels[item.state])} · 已支出 ${esc(item.cost)} 点</small></div>
+      <button type="button" class="secondary" data-pending-event="${esc(item.event_id)}">${{ready:'查看领取',issued:'查看签收'}[item.state]||'查看活动'} ›</button>
+    </li>`).join('');
+    host.innerHTML=`<section class="panel activity-pending">
+      <header>${backLink()}<h2>我的待处理活动</h2></header>
+      ${rows?`<ul class="activity-pending-list">${rows}</ul>`:'<p class="empty">暂无待处理活动</p>'}
+      ${result.total>result.page_size?pager(page,result.total,result.page_size,'list'):''}
+    </section>`;
+    bindBack();
+    host.querySelectorAll('[data-pending-event]').forEach(button=>button.onclick=()=>{
+      focusedEvent=Number(button.dataset.pendingEvent);
+      returnToPending=true;
+      filter='all';
+      opened.clear();
+      opened.add(focusedEvent);
+      revealDestination=true;
+      load();
+    });
+    host.querySelectorAll('[data-page-kind]').forEach(button=>button.onclick=()=>{
+      page=Number(button.dataset.page);load();
+    });
+  }
   function paint(){
     const funds=data.balance;
     const events=data.items;
-    host.innerHTML=`<section class="panel activity-heading"><div><span class="field-hint">PR · 活动中心</span><h2>用认可积点，参与精彩活动</h2><p>抽奖每次必得奖品 · 拍卖以积点竞价</p></div><div class="activity-wallet"><strong>${esc(funds.available)}<small> 可用积点</small></strong><span>冻结 ${esc(funds.frozen)} 点</span></div></section>
+    host.innerHTML=`${focusedEvent?backLink():''}<section class="panel activity-heading"><div><span class="field-hint">PR · 活动中心</span><h2>${focusedEvent?'活动详情':'用认可积点，参与精彩活动'}</h2>${focusedEvent?'':'<p>抽奖每次必得奖品 · 拍卖以积点竞价</p>'}</div><div class="activity-wallet"><strong>${esc(funds.available)}<small> 可用积点</small></strong><span>冻结 ${esc(funds.frozen)} 点</span></div></section>
       <div class="activity-toolbar"><div>${[['all','全部活动'],['mine','我的活动'],['sign',`待本人签收 ${data.pending_signatures||0}`],...(data.can_create||data.can_manage?[['manage','活动管理']]:[])].map(([id,name])=>`<button type="button" class="${filter===id?'primary':'secondary'}" data-filter="${id}" aria-pressed="${filter===id}">${name}</button>`).join('')}</div><div><button type="button" class="secondary" data-refresh>刷新</button>${data.can_create?'<button type="button" class="primary" data-create>创建活动</button>':''}</div></div>
       <p class="field-hint">北京时间 · 页面自动刷新。余额不足也可以查看奖池；冻结积点不能再次使用。</p>
-      <div class="activity-events">${events.map(event=>eventMarkup(details.get(event.id)||event,funds,opened.has(event.id))).join('')||'<section class="panel empty">暂无符合条件的活动</section>'}</div>${pager(page,data.total,data.page_size,'list')}`;
-    host.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;page=1;opened.clear();load();});
+      <div class="activity-events">${events.map(event=>eventMarkup(details.get(event.id)||event,funds,opened.has(event.id))).join('')||'<section class="panel empty">暂无符合条件的活动</section>'}</div>${focusedEvent?'':pager(page,data.total,data.page_size,'list')}`;
+    bindBack();
+    host.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{focusedEvent=null;returnToPending=false;filter=b.dataset.filter;page=1;opened.clear();load();});
     host.querySelector('[data-refresh]').onclick=()=>load();
     host.querySelector('[data-create]')?.addEventListener('click',async()=>{if(await createDialog()){page=1;await load();}});
     bindEventControls(host);
@@ -239,9 +281,28 @@ export async function renderActivities(){
   }
   async function load(quiet=false){
     const current=++sequence;
-    try{const result=await api('/api/activities?'+new URLSearchParams({page,view:filter}));if(!active()||current!==sequence)return;if(page>1&&!result.items.length){page=Math.max(1,Math.ceil(result.total/result.page_size));return await load(quiet);}
-      const samePage=data&&data.page===result.page&&displayedFilter===filter&&data.items.map(e=>e.id).join(',')===result.items.map(e=>e.id).join(',');
-      data=result;displayedFilter=filter;detailLoads.clear();
+    try{
+      if(filter==='pending'){
+        const result=await api('/api/activities/pending-redemptions?'+new URLSearchParams({page}));
+        if(!active()||current!==sequence)return;
+        if(page>1&&!result.items.length){page=Math.max(1,Math.ceil(result.total/result.page_size));return load(quiet);}
+        const signature=JSON.stringify(result);
+        if(displayedFilter!=='pending'||host.dataset.pendingSignature!==signature){
+          paintPending(result);
+          host.dataset.pendingSignature=signature;
+        }
+        displayedFilter='pending';
+        if(revealDestination){host.scrollIntoView({block:'start'});revealDestination=false;}
+        return;
+      }
+      const query=new URLSearchParams({page:focusedEvent?1:page,view:filter});
+      if(focusedEvent)query.set('event_id',String(focusedEvent));
+      const result=await api('/api/activities?'+query);
+      if(!active()||current!==sequence)return;
+      if(!focusedEvent&&page>1&&!result.items.length){page=Math.max(1,Math.ceil(result.total/result.page_size));return await load(quiet);}
+      const samePage=data&&data.page===result.page&&displayedFilter===filter&&displayedEvent===focusedEvent
+        &&data.items.map(e=>e.id).join(',')===result.items.map(e=>e.id).join(',');
+      data=result;displayedFilter=filter;displayedEvent=focusedEvent;detailLoads.clear();
       if(samePage){
         host.querySelector('.activity-wallet').innerHTML=`<strong>${esc(data.balance.available)}<small> 可用积点</small></strong><span>冻结 ${esc(data.balance.frozen)} 点</span>`;
         const signFilter=host.querySelector('[data-filter="sign"]');
@@ -252,12 +313,17 @@ export async function renderActivities(){
           node.querySelector('summary').innerHTML=template.content.querySelector('summary').innerHTML;
           if(!node.open){details.delete(event.id);node.querySelector('.activity-event-body').replaceWith(template.content.querySelector('.activity-event-body'));bindEventControls(node);}
         }
-        const nav=host.querySelector('nav[aria-label="活动分页"]'),template=document.createElement('template');template.innerHTML=pager(page,data.total,data.page_size,'list');
-        const next=[...template.content.querySelectorAll('button')];nav.querySelectorAll('button').forEach((button,i)=>{button.disabled=next[i].disabled;button.dataset.page=next[i].dataset.page;});
-        nav.querySelector('span').textContent=template.content.querySelector('span').textContent;
+        const nav=host.querySelector('nav[aria-label="活动分页"]');
+        if(nav){
+          const template=document.createElement('template');template.innerHTML=pager(page,data.total,data.page_size,'list');
+          const next=[...template.content.querySelectorAll('button')];nav.querySelectorAll('button').forEach((button,i)=>{button.disabled=next[i].disabled;button.dataset.page=next[i].dataset.page;});
+          nav.querySelector('span').textContent=template.content.querySelector('span').textContent;
+        }
       }
       else{details.clear();paint();}
-      await Promise.all(result.items.filter(e=>opened.has(e.id)).map(e=>loadDetail(e.id)));}
+      await Promise.all(result.items.filter(e=>opened.has(e.id)).map(e=>loadDetail(e.id)));
+      if(active()&&current===sequence&&revealDestination){host.scrollIntoView({block:'start'});revealDestination=false;}
+    }
     catch(error){if(!active()||current!==sequence||error.name==='AbortError')return;if(data){if(!quiet)toast(error.message,true);}else{host.innerHTML=`<section class="panel"><p role="alert">${esc(error.message)}</p><button type="button" class="secondary" data-retry>重新加载</button></section>`;host.querySelector('[data-retry]').onclick=()=>load();}}
   }
   async function poll(){if(!active())return;if(!document.hidden&&!document.querySelector('.modal-overlay')&&!host.querySelector('input:focus,textarea:focus,select:focus'))await load(true);if(active())pageTimeout(poll,15000);}

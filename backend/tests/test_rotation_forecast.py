@@ -89,7 +89,7 @@ def test_targeted_prefix_push_updates_head_only_when_target_is_last(kind, index)
     e = fixture()
     p = e.P['A'+str(index)]
     if kind == 'off':
-        p['end'] = 620
+        p.update(start=430, end=620)
     else:
         p['requestedExit'] = kind
     F.plan(e, 600)
@@ -122,8 +122,8 @@ def test_priority_sick_then_push7_then_earliest_shift_and_later_post():
     e = fixture((4, 4))
     e.P['A0']['requestedExit'] = 'sick'
     e.P['A1'].update(start=420, flags=['7点岗'])
-    e.P['A2']['end'] = 620
-    e.P['B3']['end'] = 620
+    e.P['A2'].update(start=415, end=620)
+    e.P['B3'].update(start=415, end=620)
     F.plan(e, 600)
     assert [e.P['new'+str(i)]['assign']['kind'] for i in range(4)] == ['sick', 'push7', 'off', 'off']
     assert e.P['new2']['assign']['target'] == 'B3'
@@ -257,9 +257,9 @@ def test_manual_push_filling_an_addition_ignores_header_opt_in():
 
 def test_same_shift_end_time_uses_later_post_but_earlier_shift_beats_position():
     e = fixture((4, 4))
-    e.P['A1']['end'] = 610
-    e.P['A3']['end'] = 615
-    e.P['B3']['end'] = 615
+    e.P['A1'].update(start=430, end=610)
+    e.P['A3'].update(start=430, end=615)
+    e.P['B3'].update(start=430, end=615)
     F.plan(e, 600)
     assert e.P['new0']['assign']['target'] == 'A1'
     assert e.P['new1']['assign']['target'] in {'A3', 'B3'}

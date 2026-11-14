@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+from contextlib import nullcontext
 
 import run_all
 
@@ -15,8 +16,10 @@ def test_recent_playwright_fixtures_are_in_browser_suite():
 
 def test_every_playwright_fixture_is_classified_as_browser():
     for path, kind in run_all.collect_tests('all'):
-        if path.suffix == '.cjs' and "require('playwright')" in path.read_text(encoding='utf-8'):
-            assert kind == 'browser', path.name
+        if path.suffix == '.cjs':
+            source = path.read_text(encoding='utf-8')
+            if "require('playwright')" in source or "require('./support/browser-runtime.cjs')" in source:
+                assert kind == 'browser', path.name
 
 
 def prepare(monkeypatch, tmp_path: Path, names: list[str]):
@@ -34,7 +37,15 @@ def prepare(monkeypatch, tmp_path: Path, names: list[str]):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_all.subprocess, "run", execute)
+    monkeypatch.setattr(run_all.subprocess, "Popen", fake_popen(calls))
     return calls
+
+
+def fake_popen(calls, returncode=0):
+    def launch(command, **kwargs):
+        calls.append((command, kwargs))
+        return nullcontext(SimpleNamespace(stdout=iter(()), wait=lambda: returncode))
+    return launch
 
 
 def test_default_runs_python_and_all_frontend_tests_separately(monkeypatch, tmp_path):
@@ -52,7 +63,7 @@ def test_default_runs_python_and_all_frontend_tests_separately(monkeypatch, tmp_
         "tests/self_recognition_batch_fields.cjs", "tests/pr_uncapped_score_display.cjs",
         "tests/deduction_type_picker_ui.cjs", "tests/view_lifecycle.cjs",
     }
-    assert all(kwargs["cwd"] == str(tmp_path) for _, kwargs in calls)
+    assert all(Path(kwargs["cwd"]) == tmp_path for _, kwargs in calls)
     assert ["test-node", "--experimental-vm-modules", "tests/view_lifecycle.cjs"] in commands
 
 
@@ -99,8 +110,8 @@ def test_browser_suite_runs_only_local_fixture(monkeypatch, tmp_path):
 
 
 def test_nonzero_test_result_is_not_hidden(monkeypatch, tmp_path, capsys):
-    prepare(monkeypatch, tmp_path, ["a.cjs", "b.cjs"])
-    monkeypatch.setattr(run_all.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1))
+    calls = prepare(monkeypatch, tmp_path, ["a.cjs", "b.cjs"])
+    monkeypatch.setattr(run_all.subprocess, "Popen", fake_popen(calls, returncode=1))
     assert run_all.main(["--suite", "node"]) == 1
     assert "0 passed, 2 failed" in capsys.readouterr().out
 
@@ -111,7 +122,7 @@ def test_launch_error_is_reported_as_failure(monkeypatch, tmp_path, capsys):
     def fail(*args, **kwargs):
         raise OSError("runtime removed")
 
-    monkeypatch.setattr(run_all.subprocess, "run", fail)
+    monkeypatch.setattr(run_all.subprocess, "Popen", fail)
     assert run_all.main(["--suite", "python"]) == 1
     assert "runtime removed" in capsys.readouterr().err
 

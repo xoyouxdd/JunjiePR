@@ -1,6 +1,6 @@
 """Bounded, permission-scoped activity reads; mutations stay in activities.py."""
 import json
-from sqlalchemy import select, or_, and_, func
+from sqlalchemy import select, or_, and_, case, func
 from app.activities_models import Activity, ActivityLot, ActivityAward, ActivityBid, ActivityPrize
 from app.v2_models import Employee
 from app.services import activities as service
@@ -36,14 +36,18 @@ def read_event(db, event_id, user):
     return event
 
 
-def pending_redemption(db, employee_id):
-    count, cost, title, state = db.query(
-        func.count(ActivityAward.id), func.sum(ActivityAward.cost),
-        func.max(Activity.title), func.max(ActivityAward.state),
-    ).select_from(ActivityAward).join(ActivityLot).join(Activity).filter(
+def pending_awards(db, employee_id):
+    return db.query(ActivityAward).join(ActivityLot).join(Activity).filter(
         ActivityAward.employee_id == employee_id,
         ActivityAward.cost > 0,
         ActivityAward.state.in_(("pending", "ready", "issued", "disputed")),
+    )
+
+
+def pending_redemption(db, employee_id):
+    count, cost, title, state, event_id = pending_awards(db, employee_id).with_entities(
+        func.count(ActivityAward.id), func.sum(ActivityAward.cost),
+        func.max(Activity.title), func.max(ActivityAward.state), func.max(Activity.id),
     ).one()
     if not count:
         return None
@@ -52,11 +56,28 @@ def pending_redemption(db, employee_id):
         "cost": cost,
         "title": title if count == 1 else None,
         "state": state if count == 1 else None,
+        "event_id": event_id if count == 1 else None,
     }
 
 
-def listing(db, user, page, page_size, view):
+def pending_redemptions(db, employee_id, page, page_size):
+    query = pending_awards(db, employee_id)
+    total = query.count()
+    priority = case((ActivityAward.state.in_(("ready", "issued")), 0), else_=1)
+    rows = query.with_entities(
+        ActivityAward.id, Activity.id, Activity.title, ActivityAward.cost, ActivityAward.state,
+    ).order_by(priority, ActivityAward.id.desc()).offset((page - 1) * page_size).limit(page_size)
+    return {
+        "page": page, "page_size": page_size, "total": total,
+        "items": [{"id": award_id, "event_id": event_id, "title": title, "cost": cost, "state": state}
+                  for award_id, event_id, title, cost, state in rows],
+    }
+
+
+def listing(db, user, page, page_size, view, event_id=None):
     query = scoped(db, user)
+    if event_id is not None:
+        query = query.filter(Activity.id == event_id)
     if view == 'manage':
         query = query.filter(managed(user))
     elif view == 'mine':

@@ -1,7 +1,7 @@
 'use strict';
 // Real announcement modules; synthetic API fixtures only, never production.
 const assert=require('node:assert/strict');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const fixture=require('./announcement_layout_ui.cjs');
 let browser;
 (async()=>{

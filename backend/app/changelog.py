@@ -6,6 +6,12 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.14.1", "date": "2026-11-14", "status": "candidate",
+     "items": [
+         {"summary": "积点榜支持跨圈导出", "detail": "GSM、AM、OM可按积点榜筛选条件导出单圈或全部景点圈的排名，表内标明统计日期、人群和员工所属圈。", "audiences": ["GSM", "AM", "OM"]},
+         {"summary": "历史积点补录名单标清所属圈", "detail": "正式GSM可在热力追踪、矮人迷宫及小熊罐子逐圈导出和导入，名单明确标出所属圈及黄色填写列。", "audiences": ["GSM"]},
+         {"summary": "积点卡可直达待兑换活动", "detail": "单笔待兑换直接打开活动，多笔进入我的待处理活动并优先显示待领取和待签收。积点明细旁可进入活动中心。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM", "AM", "OM"]},
+     ]},
     {"version": "2026.11.13.1", "date": "2026-11-13", "status": "candidate",
      "items": [
          {"summary": "今日小祝福新增收藏", "detail": "新增日常祝福。刮开后可在当前浏览器收藏，也可以从收藏中翻出一句重新刮开。", "audiences": ["all"]},

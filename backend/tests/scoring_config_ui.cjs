@@ -1,6 +1,6 @@
 // Real native module renderer and API, confined to a fresh temporary database.
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net'),assert=require('node:assert/strict');
-const {spawn}=require('node:child_process'),{chromium}=require('playwright');
+const {spawn}=require('node:child_process'),{chromium}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),wait=ms=>new Promise(r=>setTimeout(r,ms));
 let server,browser,log='';
 (async()=>{try{

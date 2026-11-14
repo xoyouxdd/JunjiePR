@@ -47,7 +47,7 @@ def test_confirmed_business_priority_matrix(strong, weak):
         elif purpose == 'push7':
             target.update(start=420, flags=['7点岗'])
         elif purpose == 'off':
-            target['end'] = 620
+            target.update(start=430, end=620)
         elif purpose in ('opening', 'vacancy'):
             e.line(lid)['posts'][2]['occ'] = None
             target.update(state='other', manualPaused=True)
@@ -81,7 +81,7 @@ def test_high_priority_target_is_actually_relieved_even_with_a_prefix_gap(purpos
     elif purpose == 'push7':
         target.update(start=420, flags=['7点岗'])
     else:
-        target['end'] = 620
+        target.update(start=430, end=620)
     F.plan(e, 600)
     assert e.P['new0']['assign']['kind'] == purpose
     F.execute(e, 'new0', 600, 'test', 'A')
@@ -95,7 +95,7 @@ def test_high_priority_target_is_actually_relieved_even_with_a_prefix_gap(purpos
 def test_reserved_push7_does_not_hide_other_special_demands():
     e = engine((3,))
     e.P['A0'].update(start=420, flags=['7点岗'])
-    e.P['A2']['end'] = 620
+    e.P['A2'].update(start=430, end=620)
     e.d['push7History'] = {'new0': [1, '2026-11-01', 435]}
     F.plan(e, 600)
     assert e.P['new0']['assign']['kind'] == 'off'

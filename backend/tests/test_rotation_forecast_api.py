@@ -371,7 +371,7 @@ def test_preparing_shift_end_uses_shared_25_minute_boundary_and_workday_clock(cu
     with current.factory() as db:
         row=S.day_row(db,current.attraction_id,DAY);state=S.day_state(row)
         eng,_=S.engine_for(db,S.load_config(db,current.attraction_id),row,state)
-        p=eng.P['1'];p['end']=end
+        p=eng.P['1'];p.update(start=430,end=end)
         from app.rotation.forecast_service import person_view
         assert person_view(eng,p,now)['preparing']==expected
         p['state']='pending'
@@ -384,7 +384,7 @@ def test_prepare_boundary_notifies_even_without_available_relief_and_clears_afte
         cfg=S.load_config(db,current.attraction_id);row=S.day_row(db,current.attraction_id,DAY);state=S.day_state(row)
         eng,_=S.engine_for(db,cfg,row,state)
         state['lastTick']=599
-        eng.P['1']['end']=625
+        eng.P['1'].update(start=430,end=625)
         eng.P['5'].update(state='pending',assign=None,readyAt=None)
         F.plan(eng,599)
         S.save_day(db,row,state)
@@ -447,8 +447,16 @@ def test_upcoming_shift_forecasts_at_20_minutes_without_starting_a_task(current,
     assert waiting['state'] == 'notyet' and not waiting.get('exception')
     move_clock(start)
     arrived = person(current)
-    assert arrived['state'] == 'pending' and arrived['canArrive'] and not arrived['upcomingShift']
-    assert arrived['previewAssign'] is None and arrived['breakStart'] is None
+    assert arrived['state'] == 'ready' and arrived['canDepart'] and not arrived['canArrive']
+    assert arrived['awaitingShiftEntry'] and not arrived['upcomingShift']
+    assert arrived['readyAt'] == start and arrived['breakStart'] is None
+    result = act(current, {'action': 'depart', 'pid': '5', 'expected_line': 'A',
+                           'confirmation_token': arrived['confirmationTokens']['depart']})
+    assert result['line_changed'] and person(current)['awaitingShiftEntry']
+    result = act(current, {'action': 'depart', 'pid': '5', 'expected_line': result['line'],
+                           'confirmation_token': arrived['confirmationTokens']['depart']})
+    assert result['executed']
+    assert person(current)['state'] == 'onpost' and not person(current)['awaitingShiftEntry']
     with current.factory() as db:
         assert db.query(RotationEvent).filter_by(work_date=DAY, employee_no='5', event_type='forecast_timeout').count() == 0
 
@@ -458,7 +466,7 @@ def test_preparing_keeps_sickness_priority_and_shift_change_recalculates(current
     with current.factory() as db:
         row=S.day_row(db,current.attraction_id,DAY);state=S.day_state(row)
         eng,_=S.engine_for(db,S.load_config(db,current.attraction_id),row,state)
-        p=eng.P['1'];p.update(end=625,requestedExit='out')
+        p=eng.P['1'];p.update(start=430,end=625,requestedExit='out')
         assert person_view(eng,p,600)['preparing']=='推下班'
         p['requestedExit']='sick'
         assert person_view(eng,p,600)['preparing']=='推病假'

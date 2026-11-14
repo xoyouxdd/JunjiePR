@@ -4,7 +4,7 @@ const net=require('node:net');
 const path=require('node:path');
 const fs=require('node:fs');
 const {spawn}=require('node:child_process');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const backend=path.resolve(__dirname,'..');
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 
@@ -126,6 +126,18 @@ async function run(){
       assert(await pointCardPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`point card overflow ${width}`);
       await pointCard.screenshot({path:path.join(output,`points-pending-${width}.png`)});
     }
+    await pointCard.getByRole('button',{name:/查看领取/}).click();
+    const direct=pointCardPage.locator(`details[data-event="${draw.id}"][open]`);
+    await direct.getByText('我的号码与奖品').waitFor();
+    assert.equal(await pointCardPage.locator('details[data-event]').count(),1);
+    for(const width of [390,1280]){
+      await pointCardPage.setViewportSize({width,height:1400});
+      assert(await pointCardPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      await direct.screenshot({path:path.join(output,`redemption-direct-${width}.png`)});
+    }
+    await pointCardPage.getByRole('button',{name:/返回积点卡/}).click();
+    await pointCard.getByRole('button',{name:/去活动中心/}).click();
+    await pointCardPage.locator('[data-filter=all][aria-pressed=true]').waitFor();
     await pointCardPage.close();
     await gsm.page.getByRole('button',{name:'刷新',exact:true}).click();
     const gmCard=gsm.page.locator(`details[data-event="${draw.id}"]`);
@@ -205,8 +217,117 @@ async function run(){
     assert(await gsm.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'creation modal overflow');
     await gsm.page.getByRole('dialog').screenshot({path:path.join(output,'create-320.png')});
     await gsm.page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();
+    assert((await cm.context.request.post(base+'/__fixture/pending-redemptions')).ok());
+    const pendingPage=await cm.context.newPage({viewport:{width:1280,height:1200}});
+    await pendingPage.goto(base+'/');
+    await pendingPage.locator('.tabs-desktop [data-tab="activityPoints"]').click();
+    const multiCard=pendingPage.locator('#personalActivityPoints .activity-points-card');
+    await multiCard.getByRole('button',{name:/3 笔活动待完成.*查看待处理/}).waitFor();
+    const pendingList=pendingPage.locator('.activity-pending');
+    for(const width of [320,390,1280]){
+      await pendingPage.setViewportSize({width,height:1200});
+      await multiCard.screenshot({path:path.join(output,`redemption-multiple-${width}.png`)});
+      await multiCard.getByRole('button',{name:/查看待处理/}).click();
+      await pendingList.getByRole('heading',{name:'我的待处理活动'}).waitFor();
+      const statuses=await pendingList.locator('li small').allTextContents();
+      assert.deepEqual(statuses,['待签收 · 已支出 12 点','待领取 · 已支出 8 点','待开奖 · 已支出 5 点']);
+      assert(await pendingPage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`pending list overflow ${width}`);
+      await pendingList.screenshot({path:path.join(output,`redemption-list-${width}.png`)});
+      await pendingList.getByRole('button',{name:/查看签收/}).click();
+      await pendingPage.locator('details[data-event][open]').getByRole('button',{name:'本人签字确认领取'}).waitFor();
+      await pendingPage.getByRole('button',{name:/返回待处理活动/}).click();
+      await pendingList.getByRole('button',{name:/返回积点卡/}).click();
+      await multiCard.getByRole('button',{name:/查看待处理/}).waitFor();
+    }
+    const otherPending=await cm2.context.request.get(base+'/api/activities/pending-redemptions').then(res=>res.json());
+    assert.equal(otherPending.total,0);
+    await pendingPage.close();
+    // Complete the flow with real join, settlement, issue, signature and refund endpoints.
+    async function postJson(context, route, body={}){
+      const response=await context.request.post(base+route,{data:{request_key:require('node:crypto').randomUUID(),...body}});
+      assert(response.ok(),await response.text());
+      return response.json();
+    }
+    async function prepareAward(title, cost, issue){
+      const current=Date.now();
+      const stamp=offset=>new Date(current+offset+8*3600000).toISOString().slice(0,19);
+      const event=await postJson(gsm.context,'/api/activities',{
+        title,kind:'draw',description:'领取测试纪念礼盒',location:'员工服务台',
+        starts_at:stamp(-3600000),ends_at:stamp(3600000),claim_until:stamp(86400000),
+        lots:[{name:'纪念礼盒',price:cost,per_person:1,prizes:[{name:'纪念礼盒',quantity:1}]}]
+      });
+      await postJson(gsm.context,`/api/activities/${event.id}/publish`);
+      const detail=await gsm.context.request.get(base+`/api/activities/${event.id}`).then(response=>response.json());
+      const lotId=detail.lots[0].id;
+      const joined=await postJson(cm2.context,`/api/activities/lots/${lotId}/join`,{count:1});
+      await postJson(gsm.context,`/__fixture/end/${lotId}`);
+      const awardId=joined.numbers[0];
+      if(issue)await postJson(gsm.context,`/api/activities/awards/${awardId}/fulfill`,{action:'issue',reason:'已交付测试奖品'});
+      return {eventId:event.id,awardId};
+    }
+    const lifecycle=await cm2.context.newPage({viewport:{width:1280,height:1100}});
+    lifecycle.on('pageerror',error=>errors.push(error.message));
+    await lifecycle.goto(base+'/');
+    await lifecycle.locator('.tabs-desktop [data-tab="activityPoints"]').click();
+    const lifecycleCard=lifecycle.locator('#personalActivityPoints .activity-points-card');
+    await lifecycleCard.getByRole('heading',{name:'我的积点卡'}).waitFor();
+    for(const width of [390,1280]){
+      const pickup=await prepareAward('秋日伙伴活动 · 待领取',8,false);
+      const signature=await prepareAward('周末礼盒活动 · 待签收',12,true);
+      await lifecycle.setViewportSize({width,height:1100});
+      // Reopen the card after creating test awards. All later transitions use the page's back buttons.
+      await lifecycle.reload();
+      if(width<768)await lifecycle.locator('[data-open-more]').click();
+      await lifecycle.locator('[data-tab="activityPoints"]:visible').first().click();
+      await lifecycleCard.getByRole('button',{name:/2 笔活动待完成.*已支出 20 点/}).click();
+      const pending=lifecycle.locator('.activity-pending');
+      await pending.getByRole('button',{name:/查看签收/}).click();
+      const issued=lifecycle.locator(`details[data-event="${signature.eventId}"][open]`);
+      await issued.getByRole('button',{name:'本人签字确认领取'}).click();
+      const dialog=lifecycle.getByRole('dialog');
+      await dialog.locator('[name=accepted]').check();
+      const canvas=dialog.locator('canvas');
+      await canvas.scrollIntoViewIfNeeded();
+      const box=await canvas.boundingBox();
+      if(width<768){
+        const touch=await cm2.context.newCDPSession(lifecycle);
+        const point=(x,y)=>({x:box.x+box.width*x,y:box.y+box.height*y});
+        await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point(.16,.65)]});
+        for(let i=1;i<=12;i++)await touch.send('Input.dispatchTouchEvent',{
+          type:'touchMove',touchPoints:[point(.16+i*.05,.5+.18*Math.sin(i*.6))]
+        });
+        await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        await touch.detach();
+      }else{
+        await lifecycle.mouse.move(box.x+box.width*.16,box.y+box.height*.65);
+        await lifecycle.mouse.down();
+        for(let i=1;i<=12;i++)await lifecycle.mouse.move(box.x+box.width*(.16+i*.05),box.y+box.height*(.5+.18*Math.sin(i*.6)));
+        await lifecycle.mouse.up();
+      }
+      await dialog.getByRole('button',{name:'提交签收并归档'}).click();
+      await issued.getByRole('button',{name:'查看本人签收档案'}).waitFor();
+      await lifecycle.getByRole('button',{name:/返回待处理活动/}).click();
+      await pending.getByRole('button',{name:/查看领取/}).waitFor();
+      assert.equal(await pending.locator('.activity-pending-row').count(),1);
+      await pending.getByRole('button',{name:/返回积点卡/}).click();
+      const remaining=lifecycleCard.getByRole('button',{name:/秋日伙伴活动.*已支出 8 点.*查看领取/});
+      await remaining.waitFor();
+      assert.equal(await lifecycleCard.locator('.points-amount strong').textContent(),'100');
+      await lifecycleCard.screenshot({path:path.join(output,`redemption-after-sign-${width}.png`)});
+      await remaining.click();
+      await lifecycle.locator(`details[data-event="${pickup.eventId}"][open]`).getByText('我的号码与奖品').waitFor();
+      assert.equal(await lifecycle.locator('details[data-event]').count(),1);
+      await postJson(gsm.context,`/api/activities/awards/${pickup.awardId}/fulfill`,{action:'refund',reason:'测试缺货退回'});
+      await lifecycle.getByRole('button',{name:/返回积点卡/}).click();
+      await lifecycleCard.getByRole('heading',{name:'我的积点卡'}).waitFor();
+      assert.equal(await lifecycleCard.locator('.points-redemption').count(),0);
+      assert.equal(await lifecycleCard.locator('.points-amount strong').textContent(),'100');
+      assert(await lifecycle.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+      await lifecycleCard.screenshot({path:path.join(output,`redemption-after-refund-${width}.png`)});
+    }
+    await lifecycle.close();
     assert.deepEqual(errors,[]);
-    console.log('Activities UI passed: camera/album pickers, mobile crop/filter/preview/compression and private photo display; creation/publication, guaranteed draw/refund, bid/outbid/settlement, staff issue and employee signature/archive, 320/390/1280px.');
+    console.log('Activities UI passed at 320/390/1280px, including sign → two pending become one → direct open → refund → no pending note on both phone and desktop.');
   }finally{if(browser)await browser.close();server.kill();}
 }
 run().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,7 +1,7 @@
 // Real isolated FastAPI fixture: skin switching must preserve business DOM and make no API calls.
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net'),crypto=require('node:crypto'),zlib=require('node:zlib');
 const assert=require('node:assert/strict'),{spawn}=require('node:child_process');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const backend=path.resolve(__dirname,'..'),output=path.resolve(backend,'../output/appearance-preview');
 fs.mkdirSync(output,{recursive:true});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));

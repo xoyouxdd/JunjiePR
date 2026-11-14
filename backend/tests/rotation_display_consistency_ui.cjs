@@ -1,7 +1,7 @@
 'use strict';
 // Real renderers, synthetic day snapshots, no production requests.
 const fs=require('fs'),path=require('path'),assert=require('node:assert/strict');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const common=fs.readFileSync(path.join(root,'js/rotation-common.js'),'utf8');
 const workflow=fs.readFileSync(path.join(root,'js/rotation-workflow.js'),'utf8').split('const workflowTimeoutSeen=')[0];

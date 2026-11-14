@@ -2603,18 +2603,22 @@ body.rotation-personal-only .rt-line{margin-top:12px;}
 .declaration-statistics-page .statistics-page-heading { margin-bottom: 8px; }
 .declaration-statistics-page .statistics-page-heading + p,
 .declaration-statistics-page .statistics-scope { color: var(--muted); font-size: 13px; line-height: 1.7; }
-.declaration-statistics-page .declaration-filter { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 14px 16px; margin-top: 20px; }
-.declaration-statistics-page .declaration-filter label { font-size: 13px; color: var(--text-label); }
-.declaration-statistics-page .declaration-filter input,
-.declaration-statistics-page .declaration-filter select { min-height: 42px; }
+.declaration-statistics-page .declaration-filter { grid-template-columns: repeat(4,minmax(0,1fr)); align-items: start; gap: 14px 16px; margin-top: 20px; }
+.declaration-statistics-page .declaration-filter label { font-size: 13px; line-height: 20px; color: var(--text-label); }
+.declaration-filter > label,
+.declaration-filter .statistics-actions { min-width: 0; }
+.declaration-statistics-page .declaration-filter :is(input,select) { min-width: 0; height: 44px; }
 .declaration-statistics-page .declaration-search { grid-column: span 2; }
 .declaration-search { display: grid; gap: 6px; min-width: 0; position: relative; align-content: start; }
 .declaration-search-control { position: relative; min-width: 0; }
 .declaration-search-control > input { width: 100%; }
 .declaration-search .employee-search-results { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 15; }
 .declaration-search .employee-search-results[hidden] { display: none; }
-.declaration-statistics-page .statistics-actions { grid-column: auto; display: flex; gap: 8px; align-self: end; }
+.declaration-statistics-page .statistics-actions { grid-column: auto; display: flex; gap: 8px; }
 .declaration-statistics-page .statistics-actions button { flex: 1; min-width: 0; padding-inline: 10px; white-space: nowrap; }
+@media (min-width: 1200px) {
+  .declaration-statistics-page .statistics-actions { margin-top: 26px; }
+}
 .declaration-statistics-page .declaration-kpis { grid-template-columns: repeat(6,minmax(0,1fr)); gap: 12px; margin: 20px 0 12px; }
 .declaration-statistics-page .trend-card { min-height: 86px; padding: 14px 16px; box-shadow: none; }
 .declaration-statistics-page .declaration-total { background: var(--surface-soft); }
@@ -2668,7 +2672,7 @@ body.rotation-personal-only .rt-line{margin-top:12px;}
   .declaration-statistics-page .declaration-material-actions .declaration-material,
   .declaration-statistics-page .declaration-status-action { min-height: 44px; }
 }
-@media (max-width: 1100px) and (min-width: 761px) {
+@media (max-width: 1199px) and (min-width: 761px) {
   .declaration-statistics-page .declaration-filter { grid-template-columns: repeat(3,minmax(0,1fr)); }
   .declaration-statistics-page .declaration-search { grid-column: auto; }
   .declaration-statistics-page .statistics-actions { grid-column: 1 / -1; justify-content: flex-end; }
@@ -2679,11 +2683,11 @@ body.rotation-personal-only .rt-line{margin-top:12px;}
 @media (max-width: 760px) {
   .declaration-statistics-page .panel { padding: 16px; }
   .declaration-statistics-page .declaration-filter { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 16px; }
+  .declaration-statistics-page .declaration-filter > label:has([name="status"]),
   .declaration-statistics-page .declaration-search,
   .declaration-statistics-page .statistics-actions { grid-column: 1 / -1; }
-  .declaration-statistics-page .declaration-filter input,
-  .declaration-statistics-page .declaration-filter select { font-size: 16px; min-height: 44px; }
-  .declaration-statistics-page .statistics-actions button { min-height: 44px; }
+  .declaration-statistics-page .declaration-filter :is(input,select) { font-size: 16px; height: 46px; }
+  .declaration-statistics-page .statistics-actions button { min-height: 46px; }
   .declaration-statistics-page .declaration-kpis { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 16px; }
   .declaration-statistics-page .declaration-kpi { min-height: 68px; }
   .declaration-statistics-page .trend-card { padding: 11px 12px; }

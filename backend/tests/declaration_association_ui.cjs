@@ -1,6 +1,6 @@
 // Real modules, read-only fixtures: ordinary records and both upgrade outcomes.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const levels=[{id:1,code:'STATEMENT',name:'声明'},{id:2,code:'MEMO',name:'备忘录'},{id:3,code:'WARNING_1',name:'一级警告'},{id:4,code:'WARNING_2',name:'二级警告'}];
 const base={employee_id:1,employee_name:'朱靖宇 <测试>',employee_no:'2057762',attraction_id:1,attraction_name:'热力追踪',occurred_on:'2026-09-01',type_id:1,type_name:'违规病假',level_id:1,level_code:'STATEMENT',level_name:'声明',description:'原文 <script>不应执行</script>',submitter_name:'登记人',submitted_at:'2026-09-30 14:20',material_status:'材料已就绪',upgrade_status:'无',raw_status:'active',business_status:'已生效',upgrade_request_id:0,upgrade_role:null,actual_points:1,score_status:'已扣分',counted_in_statistics:true,document_url:'/api/files/42',upgrade_links:[]};

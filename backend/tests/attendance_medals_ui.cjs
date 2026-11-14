@@ -1,6 +1,6 @@
 // Synthetic API data only; exercises the actual embedded page and honor module.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const out=path.resolve(__dirname,'../../output/attendance-medals-local');fs.mkdirSync(out,{recursive:true});
 let unknownCode=false,classified=false,classifications=0;

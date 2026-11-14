@@ -2,7 +2,7 @@
 // Real isolated API + browsers, random local port; never touches the running service.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'rotation-forecast-'));
 let server,browser,log='';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -118,8 +118,11 @@ async function main(){try{
     await page.waitForFunction(()=>RT.data.day.lines[0].posts[1].closeAt==='24:15:00');
     await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-05',time:'00:20'}}));
     await page.evaluate(()=>RT.load());
-    await page.locator('[data-f-pool=pending] .rt-chip').filter({hasText:'午夜支援'}).locator('[data-f-arrive]').waitFor();
-    assert.equal(await upcoming.count(),0);
+    await upcoming.locator('[data-f-board]').waitFor();
+    const support=(await board()).persons.find(p=>p.name==='午夜支援');
+    assert.equal(support.state,'ready');
+    assert.equal(support.directShiftEntry,1460);
+    assert.equal(await upcoming.locator('[data-f-arrive]').count(),0);
     for(const width of [320,390,768,1280]){
       await page.setViewportSize({width,height:900});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'overflow '+width);

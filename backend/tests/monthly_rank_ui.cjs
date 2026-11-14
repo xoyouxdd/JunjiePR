@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const http=require('node:http');
 const {createHash}=require('node:crypto');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static');
 const out=path.resolve(__dirname,'../../.handover_review/monthly-rank-ui');
 fs.mkdirSync(out,{recursive:true});

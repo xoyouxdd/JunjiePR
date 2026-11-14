@@ -1,6 +1,6 @@
 // Actual component + shipped artwork, synthetic employee data, no backend server.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),output=path.resolve(__dirname,'../../output/attendance-medals-integration');
 fs.mkdirSync(output,{recursive:true});
 let requests=[],broken=false;

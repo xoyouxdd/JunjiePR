@@ -13,9 +13,10 @@ const date=value=>value?new Date(value).toLocaleString('zh-CN',{hour12:false}):'
 const lines=value=>esc(value||'').replace(/\n/g,'<br>');
 const url='/api/learning';
 export async function renderLearningShares(){
- const request=beginViewRequest();let serial=0,options,choice,view='circle',page=1,keyword='',category='',draftPage=1,expiryTimer,assetController,blobUrl;
+ const request=beginViewRequest();let serial=0,options,choice,view='circle',page=1,keyword='',category='',draftPage=1,expiryTimer,assetController,blobUrl,listPosition;
  const alive=()=>request.isCurrent();const busy=new WeakSet();
- function clearReading(){clearTimeout(expiryTimer);assetController?.abort();assetController=null;app.querySelectorAll('[data-learning-pdf-host]').forEach(h=>h.learningPdfDispose?.());if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}}
+ function clearAsset(){assetController?.abort();assetController=null;app.querySelectorAll('[data-learning-pdf-host]').forEach(h=>h.learningPdfDispose?.());if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}}
+ function clearReading(){clearTimeout(expiryTimer);clearAsset();}
  registerPageCleanup(clearReading);
  let watermarkObserver;
  registerPageCleanup(()=>watermarkObserver?.disconnect());
@@ -25,20 +26,61 @@ export async function renderLearningShares(){
  function back(fn=list){app.querySelector('[data-learning-back]')?.addEventListener('click',guard(fn));}
  async function loadOptions(){options=await api(url+'/options');if(!choice||!options.circles.some(c=>c.id===choice))choice=options.circles.find(c=>c.own)?.id||options.circles[0]?.id;}
  const circle=()=>options.circles.find(c=>c.id===choice);
+ function openFromList(button,open){
+   listPosition={selector:button.hasAttribute('data-learning-open')?'data-learning-open':'data-learning-revisions',id:Number(button.dataset.learningOpen||button.dataset.learningRevisions),offset:button.getBoundingClientRect().top,scrollY:window.scrollY};
+   return open(listPosition.id);
+ }
+ function restoreListPosition(){
+   if(!listPosition)return;
+   const {selector,id,offset,scrollY}=listPosition;
+   listPosition=undefined;
+   const button=app.querySelector(`[${selector}="${id}"]`);
+   button?.focus({preventScroll:true});
+   window.scrollTo({top:button?window.scrollY+button.getBoundingClientRect().top-offset:scrollY,behavior:'instant'});
+ }
  function watermarks(){return `<div class="learning-watermarks" aria-hidden="true">${Array.from({length:12},()=>`<span>${esc(options.viewer.name)} · ${esc(options.viewer.employee_no)}<br>学习资料 · 请勿外传</span>`).join('')}</div>`;}
  function frame(body){return `<div class="learning-reading"><div class="learning-reading-content">${body}</div>${watermarks()}</div>`;}
  async function list(){const seq=++serial;await loadOptions();if(!alive()||seq!==serial)return;const c=circle();if(!c){draw('<h2>岗位知识库</h2><p>暂无有效景点圈</p>');return;}
  const query=`&keyword=${encodeURIComponent(keyword)}${category?'&category='+encodeURIComponent(category):''}`;const [data,drafts]=await Promise.all([api(`${url}?circle_id=${choice}&view=${view}&page=${page}${query}`),view==='mine'&&options.can_draft?api(`${url}/drafts?page=${draftPage}${query}`):Promise.resolve(null)]);if(!alive()||seq!==serial)return;
- draw(`<header class="learning-heading"><div><h2>岗位知识库</h2><p>岗位攻略与经验</p></div>${options.can_publish?'<button class="primary" data-learning-new>＋ 发布</button>':''}</header><nav class="learning-circles" aria-label="景点圈">${options.circles.map(c=>`<button type="button" data-circle="${c.id}" aria-pressed="${c.id===choice}">${esc(c.name)}</button>`).join('')}</nav><div class="learning-tools"><span>${c.own?'所属景点圈':c.readable?'已开放查看':'跨圈资料'}</span><button data-view="${view==='star'?'circle':'star'}">${view==='star'?'返回知识库':'我的星标'}</button>${options.can_draft?`<button data-view="${view==='mine'?'circle':'mine'}">${view==='mine'?'返回知识库':options.can_publish?'我发布的':'我的草稿'}${options.pending_revisions?` · ${options.pending_revisions} 待确认`:''}</button>`:''}<button data-learning-requests>查看申请${options.approvals?' · '+options.approvals:''}</button></div>${!c.readable?`<div class="learning-access"><div><strong>本圈资料需申请查看</strong><small>${c.access_status==='pending'?'已提交，等待本组组长确认':c.access_status==='rejected'?'上次申请已退回，可重新申请':'由本组组长人工确认多资质资格'}</small></div><button data-learning-apply ${c.access_status==='pending'?'disabled':''}>${c.access_status==='pending'?'待确认':'申请查看'}</button></div>`:!c.own&&c.expires_at?`<div class="learning-access">可查看至 ${esc(date(c.expires_at))}</div>`:''}<form class="learning-search" data-learning-search><label><span class="sr-only">搜索攻略标题</span><input type="search" name="keyword" maxlength="100" value="${esc(keyword)}" placeholder="搜索攻略标题，如：开场、异常"></label><button type="submit" class="secondary">搜索</button></form><div class="learning-categories" aria-label="资料分类">${['',...options.categories].map(c=>`<button type="button" data-category="${esc(c)}" aria-pressed="${category===c}">${esc(c||'全部')}</button>`).join('')}</div>${drafts?`<section class="learning-drafts"><h3>我的草稿 · 仅本人可见</h3>${drafts.items.map(d=>`<article class="learning-row"><div><small>未发布 · ${esc(d.category)}</small><h3><button data-draft-open="${d.id}">${esc(d.title||'未命名草稿')}</button></h3><footer>${esc(date(d.updated_at))}</footer><button data-draft-delete="${d.id}" data-version="${d.version}">删除草稿</button></div></article>`).join('')||'<p class="field-hint">暂无草稿</p>'}<div class="learning-pagination"><button data-draft-prev ${draftPage<=1?'disabled':''}>上一页</button><span>${drafts.page} / ${drafts.pages}</span><button data-draft-next ${draftPage>=drafts.pages?'disabled':''}>下一页</button></div></section><h3>已发布资料</h3>`:''}<div class="learning-list">${data.items.map(a=>`<article class="learning-row"><span class="learning-document" aria-hidden="true">${a.locked?navIcon('password'):navIcon('entries')}</span><div><small>${esc(a.category||'未分类')} · V${a.version}</small><h3>${a.locked?esc(a.title):`<button data-learning-open="${a.id}">${esc(a.title)}</button>`}</h3><p>${a.locked?'正文及附件未开放':`赞 ${a.likes}${a.starred?' · 已星标':''}`}</p><footer>${esc(a.owner)} · ${esc(date(a.updated_at))}</footer>${a.pending_revisions?`<button data-learning-revisions="${a.id}">${a.pending_revisions} 份修改待确认</button>`:''}</div></article>`).join('')||'<p class="empty">这里暂无资料</p>'}</div><div class="learning-pagination"><button data-prev ${page<=1?'disabled':''}>上一页</button><span>${page} / ${data.pages}</span><button data-next ${page>=data.pages?'disabled':''}>下一页</button></div>`);
+ const waiting=options.pending_revisions+options.approvals;
+ const empty=category?`<div class="learning-empty"><p>当前分类下没有匹配的攻略。</p><button type="button" class="secondary" data-category="">查看全部分类</button></div>`
+   : `<p class="empty">${keyword?'没有找到匹配的攻略。':view==='star'?'这个景点圈暂无星标攻略。':'这里暂无资料。'}</p>`;
+ draw(`<header class="learning-heading">
+   <h2>岗位知识库</h2>
+   <div class="learning-heading-actions">
+     ${options.can_publish&&c.own?'<button class="primary" data-learning-new>＋ 发布</button>':''}
+     <details class="learning-personal"><summary>我的${waiting?`<span class="learning-personal-count" aria-label="${waiting} 项待处理">${waiting}</span>`:''}</summary>
+       <div class="learning-personal-links">
+         <button data-view="star">我的星标</button>
+         ${options.can_draft?`<button data-view="mine">我的草稿${options.pending_revisions?` · ${options.pending_revisions} 待确认`:''}</button>`:''}
+         <button data-learning-requests>查看申请${options.approvals?' · '+options.approvals:''}</button>
+       </div>
+     </details>
+   </div>
+ </header>
+ ${view!=='circle'?`<div class="learning-view-heading"><h3>${view==='star'?'我的星标':'我的草稿'}</h3><button class="secondary" data-view="circle">返回知识库</button></div>`:''}
+ <nav class="learning-circles" aria-label="景点圈">${options.circles.map(c=>`<button type="button" data-circle="${c.id}" aria-pressed="${c.id===choice}">${esc(c.name)}</button>`).join('')}</nav>
+ <form class="learning-search" data-learning-search>
+   <label><input type="search" name="keyword" maxlength="100" value="${esc(keyword)}" aria-label="在${esc(c.name)}搜索攻略标题" placeholder="在${esc(c.name)}搜攻略标题"></label>
+   ${keyword?'<button type="button" class="secondary" data-learning-clear-search>清除</button>':''}
+   <button type="submit" class="secondary">搜索</button>
+ </form>
+ <div class="learning-categories" aria-label="资料分类">${['',...options.categories].map(c=>`<button type="button" data-category="${esc(c)}" aria-pressed="${category===c}">${esc(c||'全部')}</button>`).join('')}</div>
+ ${!c.readable?`<div class="learning-access"><div><strong>本圈资料需申请查看</strong><small>${c.access_status==='pending'?'已提交，等待本组组长确认':c.access_status==='rejected'?'上次申请已退回，可重新申请':'由本组组长人工确认多资质资格'}</small></div><button data-learning-apply ${c.access_status==='pending'?'disabled':''}>${c.access_status==='pending'?'待确认':'申请查看'}</button></div>`:!c.own&&c.expires_at?`<div class="learning-access">可查看至 ${esc(date(c.expires_at))}</div>`:''}
+ ${drafts?`<section class="learning-drafts"><h3>仅本人可见</h3>${drafts.items.map(d=>`<article class="learning-row"><div><small>未发布 · ${esc(d.category)}</small><h3><button data-draft-open="${d.id}">${esc(d.title||'未命名草稿')}</button></h3><footer>${esc(date(d.updated_at))}</footer><button data-draft-delete="${d.id}" data-version="${d.version}">删除草稿</button></div></article>`).join('')||'<p class="field-hint">暂无草稿</p>'}<div class="learning-pagination"><button data-draft-prev ${draftPage<=1?'disabled':''}>上一页</button><span>${drafts.page} / ${drafts.pages}</span><button data-draft-next ${draftPage>=drafts.pages?'disabled':''}>下一页</button></div></section><h3>已发布资料</h3>`:''}
+ <div class="learning-list">${data.items.map(a=>`<article class="learning-row"><span class="learning-document" aria-hidden="true">${a.locked?navIcon('password'):navIcon('entries')}</span><div><small>${esc(a.category||'未分类')} · V${a.version}</small><h3>${a.locked?esc(a.title):`<button data-learning-open="${a.id}">${esc(a.title)}</button>`}</h3><p>${a.locked?'正文及附件未开放':`赞 ${a.likes}${a.starred?' · 已星标':''}`}</p><footer>${esc(a.owner)} · ${esc(date(a.updated_at))}</footer>${a.pending_revisions?`<button data-learning-revisions="${a.id}">${a.pending_revisions} 份修改待确认</button>`:''}</div></article>`).join('')||empty}</div>
+ <div class="learning-pagination"><button data-prev ${page<=1?'disabled':''}>上一页</button><span>${page} / ${data.pages}</span><button data-next ${page>=data.pages?'disabled':''}>下一页</button></div>`);
+ restoreListPosition();
  app.querySelector('[data-learning-search]').onsubmit=guard(async e=>{e.preventDefault();keyword=new FormData(e.currentTarget).get('keyword').trim();page=1;draftPage=1;await list();});
+ app.querySelector('[data-learning-clear-search]')?.addEventListener('click',guard(()=>{keyword='';page=1;draftPage=1;return list();}));
  app.querySelectorAll('[data-category]').forEach(b=>b.onclick=guard(()=>{keyword=app.querySelector('[name=keyword]').value.trim();category=b.dataset.category;page=1;draftPage=1;return list();}));
  app.querySelectorAll('[data-draft-open]').forEach(b=>b.onclick=guard(async()=>{const d=await api(`${url}/drafts/${b.dataset.draftOpen}`);if(!alive())return;const a=d.share_id?await api(`${url}/${d.share_id}`):null;if(alive())await editor(a,d);}));
  app.querySelectorAll('[data-draft-delete]').forEach(b=>b.onclick=guard(async()=>{if(!await confirmModal('删除草稿','<p>确认删除这份未发布草稿？已发布资料不受影响。</p>','删除草稿'))return;await api(`${url}/drafts/${b.dataset.draftDelete}`,json('DELETE',{expected_version:Number(b.dataset.version)}));if(alive())await list();}));
  app.querySelector('[data-draft-prev]')?.addEventListener('click',guard(()=>{draftPage--;return list();}));app.querySelector('[data-draft-next]')?.addEventListener('click',guard(()=>{draftPage++;return list();}));
  app.querySelectorAll('[data-circle]').forEach(b=>b.onclick=guard(()=>{choice=Number(b.dataset.circle);page=1;draftPage=1;view='circle';return list();}));
  app.querySelectorAll('[data-view]').forEach(b=>b.onclick=guard(()=>{view=b.dataset.view;draftPage=1;if(view==='mine')choice=options.circles.find(c=>c.own)?.id||choice;page=1;return list();}));
- app.querySelectorAll('[data-learning-open]').forEach(b=>b.onclick=guard(()=>detail(Number(b.dataset.learningOpen))));
- app.querySelectorAll('[data-learning-revisions]').forEach(b=>b.onclick=guard(()=>revisions(Number(b.dataset.learningRevisions))));
+ app.querySelectorAll('[data-learning-open]').forEach(b=>b.onclick=guard(()=>openFromList(b,detail)));
+ app.querySelectorAll('[data-learning-revisions]').forEach(b=>b.onclick=guard(()=>openFromList(b,revisions)));
  app.querySelector('[data-learning-new]')?.addEventListener('click',guard(()=>editor()));
  app.querySelector('[data-learning-apply]')?.addEventListener('click',()=>apply());
  app.querySelector('[data-learning-requests]').onclick=guard(approvals);
@@ -46,17 +88,64 @@ export async function renderLearningShares(){
  }
  function expireAt(value){if(!value)return;const remaining=new Date(value).getTime()-Date.now();expiryTimer=setTimeout(()=>{if(!alive())return;serial++;clearReading();draw('<h2>查看权限已到期</h2><p>请重新申请对应景点圈的查看权限。</p><button data-learning-back>返回知识库</button>');back();},Math.max(0,Math.min(remaining,2147483647)));}
  async function detail(id){const seq=++serial,a=await api(url+'/'+id);if(!alive()||seq!==serial)return;choice=a.circle_id;
- draw(`<button class="secondary" data-learning-back>‹ 岗位知识库</button><div class="learning-detail-heading"><small>${esc(a.category||'未分类')} · V${a.version}</small><h2>${esc(a.title)}</h2><p>${esc(a.owner)} · ${esc(date(a.updated_at))}</p></div><p class="learning-confidential">仅限获授权人员学习，请勿外传</p>${frame(`<div class="learning-prose">${lines(a.body)}</div>`)}${a.assets.length?`<div class="learning-assets">${a.assets.map(asset=>`<button data-learning-asset="${asset.id}">${esc(asset.filename)} · 阅读</button>`).join('')}</div><div data-learning-asset-reader></div>`:''}<div class="learning-reactions"><button data-like aria-pressed="${a.liked}">${a.liked?'已点赞':'点赞'} ${a.likes}</button><button data-star aria-pressed="${a.starred}">${a.starred?'★ 已星标':'☆ 星标收藏'}</button></div>${a.can_edit?'<div class="learning-actions"><button data-learning-edit>参与修改</button><button data-learning-history>修改记录</button></div>':''}${a.can_manage?'<div class="learning-actions"><button data-learning-transfer>交接负责人</button><button data-learning-withdraw>下架文档</button></div>':''}`);back();expireAt(a.expires_at);
+ const assetTypes={'application/pdf':'PDF','image/jpeg':'JPG','image/png':'PNG','image/webp':'WebP'};
+ draw(`<button type="button" class="secondary learning-detail-back" data-learning-back>‹ 返回列表</button>
+ <div class="learning-detail-heading learning-reader-heading"><h2>${esc(a.title)}</h2><small>${esc(a.category||'未分类')} · V${a.version}</small><p>${esc(a.owner)} · ${esc(date(a.updated_at))}</p></div>
+ <p class="learning-confidential">仅限获授权人员学习，请勿外传</p>
+ ${a.body?.trim()?`<div class="learning-detail-body">${frame(`<div class="learning-prose">${lines(a.body)}</div>`)}</div>`:''}
+ ${a.assets.length?`<section class="learning-detail-assets" aria-labelledby="learningAssetsTitle"><h3 id="learningAssetsTitle">附件</h3>
+   <ul>${a.assets.map(asset=>`<li>
+     <button type="button" class="secondary learning-asset-row" data-learning-asset="${asset.id}" aria-expanded="false" aria-controls="learningAsset${asset.id}">
+       <span class="learning-asset-type">${assetTypes[asset.media_type]||'文件'}</span><span class="learning-asset-name">${esc(asset.filename)}</span>
+     </button>
+     <div class="learning-inline-reader" id="learningAsset${asset.id}" hidden>
+       <div class="learning-inline-reader-heading"><strong>${esc(asset.filename)}</strong><button type="button" class="secondary" data-learning-close-asset>关闭</button></div>
+       <div data-learning-asset-reader></div>
+     </div>
+   </li>`).join('')}</ul></section>`:''}
+ <div class="learning-reactions"><button data-like aria-pressed="${a.liked}">${a.liked?'已点赞':'点赞'} ${a.likes}</button><button data-star aria-pressed="${a.starred}">${a.starred?'★ 已星标':'☆ 星标收藏'}</button></div>
+ ${a.can_edit?'<div class="learning-actions"><button data-learning-edit>参与修改</button><button data-learning-history>修改记录</button></div>':''}
+ ${a.can_manage?'<div class="learning-actions"><button data-learning-transfer>交接负责人</button><button data-learning-withdraw>下架文档</button></div>':''}`);back();expireAt(a.expires_at);
  mountFeedback(a,seq);
  app.querySelector('[data-like]').onclick=guard(async()=>{await api(`${url}/${id}/reaction`,json('PUT',{liked:!a.liked,starred:a.starred}));if(alive()&&seq===serial)await detail(id);});
  app.querySelector('[data-star]').onclick=guard(async()=>{await api(`${url}/${id}/reaction`,json('PUT',{liked:a.liked,starred:!a.starred}));if(alive()&&seq===serial)await detail(id);});
- app.querySelectorAll('[data-learning-asset]').forEach(b=>b.onclick=guard(()=>readAsset(a,a.assets.find(x=>x.id===Number(b.dataset.learningAsset)))));
+ let openAttachment;
+ function closeAttachment(restorePosition){
+   if(!openAttachment)return;
+   const {button,panel,reader,offset}=openAttachment;
+   clearAsset();
+   reader.replaceChildren();
+   panel.hidden=true;
+   button.setAttribute('aria-expanded','false');
+   openAttachment=undefined;
+   if(restorePosition){
+     button.focus({preventScroll:true});
+     window.scrollTo({top:window.scrollY+button.getBoundingClientRect().top-offset,behavior:'instant'});
+   }
+ }
+ app.querySelectorAll('[data-learning-asset]').forEach(button=>{
+   const panel=button.nextElementSibling,reader=panel.querySelector('[data-learning-asset-reader]');
+   const asset=a.assets.find(item=>item.id===Number(button.dataset.learningAsset));
+   panel.querySelector('[data-learning-close-asset]').onclick=()=>closeAttachment(true);
+   const open=guard(()=>readAsset(a,asset,null,null,reader));
+   button.onclick=event=>{
+     if(openAttachment?.button===button){closeAttachment(true);return;}
+     const offset=button.getBoundingClientRect().top;
+     const switching=Boolean(openAttachment);
+     closeAttachment(false);
+     openAttachment={button,panel,reader,offset};
+     button.setAttribute('aria-expanded','true');
+     panel.hidden=false;
+     if(switching)window.scrollTo({top:window.scrollY+button.getBoundingClientRect().top-offset,behavior:'instant'});
+     return open(event);
+   };
+ });
  app.querySelector('[data-learning-edit]')?.addEventListener('click',()=>editor(a));app.querySelector('[data-learning-history]')?.addEventListener('click',guard(()=>revisions(id)));
  app.querySelector('[data-learning-transfer]')?.addEventListener('click',guard(()=>transfer(a)));
  app.querySelector('[data-learning-withdraw]')?.addEventListener('click',()=>reasonForm('下架文档','下架后本圈人员将无法浏览正文及附件。',async reason=>{await api(`${url}/${id}/withdraw`,json('POST',{action:'withdraw',expected_version:a.version,reason}));if(alive())await list();},()=>detail(id)));
  }
- async function readAsset(a,asset,revisionId=null,privateUrl=null){const seq=serial,host=app.querySelector('[data-learning-asset-reader]');if(!host)return;
- assetController?.abort();host.querySelectorAll('[data-learning-pdf-host]').forEach(h=>h.learningPdfDispose?.());if(blobUrl){URL.revokeObjectURL(blobUrl);blobUrl=null;}assetController=new AbortController();const controller=assetController;
+ async function readAsset(a,asset,revisionId=null,privateUrl=null,host=app.querySelector('[data-learning-asset-reader]')){const seq=serial;if(!host)return;
+ clearAsset();assetController=new AbortController();const controller=assetController;
  try{
  host.innerHTML='<p>正在读取材料…</p>';
  const response=await fetch(portalPath(privateUrl||`${url}/${a.id}/${revisionId?'revisions/'+revisionId+'/':''}assets/${asset.id}`),{signal:controller.signal,cache:'no-store'});
@@ -66,11 +155,11 @@ export async function renderLearningShares(){
   host.innerHTML=frame('<div data-learning-pdf-host><p>正在显示材料…</p></div>');observeWatermarks();
   const pdfHost=host.querySelector('[data-learning-pdf-host]');await mountLearningPdf(pdfHost,await blob.arrayBuffer(),()=>alive()&&seq===serial&&!controller.signal.aborted&&pdfHost.isConnected);
  }else{blobUrl=URL.createObjectURL(blob);host.innerHTML=frame(`<img class="learning-image" alt="${esc(asset.filename)}" src="${esc(blobUrl)}">`);observeWatermarks();}
- }catch(error){if(!controller.signal.aborted&&alive()&&seq===serial)throw error;}
+ }catch(error){if(!controller.signal.aborted&&alive()&&seq===serial){host.innerHTML='<p role="alert">材料未能打开，请关闭后重试。</p>';throw error;}}
  }
- async function editor(a=null,draft=null){++serial;const targetCircle=a?.circle_id||options.circles.find(c=>c.own)?.id;let assets=[...(draft?.assets||a?.assets||[])],uploading=false,writing=false;
+ async function editor(a=null,draft=null){++serial;const targetCircle=a?.circle_id||options.circles.find(c=>c.own)?.id;const circleName=options.circles.find(c=>c.id===targetCircle)?.name||'本景点圈';let assets=[...(draft?.assets||a?.assets||[])],uploading=false,writing=false;
  const initial=draft||a||{};const stale=draft&&a&&draft.base_version!==a.version;
- draw(`<button class="secondary" data-learning-back>‹ 返回</button><h2>${a?'修改岗位攻略':'发布岗位攻略'}</h2><p>${a&&!a.can_publish?'提交后由负责TR确认。确认前继续展示已发布版本。':'发布至本景点圈，供圈内人员学习。'}</p>${stale?`<p class="error" role="alert">此草稿基于 V${draft.base_version}，公开资料已更新至 V${a.version}。请保留草稿内容，打开最新资料重新核对修改，系统不会覆盖新版本。</p>`:''}<form class="form-stack learning-form"><label>标题<input name="title" required maxlength="100" value="${esc(initial.title||'')}"></label><label>分类<select name="category">${options.categories.map(c=>`<option ${c===(initial.category||'未分类')?'selected':''}>${esc(c)}</option>`).join('')}</select></label><label>内容<textarea name="body" maxlength="20000" rows="9">${esc(initial.body||'')}</textarea></label>${a?`<label>修改说明<input name="summary" required maxlength="500" value="${esc(draft?.summary||'')}"></label>`:''}<label>添加材料（PDF或图片，单个不超过10MB，最多8份）<input type="file" data-learning-upload accept=".pdf,.jpg,.jpeg,.png,.webp" multiple></label><div data-learning-assets></div><div class="learning-actions"><button type="button" class="secondary" data-learning-save-draft>保存草稿</button><button class="primary" type="submit">预览${a&&!a.can_publish?'并提交':'并发布'}</button></div><p data-draft-status role="status" aria-live="polite">${draft?'已读取本人草稿，尚未发布':''}</p></form><section data-learning-preview hidden></section>`);back(a?()=>detail(a.id):list);
+ draw(`<button class="secondary" data-learning-back>‹ 返回</button><h2>${a?'修改岗位攻略':'发布岗位攻略'}</h2><p>${a&&!a.can_publish?'提交后由当前负责人确认。确认前继续展示已发布版本。':'发布到「'+esc(circleName)+'」。'}</p>${stale?`<p class="error" role="alert">此草稿基于 V${draft.base_version}，公开资料已更新至 V${a.version}。请保留草稿内容，打开最新资料重新核对修改，系统不会覆盖新版本。</p>`:''}<form class="form-stack learning-form"><label>标题<input name="title" required maxlength="100" value="${esc(initial.title||'')}"></label><label>分类<select name="category">${options.categories.map(c=>`<option ${c===(initial.category||'未分类')?'selected':''}>${esc(c)}</option>`).join('')}</select></label><label>内容<textarea name="body" maxlength="20000" rows="9">${esc(initial.body||'')}</textarea></label>${a?`<label>修改说明<input name="summary" required maxlength="500" value="${esc(draft?.summary||'')}"></label>`:''}<label>添加材料（PDF或图片，单个不超过10MB，最多8份）<input type="file" data-learning-upload accept=".pdf,.jpg,.jpeg,.png,.webp" multiple></label><div data-learning-assets></div><div class="learning-actions"><button type="button" class="secondary" data-learning-save-draft>保存草稿</button><button class="primary" type="submit">预览${a&&!a.can_publish?'并提交':'并发布'}</button></div><p data-draft-status role="status" aria-live="polite">${draft?'已读取本人草稿，尚未发布':''}</p></form><section data-learning-preview hidden></section>`);back(a?()=>detail(a.id):list);
  const form=app.querySelector('.learning-form'),assetHost=app.querySelector('[data-learning-assets]'),preview=app.querySelector('[data-learning-preview]');
  const payload=()=>{const v=new FormData(form);return {title:v.get('title'),body:v.get('body'),category:v.get('category'),summary:v.get('summary')||'',assets:assets.map(x=>x.id),share_id:a?.id||null,base_version:draft?.base_version||a?.version||1,expected_version:draft?.version||1};};
  function controls(disabled){form.querySelectorAll('button').forEach(b=>b.disabled=disabled);preview.querySelectorAll('button').forEach(b=>b.disabled=disabled);}
@@ -79,10 +168,10 @@ export async function renderLearningShares(){
  app.querySelector('[data-learning-upload]').onchange=guard(async event=>{if(writing||uploading)return;const files=[...event.target.files];if(files.length+assets.length>8)throw new Error('最多添加8份材料');uploading=true;controls(true);try{for(const file of files){if(file.size>10*1024*1024)throw new Error('单个材料不能超过10MB');const body=new FormData();body.set('file',file);body.set('circle_id',targetCircle);const uploaded=await api(url+'/assets',{method:'POST',body});if(!alive()||!form.isConnected)return;assets.push(uploaded);renderAssets();}}finally{uploading=false;if(form.isConnected)controls(false);}});
  app.querySelector('[data-learning-save-draft]').onclick=guard(async()=>{if(writing||uploading)return;writing=true;controls(true);try{await saveDraft();}finally{writing=false;if(form.isConnected)controls(false);}});
  form.onsubmit=guard(async event=>{event.preventDefault();if(writing||uploading)return;const data=payload();if(!data.title.trim()||(!data.body.trim()&&!data.assets.length))throw new Error('请填写标题和内容或上传材料');if(a&&!data.summary.trim())throw new Error('请填写修改说明');
- form.hidden=true;preview.hidden=false;preview.innerHTML=`<p class="learning-preview-tag">${a&&!a.can_publish?'提交前预览':'发布前预览'} · 尚未发布</p><div class="learning-detail-heading"><small>${esc(data.category)}</small><h2>${esc(data.title)}</h2><p>观看范围：本景点圈 · 附件 ${assets.length} 份</p></div><p class="learning-confidential">仅限获授权人员学习，请勿外传</p>${frame(`<div class="learning-prose">${lines(data.body)}</div>`)}<div class="learning-assets">${assets.map(x=>`<button type="button" data-preview-asset="${x.id}">${esc(x.filename)} · 阅读</button>`).join('')}</div><div data-learning-asset-reader></div><div class="learning-actions"><button type="button" class="secondary" data-preview-edit>返回编辑</button><button type="button" class="primary" data-preview-confirm>${a&&!a.can_publish?'确认提交修改稿':'确认发布'}</button></div><p data-preview-status role="status"></p>`;observeWatermarks();
+ form.hidden=true;preview.hidden=false;preview.innerHTML=`<p class="learning-preview-tag">${a&&!a.can_publish?'提交前预览':'发布前预览'} · 尚未发布</p><div class="learning-detail-heading"><small>${esc(data.category)}</small><h2>${esc(data.title)}</h2><p>所属景点圈：${esc(circleName)} · 附件 ${assets.length} 份</p></div><p class="learning-confidential">仅限获授权人员学习，请勿外传</p>${frame(`<div class="learning-prose">${lines(data.body)}</div>`)}<div class="learning-assets">${assets.map(x=>`<button type="button" data-preview-asset="${x.id}">${esc(x.filename)} · 阅读</button>`).join('')}</div><div data-learning-asset-reader></div><div class="learning-actions"><button type="button" class="secondary" data-preview-edit>返回编辑</button><button type="button" class="primary" data-preview-confirm>${a&&!a.can_publish?'确认提交修改稿':'确认发布'}</button></div><p data-preview-status role="status"></p>`;observeWatermarks();
  preview.querySelector('[data-preview-edit]').onclick=()=>{if(writing)return;clearReading();preview.hidden=true;preview.innerHTML='';form.hidden=false;observeWatermarks();};
  preview.querySelectorAll('[data-preview-asset]').forEach(b=>b.onclick=guard(()=>{const asset=assets.find(x=>x.id===Number(b.dataset.previewAsset));const existing=a?.assets.some(x=>x.id===asset.id);return readAsset(a||{},asset,null,existing?`${url}/${a.id}/assets/${asset.id}`:`${url}/assets/${asset.id}`);}));
- preview.querySelector('[data-preview-confirm]').onclick=guard(async()=>{if(writing||uploading)return;writing=true;controls(true);try{const saved=await saveDraft();if(!saved||!alive()||!form.isConnected)return;await api(`${url}/drafts/${saved.id}/publish`,json('POST',{expected_version:saved.version}));clearFormEdits(form);toast(a&&!a.can_publish?'修改稿已提交，等待负责TR确认':'攻略已发布');if(alive()&&form.isConnected)await list();}finally{writing=false;if(form.isConnected)controls(false);}});
+ preview.querySelector('[data-preview-confirm]').onclick=guard(async()=>{if(writing||uploading)return;writing=true;controls(true);try{const saved=await saveDraft();if(!saved||!alive()||!form.isConnected)return;const result=await api(`${url}/drafts/${saved.id}/publish`,json('POST',{expected_version:saved.version}));clearFormEdits(form);toast(result.status==='pending'?'修改稿已提交，等待当前负责人确认':'攻略已发布');if(alive()&&form.isConnected)await list();}finally{writing=false;if(form.isConnected)controls(false);}});
  });
  }
  function mountFeedback(a,seq){const panel=document.createElement('details');panel.className='learning-feedback';panel.innerHTML='<summary>内容有误或需要补充？问题反馈</summary><p class="field-hint">本人可查看自己的反馈；作者和本圈负责人员可处理反馈。</p><form class="form-stack" data-feedback-form><label>问题类型<select name="kind"><option>内容有误</option><option>需要补充</option><option>附件问题</option></select></label><label>具体说明<textarea name="content" maxlength="500" required rows="3" placeholder="请说明需要核对的步骤或附件"></textarea></label><button type="submit" class="primary">提交反馈</button><p data-feedback-status role="status"></p></form><div data-feedback-list></div>';app.querySelector('.learning-library').append(panel);let feedbackPage=1,loaded=false,feedbackSerial=0;
@@ -99,11 +188,49 @@ export async function renderLearningShares(){
  for(const [key,action,rows] of [['reject','reject',data.items],['revoke','revoke',grants.items]])app.querySelectorAll(`[data-${key}]`).forEach(b=>b.onclick=()=>{const r=rows.find(r=>r.id===Number(b.dataset[key]));reasonForm(action==='reject'?'退回申请':'撤销查看权限',r.employee_name,async reason=>{await api(`${url}/requests/${r.id}/decision`,json('POST',{action,reason,expected_version:r.generation}));void refreshActionBadge();if(alive())await approvals();},approvals);});
  }
  async function revisions(id){const seq=++serial,[a,data]=await Promise.all([api(url+'/'+id),api(`${url}/${id}/revisions`)]);if(!alive()||seq!==serial)return;
- draw(`<button class="secondary" data-learning-back>‹ 文档详情</button><h2>修改记录</h2><p>${esc(a.title)} · 当前 V${a.version}</p><section class="learning-compare"><h3>当前已发布内容</h3>${frame(lines(a.body))}</section>${data.items.map(r=>`<article class="learning-revision"><h3>${esc(r.title)}</h3><p>${esc(r.editor)} · 基于 V${r.base_version} · ${{pending:'待确认',published:'已发布',returned:'已退回'}[r.status]||esc(r.status)}</p><p>修改说明：${esc(r.summary)}</p>${frame(lines(r.body))}${r.assets.map(asset=>`<button data-revision-asset="${r.id}:${asset.id}">阅读修改稿附件：${esc(asset.filename)}</button>`).join('')}${r.reason?`<p>处理说明：${esc(r.reason)}</p>`:''}${a.can_review&&r.status==='pending'?`<div class="learning-actions"><button data-review-approve="${r.id}" class="primary">确认发布</button><button data-review-reject="${r.id}">退回修改</button></div>`:''}</article>`).join('')||'<p>暂无修改记录</p>'}<div data-learning-asset-reader></div>`);back(()=>detail(id));
- app.querySelectorAll('[data-revision-asset]').forEach(b=>b.onclick=guard(()=>{const [rid,aid]=b.dataset.revisionAsset.split(':').map(Number);return readAsset(a,data.items.find(r=>r.id===rid).assets.find(x=>x.id===aid),rid);}));
+ const pending=data.items.filter(r=>r.status==='pending');
+ const history=data.items.filter(r=>r.status!=='pending');
+ const statusNames={published:'已发布',returned:'已退回'};
+ const body=text=>frame(text?.trim()?lines(text):'<p class="field-hint">无正文</p>');
+ const attachments=(assets,revisionId)=>assets.length?`<div class="learning-assets">${assets.map(asset=>
+   `<button type="button" class="secondary" data-revision-asset="${revisionId}:${asset.id}">${esc(asset.filename)} · 阅读</button>`).join('')}</div>`:'';
+ draw(`<div class="learning-review-page">
+   <button class="secondary learning-review-back" data-learning-back>‹ 文档详情</button>
+   <header class="learning-review-heading"><h2>修改记录</h2><p>${esc(a.title)} · 当前 V${a.version}</p></header>
+   <section class="learning-review-pending" aria-labelledby="learningPendingTitle">
+     <h3 id="learningPendingTitle">待确认稿 <span>${pending.length} 份</span></h3>
+     ${pending.map((r,index)=>`<details class="learning-review-item" ${index===0?'open':''}>
+       <summary><strong>${esc(r.title)}</strong><span>${esc(r.editor)} · 基于 V${r.base_version}</span></summary>
+       <div class="learning-review-content">
+         <p class="learning-review-note"><strong>修改说明</strong> ${esc(r.summary)}</p>
+         <div class="learning-review-compare">
+           <section class="learning-review-column"><h4>当前版 <span>V${a.version}</span></h4>${body(a.body)}${attachments(a.assets,0)}</section>
+           <section class="learning-review-column"><h4>修改稿 <span>基于 V${r.base_version}</span></h4>${body(r.body)}${attachments(r.assets,r.id)}</section>
+         </div>
+         <div class="learning-review-reader"></div>
+         ${a.can_review?`<div class="learning-actions learning-review-actions"><button data-review-approve="${r.id}" class="primary">确认发布</button><button class="secondary" data-review-reject="${r.id}">退回修改</button></div>`:''}
+       </div>
+     </details>`).join('')||'<p class="field-hint">暂无待确认稿</p>'}
+   </section>
+   ${history.length?`<details class="learning-review-history"><summary><strong>已处理历史</strong><span>${history.length} 份</span></summary>
+     <div class="learning-review-content">${history.map(r=>`<article class="learning-revision">
+       <h3>${esc(r.title)}</h3><p>${esc(r.editor)} · 基于 V${r.base_version} · ${esc(statusNames[r.status]||r.status)}</p>
+       <p>修改说明：${esc(r.summary)}</p>${body(r.body)}${attachments(r.assets,r.id)}
+       ${r.reason?`<p>处理说明：${esc(r.reason)}</p>`:''}<div class="learning-review-reader"></div>
+     </article>`).join('')}</div>
+   </details>`:''}
+   <div data-learning-asset-reader></div>
+ </div>`);back(()=>detail(id));
+ const reader=app.querySelector('[data-learning-asset-reader]');
+ app.querySelectorAll('[data-revision-asset]').forEach(b=>b.onclick=guard(()=>{
+   const [rid,aid]=b.dataset.revisionAsset.split(':').map(Number);
+   const assets=rid?data.items.find(r=>r.id===rid).assets:a.assets;
+   b.closest('.learning-review-content,.learning-revision').querySelector('.learning-review-reader').append(reader);
+   return readAsset(a,assets.find(asset=>asset.id===aid),rid);
+ }));
  app.querySelectorAll('[data-review-approve]').forEach(b=>b.onclick=guard(async()=>{if(!await confirmModal('发布修改稿','<p>已核对修改内容及附件，确认发布新版本？</p>','确认发布'))return;await api(`${url}/${id}/revisions/${b.dataset.reviewApprove}/decision`,json('POST',{action:'approve',expected_version:a.version}));if(alive()&&seq===serial)await revisions(id);}));
  app.querySelectorAll('[data-review-reject]').forEach(b=>b.onclick=()=>reasonForm('退回修改','请说明需要修改的内容。',async reason=>{await api(`${url}/${id}/revisions/${b.dataset.reviewReject}/decision`,json('POST',{action:'reject',reason,expected_version:a.version}));if(alive())await revisions(id);},()=>revisions(id)));
  }
- async function transfer(a){const seq=++serial,data=await api(`${url}/owners?circle_id=${a.circle_id}`);if(!alive()||seq!==serial)return;draw(`<button class="secondary" data-learning-back>‹ 返回</button><h2>交接负责人</h2><p>交接后，由新的负责TR确认后续修改稿。</p><form class="form-stack"><label>新负责人<select name="employee_id" required><option value="">请选择本圈TR</option>${data.items.map(e=>`<option value="${e.id}">${esc(e.name)} · ${esc(e.employee_no)}</option>`).join('')}</select></label><label>交接说明<textarea name="reason" required maxlength="500"></textarea></label><button class="primary" type="submit">确认交接</button></form>`);back(()=>detail(a.id));const form=app.querySelector('form');form.onsubmit=guard(async e=>{e.preventDefault();const data=new FormData(form);await api(`${url}/${a.id}/transfer`,json('POST',{employee_id:Number(data.get('employee_id')),reason:data.get('reason'),expected_version:a.version}));clearFormEdits(form);if(alive()&&form.isConnected)await detail(a.id);});}
+ async function transfer(a){const seq=++serial,data=await api(`${url}/owners?circle_id=${a.circle_id}`);if(!alive()||seq!==serial)return;draw(`<button class="secondary" data-learning-back>‹ 返回</button><h2>交接负责人</h2><p>交接后的修改稿由新负责人确认，已有待确认稿也会一并交接。</p><form class="form-stack"><label>新负责人<select name="employee_id" required><option value="">请选择本圈具备发布资格的人员</option>${data.items.map(e=>`<option value="${e.id}">${esc(e.name)} · ${esc(e.employee_no)}</option>`).join('')}</select></label><label>交接说明<textarea name="reason" required maxlength="500"></textarea></label><button class="primary" type="submit">确认交接</button></form>`);back(()=>detail(a.id));const form=app.querySelector('form');form.onsubmit=guard(async e=>{e.preventDefault();const data=new FormData(form);await api(`${url}/${a.id}/transfer`,json('POST',{employee_id:Number(data.get('employee_id')),reason:data.get('reason'),expected_version:a.version}));clearFormEdits(form);if(alive()&&form.isConnected)await detail(a.id);});}
  if(state.learningApprovals){state.learningApprovals=false;await loadOptions();if(alive())await approvals();}else await list();
 }

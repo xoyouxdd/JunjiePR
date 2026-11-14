@@ -13,11 +13,10 @@ from app.activity_points_models import ActivityPointsEntry, LegacyPointsBalance,
 from app.employee_numbers import employee_number, employee_number_cell
 from app.services.activity_points import LEVELS, START_POLICY, START_POLICY_VERSION, digest
 from app.services.identity import base_role_at
-from app.services.organization import managed_attraction_ids
 from app.services.employment import employment_history
+from app.services.legacy_points_xlsx import HEADERS, PREVIOUS_HEADERS
 from app.v2_models import Attraction, AuditLog, CircleTransferRequest, Employee, EmployeeRoleAssignment, EmployeeMonthOrganizationSnapshot
 
-HEADERS = ["工号", "姓名", "景点圈", "身份", "状态", "截止月份", "已存历史积点", "核定历史积点总数", "备注", "核定范围"]
 LIMIT = 1_000_000
 
 
@@ -35,14 +34,14 @@ def formal_gsm(db, user):
 
 def circles(db, user):
     formal_gsm(db, user)
-    return db.query(Attraction).filter(Attraction.id.in_(managed_attraction_ids(db, user.id)),
+    return db.query(Attraction).filter(
         Attraction.active.is_(True), Attraction.employee_circle.is_(True), Attraction.name.in_(START_POLICY)).order_by(Attraction.id).all()
 
 
 def ensure_circle(db, user, circle_id):
     found = next((c for c in circles(db, user) if c.id == circle_id), None)
     if not found:
-        raise HTTPException(403, "只能处理本人管理的景点圈")
+        raise HTTPException(403, "只能处理已开放历史积点补录的景点圈")
     return found
 
 
@@ -184,7 +183,7 @@ def _parse(content):
         sheet = book['名单']
         if sheet.max_row > 10005 or sheet.max_column > len(HEADERS):
             raise ValueError('名单最多10000行，请勿增加列')
-        if [sheet.cell(3, c).value for c in range(1, len(HEADERS)+1)] != HEADERS:
+        if [sheet.cell(3, c).value for c in range(1, len(HEADERS)+1)] not in (HEADERS, PREVIOUS_HEADERS):
             raise ValueError('模板列名已变化，请重新导出')
         rows = [(i, list(row)) for i, row in enumerate(sheet.iter_rows(min_row=4, max_col=len(HEADERS)), 4)]
         book.close()
@@ -196,11 +195,13 @@ def _parse(content):
 
 
 def preview(db, user, circle_id, content):
-    ensure_circle(db, user, circle_id)
+    circle = ensure_circle(db, user, circle_id)
     export_id, uploaded = _parse(content)
     batch = db.get(LegacyPointsExport, str(export_id))
-    if not batch or batch.circle_id != circle_id or datetime.now() - batch.created_at > timedelta(days=30):
-        raise HTTPException(409, '模板已过期或景点圈不匹配，请重新导出')
+    if not batch or datetime.now() - batch.created_at > timedelta(days=30):
+        raise HTTPException(409, '模板无效或已过期，请重新导出')
+    if batch.circle_id != circle_id:
+        raise HTTPException(409, f'名单所属圈与当前选择的「{circle.name}」不一致，请切换到名单所属圈后再导入')
     expected = {employee_number(r['employee_no']): r for r in json.loads(batch.roster_json)}
     current = {r['employee_id']: r for r in roster(db, user, circle_id)}
     errors, changes, seen = [], [], set()
@@ -246,7 +247,7 @@ def preview(db, user, circle_id, content):
             'previous': live['total'], 'total': value, 'delta': delta, 'revision': live['revision'], 'note': note,
             'identity': digest({k: live[k] for k in ['employee_no', 'name', 'circle_id', 'role', 'status', 'coverage', 'blocked']}),
             'cutoff': live['cutoff'], 'coverage': live['coverage']})
-    result = {'circle_id': circle_id, 'summary': counts, 'errors': errors, 'changes': changes,
+    result = {'circle_id': circle_id, 'circle_name': circle.name, 'summary': counts, 'errors': errors, 'changes': changes,
               'policy': START_POLICY_VERSION, 'file_digest': digest(content.hex())}
     token = uuid4().hex
     db.add(LegacyPointsPreview(id=token, export_id=batch.id, created_by=user.id, payload_json=json.dumps(result, ensure_ascii=False)))

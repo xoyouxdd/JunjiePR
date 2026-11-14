@@ -36,6 +36,8 @@ $env:RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD = "由负责人现场设置的初始�
 
 `run_all.py` 用当前解释器逐个文件起子进程，工作目录固定为 `backend/`，所以在仓库根目录直接执行即可。
 
+Windows 有 D 盘时，直接运行 Pytest、`run_all.py`、浏览器用例或备份健康场景测试，临时数据默认写入 `D:\JunjiePR-testing\scratch\native` 下的独立目录。没有 D 盘时使用系统临时目录。成功后自动清理本次临时目录，失败时保留测试数据和 `test.log`，终端会显示目录路径。浏览器用例显式保存的截图仍保存在原有位置。
+
 默认入口同时执行 Python、纯 Node.js 回归和 Playwright/Edge 本地 DOM 夹具；Node.js 须在 PATH 中，Playwright 须能由 `backend/` 解析，Microsoft Edge 须已安装。可配置 `NODE_PATH` 指向已有 Playwright 模块目录。运行器不自动安装依赖，缺少必需运行时会明确失败；浏览器夹具不启动应用服务器，也不连接部署环境。
 
 定向检查可追加 `--suite python`、`--suite node` 或 `--suite browser`；它们只证明相应范围通过，不能替代默认完整验证。新增 Python 回归继续使用 `test_*.py`，前端回归使用 `.cjs`。

@@ -98,6 +98,41 @@ def test_timeout_is_personal_and_manual_pool_move_does_not_claim_execution(today
         assert p['state'] == 'rest' and p['readyAt'] - data['clock']['minute'] == pytest.approx(15, abs=.05)
 
 
+def test_batch_sign_in_is_shared_by_screen_and_personal_todo(today):
+    day = date.today().isoformat()
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        with S.transaction(db):
+            row = S.day_row(db, today, day)
+            state = S.day_state(row)
+            state['lastTick'] = 719
+            p = state['persons']['9710000']
+            p.update(state='notyet', start=735, readyAt=None, assign=None)
+            for i in range(15):
+                pid = f'8990{i:03}'
+                state['persons'][pid] = dict(p, pid=pid, name=pid, forecastOrder=pid)
+            S.save_day(db, row, state)
+
+    with TestClient(app) as cm, TestClient(app) as screen:
+        login(cm, '9710000')
+        ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
+        mine = ok(cm.get('/api/rotation-board/me'))['person']
+        assert any(item['type'] == 'rotation_step' for item in ok(cm.get('/api/action-center'))['items'])
+        view = ok(screen.get('/api/rotation/screen/state'))['day']
+        everyone = {p['pid']: p for p in view['persons']}
+        assert everyone[mine['pid']]['canBatchCheckIn'] and mine['canBatchCheckIn']
+        other = everyone['8990000']
+        payload = {'action': 'batch_check_in', 'pid': other['pid'],
+                   'confirmation_token': other['confirmationTokens']['batch_check_in']}
+        assert cm.post('/api/rotation-board/me/act', json=payload).status_code == 403
+        assert ok(screen.post('/api/rotation/screen/act', json=payload))['executed']
+        own = {'action': 'batch_check_in', 'pid': mine['pid'],
+               'confirmation_token': mine['confirmationTokens']['batch_check_in']}
+        assert ok(cm.post('/api/rotation-board/me/act', json=own))['executed']
+        assert ok(screen.post('/api/rotation/screen/act', json=own))['duplicate']
+        assert ok(cm.get('/api/rotation-board/me'))['person']['batchCheckedIn']
+
+
 def test_overnight_personal_confirmation_receipt_uses_workday_not_calendar_date(today, monkeypatch):
     previous = (date.today() - timedelta(days=1)).isoformat()
     with SessionLocal() as db:

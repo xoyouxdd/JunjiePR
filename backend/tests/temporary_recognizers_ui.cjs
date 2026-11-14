@@ -1,6 +1,6 @@
 // Exercise the real panel functions with isolated HR API data; no live accounts or database.
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const staticRoot=path.resolve(__dirname,'../app/static');
 const source=fs.readFileSync(path.join(staticRoot,'js/app/hr-employees.js'),'utf8');
 const functions=source.slice(source.indexOf('function temporaryRecognizerPanel(){'),source.indexOf('async function renderHrEmployees(){'));

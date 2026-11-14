@@ -201,8 +201,16 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
                     actionable=person.get('state') in ('walkback','pending') or bool(person.get('entryHold') and person.get('state') in ('ready','rest')) or (person.get('state')=='ready' and assignment and now_min>=max(person.get('readyAt') or now_min,assignment.get('notBefore',0),assignment.get('departAt',1440)-early))
                     paused=bool(assignment.get('queueId')) or any(c['status'] in {'open','handling'} and user.employee.employee_no in c['people'] for c in rotation_state.get('timeoutCases',{}).values())
                     if paused and person.get('state') in ('ready','rest','meal'):actionable=False
+                    if rotation_state.get('ruleVersion') == 2 and person['state'] == 'notyet':
+                        from app.rotation.forecast import BATCH_CHECK_IN_MINUTES, BATCH_LEAD_MINUTES
+                        start = person['start']
+                        actionable = (start - BATCH_CHECK_IN_MINUTES <= now_min < start - BATCH_LEAD_MINUTES
+                                      and db.query(FORMAL_TABLES.RotationNotice.id).filter_by(
+                                          attraction_id=aid, work_date=row.work_date,
+                                          employee_no=user.employee.employee_no, kind='batch_check_in',
+                                          status='open').first() is not None)
                     if actionable:actionable_count+=1
-        if actionable_count:items.append(action_center_item('rotation_step','本人轮岗待确认',actionable_count,'rotationTest','warning','确认待上岗或待休息（吃饭），同步对应景点圈轮岗看板。'))
+        if actionable_count:items.append(action_center_item('rotation_step','本人轮岗待确认',actionable_count,'rotationTest','warning','确认班前已到、待上岗或待休息（吃饭），同步对应景点圈轮岗看板。'))
     if rotation_timeout_cases:
         items.append(action_center_item('rotation_timeout_related','同线关联任务待核实',len(rotation_timeout_cases),'rotationTest','critical','超时导致同线关联任务暂停，请核实执行情况并恢复相关任务。'))
 

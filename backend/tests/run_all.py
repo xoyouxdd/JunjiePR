@@ -19,10 +19,13 @@ API and FFmpeg fixture. None connects to a deployed application by default.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from temp_storage import finish_test_workspace, test_log, test_workspace
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -108,13 +111,10 @@ def check_frontend_runtime(files: list[tuple[Path, str]]) -> str | None:
     return node
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", choices=("all", "python", "node", "browser"), default="all")
-    args = parser.parse_args(argv)
-    files = collect_tests(args.suite)
+def run_suite(suite: str) -> int:
+    files = collect_tests(suite)
     if not files:
-        print(f"no tests found for suite {args.suite}")
+        print(f"no tests found for suite {suite}")
         return 2
     try:
         node = check_frontend_runtime(files)
@@ -129,8 +129,19 @@ def main(argv: list[str] | None = None) -> int:
         command = ([PYTHON, "-m", "pytest", relative, "-q", "-p", "no:warnings"]
                    if kind == "python" else [node, *(["--experimental-vm-modules"] if path.name in ESM_VM_TESTS else []), relative])
         try:
-            result = subprocess.run(command, cwd=str(ROOT))
-            passed = result.returncode == 0
+            with subprocess.Popen(
+                command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                encoding="utf-8", errors="replace",
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            ) as child:
+                try:
+                    for line in child.stdout:
+                        print(line, end="", flush=True)
+                    passed = child.wait() == 0
+                except BaseException:
+                    if child.poll() is None:
+                        child.terminate()
+                    raise
         except OSError as error:
             print(f"cannot execute {path.name}: {error}", file=sys.stderr)
             passed = False
@@ -145,6 +156,21 @@ def main(argv: list[str] | None = None) -> int:
         print("failed:", ", ".join(failed_modules))
         return 1
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("all", "python", "node", "browser"), default="all")
+    args = parser.parse_args(argv)
+    with test_workspace("pr-suite-") as root:
+        success = False
+        try:
+            with test_log(root):
+                result = run_suite(args.suite)
+                success = result == 0
+            return result
+        finally:
+            finish_test_workspace(root, success)
 
 
 if __name__ == "__main__":

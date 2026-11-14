@@ -154,7 +154,7 @@
   #app[data-workspace-ui] .hr-report-page .statistics-filter { grid-template-columns: repeat(3,minmax(0,1fr)); }
 }
 @media (min-width: 761px) and (max-width: 1199px) {
-  #app[data-workspace-ui] :is(.entry-filter,.statistics-filter,.pr-ranking-filter) { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  #app[data-workspace-ui] :is(.entry-filter,.statistics-filter:not(.declaration-filter),.pr-ranking-filter) { grid-template-columns: repeat(2,minmax(0,1fr)); }
   #app[data-workspace-ui] .entry-filter > button { align-self: end; }
 }
 @media (max-width: 760px) {
@@ -216,6 +216,9 @@
   }
   #app[data-workspace-ui] :is(input[type=date],input[type=month])::-webkit-datetime-edit { min-width: 0; padding: 0; }
   #app[data-workspace-ui] :is(.statistics-actions,.pr-ranking-actions) { grid-column: 1/-1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+  #app[data-workspace-ui] .declaration-filter > label { line-height: 20px; }
+  #app[data-workspace-ui] .declaration-filter .statistics-actions > button { min-height: 46px; }
+  #app[data-workspace-ui] .declaration-filter .statistics-actions > button:only-child { grid-column: 1/-1; }
   #app[data-workspace-ui] .statistics-actions button { min-width: 0; }
   #app[data-workspace-ui] :is(.entry-filter,.statistics-filter,.pr-ranking-filter) > button:last-child { grid-column: 1/-1; }
   #app[data-workspace-ui] .work-card { padding: 14px; }

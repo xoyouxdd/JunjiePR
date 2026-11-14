@@ -1,6 +1,6 @@
 // Real production modules/CSP with synthetic APIs; never opens a business database.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {createHash}=require('node:crypto'),{chromium,webkit}=require('playwright');
+const {createHash}=require('node:crypto'),{chromium,webkit}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),version='compact-ui-fixture';
 const shell=fs.readFileSync(path.join(root,'index.html'),'utf8').replaceAll('__STATIC_CACHE_VERSION__',version).replace(/<script type="module"[^>]*><\/script>/,'');
 const policySource=fs.readFileSync(path.join(root,'../security.py'),'utf8');

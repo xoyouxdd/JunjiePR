@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
-const {spawn}=require('node:child_process');const {chromium,webkit,firefox}=require('playwright');
+const {spawn}=require('node:child_process');const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'rotation-post-edit-'));
 const report=path.join(root,'.handover_review/rotation-post-edit');fs.mkdirSync(report,{recursive:true});
 let server,browser,log='';const sleep=ms=>new Promise(r=>setTimeout(r,ms));

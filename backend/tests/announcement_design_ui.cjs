@@ -1,7 +1,7 @@
 'use strict';
 // Actual app modules, original API shapes and fictitious announcements only.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const {chromium,webkit}=require('playwright');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');
 const fixture=require('./announcement_layout_ui.cjs');
 const out=path.resolve(__dirname,'../../output/announcement-redesign-20261020');fs.mkdirSync(out,{recursive:true});
 const checks=[];

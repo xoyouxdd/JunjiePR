@@ -7,7 +7,14 @@ Set-StrictMode -Version Latest
 $opsRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $healthScript = Join-Path $opsRoot "Test-SqliteBackupHealth.ps1"
 $installerScript = Join-Path $opsRoot "Install-DailyBackupHealthTask.ps1"
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ("recognition-backup-health-{0}" -f [Guid]::NewGuid().ToString("N"))
+$tempBase = [IO.Path]::GetTempPath()
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and
+    (Test-Path -LiteralPath 'D:\' -PathType Container) -and
+    [IO.Path]::GetPathRoot($tempBase) -ne 'D:\') {
+    $tempBase = 'D:\JunjiePR-testing\scratch\native'
+    [void][IO.Directory]::CreateDirectory($tempBase)
+}
+$testRoot = Join-Path $tempBase ("recognition-backup-health-{0}" -f [Guid]::NewGuid().ToString("N"))
 $backupRoot = Join-Path $testRoot "backups"
 $taskStatusFile = Join-Path $testRoot "task-status.json"
 $fakePython = Join-Path $testRoot "fake-sqlite-check.cmd"
@@ -56,6 +63,7 @@ function Invoke-HealthCheck {
         -BackupRoot $backupRoot -Python $fakePython -TestMode -TestRoot $testRoot `
         -TaskStatusFile $taskStatusFile -NowUtc $now.ToString("o") 2>&1
     $exitCode = $LASTEXITCODE
+    Add-Content -LiteralPath $testLog -Encoding UTF8 -Value ("Exit code {0}`r`n{1}" -f $exitCode, ($output -join [Environment]::NewLine))
     $report = ($output -join [Environment]::NewLine) | ConvertFrom-Json
     return [pscustomobject]@{ exit_code = $exitCode; report = $report }
 }
@@ -65,6 +73,8 @@ function Has-Issue($Result, [string]$Code) {
 }
 
 $results = [Collections.Generic.List[object]]::new()
+$testLog = Join-Path $testRoot "test.log"
+$success = $false
 try {
     New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
     @'
@@ -120,7 +130,9 @@ if "%FAKE_SQLITE_QUICKCHECK_FAIL%"=="1" (
 
     $installOutput = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installerScript `
         -HealthScript $copiedHealthScript -TestMode -TestRoot $testRoot -DryRun
-    Assert-True ($LASTEXITCODE -eq 0) "health task installer dry-run must exit 0"
+    $installExit = $LASTEXITCODE
+    Add-Content -LiteralPath $testLog -Encoding UTF8 -Value ("Installer exit code {0}`r`n{1}" -f $installExit, ($installOutput -join [Environment]::NewLine))
+    Assert-True ($installExit -eq 0) "health task installer dry-run must exit 0"
     $installResult = ($installOutput -join [Environment]::NewLine) | ConvertFrom-Json
     Assert-True ([bool]$installResult.ok -and [bool]$installResult.dry_run) "installer dry-run must report ok"
     $results.Add([pscustomobject]@{ scenario = "installer_dry_run"; passed = $true })
@@ -131,14 +143,23 @@ if "%FAKE_SQLITE_QUICKCHECK_FAIL%"=="1" (
         scenarios = @($results)
         test_root = $testRoot
     } | ConvertTo-Json -Depth 5
+    $success = $true
+}
+catch {
+    if (Test-Path -LiteralPath $testRoot -PathType Container) {
+        Add-Content -LiteralPath $testLog -Encoding UTF8 -Value ($_ | Out-String)
+    }
+    Write-Warning "Test artifacts retained: $testRoot"
+    throw
 }
 finally {
     Remove-Item Env:FAKE_SQLITE_QUICKCHECK_FAIL -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $testRoot -PathType Container) {
-        $resolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if ($success -and (Test-Path -LiteralPath $testRoot -PathType Container)) {
+        $resolvedTemp = [IO.Path]::GetFullPath($tempBase).TrimEnd([IO.Path]::DirectorySeparatorChar)
         $resolvedTest = [IO.Path]::GetFullPath($testRoot)
         if ($resolvedTest.StartsWith($resolvedTemp + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
-            [IO.Path]::GetFileName($resolvedTest) -match '^recognition-backup-health-[a-f0-9]{32}$') {
+            [IO.Path]::GetFileName($resolvedTest) -match '^recognition-backup-health-[a-f0-9]{32}$' -and
+            -not ((Get-Item -LiteralPath $resolvedTest -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             Remove-Item -LiteralPath $resolvedTest -Recurse -Force
         }
     }

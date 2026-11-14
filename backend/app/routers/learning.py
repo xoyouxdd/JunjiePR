@@ -92,15 +92,18 @@ def claim(db, share, version, **values):
 def options(db: Session = Depends(get_db), user: V2User = Depends(member)):
     grants = {r.circle_id:r for r in db.query(Access).filter_by(employee_id=user.id)}
     leader = domain.current_leader_for_employee(db, user.id)
+    circles = domain.circles(db)
+    home_circle = user.employee.attraction_id
+    can_publish = any(c.id == home_circle for c in circles) and domain.can_publish(user, home_circle)
     pending = db.query(Revision).join(Share, Share.id == Revision.share_id).filter(
-        Share.owner_id == user.id, Share.circle_id == user.employee.attraction_id,
-        Share.status == 'published', Revision.status == 'pending').count()
+        Share.owner_id == user.id, Share.circle_id == home_circle,
+        Share.status == 'published', Revision.status == 'pending').count() if can_publish else 0
     return {'circles':[{'id':c.id,'name':c.name,'readable':domain.readable(db,user,c.id),
         'own':c.id==user.employee.attraction_id,'can_edit':domain.editing(user,c.id),
         'can_manage':domain.management(user,c.id),
         'access_status':grants[c.id].status if not domain.direct_read(user,c.id) and c.id in grants and grants[c.id].home_circle_id==user.employee.attraction_id else None,
-        'expires_at':grants[c.id].expires_at if not domain.direct_read(user,c.id) and c.id in grants and grants[c.id].home_circle_id == user.employee.attraction_id else None} for c in domain.circles(db)],
-        'can_publish':user.has_role('TR') and user.employee.attraction_id in {c.id for c in domain.circles(db)},
+        'expires_at':grants[c.id].expires_at if not domain.direct_read(user,c.id) and c.id in grants and grants[c.id].home_circle_id == user.employee.attraction_id else None} for c in circles],
+        'can_publish':can_publish,
         'can_draft':domain.editing(user,user.employee.attraction_id), 'categories':CATEGORIES,
         'pending_revisions':pending,'approvals':len(domain.approval_rows(db,user)),
         'leader':{'id':leader.id,'name':leader.name} if leader else None,
@@ -130,7 +133,7 @@ def listing(circle_id: int, view: str = 'circle', page: int = Query(1, ge=1), ke
     return {'items':[{'id':r.id,'title':r.title,'category':r.category,'version':r.version,'owner_id':r.owner_id,'owner':owners.get(r.owner_id,''),
         'updated_at':r.updated_at,'locked':not allowed,'likes':counts.get(r.id,0),
         'liked':bool(reactions.get(r.id) and reactions[r.id].liked),'starred':bool(reactions.get(r.id) and reactions[r.id].starred),
-        'pending_revisions':pending.get(r.id,0) if r.owner_id==user.id else 0} for r in rows],
+        'pending_revisions':pending.get(r.id,0) if domain.owner_can_publish(user,r) else 0} for r in rows],
         'total':total,'page':page,'pages':max(1,(total+19)//20)}
 
 
@@ -142,9 +145,10 @@ def publish(data: Content, db: Session = Depends(get_db), user: V2User = Depends
 
 
 def create_share(db, user, data):
-    circle_or_fail(db,user.employee.attraction_id)
-    if not user.has_role('TR'):
-        raise HTTPException(403,'仅本圈TR可以直接发布攻略')
+    home_circle = user.employee.attraction_id
+    if not domain.can_publish(user, home_circle):
+        raise HTTPException(403,'仅本圈TR、主管、GSM及有效任期内的TA主管、TA GSM可以发布新攻略')
+    circle_or_fail(db,home_circle)
     content_valid(db,user,data)
     row=Share(circle_id=user.employee.attraction_id,owner_id=user.id,publisher_id=user.id,title=data.title.strip(),body=data.body,category=data.category or '未分类',assets=json.dumps(data.assets))
     db.add(row);db.flush()
@@ -212,8 +216,9 @@ def grants(db: Session = Depends(get_db), user: V2User = Depends(member)):
 @router.get('/owners')
 def owners(circle_id: int, db: Session = Depends(get_db), user: V2User = Depends(member)):
     if not domain.management(user,circle_id):raise HTTPException(403,'仅本圈主管及以上可以交接负责人')
-    return {'items':[{'id':e.id,'name':e.name,'employee_no':e.employee_no} for e in db.query(Employee).filter_by(attraction_id=circle_id,is_active=True)
-                     if domain.active_tr(db,e.id,circle_id)]}
+    circle_or_fail(db,circle_id)
+    return {'items':[{'id':e.id,'name':e.name,'employee_no':e.employee_no}
+                     for e in domain.eligible_publishers(db,circle_id)]}
 
 
 @router.post('/assets')
@@ -268,7 +273,8 @@ class DraftVersion(BaseModel):
 def draft_owned(db, user, id):
     row=db.get(Draft,id)
     if not row or row.employee_id!=user.id:raise HTTPException(404,'草稿不存在')
-    if not domain.valid_circle(db,row.circle_id) or not domain.editing(user,row.circle_id) or (not row.share_id and row.circle_id!=user.employee.attraction_id):
+    allowed = domain.editing(user,row.circle_id) if row.share_id else domain.can_publish(user,row.circle_id)
+    if not domain.valid_circle(db,row.circle_id) or not allowed:
         raise HTTPException(403,'岗位或景点圈已变化，不能继续编辑此草稿')
     if row.share_id:
         share=db.get(Share,row.share_id);domain.require_read(db,user,share)
@@ -288,6 +294,8 @@ def draft_list(page: int = Query(1,ge=1), keyword: str = Query('',max_length=100
     if not domain.editing(user,user.employee.attraction_id):raise HTTPException(403,'没有草稿编辑权限')
     allowed={c.id for c in domain.circles(db) if domain.editing(user,c.id)}
     q=db.query(Draft).filter(Draft.employee_id==user.id,Draft.circle_id.in_(allowed))
+    if not domain.can_publish(user,user.employee.attraction_id):
+        q=q.filter(Draft.share_id.is_not(None))
     if keyword.strip():q=q.filter(Draft.title.contains(keyword.strip(),autoescape=True))
     if category:q=q.filter_by(category=category)
     total=q.count()
@@ -297,11 +305,13 @@ def draft_list(page: int = Query(1,ge=1), keyword: str = Query('',max_length=100
 
 
 def validate_draft(db,user,data):
-    circle_or_fail(db,user.employee.attraction_id)
     share=db.get(Share,data.share_id) if data.share_id else None
     if data.share_id:
         domain.require_read(db,user,share)
-    elif not user.has_role('TR'):raise HTTPException(403,'仅本圈TR可起草新攻略')
+    else:
+        home_circle=user.employee.attraction_id
+        if not domain.can_publish(user,home_circle):raise HTTPException(403,'当前岗位没有新攻略发布权限')
+        circle_or_fail(db,home_circle)
     circle_id=share.circle_id if share else user.employee.attraction_id
     if not domain.editing(user,circle_id):raise HTTPException(403,'没有草稿编辑权限')
     assets_valid(db,user,data.assets,share)
@@ -374,7 +384,7 @@ def detail(id: int, db: Session = Depends(get_db), user: V2User = Depends(member
         'owner':owner.name,'owner_id':row.owner_id,'publisher_id':row.publisher_id,'updated_at':row.updated_at,
         'assets':[{'id':a.id,'filename':a.filename,'media_type':a.media_type} for a in assets],
         'can_edit':domain.editing(user,row.circle_id),'can_manage':domain.management(user,row.circle_id),
-        'can_publish':domain.owner_can_publish(db,user,row),'can_review':domain.owner_can_publish(db,user,row),
+        'can_publish':domain.owner_can_publish(user,row),'can_review':domain.owner_can_publish(user,row),
         'liked':bool(reaction and reaction.liked),'starred':bool(reaction and reaction.starred),
         'likes':db.query(Reaction).filter_by(share_id=id,liked=True).count(),
         'viewer':{'name':user.name,'employee_no':user.employee.employee_no},
@@ -413,7 +423,7 @@ def create_revision(db,user,id,data):
     if not data.summary.strip():raise HTTPException(400,'请填写修改说明')
     content_valid(db,user,data,row)
     if row.version!=data.expected_version:raise HTTPException(409,'公开版本已更新，请重新打开文档')
-    direct=domain.owner_can_publish(db,user,row)
+    direct=domain.owner_can_publish(user,row)
     revision=Revision(share_id=id,editor_id=user.id,base_version=row.version,title=data.title.strip(),body=data.body,
         assets=json.dumps(data.assets),category=data.category or row.category,summary=data.summary,status='published' if direct else 'pending',
         reviewed_by=user.id if direct else None,reviewed_at=datetime.now() if direct else None)
@@ -454,15 +464,16 @@ def revision_attachment(id: int, revision_id: int, asset_id: int, db: Session = 
 @router.post('/{id}/revisions/{revision_id}/decision')
 def review(id: int, revision_id: int, data: Decision, db: Session = Depends(get_db), user: V2User = Depends(member)):
     row=db.get(Share,id);domain.require_read(db,user,row)
-    if not domain.owner_can_publish(db,user,row):raise HTTPException(403,'仅文档当前负责TR可确认发布')
+    if not domain.owner_can_publish(user,row):raise HTTPException(403,'仅具备本圈发布资格的当前负责人可确认或退回修改稿')
     r=db.get(Revision,revision_id)
     if not r or r.share_id!=id:raise HTTPException(404,'修改稿不存在')
     if data.action not in {'approve','reject'}:raise HTTPException(400,'操作不正确')
     if data.action=='reject' and not data.reason.strip():raise HTTPException(400,'请说明退回原因')
     if data.action=='approve' and (r.base_version!=row.version or data.expected_version!=row.version):raise HTTPException(409,'修改稿基于旧版本，请修改人核对最新内容后重新提交')
-    count=db.query(Revision).filter_by(id=r.id,status='pending').update({'status':'published' if data.action=='approve' else 'returned',
+    still_owner=db.query(Share.id).filter_by(id=id,owner_id=user.id,status='published').exists()
+    count=db.query(Revision).filter_by(id=r.id,status='pending').filter(still_owner).update({'status':'published' if data.action=='approve' else 'returned',
         'reason':data.reason,'reviewed_by':user.id,'reviewed_at':datetime.now()},synchronize_session=False)
-    if not count:raise HTTPException(409,'修改稿已被处理')
+    if not count:raise HTTPException(409,'修改稿已被处理或负责人已变化，请刷新')
     if data.action=='approve':claim(db,row,data.expected_version,title=r.title,body=r.body,assets=r.assets,category=r.category)
     write_audit(db,user.employee,'审核学习攻略修改','learning_share',id,after={'revision_id':r.id,'action':data.action,'reason':data.reason})
     db.commit()
@@ -483,7 +494,9 @@ def withdraw(id: int, data: Decision, db: Session = Depends(get_db), user: V2Use
 def transfer(id: int, data: TransferInput, db: Session = Depends(get_db), user: V2User = Depends(member)):
     row=db.get(Share,id)
     if not row or not domain.management(user,row.circle_id):raise HTTPException(403,'仅本圈主管及以上可交接')
-    if not data.reason.strip() or not domain.active_tr(db,data.employee_id,row.circle_id):raise HTTPException(400,'请选择本圈有效TR并填写交接原因')
+    circle_or_fail(db,row.circle_id)
+    if not data.reason.strip() or not domain.eligible_publishers(db,row.circle_id,data.employee_id):
+        raise HTTPException(400,'请选择本圈具备发布资格的人员并填写交接原因')
     # Ownership changes do not change the published content version or invalidate pending edits.
     count=db.query(Share).filter_by(id=id,owner_id=row.owner_id,version=data.expected_version,status='published').update({'owner_id':data.employee_id},synchronize_session=False)
     if not count:raise HTTPException(409,'文档已变化，请刷新')
@@ -503,7 +516,7 @@ class FeedbackDecision(BaseModel):
 
 
 def feedback_manager(user,share):
-    return domain.owner_can_publish(None,user,share) or domain.management(user,share.circle_id)
+    return domain.owner_can_publish(user,share) or domain.management(user,share.circle_id)
 
 
 @router.get('/{id}/feedback')

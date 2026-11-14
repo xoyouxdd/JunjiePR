@@ -1,6 +1,6 @@
 // Render the real filter templates and CSS; use synthetic options/history only.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),http=require('node:http');
-const {chromium,webkit,firefox}=require('playwright');
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),history=Array.from({length:12},(_,i)=>({exported_at:'2026-10-19 20:08',month:'2026-10',attraction_name:'热力追踪',title:'CM/TR全部',keyword:i?'':'合成长姓名和员工号',employee_count:120+i}));
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const options='<option value="1">热力追踪</option><option value="2">矮人迷宫</option>';

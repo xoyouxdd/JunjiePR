@@ -1,7 +1,7 @@
 // Actual FastAPI + SQLite + browser; uses a new isolated fixture directory.
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net'),crypto=require('node:crypto');
 const {spawn}=require('node:child_process'),assert=require('node:assert/strict');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const backend=path.resolve(__dirname,'..'),output=path.resolve(backend,'../output/avatar-live-acceptance');
 fs.mkdirSync(output,{recursive:true});
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));

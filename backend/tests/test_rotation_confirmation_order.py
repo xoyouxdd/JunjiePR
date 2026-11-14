@@ -85,7 +85,7 @@ def test_confirmation_time_then_participating_post_count(counts, headers, winner
 def test_unconfirmed_forecasts_do_not_reserve_special_relief(kind, outcome):
     e = fixture()
     e.line('B')['sortAt'] = 590
-    if kind == 'off': e.P['B1']['end'] = 610
+    if kind == 'off': e.P['B1'].update(start=430, end=610)
     else: e.P['B1']['requestedExit'] = 'sick' if kind == 'sick' else 'out'
     F.plan(e, 600)
     assert e.P['new0']['assign']['target'] == 'B1'

@@ -2,8 +2,8 @@
 // Real isolated API + browser: no production data, service or credentials.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net');
 const {spawn}=require('node:child_process');
-const {chromium,webkit,firefox}=require('playwright');
-const root=path.resolve(__dirname,'../..'),review=path.join(root,'.handover_review');fs.mkdirSync(review,{recursive:true});const work=fs.mkdtempSync(path.join(review,'daily-ui-'));
+const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
+const root=path.resolve(__dirname,'../..');const work=fs.mkdtempSync(path.join(os.tmpdir(),'daily-ui-'));
 const shots=process.env.ROTATION_DAILY_SCREENSHOTS;
 let server,browser,log='';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));

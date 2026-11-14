@@ -1,6 +1,6 @@
 // Real shared clock/pool predicates and renderer; no production data.
 const fs=require('fs'),path=require('path'),assert=require('node:assert/strict');
-const {chromium,webkit}=require('playwright');const root=path.resolve(__dirname,'../app/static');
+const {chromium,webkit}=require('./support/browser-runtime.cjs');const root=path.resolve(__dirname,'../app/static');
 const common=fs.readFileSync(path.join(root,'js/rotation-common.js'),'utf8'),source=fs.readFileSync(path.join(root,'js/rotation-workflow.js'),'utf8');const workflow=source.slice(0,source.indexOf('const workflowTimeoutSeen='));
 (async()=>{for(const [engine,type,opts] of [['edge',chromium,{channel:'msedge'}],['webkit',webkit,{}]]){const browser=await type.launch({...opts,headless:true});try{for(const width of [1920,390]){const page=await browser.newPage({viewport:{width,height:1000}});await page.setContent('<body class="rotation-screen"><main id="rtApp" class="rt-pool"></main></body>');await page.addStyleTag({content:fs.readFileSync(path.join(root,'css/rotation.css'),'utf8')});await page.addScriptTag({content:common});await page.addScriptTag({content:workflow});
 for(const kind of ['rest','meal','meal_rest'])for(const ops of [true,false]){

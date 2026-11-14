@@ -1,7 +1,7 @@
 'use strict';
 // Real app modules and stylesheet, synthetic role-scoped API data only.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),out=path.resolve(__dirname,'../../.handover_review/announcement-ui');
 fs.mkdirSync(out,{recursive:true});
 const categories=['安全 & 合规','演出 & 5S','排班 & 效率','礼仪 & MM','HR & 活动','培训'];

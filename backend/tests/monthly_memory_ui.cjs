@@ -1,5 +1,5 @@
 // Real frontend modules, strict CSP, synthetic self-only API; no employee data is written.
-const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');const assert=require('node:assert/strict');const{chromium,webkit,firefox}=require('playwright');
+const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');const assert=require('node:assert/strict');const{chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),out=path.resolve(__dirname,'../../output/appearance-preview');fs.mkdirSync(out,{recursive:true});
 const original=fs.readFileSync(path.join(root,'index.html'),'utf8').replaceAll('__STATIC_CACHE_VERSION__','memory-local');const html=original.replace('src="static/js/app.js?v=memory-local"','src="static/js/memory-harness.js"');
 const security=fs.readFileSync(path.join(root,'../security.py'),'utf8');const policy=[.../CONTENT_SECURITY_POLICY\s*=\s*"; "\.join\(\s*\(([\s\S]*?)\)\s*\)/.exec(security)[1].matchAll(/"([^"\r\n]+)"/g)].map(m=>m[1]).join('; ');const map=/<script type="importmap">([\s\S]*?)<\/script>/.exec(html)[1];const csp=policy.replace("script-src 'self'",`script-src 'self' 'sha256-${crypto.createHash('sha256').update(map.replace(/\r\n?/g,'\n')).digest('base64')}'`);

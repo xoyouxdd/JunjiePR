@@ -8,16 +8,20 @@ from calendar import monthrange
 from datetime import date, datetime
 
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 from sqlalchemy.orm import Session
 
 from app.excel_export_utils import (
+    BODY_ALIGNMENT,
+    THIN_BORDER,
+    TITLE_FILL,
     add_banded_table,
     apply_date_format,
     apply_score_format,
     configure_sheet,
     excel_row,
     excel_safe_value,
+    fit_row_heights,
     style_sheet,
     write_kpi_block,
     write_label_value_pairs,
@@ -421,7 +425,82 @@ def write_hierarchical_performance_sheet(ws, data: dict) -> None:
             ws.column_dimensions[letter].width = min(max(max(len(str(cell.value or "")) for cell in column) + 2, 12), 42)
     configure_sheet(ws, freeze="A2", landscape=True)
 
-def build_pr_rankings_workbook(db: Session, data: dict, category: str) -> Workbook:
+def build_points_ranking_workbook(db: Session, data: dict, keyword: str) -> Workbook:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "积点榜"
+    write_merged_title(ws, "积点榜", 7)
+    population = "LEAD" if data["population"] == "supervisor" else "CM/TR"
+    context = (
+        f"{data['attraction_name']}  ·  {population}  ·  "
+        f"{data['start_date']} 至 {data['end_date']}  ·  {data['total']} 人"
+    )
+    for row, content in [
+        (2, context),
+        (3, "认可按认可日期统计，历史补录与修正按入账日期统计。活动支出与退款不计入排名。"),
+    ]:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        cell = ws.cell(row, 1, excel_safe_value(content))
+        cell.font = Font(name="Microsoft YaHei", size=10, color="425A70")
+        cell.alignment = BODY_ALIGNMENT
+        ws.row_dimensions[row].height = 24
+
+    ws.append(["排名", "员工号", "姓名", "角色", "所属景点圈", "小组", "区间累计积点（点）"])
+    for row in data["rows"]:
+        ws.append(excel_row([
+            row["rank"], row["employee_no"], row["employee_name"], row["role_name"],
+            row["attraction_name"], row["group_label"], int(row["score"]),
+        ]))
+    for column, width in zip("ABCDEFG", (9, 14, 16, 20, 17, 36, 22)):
+        ws.column_dimensions[column].width = width
+    heading_font = Font(name="Microsoft YaHei", bold=True, color="FFFFFF")
+    for cell in ws[4]:
+        cell.font = heading_font
+        cell.fill = TITLE_FILL
+        cell.alignment = BODY_ALIGNMENT
+    body_font = Font(name="Microsoft YaHei", size=11, color="183451")
+    points_font = Font(name="Microsoft YaHei", size=11, bold=True, color="155AC8")
+    stripe = PatternFill("solid", fgColor="F2F7FC")
+    for row in ws.iter_rows(min_row=5, max_row=ws.max_row, max_col=7):
+        for cell in row:
+            cell.font = body_font
+            cell.border = THIN_BORDER
+            cell.alignment = BODY_ALIGNMENT
+            if cell.row % 2 == 0:
+                cell.fill = stripe
+        row[1].number_format = "@"
+        row[-1].font = points_font
+        row[-1].number_format = "#,##0"
+        row[-1].alignment = Alignment(horizontal="right", vertical="center", indent=1)
+    fit_row_heights(ws, start_row=4)
+    configure_sheet(ws, freeze="D5", landscape=True)
+    ws.print_title_rows = "1:4"
+    ws.auto_filter.ref = f"A4:G{ws.max_row}"
+    if not data["rows"]:
+        ws.merge_cells("A5:G5")
+        ws["A5"] = "当前条件下暂无排名数据"
+        ws["A5"].font = body_font
+        ws.row_dimensions[5].height = 24
+
+    notes = wb.create_sheet("导出说明")
+    notes.append(["项目", "内容"])
+    append_export_context(notes, [
+        ("景点圈", data["attraction_name"]),
+        ("统计日期", f"{data['start_date']} 至 {data['end_date']}"),
+        ("排名人群", population),
+        ("员工搜索", keyword.strip() or "全部员工"),
+        ("导出人数", data["total"]),
+    ])
+    notes.column_dimensions["A"].width = 16
+    notes.column_dimensions["B"].width = 45
+    configure_sheet(notes)
+    write_employee_number_history_sheet(wb, db, [row["employee_id"] for row in data["rows"]])
+    return wb
+
+
+def build_pr_rankings_workbook(db: Session, data: dict, category: str, *, keyword: str = "") -> Workbook:
+    if category == "points":
+        return build_points_ranking_workbook(db, data, keyword)
     wb = Workbook()
     ws = wb.active
     ws.title = "PR排名数据"

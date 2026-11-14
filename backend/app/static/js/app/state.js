@@ -5,7 +5,7 @@ const app = document.getElementById('app');
 
 const tabs = document.getElementById('tabs');
 
-const state = { me: null, options: null, tab: null, pendingMaterialFocusId: null, actionBadgeTotal: 0, homeMonth: null };
+const state = { me: null, options: null, tab: null, pendingMaterialFocusId: null, actionBadgeTotal: 0, homeMonth: null, activityDestination: null };
 
 const has = p => state.me.permissions.includes(p);
 

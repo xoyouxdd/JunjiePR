@@ -4,7 +4,7 @@ const net=require('node:net');
 const path=require('node:path');
 const fs=require('node:fs');
 const {spawn}=require('node:child_process');
-const {chromium}=require('playwright');
+const {chromium}=require('./support/browser-runtime.cjs');
 const backend=path.resolve(__dirname,'..');
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -108,12 +108,42 @@ async function run(){
     await ranking.locator('[data-pr-category="points"]').click();
     await ranking.locator('#prResults th').getByText('区间累计积点',{exact:true}).waitFor({state:'attached'});
     assert.equal(await ranking.locator('#prResults tbody tr').first().locator('.pr-points-value').textContent(),'1 点');
-    assert(await ranking.locator('#prExport').isHidden());
+    assert(await ranking.locator('#prExport').isVisible());
+    await ranking.locator('#prFilter [name=attraction_id]').selectOption('');
+    await ranking.locator('.pr-result-meta').getByText(/全部景点圈/).waitFor();
     for(const width of [320,390,1280]){
       await ranking.setViewportSize({width,height:1450});
       assert(await ranking.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`ranking overflow ${width}`);
       assert(await ranking.locator(width<768?'.pr-points-row':'.pr-ranking-table').first().isVisible());
       await ranking.locator('.pr-ranking-page').screenshot({path:path.join(output,`points-ranking-${width}.png`)});
+    }
+    for(const width of [390,1280]){
+      await ranking.setViewportSize({width,height:1450});
+      const queued=ranking.waitForResponse(res=>res.request().method()==='POST'&&new URL(res.url()).pathname==='/api/export-tasks');
+      await ranking.locator('#prExport').click();
+      const exportResponse=await queued;
+      assert.equal(exportResponse.status(),202);
+      const target=new URL(exportResponse.url()).searchParams.get('target');
+      const exportParams=new URL(target,base).searchParams;
+      assert.equal(exportParams.get('category'),'points');
+      assert.equal(exportParams.has('attraction_id'),false);
+      const {id}=await exportResponse.json();
+      let job;
+      for(let i=0;i<80;i++){
+        const jobs=await manager.request.get(base+'/api/export-tasks').then(res=>res.json());
+        job=jobs.items.find(item=>item.id===id);
+        if(job?.status==='completed'||job?.status==='failed')break;
+        await sleep(100);
+      }
+      assert.equal(job?.status,'completed',JSON.stringify(job));
+      const file=await manager.request.get(base+job.download_url);
+      assert(file.ok(),await file.text());
+      assert.match(decodeURIComponent(file.headers()['content-disposition']),/积点榜_全部景点圈/);
+      const link=ranking.locator(`[data-export-download="${id}"]`);
+      const [download]=await Promise.all([ranking.waitForEvent('download'),link.click()]);
+      assert.match(download.suggestedFilename(),/积点榜_全部景点圈/);
+      await download.saveAs(path.join(output,`points-ranking-all-circles-${width}.xlsx`));
+      await ranking.locator('[data-export-close]').click();
     }
     await ranking.locator('#prFilter [name=keyword]').fill('CMTEST01');
     await ranking.locator('#prFilter .primary').click();

@@ -170,7 +170,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
         raise HTTPException(403,'个人待办只能确认本人到位，不能整组代确认')
     if employee_number(payload.get('pid',user.employee.employee_no)) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
-    if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust'): raise HTTPException(403, '只可确认本人轮岗待办')
+    if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust','batch_check_in'): raise HTTPException(403, '只可确认本人轮岗待办')
     if not payload.get('confirmation_token'): raise HTTPException(400, '请刷新待办后重新确认')
     with runtime_for(db).lock:
         try:
@@ -194,7 +194,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
 def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(operator)):
     if not capabilities(user)['can_manage'] and payload.get('action') in ('set_close',):
         raise HTTPException(403, '此操作需要主管或经理权限')
-    if payload.get('action') in ('arrive','depart','entry_return','entry_adjust') and not payload.get('confirmation_token'):
+    if payload.get('action') in ('arrive','depart','entry_return','entry_adjust','batch_check_in') and not payload.get('confirmation_token'):
         raise HTTPException(400, '请刷新看板后重新确认')
     if payload.get('action') in ('post','move','post_order') and not payload.get('expected_snapshot'):
         raise HTTPException(400,'请先预览当日调整影响')
