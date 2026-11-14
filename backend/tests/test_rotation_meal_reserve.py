@@ -34,7 +34,7 @@ def test_exact_twenty_minutes_and_default_five_excluding_current_person(state,ki
 
 @pytest.mark.parametrize('change',[{'state':'exception'},{'state':'away'},{'state':'sick'},{'state':'notyet'},
                                   {'state':'done'},{'role':'excluded'},{'readyAt':None},{'exception':{'at':600}},
-                                  {'manualPaused':True},{'start':605},{'end':625},
+                                  {'manualPaused':True},{'start':605},{'end':620},
                                   {'absences':[{'start':610,'end':650}]}])
 def test_unavailable_people_are_not_reserve(change):
     eng,p,crew=reserve_engine();crew[0].update(change)
