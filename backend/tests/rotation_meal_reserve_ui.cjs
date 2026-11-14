@@ -106,7 +106,20 @@ async function main(){try{
     await page.locator('[data-tab=board]').click();
     const resting=page.locator('[data-f-pool=rest] [data-f-drag="'+extra+'"]');
     await resting.waitFor();
-    await resting.dragTo(page.locator('[data-f-pool=meal]'));
+    await page.waitForFunction(()=>nowMin()===655);
+    const [moved]=await Promise.all([
+      page.waitForResponse(r=>r.request().method()==='POST'&&r.url().endsWith('/api/rotation-board/act')&&r.request().postDataJSON()?.pid===extra),
+      resting.evaluate(source=>{
+        const target=document.querySelector('[data-f-pool=meal] > h2');
+        const dataTransfer=new DataTransfer();
+        // Keep the drag events on the same board render across browsers.
+        source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer}));
+        target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer}));
+        target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer}));
+        source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));
+      }),
+    ]);
+    assert(moved.ok(),await moved.text());
     const mealCard=page.locator('[data-f-pool=meal] [data-f-drag="'+extra+'"]');
     await mealCard.getByText('35分钟 · 11:30:00可上岗',{exact:true}).waitFor();
     assert.equal((await member.request.put(base+'/api/rotation-board/config',{data:{settings:{mealReserveMinPeople:1}}})).status(),403);
