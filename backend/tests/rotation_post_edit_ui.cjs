@@ -31,11 +31,26 @@ async function main(){try{
     await page.locator('[data-f-post="A#0"]').dblclick();await page.getByRole('textbox',{name:'岗位名称',exact:true}).fill('取消的名字');await page.getByRole('textbox',{name:'岗位名称',exact:true}).press('Escape');
     assert.equal(renameWrites,1);assert.equal((await board()).lines[0].posts[0].name,name);
     await page.locator('[data-f-post="A#0"]').dblclick();await page.getByRole('textbox',{name:'岗位名称',exact:true}).press('Enter');assert.equal(renameWrites,1);
-    // True native post-label drag must open the post dialog, not the person dialog.
-    const drag=async(source,target)=>{
+    const dropOnSlot=async(source,slot)=>{
       await page.waitForFunction(()=>!RT.loading&&!RT.modalOpen&&!RT.editingPost&&!RT.dragging&&!RT.submitting);
-      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-      await page.locator('[data-f-post="'+source+'"]').dragTo(page.locator('[data-f-slot="'+target+'"]'));
+      const target='[data-f-slot="'+slot+'"]';
+      // WebKit may replace board nodes between Playwright's pointer events.
+      // Dispatch on one render there, retaining native pointer coverage on Edge and Firefox.
+      if(engine==='webkit'){
+        await source.evaluate((element,selector)=>{
+          const destination=document.querySelector(selector),dataTransfer=new DataTransfer();
+          element.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer}));
+          destination.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer}));
+          destination.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer}));
+          element.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));
+        },target);
+        return;
+      }
+      await source.dragTo(page.locator(target));
+    };
+    // The post label and person drag must open different dialogs.
+    const drag=async(source,target)=>{
+      await dropOnSlot(page.locator('[data-f-post="'+source+'"]'),target);
       await page.getByRole('heading',{name:'选择岗位交换方式',exact:true}).waitFor();
       assert.equal(await page.locator('[name=place_mode]').count(),0);
       assert.equal(await page.locator('[name=swapMode] option').count(),2);
@@ -52,7 +67,7 @@ async function main(){try{
     assert.equal(after.lines[0].posts[1].key,before.lines[1].posts[0].key);assert.equal(after.lines[0].posts[1].occ,before.lines[0].posts[1].occ);assert.equal(after.lines[1].posts[0].occ,before.lines[1].posts[0].occ);
     // Dragging a person remains the separate push/person-swap operation.
     const pid=after.lines[0].posts[0].occ;
-    await page.locator('[data-f-drag="'+pid+'"]').first().dragTo(page.locator('[data-f-slot="B#0"]'));
+    await dropOnSlot(page.locator('[data-f-drag="'+pid+'"]').first(),'B#0');
     await page.getByRole('heading',{name:'现场安排',exact:true}).waitFor();assert.equal(await page.locator('[name=place_mode]').count(),1);assert.equal(await page.locator('[name=swapMode]').count(),0);
     await page.getByRole('button',{name:'取消',exact:true}).click();
     assert.deepEqual(errors,[]);await context.close();await browser.close();browser=null;
