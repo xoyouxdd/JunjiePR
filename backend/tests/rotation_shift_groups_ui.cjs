@@ -11,6 +11,9 @@ const {chromium}=require('./support/browser-runtime.cjs');
  const helperStart=common.indexOf('function rotationTaskPaused('),helperEnd=common.indexOf('\nfunction rotationUsesTasks(',helperStart);
  assert(helperStart>=0&&helperEnd>helperStart);
  await page.addScriptTag({content:common.slice(helperStart,helperEnd)});
+ const sickStart=common.indexOf('function rosterSickPeople('),sickEnd=common.indexOf('\nfunction outsideKind(',sickStart);
+ assert(sickStart>=0&&sickEnd>sickStart);
+ await page.addScriptTag({content:common.slice(sickStart,sickEnd)});
  await page.addScriptTag({content:fs.readFileSync(path.resolve(__dirname,'../app/static/js/rotation-workflow.js'),'utf8')});
  await page.evaluate(()=>document.dispatchEvent(new Event('DOMContentLoaded')));
  for(const daily of [false,true]){

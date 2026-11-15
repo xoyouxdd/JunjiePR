@@ -46,6 +46,11 @@ async function main(){try{
     await screen.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).preparing===null,pid);
     await phone.locator('[data-formal-rotation-todo]').getByText('准备下班',{exact:true}).waitFor({state:'detached'});
     await mobile.close();
+    // Treat the overnight 19:00 shift as ordinary for this reminder check.
+    const configPath=base+'/api/rotation-board/config';
+    const config=await ok(await request.get(configPath));
+    assert(config.late_shifts.defaults.includes(19*3600));
+    await ok(await request.put(configPath,{data:{work_date:'2026-11-05',late_shifts:[16*3600]}}));
     // The next day's 01:35 is still this workday, 25 minutes before 02:00.
     await clock({action:'set',date:'2026-11-06',time:'01:34:59'});
     day=await board();const late=day.persons.find(p=>p.end===1560),line=day.lines.find(l=>l.id==='A');
