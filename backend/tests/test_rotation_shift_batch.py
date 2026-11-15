@@ -6,7 +6,7 @@ import pytest
 
 from app.rotation import forecast as F, forecast_service as API, history as H, service as S
 from app.rotation.models import RotationEvent, RotationNotice, RotationSegment
-from test_rotation_forecast import fixture, occupants
+from test_rotation_forecast import add_later_shifts, fixture, occupants
 from test_rotation_forecast_api import act, board, current, person, rotation, DAY
 
 
@@ -64,6 +64,7 @@ def test_batch_skips_protected_workers_and_rests_overflow(counts, expected):
 ])
 def test_batch_handoff_follows_original_worker_at_each_final_post(off, arrivals, headings):
     eng = batch_fixture((5,), len(arrivals))
+    add_later_shifts(eng.P, (900,))
     names = ('塔台', '上客一', '上协一', '下协一', '大出口')
     for post, name in zip(eng.line('A')['posts'], names):
         post['name'] = name
@@ -88,6 +89,7 @@ def test_batch_handoff_follows_original_worker_at_each_final_post(off, arrivals,
 
 def test_batch_uses_resting_workers_first_and_original_time_for_tail_relief():
     eng = batch_fixture((2, 3), 1)
+    add_later_shifts(eng.P, (900,))
     eng.P['resting'] = dict(eng.P['late00'], pid='resting', name='resting', state='rest',
                            start=435, end=1200, readyAt=808)
     eng.P['A1']['end'] = 820
@@ -117,9 +119,8 @@ def test_conflict_at_next_second_preserves_round_robin_in_preview_and_execution(
         assert eng.P[f'new{i:02}']['lineStart'] == eng.line(line)['sortAt']
 
 
-@pytest.mark.parametrize('last,second,expected', [(2, 9, (False, False)), (3, 9, (True, False)),
-                                                   (2, 10, (False, True)), (3, 10, (True, True))])
-def test_late_shift_thresholds_are_independent(last, second, expected):
+@pytest.mark.parametrize('last,second', [(1, 1), (2, 9), (3, 10)])
+def test_late_shifts_default_to_latest_two_regardless_of_headcount(last, second):
     eng = fixture()
     template = eng.P['new0']
     for start, count in ((650, 20), (700, second), (750, last)):
@@ -127,7 +128,7 @@ def test_late_shift_thresholds_are_independent(last, second, expected):
             pid = f'{start}-{i}'
             eng.P[pid] = dict(template, pid=pid, start=start, end=900, forecastOrder=pid)
     assert not F.late_shift(eng, eng.P['650-0'])
-    assert tuple(F.late_shift(eng, eng.P[f'{start}-0']) for start in (750, 700)) == expected
+    assert all(F.late_shift(eng, eng.P[f'{start}-0']) for start in (750, 700))
 
 
 def test_late_shift_works_last_twenty_minutes_and_ordinary_exit_is_inclusive():
@@ -136,6 +137,7 @@ def test_late_shift_works_last_twenty_minutes_and_ordinary_exit_is_inclusive():
         p.update(start=750 if p['state']=='onpost' else 430, end=900)
     for i in range(3):
         eng.P[f'new{i}'].update(start=750, readyAt=885 if i == 0 else 895)
+    eng.P['new2']['start'] = 700
     eng.P['new3'].update(state='pending')
     eng.P['A2'].update(start=430, end=910)
     F.tick(eng, 870)
@@ -211,6 +213,7 @@ def test_check_in_window_and_batch_commit_with_isolated_database(current, monkey
 
 def test_scheduled_close_inside_relief_path_waits_for_relief():
     eng = batch_fixture((3, 3), 1)
+    add_later_shifts(eng.P, (900,))
     eng.P['A2']['end'] = 807
     eng.line('A')['posts'][1]['closeAt'] = '13:27'
     F.tick(eng, 807, advance_batches=True)
@@ -262,7 +265,8 @@ def test_direct_shift_entry_is_not_picked_up_by_a_later_batch():
     assert eng.P['late00']['state'] == 'onpost'
 
 
-def test_opening_shifts_of_sixteen_keep_opening_rest_and_personal_push7(rotation):
+@pytest.mark.parametrize('actor_kind', ['member', 'screen', 'supervisor'])
+def test_opening_shifts_of_sixteen_keep_opening_rest_and_confirmed_push7(rotation, actor_kind):
     aid = rotation.attraction_id
     names = ['迎宾', '快迎1', '小C', '铁马入口', '铁马检票1', '熊出口']
     early = [str(i) for i in range(1, 17)]
@@ -322,13 +326,15 @@ def test_opening_shifts_of_sixteen_keep_opening_rest_and_personal_push7(rotation
     worker = by_id[pid]
     target = worker['assign']['target']
     request = {'action': 'depart', 'pid': pid, 'expected_line': worker['assign']['line'],
+               'expected_push7': worker['task']['push7Route'],
                'confirmation_token': worker['confirmationTokens']['depart']}
-    with pytest.raises(S.ActionError, match='本人待办'):
-        act(rotation, request, actor=SimpleNamespace(kind='screen', actor_id=None, name='大屏'))
+    actor = SimpleNamespace(kind=actor_kind, member_employee_no=pid, actor_id=None, name=pid)
+    stale = act(rotation, {**request, 'expected_push7': 'stale'}, actor=actor)
+    assert stale['line_changed'] and not stale.get('executed')
     assert person(rotation, target)['state'] == 'onpost'
-    result = act(rotation, request, actor=SimpleNamespace(
-        kind='member', member_employee_no=pid, actor_id=None, name=pid))
+    result = act(rotation, request, actor=actor)
     assert result['executed']
+    assert act(rotation, request, actor=actor)['duplicate']
     assert person(rotation, pid)['state'] == 'onpost'
     assert person(rotation, target)['state'] == 'pending'
 

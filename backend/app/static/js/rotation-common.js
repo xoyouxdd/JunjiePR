@@ -112,8 +112,13 @@ function restSummary(people) {
 }
 
 function opWaiting(p){return p.role==='op'&&['op','notyet'].includes(p.state);}
+function rosterSickPeople(day){
+  const live=new Set(day.persons.map(p=>p.pid));
+  return (day.off||[]).filter(p=>!live.has(p.pid)&&/(^SL\b|病假)/i.test(p.label||''))
+    .map(p=>({...p,state:'sick',label:'病假',rosterSick:true}));
+}
 function outsideKind(p){
-  if(p.state==='done'&&/病假/.test(p.leaveReason||''))return '病假';
+  if(p.state==='sick'||p.initialPool==='sick'||p.state==='done'&&/病假/.test(p.leaveReason||''))return '病假';
   if(p.role==='excluded'&&/OJT/i.test([p.label,p.note,p.type].join(' ')))return 'OJT';
   return p.state==='away'?'出圈':null;
 }
@@ -576,6 +581,9 @@ function rotationSevenBadge(person, planned = false){
   return (planned || flags.includes('7点岗')) && !flags.includes('推7点下来')
     ? '<span class="rt-badge p7">7点</span>' : '';
 }
+function pendingAddTime(post){
+  return !post.openExpired&&!post.open&&!post.opened&&post.openAt?post.openAt:null;
+}
 function lineCard(L, n, ops, view = {}) {
   if(!view.daily&&typeof forecastActive==='function'&&forecastActive())return forecastLineCard(L,n,ops);
   const persons = view.day?.persons || RT.data.day.persons;
@@ -593,13 +601,14 @@ function lineCard(L, n, ops, view = {}) {
       const label=view.editable?`<button type="button" class="rt-pn rt-daily-post" data-daily-rename="${esc(key)}" ${editable?`draggable="true" data-daily-post="${esc(key)}"`:''} aria-label="${esc(x.name)}，双击改名${editable?'，拖拽交换岗位':''}">${esc(x.name)}</button>`:`<span class="rt-pn">${esc(x.name)}</span>`;
       const sevenPlan=view.day?.plan?.seven;
       const plannedSeven=p?.start===420 && (sevenPlan ? sevenPlan[key]===p.pid : !!x.seven);
-      const personName=esc(p?.name||'空岗')+rotationPostShiftEnd(p)+rotationSevenBadge(p,plannedSeven);
+      const addTime=pendingAddTime(x),who=p?.name||(addTime?`${addTime} 加岗`:'空岗');
+      const personName=esc(who)+rotationPostShiftEnd(p)+rotationSevenBadge(p,plannedSeven);
       const livePerson=p&&typeof forecastActive==='function'&&forecastActive()&&RT.data.day.status==='live'&&view.day?.date===RT.data.day.date;
-      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(p?.name||'空岗')}，岗位操作" aria-haspopup="dialog">${personName}</button>`:livePerson?`<button type="button" class="rt-who-name" data-f-person="${esc(p.pid)}">${personName}</button>`:`<span class="rt-who-name">${personName}</span>`;
+      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(who)}，岗位操作" aria-haspopup="dialog">${personName}</button>`:livePerson?`<button type="button" class="rt-who-name" data-f-person="${esc(p.pid)}">${personName}</button>`:`<span class="rt-who-name">${personName}</span>`;
       let status=x.open?(p?'预排':'空岗'):p?'预排 · 未开岗':'未开岗';
       if(draftPosts?.[i]?.draftHold)status='预予定岗';
       else if(editable&&x.closeAt)status=`${esc(x.closeAt)} 撤`;
-      else if(editable&&!x.open&&x.openAt)status=`${esc(x.openAt)} 开`;
+      else if(addTime)status=p?`待加 ${esc(addTime)}`:'待加';
       return rotationPostRow(cls,editable?` data-daily-slot="${esc(key)}"`:'',label,person,status);
     }
     if (!L.active) { cls += ' closed'; who = '待命'; }

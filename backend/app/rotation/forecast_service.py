@@ -249,13 +249,16 @@ def person_view(eng, p, now):
             'assign': S.assignment_view(eng, p) if p.get('assign') else None}
 
 
-def add_person(db, eng, body, now, actor):
+def add_person(db, eng, body, now, actor, identity=None):
     from app.rotation.service import _require
     from app.v2_models import Employee
     _require(body, 'start', 'end')
     start, end = shift_values(body)
     temporary = body.get('temporary') is True
-    if temporary:
+    if identity is not None:
+        pid, name = body['pid'], identity['name']
+        temporary = identity['temporary']
+    elif temporary:
         name = str(body.get('name') or '').strip()
         if not name or len(name) > 100:
             raise ActionError('临时人员姓名须为1至100字')
@@ -266,6 +269,8 @@ def add_person(db, eng, body, now, actor):
             raise ActionError('未找到有效员工')
         pid, name = employee.employee_no, employee.name
     eng.act_add_person({'pid': pid, 'name': name, 'type': '', 'mark': '', 'start': start, 'end': end}, now, actor)
+    if identity is not None:
+        eng.d.setdefault('rosterIdentities', {})[pid] = identity
     p = eng.P[pid]
     p.update(temporary=temporary, continuousStart=None, forecastOrder=uuid4().hex,
              state='notyet' if now < start else 'pending' if now < end else 'other',
@@ -273,7 +278,7 @@ def add_person(db, eng, body, now, actor):
     eng.__dict__.pop('_forecast_shift_counts', None)
 
 
-def action(db, cfg, row, eng, body, now, actor):
+def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
     from app.rotation import service as S, workflow as W, history as H
     act = body['action']
     pid = body.get('pid')
@@ -352,7 +357,10 @@ def action(db, cfg, row, eng, body, now, actor):
             F.pool(eng, pid, 'away', now, actor)
         else:
             F.remove(eng, p, now)
-            p.update(state='sick', manualPaused=True)
+            p.update(state='sick', manualPaused=True, away=None, readyAt=None,
+                     breakStart=None, breakKind=None, timeoutAt=None)
+            p.pop('exception', None)
+            p.pop('requestedExit', None)
         eng.h.log('request_' + purpose, actor, pid, p.get('line'), None, {})
     elif act == 'back':
         if eng.person(pid)['state'] != 'away':
@@ -478,7 +486,7 @@ def action(db, cfg, row, eng, body, now, actor):
             L['active'] = False
         eng.h.log('line_change', actor, None, L['id'], None, {'active': L['active']})
     elif act == 'add_person':
-        add_person(db, eng, body, now, actor)
+        add_person(db, eng, body, now, actor, add_identity)
     elif act == 'post_hold':
         eng.act_post_hold(body['line'], body['i'], pid, S.action_boolean(body, 'on'), str(body.get('reason') or ''), now, actor)
     elif act == 'hold101':

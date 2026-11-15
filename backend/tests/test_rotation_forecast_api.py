@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from test_rotation_transaction_boundaries import rotation, DAY
+from test_rotation_forecast import add_later_shifts
 from app.rotation import service as S, forecast as F
 from app.rotation.forecast_service import snapshot, search_people
 from app.rotation.models import RotationDay, RotationDuty, RotationEvent, RotationSegment, RotationSnapshot
@@ -370,6 +371,7 @@ def test_push7_counts_only_committed_executions_across_retries_and_restore(curre
 def test_preparing_shift_end_uses_shared_25_minute_boundary_and_workday_clock(current,end,now,expected):
     with current.factory() as db:
         row=S.day_row(db,current.attraction_id,DAY);state=S.day_state(row)
+        add_later_shifts(state['persons'])
         eng,_=S.engine_for(db,S.load_config(db,current.attraction_id),row,state)
         p=eng.P['1'];p.update(start=430,end=end)
         from app.rotation.forecast_service import person_view
@@ -382,6 +384,7 @@ def test_prepare_boundary_notifies_even_without_available_relief_and_clears_afte
     from app.rotation.forecast_service import person_view
     with current.factory() as db,S.transaction(db):
         cfg=S.load_config(db,current.attraction_id);row=S.day_row(db,current.attraction_id,DAY);state=S.day_state(row)
+        add_later_shifts(state['persons'])
         eng,_=S.engine_for(db,cfg,row,state)
         state['lastTick']=599
         eng.P['1'].update(start=430,end=625)
@@ -465,6 +468,7 @@ def test_preparing_keeps_sickness_priority_and_shift_change_recalculates(current
     from app.rotation.forecast_service import person_view
     with current.factory() as db:
         row=S.day_row(db,current.attraction_id,DAY);state=S.day_state(row)
+        add_later_shifts(state['persons'])
         eng,_=S.engine_for(db,S.load_config(db,current.attraction_id),row,state)
         p=eng.P['1'];p.update(start=430,end=625,requestedExit='out')
         assert person_view(eng,p,600)['preparing']=='推下班'
@@ -580,6 +584,21 @@ def test_sick_waits_for_prefix_relief_and_does_not_reset_head_for_middle_target(
     act(current, {'action': 'depart', 'pid': '5', 'confirmation_token': p['confirmationTokens']['depart'], 'expected_line': 'A'})
     assert person(current, '1')['state'] == 'sick'
     assert board(current)['lines'][0]['sortAt'] == 435
+
+
+def test_not_on_post_sick_clears_previous_pool_and_personal_task(current):
+    from app.rotation.models import RotationNotice
+
+    act(current, {'action': 'away', 'pid': '5'})
+    assert person(current)['state'] == 'away'
+    act(current, {'action': 'sick', 'pid': '5'})
+    p = person(current)
+    assert p['state'] == 'sick' and p['away'] is None and p['readyAt'] is None
+    assert p['task'] is None and not p['canDepart'] and not p['canArrive']
+    with current.factory() as db:
+        screen = S.screen_payload(db, current.attraction_id)['day']
+        assert next(p for p in screen['persons'] if p['pid'] == '5')['state'] == 'sick'
+        assert not db.query(RotationNotice).filter_by(employee_no='5', status='open').first()
 
 
 def test_temporary_person_can_have_same_name_without_creating_employee(current):

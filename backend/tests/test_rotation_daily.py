@@ -45,6 +45,22 @@ def test_0300_future_prearrangement_preserves_manual_plan(rotation):
         assert all(p['state']=='notyet' for p in data['persons'])
 
 
+def test_roster_sick_leave_appears_in_board_and_screen_without_entering_rotation(rotation):
+    names = {'21': '班表病假', '22': '备注病假', '23': '正常班次', '24': '公休'}
+    cells = {'21': 'sl', '22': '07:15-16:15\n(SL)', '23': '07:15-16:15', '24': 'OFF'}
+    parsed = {'people': {pid: {'name': name} for pid, name in names.items()},
+              'days': {FUTURE: cells}, 'hours': {}}
+    with rotation.factory() as db:
+        S.save_roster(db, rotation.attraction_id, parsed, scope='day', file_name='病假.xlsx',
+                      uploader_id=None, uploader_name='测试')
+        with S.transaction(db):
+            S.set_sim_clock(S.load_config(db, rotation.attraction_id), FUTURE, 180, paused=True)
+        for payload in (S.board_payload, S.screen_payload):
+            day = payload(db, rotation.attraction_id)['day']
+            assert {p['pid'] for p in day['persons']} == {'23'}
+            assert {p['pid']: p['label'] for p in day['off']} == {'21': '病假', '22': '病假', '24': 'OFF'}
+
+
 def prepare(rotation):
     with rotation.factory() as db:
         parsed = {'people': {str(i): {'name': f'测试员工{i}', 'type': '', 'mark': ''} for i in range(1, 6)},

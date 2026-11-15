@@ -1,5 +1,5 @@
 """Authenticated formal V2 routes, screen restrictions and personal receipts."""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
 import pytest
@@ -12,6 +12,48 @@ from app.rotation import service as S
 @pytest.fixture
 def today():
     return seed_today(rule_version=2)
+
+
+def test_manager_can_set_four_late_shifts_for_current_workday(today):
+    day = date.today().isoformat()
+    config_path = '/api/rotation-board/config'
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        with S.transaction(db):
+            row = S.day_row(db, today, day)
+            state = S.day_state(row)
+            state['lastTick'] = 720
+            worker = next(p for p in state['persons'].values() if p['state'] == 'onpost')
+            worker.update(start=480, end=735)
+            template = state['persons']['9710000']
+            for start, count in [(510, 2), (540, 2), (570, 1)]:
+                for i in range(count):
+                    pid = f'{start}{i:04}'
+                    state['persons'][pid] = dict(template, pid=pid, state='other', start=start,
+                                                 end=1200, assign=None)
+            S.save_day(db, row, state)
+
+    with TestClient(app) as manager, TestClient(app) as cm:
+        login(manager, '9710020')
+        login(cm, '9710000')
+        section = ok(manager.get(config_path))['late_shifts']
+        assert section['date'] == day and section['selected'] is None
+        assert section['defaults'] == [570 * 60, 540 * 60]
+        select = [start * 60 for start in (480, 510, 540, 570)]
+        request = {'work_date': day, 'late_shifts': select}
+        assert cm.put(config_path, json=request).status_code == 403
+        assert manager.put(config_path, json={**request, 'work_date': '2000-01-01'}).status_code == 400
+        for invalid in (select + [600 * 60], [select[0], select[0]], [1], [False]):
+            assert manager.put(config_path, json={**request, 'late_shifts': invalid}).status_code == 400
+        ok(manager.put(config_path, json=request))
+        ok(manager.put(config_path, json={'settings': {'breakMin': 16}}))
+        assert ok(manager.get(config_path))['late_shifts']['selected'] == select
+        board = ok(manager.get('/api/rotation-board/board'))['day']
+        assert next(p for p in board['persons'] if p['pid'] == worker['pid'])['preparing'] is None
+        ok(manager.put(config_path, json={**request, 'late_shifts': None}))
+        assert ok(manager.get(config_path))['late_shifts']['selected'] is None
+        board = ok(manager.get('/api/rotation-board/board'))['day']
+        assert next(p for p in board['persons'] if p['pid'] == worker['pid'])['preparing'] == '推下班'
 
 
 def test_post_editing_allows_tr_but_rejects_member_and_screen(today):
@@ -76,8 +118,103 @@ def test_tr_queries_across_circles_max_three_and_adds_temporary_record_only(toda
         day = ok(tr.get('/api/rotation-board/board'))['day']
         p = next(p for p in day['persons'] if p['name'] == '现场伙伴')
         assert p['temporary'] and p['state'] == 'pending'
+        assert p['pid'].startswith('temporary:')
         with SessionLocal() as db:
             assert db.query(Employee).count() == before
+
+
+def test_live_add_numbered_person_uses_existing_login_or_creates_temporary(today, monkeypatch):
+    from app.rotation.temporary import TemporaryMember
+    from app.v2_models import UserAccount
+
+    path = '/api/rotation-board/act'
+    preview_path = '/api/rotation-board/people-preview'
+    base = {'action': 'add_person', 'temporary': True, 'start': '09:00', 'end': '23:59'}
+    new = {**base, 'pid': '09730151', 'name': '现场临时有工号'}
+    with TestClient(app) as manager, TestClient(app) as worker, TestClient(app) as cross:
+        login(manager, '9710020')
+        draft = ok(manager.post(preview_path, json=new))
+        assert draft['initial_pin'] and draft['identity']['temporary']
+        add = {**new, 'expected_identity': draft['digest']}
+        assert manager.post(path, json={**add, 'end': '23:58'}).status_code == 409
+
+        sync_notices = S.sync_notices
+
+        def fail_notice_sync(db, aid, state, eng, now):
+            if '9730151' in eng.P:
+                assert db.query(TemporaryMember).filter_by(employee_no='9730151').first() is not None
+                raise S.ActionError('模拟待办保存失败')
+            return sync_notices(db, aid, state, eng, now)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(S, 'sync_notices', fail_notice_sync)
+            assert manager.post(path, json=add).status_code == 400
+        with SessionLocal() as db:
+            assert db.query(TemporaryMember).filter_by(employee_no='9730151').first() is None
+
+        ok(manager.post(path, json=add))
+        assert manager.post(path, json=add).status_code == 409
+        ok(worker.post('/api/login', json={'employee_no': '9730151', 'password': '0151'}))
+        assert ok(worker.get('/api/me'))['rotation_temporary']
+        mine = ok(worker.get('/api/rotation-board/me'))
+        assert mine['person']['pid'] == '9730151' and mine['person']['canArrive']
+        assert any(n['kind'] == 'arrive' and n['status'] == 'open' for n in mine['notices'])
+        ok(worker.post('/api/rotation-board/me/act', json={'action': 'arrive',
+            'confirmation_token': mine['person']['confirmationTokens']['arrive']}))
+
+        existing = {**base, 'pid': '9710001', 'name': '现场输入姓名'}
+        preview = ok(manager.post(preview_path, json=existing))
+        assert preview['identity']['cross_circle'] and not preview['initial_pin']
+        ok(manager.post(path, json={**existing, 'expected_identity': preview['digest']}))
+        login(cross, '9710001')
+        assert ok(cross.get('/api/me'))['attraction_id'] != today
+        mine = ok(cross.get('/api/rotation-board/me'))
+        assert mine['attraction_id'] == today and mine['person']['name'] == preview['identity']['name']
+        assert any(n['kind'] == 'arrive' and n['status'] == 'open' for n in mine['notices'])
+        with SessionLocal() as db:
+            assert db.query(UserAccount).filter_by(login_account='9730151').first() is None
+            assert db.query(TemporaryMember).filter_by(employee_no='9710001').first() is None
+
+
+def test_live_add_reuses_temporary_credentials_and_confirms_disabled_account(today):
+    from app.rotation.temporary import TemporaryMember
+    from app.v2_crypto import hash_password
+    from app.v2_models import UserAccount
+
+    original_hash = hash_password('existing-rotation-password')
+    with SessionLocal() as db:
+        expired = datetime.fromisoformat(date.today().isoformat())
+        db.add(TemporaryMember(employee_no='9730152', name='已登记临时人员', attraction_id=today,
+                               password_hash=original_hash, valid_until=expired, enabled=True))
+        db.query(UserAccount).filter_by(login_account='9710031').one().enabled = False
+        db.commit()
+
+    path = '/api/rotation-board/act'
+    preview_path = '/api/rotation-board/people-preview'
+    base = {'action': 'add_person', 'temporary': True, 'start': '09:00', 'end': '01:00'}
+    with TestClient(app) as manager, TestClient(app) as temp, TestClient(app) as disabled:
+        login(manager, '9710020')
+        reuse = {**base, 'pid': '9730152', 'name': '已登记临时人员'}
+        check = ok(manager.post(preview_path, json=reuse))
+        assert check['reuse_account'] and not check['initial_pin']
+        ok(manager.post(path, json={**reuse, 'expected_identity': check['digest']}))
+        ok(temp.post('/api/login', json={'employee_no': '9730152', 'password': 'existing-rotation-password'}))
+        assert ok(temp.get('/api/rotation-board/me'))['person']['canArrive']
+
+        exception = {**base, 'pid': '9710031', 'name': '停用员工'}
+        check = ok(manager.post(preview_path, json=exception))
+        assert '账号停用' in check['identity']['issues'] and not check['initial_pin']
+        add = {**exception, 'expected_identity': check['digest']}
+        assert manager.post(path, json=add).status_code == 409
+        ok(manager.post(path, json={**add, 'confirm_exceptions': True}))
+        login(disabled, '9710031')
+        assert ok(disabled.get('/api/me'))['rotation_temporary']
+        assert ok(disabled.get('/api/rotation-board/me'))['person']['canArrive']
+        with SessionLocal() as db:
+            assert not db.query(UserAccount).filter_by(login_account='9710031').one().enabled
+            member = db.query(TemporaryMember).filter_by(employee_no='9730152').one()
+            assert member.password_hash == original_hash
+            assert member.valid_until == expired + timedelta(days=1, hours=1)
 
 
 def test_timeout_is_personal_and_manual_pool_move_does_not_claim_execution(today):

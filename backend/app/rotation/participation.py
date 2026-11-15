@@ -73,7 +73,9 @@ def _contexts(db,no,day=None):
         if not present and aid not in live:continue
         circle=db.get(Attraction,aid)
         if not circle or not circle.active or not circle.employee_circle:continue
-        metadata=roster_metadata(db,aid,day).get(no,{}) if present else live.get(aid) or {}
+        metadata = live.get(aid)
+        if metadata is None:
+            metadata = roster_metadata(db, aid, day).get(no, {}) if present else {}
         out.append({'id':aid,'name':circle.name,'metadata':metadata})
     return out
 

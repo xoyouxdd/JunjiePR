@@ -33,6 +33,7 @@ function workflowPools(n,ops,view={}){
   const section=(title,list,chip,cls='')=>{list.forEach(p=>seen.add(p.pid));const contents=cls==='rt-others'&&list.length?workflowShiftGroups(list,chip,day,view):`<div class="rt-chips${list.length?'':' empty'}">${list.length?list.map(chip).join(''):'暂无'}</div>`;return `<section class="rt-sect ${cls}${list.length?'':' is-empty'}"><h2>${title}<span class="rt-n">${list.length}</span></h2>${contents}</section>`;};
   const drag=p=>ops&&['rest','meal','ready','notyet'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:'';
   const card=(p,action,body,cls='')=>{
+    if(p.rosterSick)return `<div class="rt-chip dim"><span class="rt-nm">${esc(p.name)}</span>${body}</div>`;
     if(view.daily){
       const drag=view.editable&&p.role==='rotation'?` draggable="true" data-daily-person="person:${esc(p.pid)}"`:'';
       const livePerson=typeof forecastActive==='function'&&forecastActive()&&RT.data.day.status==='live'&&day.date===RT.data.day.date;
@@ -51,14 +52,14 @@ function workflowPools(n,ops,view={}){
   let html='';
   if(!view.daily){const paused=allPeople.filter(rotationTaskPaused);if(paused.length)html+=section('关联任务待处理',paused,p=>card(p,null,`<span class="rt-go">${esc(p.timeoutCase?.line||p.timeoutPending?.line||p.task?.line||'')} · ${p.timeoutPending?'等待前序完成':'待负责人核实'}</span><span class="rt-sub">旧详情暂停执行 · 暂不计确认超时</span>`,'late'),'rt-related-paused');}
   if(view.daily){
-    const initial=p=>p.role==='rotation'&&p.state==='notyet'&&[420,435].includes(p.start);
+    const initial=p=>p.role==='rotation'&&p.state==='notyet'&&p.initialPool!=='sick'&&[420,435].includes(p.start);
     const pending=p=>['walkback','pending','op'].includes(p.state)||p.role==='op'&&p.state==='notyet';
     const chip=p=>card(p,null,`<span class="rt-sub">${p.role==='op'?'OP':p.role==='excluded'?'不轮岗':p.state==='notyet'?(view.frozen?'开班预排':'班次未开始'):esc(STATE_NAME[p.state]||'待安排')}</span>`);
     html+=section('待出发',ps.filter(p=>p.state==='ready'),chip,'rt-ready');
     html+=section('待确定休息',ps.filter(pending),chip,'rt-arrivals');
     html+=section('吃饭区',ps.filter(p=>p.state==='meal'),chip,'rt-meals');
     html+=section('休息区',ps.filter(p=>p.state==='rest'||initial(p)),chip,'rt-resting');
-    html+=section('圈外人员',ps.filter(p=>p.state==='away'),chip,'rt-outside');
+    html+=section('圈外人员',[...ps.filter(p=>p.state==='away'||outsideKind(p)==='病假'),...rosterSickPeople(day)],p=>card(p,null,`<span class="rt-sub">${esc(outsideKind(p)==='病假'?'病假':p.away?.reason||'出圈')}</span>`,'dim'),'rt-outside');
     html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),chip,'rt-others');
     return html;
   }
@@ -77,7 +78,7 @@ function workflowPools(n,ops,view={}){
   },'rt-arrivals');
   html+=section('吃饭区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='meal'),p=>card(p,null,`<span class="rt-sub">至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟</span>`,'meal'),'rt-meals');
   html+=section('休息区',ps.filter(p=>!p.entryHold&&poolState(p,n)==='rest'),p=>card(p,null,`<span class="rt-sub">${waitingInitialRest(p)?'预排休息 · '+hm(p.start)+' 开始计时':'至 '+hm(p.readyAt)+' · 剩 '+Math.max(0,Math.ceil((p.readyAt??n)-n))+' 分钟'}</span>`,'rest'),'rt-resting');
-  html+=section('圈外人员',ps.filter(outsideKind),p=>card(p,null,`<span class="rt-sub">${esc(p.leaveReason||p.away?.reason||outsideKind(p))}</span>`,'dim'),'rt-outside');
+  html+=section('圈外人员',[...ps.filter(outsideKind),...rosterSickPeople(day)],p=>card(p,null,`<span class="rt-sub">${esc(p.leaveReason||p.away?.reason||outsideKind(p))}</span>`,'dim'),'rt-outside');
   html+=section('任务超时 · 待本人确认',ps.filter(p=>p.entryHold),p=>card(p,'entry_return',`<span class="rt-sub">${esc(p.taskTimeout?.line||'')} · ${esc(p.taskTimeout?.entryPost||'原上岗')} 任务超时</span><span class="rt-task-summary">${p.taskTimeout?.transferredToName?'已转 '+esc(p.taskTimeout.transferredToName):'等待转接'}</span><span class="rt-sub">确认后立即分配，不新增休息</span>`,'late'),'rt-timeout');
   html+=section('其他人员',ps.filter(p=>!seen.has(p.pid)),p=>card(p,null,`<span class="rt-sub">${esc(p.state==='notyet'?'班次未开始':STATE_NAME[p.state]||'')}</span>`,'dim'),'rt-others');
   return html;

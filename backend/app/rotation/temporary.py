@@ -118,15 +118,18 @@ def provision(db, parsed, attraction_id, batch, passwords):
             if no in parsed['days'][day]:
                 info=classify(parsed['days'][day][no])
                 ends.append(datetime.fromisoformat(day)+timedelta(minutes=max(1440,info.get('end',1440))))
-        until=max(ends)
-        member=db.query(TemporaryMember).filter_by(employee_no=no).first()
-        if member:
-            member.valid_until=max(member.valid_until,until)
-            member.name=person['name']
-        else:
-            db.add(TemporaryMember(employee_no=no,name=person['name'],attraction_id=attraction_id,
-                password_hash=passwords[no],valid_until=until,enabled=True))
+        provision_member(db, attraction_id, no, person['name'], max(ends), passwords)
     db.flush()
+
+
+def provision_member(db, attraction_id, no, name, until, passwords):
+    member = db.query(TemporaryMember).filter_by(employee_no=no).first()
+    if member:
+        member.valid_until = max(member.valid_until, until)
+        member.name = name
+    else:
+        db.add(TemporaryMember(employee_no=no, name=name, attraction_id=attraction_id,
+                               password_hash=passwords[no], valid_until=until, enabled=True))
 
 
 def login(db, request, response, member, password):

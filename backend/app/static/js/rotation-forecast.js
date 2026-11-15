@@ -35,18 +35,21 @@ function forecastLineCard(L,n,ops){
   const manage=forecastOperator(),editPosts=forecastPostOperator(),personTag=manage?'button':'span';
   return `<div class="rt-line${L.active?'':' off'}"><div class="rt-line-head g-${esc(L.group||'')}" data-f-head="${esc(L.id)}"${manage?' tabindex="0" role="button"':''}><span class="rt-lid">${esc(L.id)}</span><span class="rt-sort-time" title="线路排序时间">${forecastClock(L.sortAt||0)}</span>${L.adding?'<span class="rt-badge">加岗</span>':''}<span>${L.posts.filter(x=>x.open&&!x.hold).length}/${L.posts.length}岗</span></div>${L.posts.map((post,i)=>{
     const p=personOf(post.occ),drag=manage&&p?' draggable="true" data-f-drag="'+esc(p.pid)+'"':'';
-    const status=post.openExpired?'加岗已失效':post.prearranged||p?.state==='notyet'?'预排':post.open?(p?'在岗':'空岗'):'未开岗';
+    const addTime=pendingAddTime(post)||(post.openingStatus?post.openAt:null);
+    const adding=addTime||post.openingStatus;
+    const who=p?.name||(addTime?`${addTime} 加岗`:post.openingStatus?'等待接替':'空岗');
+    const status=post.openExpired?'加岗已失效':adding?(post.openingStatus?'准备加岗':'待加'):post.prearranged||p?.state==='notyet'?'预排':post.open?(p?'在岗':'空岗'):'未开岗';
     const label=editPosts?`<button type="button" class="rt-pn" draggable="true" data-f-post="${esc(L.id)}#${i}" data-f-post-key="${esc(post.key)}" aria-label="${esc(post.name)}，双击改名，拖拽交换岗位" title="双击改名，拖拽交换岗位">${esc(post.name)}</button>`:`<span class="rt-pn">${esc(post.name)}</span>`;
-    return `<div class="rt-post${post.open?'':' closed'}${p?.preparing?' prep':''}${p?.state==='onpost'&&p.batchOnPost!=null?' rt-batch-on-post':''}" data-f-slot="${esc(L.id)}#${i}" data-f-slot-key="${esc(post.key)}">${label}<${personTag}${manage?' type="button"':''} class="rt-who-name"${manage&&p?' data-f-person="'+esc(p.pid)+'"':''}${drag}>${esc(p?.name||'空岗')}${rotationPostShiftEnd(p)}${rotationSevenBadge(p)}${rotationMealBadge(p)}${p?.preparing?'<span class="rt-badge prep">'+preparingText(p.preparing)+'</span>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</${personTag}><span class="rt-mins">${status}</span></div>`;
+    return `<div class="rt-post${post.open?'':' closed'}${adding?' pending-add':''}${p?.preparing?' prep':''}${p?.state==='onpost'&&p.batchOnPost!=null?' rt-batch-on-post':''}" data-f-slot="${esc(L.id)}#${i}" data-f-slot-key="${esc(post.key)}">${label}<${personTag}${manage?' type="button"':''} class="rt-who-name"${manage&&p?' data-f-person="'+esc(p.pid)+'"':''}${drag}>${esc(who)}${p&&addTime?`<span class="rt-badge prep">待加 ${esc(addTime)}</span>`:''}${rotationPostShiftEnd(p)}${rotationSevenBadge(p)}${rotationMealBadge(p)}${p?.preparing?'<span class="rt-badge prep">'+preparingText(p.preparing)+'</span>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</${personTag}><span class="rt-mins">${status}</span></div>`;
   }).join('')}</div>`;
 }
 function forecastPools(n){
   const day=RT.data.day,manage=forecastOperator(),confirm=manage||forecastScreen(),personTag=manage?'button':'span',posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean)));
-  const people=day.persons.filter(p=>p.upcomingShift||!posted.has(p.pid));
+  const people=[...day.persons.filter(p=>p.upcomingShift||!posted.has(p.pid)),...rosterSickPeople(day)];
   const definitions=[['pending','待确定休息',p=>['pending','walkback','op'].includes(p.state)],
     ['meal','吃饭区',p=>p.state==='meal'||p.state==='ready'&&p.breakKind==='meal'],
     ['rest','休息区',p=>p.upcomingShift||p.state==='rest'||p.state==='ready'&&p.breakKind!=='meal'],
-    ['away','圈外人员',p=>p.state==='away'],['other','其他人员',p=>!p.upcomingShift&&['notyet','other','done','sick','excluded'].includes(p.state)],
+    ['away','圈外人员',p=>p.state==='away'||outsideKind(p)==='病假'],['other','其他人员',p=>!p.upcomingShift&&['notyet','other','done','excluded'].includes(p.state)&&outsideKind(p)!=='病假'],
     ['exception','异常池',p=>p.state==='exception']];
   return definitions.map(([key,title,filter])=>{
     const list=people.filter(filter);
@@ -54,8 +57,9 @@ function forecastPools(n){
       const upcoming=p.upcomingShift,ready=!!p.canDepart,rest=['rest','meal','ready'].includes(p.state);
       const a=upcoming?p.previewAssign:p.assign,route=upcoming?a:p.task;
       const mealTail=p.breakKind==='meal_rest'?'饭后休息 · ':'';
-      const detail=upcoming?`准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-n))} 分钟`:p.awaitingShiftEntry?(ready?'准备上班 · 已到班':'准备上班 · 已到班，等待安排'):p.exception?`原预计 ${esc(p.exception.assignment?.line||'')} · ${forecastClock(p.exception.allowedAt)}可上岗 · ${forecastClock(p.exception.at)}超时`:rest?`${mealTail}${Math.max(0,Math.ceil((p.readyAt??n)-n))}分钟 · ${forecastClock(p.readyAt)}可上岗`:p.state==='notyet'?`${forecastClock(p.start)}到班`:p.state==='sick'?'病假':p.state==='done'?'已下班':'';
-      return `<div class="rt-chip${ready?' rt-can-board':''}"${manage?' draggable="true" data-f-drag="'+esc(p.pid)+'"':''}><div class="rt-forecast-person-head"><${personTag}${manage?' type="button"':''} class="rt-forecast-name"${manage?' data-f-person="'+esc(p.pid)+'"':''}>${rotationName(p)}</${personTag}>${rotationMealBadge(p)}${forecastOverdue(p,n)}</div><span class="rt-sub">${detail}</span>${confirm&&p.canBatchCheckIn?`<button type="button" class="primary" data-f-check-in="${esc(p.pid)}">已到</button>`:p.batchCheckedIn?'<span class="rt-sub">已签到</span>':''}${a?`<span class="rt-go">预计 ${esc(a.line)} · ${esc(a.why)}${a.batchSize>1?' · 同分钟预计'+a.batchSize+'人':''}</span>`:''}${a&&(!upcoming||route?.routes?.length)?`<details class="rt-forecast-detail"><summary>预计路线</summary>${forecastRoutes(route)}</details>`:''}${confirm&&ready&&p.task?.kind==='push7'?'<span class="rt-sub">请本人在待办确认推7点</span>':confirm&&ready?`<button type="button" class="primary" data-f-board="${esc(p.pid)}">${forecastScreen()?'确认去轮岗':'可上岗'}</button>`:''}${confirm&&['pending','walkback','op'].includes(p.state)?`<button type="button" class="primary" data-f-arrive="${esc(p.pid)}">${forecastScreen()?'去休息':'确认休息／吃饭'}</button>`:''}</div>`;
+      if(p.rosterSick)return `<div class="rt-chip dim"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">病假</span></div>`;
+      const detail=outsideKind(p)==='病假'?'病假':upcoming?`准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-n))} 分钟`:p.awaitingShiftEntry?(ready?'准备上班 · 已到班':'准备上班 · 已到班，等待安排'):p.exception?`原预计 ${esc(p.exception.assignment?.line||'')} · ${forecastClock(p.exception.allowedAt)}可上岗 · ${forecastClock(p.exception.at)}超时`:rest?`${mealTail}${Math.max(0,Math.ceil((p.readyAt??n)-n))}分钟 · ${forecastClock(p.readyAt)}可上岗`:p.state==='notyet'?`${forecastClock(p.start)}到班`:p.state==='done'?'已下班':'';
+      return `<div class="rt-chip${ready?' rt-can-board':''}"${manage?' draggable="true" data-f-drag="'+esc(p.pid)+'"':''}><div class="rt-forecast-person-head"><${personTag}${manage?' type="button"':''} class="rt-forecast-name"${manage?' data-f-person="'+esc(p.pid)+'"':''}>${rotationName(p)}</${personTag}>${rotationMealBadge(p)}${forecastOverdue(p,n)}</div><span class="rt-sub">${detail}</span>${confirm&&p.canBatchCheckIn?`<button type="button" class="primary" data-f-check-in="${esc(p.pid)}">已到</button>`:p.batchCheckedIn?'<span class="rt-sub">已签到</span>':''}${a?`<span class="rt-go">预计 ${esc(a.line)} · ${esc(a.why)}${a.batchSize>1?' · 同分钟预计'+a.batchSize+'人':''}</span>`:''}${a&&(!upcoming||route?.routes?.length)?`<details class="rt-forecast-detail"><summary>预计路线</summary>${forecastRoutes(route)}</details>`:''}${confirm&&ready?`<button type="button" class="primary" data-f-board="${esc(p.pid)}">${forecastScreen()?'确认去轮岗':'可上岗'}</button>`:''}${confirm&&['pending','walkback','op'].includes(p.state)?`<button type="button" class="primary" data-f-arrive="${esc(p.pid)}">${forecastScreen()?'去休息':'确认休息／吃饭'}</button>`:''}</div>`;
     }).join('')||'暂无'}</div></section>`;
   }).join('')+(manage&&!forecastScreen()?'<button type="button" class="danger" data-f-close-all>全线关闭</button>':'');
 }
@@ -104,7 +108,7 @@ function forecastArrive(p){
 function forecastPerson(p){
   if(!p||!forecastOperator())return;
   const screen=forecastScreen();
-  const actions=[['pool','移动到人员池'],...(!screen?[['shift','修改当天班次'],['sick','病假（在岗等待接替）'],['away','安排出圈'],...(p.state==='away'?[['back','回圈，休息15分钟']]:[]),...(['rest','meal','ready'].includes(p.state)?[['break_time','修改餐休剩余时间']]:[]),...(p.state==='onpost'?[['post_hold',p.postHold?'取消持续定岗':'设置持续定岗']]:[])]:[])];
+  const actions=[['pool','移动到人员池'],...(!screen?[['shift','修改当天班次'],['sick',p.state==='onpost'?'病假（等待接替）':'病假'],['away','安排出圈'],...(p.state==='away'?[['back','回圈，休息15分钟']]:[]),...(['rest','meal','ready'].includes(p.state)?[['break_time','修改餐休剩余时间']]:[]),...(p.state==='onpost'?[['post_hold',p.postHold?'取消持续定岗':'设置持续定岗']]:[])]:[])];
   openModal(`<h3>${esc(p.name)}</h3><p>${forecastClock(p.start)}—${forecastClock(p.end)}</p><div class="rt-actions">${actions.map(([key,label])=>`<button type="button" class="secondary" data-f-operation="${key}">${label}</button>`).join('')}<button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
     host.querySelectorAll('[data-f-operation]').forEach(button=>button.onclick=()=>{
       const action=button.dataset.fOperation,base={action,pid:p.pid};
@@ -209,18 +213,48 @@ function forecastHead(line){
   });
 }
 function forecastAdd(){
-  let request=0,timer,selected=null;
-  openModal('<h3>新增人员</h3><label>姓名或工号<input name="query" autocomplete="off" maxlength="100"></label><div data-f-results aria-live="polite"></div><label><input type="checkbox" name="temporary">新增临时人员（只作轮岗记录）</label>'+forecastShiftFields(null,null,nowMin()>=1440?1:0)+'<div class="rt-actions"><button type="button" class="primary" data-f-save>新增</button><button type="button" class="ghost" data-close>关闭</button></div>',host=>{
+  let request=0,revision=0,timer,selected=null,preview=null;
+  const numbered=formalRotation?'<div data-f-temp-fields hidden><label>工号（选填）<input name="temporary_no" inputmode="numeric" maxlength="8" autocomplete="off"></label><p class="field-hint">填写工号后，本人可登录查看轮岗待办。</p><div data-f-identity aria-live="polite"></div></div>':'';
+  openModal('<h3>新增人员</h3><label><span data-f-name-label>姓名或工号</span><input name="query" autocomplete="off" maxlength="100"></label><div data-f-results aria-live="polite"></div><label><input type="checkbox" name="temporary">新增临时人员</label>'+numbered+forecastShiftFields(null,null,nowMin()>=1440?1:0)+'<div class="rt-actions"><button type="button" class="primary" data-f-save>新增</button><button type="button" class="ghost" data-close>关闭</button></div>',host=>{
     const input=host.querySelector('[name=query]'),results=host.querySelector('[data-f-results]');
+    const toggle=host.querySelector('[name=temporary]'),fields=host.querySelector('[data-f-temp-fields]');
+    const number=host.querySelector('[name=temporary_no]'),identity=host.querySelector('[data-f-identity]');
+    const save=host.querySelector('[data-f-save]');
+    const clearPreview=()=>{++revision;preview=null;if(identity)identity.textContent='';save.textContent='新增';};
+    host.querySelectorAll('input, select').forEach(field=>field.addEventListener('input',clearPreview));
+    toggle.onchange=()=>{
+      ++request;clearTimeout(timer);results.textContent='';selected=null;
+      if(fields)fields.hidden=!toggle.checked;
+      host.querySelector('[data-f-name-label]').textContent=toggle.checked?'姓名':'姓名或工号';
+      if(!toggle.checked&&input.value)input.oninput();
+    };
     input.oninput=()=>{selected=null;clearTimeout(timer);const generation=++request;
-      timer=setTimeout(async()=>{try{const data=await rtApi('/api/rotation/people-search?q='+encodeURIComponent(input.value));if(!host.isConnected||generation!==request)return;
+      results.textContent='';if(toggle.checked||!input.value.trim())return;
+      timer=setTimeout(async()=>{try{const data=await rtApi('/api/rotation/people-search?q='+encodeURIComponent(input.value));if(!input.isConnected||generation!==request)return;
         results.innerHTML=data.people.map((p,i)=>`<button type="button" class="secondary" data-f-result="${i}">${esc(p.name)} · ${esc(p.pid)} · ${esc(p.attraction||'')}</button>`).join('');
         results.querySelectorAll('[data-f-result]').forEach(b=>b.onclick=()=>{selected=data.people[Number(b.dataset.fResult)];results.textContent=selected.name+' · '+selected.pid;});
-      }catch(error){if(host.isConnected&&generation===request)results.textContent=error.message;}},200);
+      }catch(error){if(input.isConnected&&generation===request)results.textContent=error.message;}},200);
     };
-    const save=host.querySelector('[data-f-save]');save.onclick=async()=>{const temporary=host.querySelector('[name=temporary]').checked;
+    save.onclick=async()=>{const temporary=toggle.checked,pid=temporary?number?.value.trim():selected?.pid;
       if(!temporary&&!selected){toast('请先选择员工，或勾选临时人员',true);return;}
-      save.disabled=true;try{const ok=await forecastRun({action:'add_person',temporary,pid:selected?.pid,name:input.value,start_day_offset:Number(host.querySelector('[name=start_day_offset]').value),start:host.querySelector('[name=start]').value,end:host.querySelector('[name=end]').value});if(ok){++request;clearTimeout(timer);closeModal();}}finally{save.disabled=false;}
+      const body={action:'add_person',temporary,pid,name:input.value.trim(),start_day_offset:Number(host.querySelector('[name=start_day_offset]').value),start:host.querySelector('[name=start]').value,end:host.querySelector('[name=end]').value};
+      save.disabled=true;
+      try{
+        if(temporary&&pid&&!preview){
+          const generation=revision;
+          const result=await rtPost('/api/rotation/people-preview',body);
+          if(!input.isConnected||generation!==revision)return;
+          const facts=result.identity;
+          const account=result.initial_pin?'新临时账号用完整工号登录，初始密码为工号后四位。'
+            :result.reuse_account?'沿用已有轮岗登录方式。':facts.issues.length?'用原账号密码登录，仅可查看本人轮岗待办。':'用原员工账号登录。';
+          identity.textContent=[facts.name,facts.origin_name,...facts.issues,account].filter(Boolean).join(' · ');
+          preview=result;
+          save.textContent='确认新增';
+          return;
+        }
+        await forecastSend(preview?{...body,expected_identity:preview.digest,confirm_exceptions:true}:body);
+        if(input.isConnected){++request;clearTimeout(timer);closeModal();}
+      }catch(error){clearPreview();toast(error.message,true);}finally{save.disabled=false;}
     };
   });
 }

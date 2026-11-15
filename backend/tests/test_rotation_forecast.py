@@ -38,6 +38,14 @@ def occupants(e, lid='A'):
     return [x.get('occ') for x in e.line(lid)['posts']]
 
 
+def add_later_shifts(people, starts=(480, 510)):
+    template = next(iter(people.values()))
+    for start in starts:
+        pid = str(980000 + start)
+        people[pid] = dict(template, pid=pid, name=pid, start=start, end=1200,
+                           state='other', assign=None, line=None, lineStart=None, readyAt=None)
+
+
 def test_sequential_forecasts_use_head_time_then_active_count_without_mutating_positions():
     e = fixture((4, 3))
     before = deepcopy(e.d['lines'])
@@ -89,6 +97,7 @@ def test_targeted_prefix_push_updates_head_only_when_target_is_last(kind, index)
     e = fixture()
     p = e.P['A'+str(index)]
     if kind == 'off':
+        add_later_shifts(e.P)
         p.update(start=430, end=620)
     else:
         p['requestedExit'] = kind
@@ -257,6 +266,7 @@ def test_manual_push_filling_an_addition_ignores_header_opt_in():
 
 def test_same_shift_end_time_uses_later_post_but_earlier_shift_beats_position():
     e = fixture((4, 4))
+    add_later_shifts(e.P)
     e.P['A1'].update(start=430, end=610)
     e.P['A3'].update(start=430, end=615)
     e.P['B3'].update(start=430, end=615)

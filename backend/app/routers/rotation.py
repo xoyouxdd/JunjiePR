@@ -241,6 +241,8 @@ def rotation_screen_act(payload: dict, db: Session = Depends(get_db), actor: Rot
                                        "pool": payload.get('pool'), "repeat_meal": payload.get('repeat_meal'),
                                        "person_context": payload.get('person_context'),
                                        "expected_snapshot": payload.get('expected_snapshot'),
+                                       **{key: payload[key] for key in ('expected_push7', 'expected_kind')
+                                          if key in payload},
                                        **({'expected_arrival_outcome': payload['expected_arrival_outcome']}
                                           if 'expected_arrival_outcome' in payload else {})})
     except service.ActionError as exc:

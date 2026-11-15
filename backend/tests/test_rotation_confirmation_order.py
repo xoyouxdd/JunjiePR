@@ -6,7 +6,7 @@ import pytest
 
 from app.rotation import forecast as F
 from app.rotation import service as S
-from test_rotation_forecast import fixture, occupants
+from test_rotation_forecast import add_later_shifts, fixture, occupants
 from test_rotation_forecast_api import rotation, current, board, act, person, DAY
 
 
@@ -85,8 +85,11 @@ def test_confirmation_time_then_participating_post_count(counts, headers, winner
 def test_unconfirmed_forecasts_do_not_reserve_special_relief(kind, outcome):
     e = fixture()
     e.line('B')['sortAt'] = 590
-    if kind == 'off': e.P['B1'].update(start=430, end=610)
-    else: e.P['B1']['requestedExit'] = 'sick' if kind == 'sick' else 'out'
+    if kind == 'off':
+        add_later_shifts(e.P)
+        e.P['B1'].update(start=430, end=610)
+    else:
+        e.P['B1']['requestedExit'] = 'sick' if kind == 'sick' else 'out'
     F.plan(e, 600)
     assert e.P['new0']['assign']['target'] == 'B1'
     assert e.P['new1']['assign']['line'] == 'A'

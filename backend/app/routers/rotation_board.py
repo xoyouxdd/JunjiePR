@@ -1,8 +1,10 @@
 """Formal rotation: authenticated employee identity, scoped data, real clock only."""
 from app.employee_numbers import employee_number
 import asyncio
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timedelta
 from io import BytesIO
+import json
 import zipfile
 from weakref import WeakKeyDictionary
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -14,9 +16,10 @@ from app.v2_database import SessionLocal, get_db
 from app.v2_models import Employee
 from app.rotation import service as S
 from app.rotation import daily as D
+from app.rotation import forecast as F
 from app.rotation.access import RotationActor, ROTATION_ATTRACTION_NAME, rotation_attraction_id
 from app.rotation.namespace import runtime_for
-from app.rotation.roster import parse_any
+from app.rotation.roster import classify, parse_any
 from app.date_utils import parse_iso_date
 
 _request_gates = WeakKeyDictionary()
@@ -200,7 +203,89 @@ def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(
         raise HTTPException(400,'请先预览当日调整影响')
     if payload.get('action') == 'line' and not isinstance(payload.get('line_context'), dict):
         raise HTTPException(409,'请刷新看板后重新确认开停线')
-    return call(S.do_live_action, db, board_attraction_id(db,user), actor(user), payload)
+    aid = board_attraction_id(db, user)
+    entered_by = actor(user)
+    if (payload.get('action') == 'add_person' and payload.get('temporary') is True
+            and payload.get('pid') not in (None, '')):
+        return add_numbered_person(db, aid, entered_by, payload)
+    return call(S.do_live_action, db, aid, entered_by, payload)
+
+
+def numbered_person_identity(db, aid, no, payload):
+    from app.rotation.forecast_service import shift_values
+    from app.rotation.temporary import TemporaryMember, preflight
+
+    name = payload.get('name')
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 100:
+        raise HTTPException(400, '临时人员姓名须为1至100字')
+    start, end = call(shift_values, payload)
+    cfg = S.load_config(db, aid)
+    day, _ = S.clock_now(cfg)
+    row = S.day_row(db, aid, day)
+    state = S.day_state(row) if row else {}
+    if state.get('status') != 'live' or state.get('ruleVersion') != 2:
+        raise HTTPException(400, '请先发布当天轮岗')
+    if no in state['persons']:
+        raise HTTPException(409, '该工号今天已在轮岗名单中')
+    # The identity digest covers the work date and full shift, including overnight offsets.
+    parsed = {'people': {no: {'name': name.strip()}}, 'days': {day: {no: [start, end]}}}
+    batch = preflight(db, parsed, aid, 'day', day)
+    identity = batch['identities'][no]
+    if identity['temporary'] and batch['reuse']:
+        member = db.query(TemporaryMember).filter_by(employee_no=no).one()
+        if not member.enabled or member.adopted_at:
+            raise HTTPException(409, '该工号的临时轮岗账号不可用，请先核对账号状态')
+    return batch, day, end
+
+
+def numbered_person_no(payload):
+    if not isinstance(payload.get('pid'), str):
+        raise HTTPException(400, '工号须为7位数字')
+    no = employee_number(payload['pid'])
+    if len(no) != 7 or not no.isascii() or not no.isdecimal():
+        raise HTTPException(400, '工号须为7位数字')
+    return no
+
+
+@router.post('/people-preview')
+def people_preview(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(operator)):
+    no = numbered_person_no(payload)
+    batch, _, _ = numbered_person_identity(db, board_attraction_id(db, user), no, payload)
+    new = batch['new']
+    return {'digest': batch['digest'], 'identity': batch['identities'][no],
+            'initial_pin': bool(new and new[0]['credential_source'] == 'suffix'),
+            'reuse_account': bool(batch['reuse'])}
+
+
+def add_numbered_person(db, aid, entered_by, payload):
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+    from app.rotation.temporary import provision_member
+    from app.v2_crypto import hash_password
+
+    no = numbered_person_no(payload)
+    preliminary, _, _ = numbered_person_identity(db, aid, no, payload)
+    if payload.get('expected_identity') != preliminary['digest']:
+        raise HTTPException(409, '人员身份或班时已变化，请重新核对')
+    if preliminary['warnings'] and payload.get('confirm_exceptions') is not True:
+        raise HTTPException(409, '请先确认该工号的账号异常')
+    db.rollback()
+    passwords = {no: hash_password(no[-4:])} if preliminary['new'] else {}
+    try:
+        with S.transaction(db):
+            # Serialize identity provisioning against HR registration, as roster import does.
+            db.execute(text('BEGIN IMMEDIATE'))
+            batch, day, end = numbered_person_identity(db, aid, no, payload)
+            if batch['digest'] != preliminary['digest']:
+                raise HTTPException(409, '人员身份或班时已变化，请重新核对')
+            identity = batch['identities'][no]
+            if batch['new'] or batch['reuse']:
+                until = datetime.fromisoformat(day) + timedelta(minutes=max(1440, end))
+                provision_member(db, aid, no, identity['name'], until, passwords)
+                db.flush()
+            return call(S.do_live_action, db, aid, entered_by, {**payload, 'pid': no}, add_identity=(day, identity))
+    except IntegrityError as exc:
+        raise HTTPException(409, '人员身份刚刚变化，请重新核对') from exc
 
 
 @router.post('/timeout/preview')
@@ -293,19 +378,71 @@ def draft(payload: dict, db: Session = Depends(formal_db), user: V2User = Depend
     raise HTTPException(400, '请通过每日班表并携带版本调整预排')
 
 
+def late_shift_counts(db, aid, day, state):
+    if state and state['status'] == 'live':
+        return Counter(round(p['start'] * 60) for p in state['persons'].values())
+    roster = S.roster_for(db, aid, day)
+    return Counter(shift['start'] * 60 for cell in (roster['days'][day].values() if roster else ())
+                   if (shift := classify(cell))['kind'] != 'off')
+
+
 @router.get('/config')
 def config(db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     with S.transaction(db):
-        cfg=S.load_config(db,board_attraction_id(db,user))
-        return {'lines':S.lines_of(cfg),'settings':S.settings_of(cfg),'defaults':S.E.DEFAULT_SETTINGS}
+        aid = board_attraction_id(db, user)
+        cfg = S.load_config(db, aid)
+        day, _ = S.clock_now(cfg)
+        row = S.day_row(db, aid, day)
+        counts = late_shift_counts(db, aid, day, S.day_state(row) if row else None)
+        settings = S.settings_of(cfg)
+        return {'lines':S.lines_of(cfg),'settings':settings,'defaults':S.E.DEFAULT_SETTINGS,
+                'late_shifts': {'date': day, 'options': sorted(counts.items()),
+                                'defaults': F.default_late_shifts(counts),
+                                'selected': settings.get('lateShiftsByDay', {}).get(day)}}
 
 
 @router.put('/config')
 def save_config(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     try:
         with S.transaction(db):
-            cfg=S.load_config(db,board_attraction_id(db,user))
+            aid = board_attraction_id(db, user)
+            cfg = S.load_config(db, aid)
             S.update_config(cfg,payload.get('lines'),payload.get('settings'),user.id)
+            if 'late_shifts' in payload:
+                day, now = S.clock_now(cfg)
+                if payload.get('work_date') != day:
+                    raise S.ActionError('轮岗工作日已变化，请刷新设置')
+                row = S.day_row(db, aid, day)
+                state = S.day_state(row) if row else None
+                if row and row.status == 'ended':
+                    raise S.ActionError('当天轮岗已结束')
+                selected = payload['late_shifts']
+                counts = late_shift_counts(db, aid, day, state)
+                if selected is not None and (
+                    not isinstance(selected, list) or not 1 <= len(selected) <= 4
+                    or any(type(value) is not int or value not in counts for value in selected)
+                    or len(set(selected)) != len(selected)
+                ):
+                    raise S.ActionError('请选择当天班表中 1 至 4 个不同开班时间')
+                if row and row.status == 'live':
+                    S.advance(db, cfg, row, state, now)
+                    if state['status'] != 'live':
+                        raise S.ActionError('当天轮岗已结束')
+                saved = json.loads(cfg.settings_json or '{}')
+                overrides = saved.setdefault('lateShiftsByDay', {})
+                if selected is None:
+                    overrides.pop(day, None)
+                else:
+                    overrides[day] = sorted(selected)
+                if not overrides:
+                    saved.pop('lateShiftsByDay')
+                cfg.settings_json = S._dumps(saved)
+                if row and row.status == 'live':
+                    eng, hooks = S.engine_for(db, cfg, row, state)
+                    hooks.now = now
+                    F.tick(eng, now)
+                    S.sync_notices(db, aid, state, eng, now)
+                    S.save_day(db, row, state)
             S.mark_changed(db)
     except S.ActionError as exc: raise HTTPException(400,str(exc)) from exc
     return {'ok':True}

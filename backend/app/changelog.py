@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.15.1", "date": "2026-11-15", "status": "candidate",
+     "items": [{"summary": "轮岗晚班设置与临时人员补录", "detail": "支持按工作日配置晚班，按工号核对并补录临时轮岗人员，完善推7点确认和病假状态处理。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]}]},
     {"version": "2026.11.14.1", "date": "2026-11-14", "status": "candidate",
      "items": [
          {"summary": "积点榜支持跨圈导出", "detail": "GSM、AM、OM可按积点榜筛选条件导出单圈或全部景点圈的排名，表内标明统计日期、人群和员工所属圈。", "audiences": ["GSM", "AM", "OM"]},

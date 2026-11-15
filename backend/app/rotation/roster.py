@@ -92,6 +92,7 @@ def fmt(m):
 
 
 SHIFT_RE = re.compile(r'^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(.*)$', re.S)
+SICK_LEAVE_RE = re.compile(r'\bSL\b|病假', re.I)
 
 
 def classify(cell):
@@ -99,6 +100,8 @@ def classify(cell):
     s = '' if cell is None else str(cell).strip()
     if not s:
         return {'kind': 'off', 'label': ''}
+    if SICK_LEAVE_RE.search(s):
+        return {'kind': 'off', 'label': '病假'}
     m = SHIFT_RE.match(s)
     if not m:
         return {'kind': 'off', 'label': s.replace('\n', ' ')}

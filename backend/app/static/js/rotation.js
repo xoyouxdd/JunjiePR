@@ -91,7 +91,7 @@ function openTab() {
   if(tab==='draft')void loadDaily(daily.date||RT.data.clock.date,daily.time);
   if (tab === 'records' && !view.log) loadLog(view.logDate || RT.data.clock.date);
   if (tab === 'roster' && !view.roster) loadRoster(view.rosterDate || RT.data.clock.date);
-  if (tab === 'settings' && !view.config) loadSettings();
+  if (tab === 'settings') loadSettings();
   RT.render();
 }
 
@@ -130,8 +130,8 @@ function poolView(n) {
   html += section('吃饭区', by(['meal']).sort((a,b)=>a.readyAt-b.readyAt), p=>button(p, `吃饭至 ${hm(p.readyAt)}，剩余 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟`, '', 'meal'));
   const resting=by(['rest']).filter(p=>!p.entryHold).sort((a,b)=>restUntil(a)-restUntil(b));
   html += section(`休息区 <span class="rt-hint">${restSummary(resting)}</span>`, resting, p=>button(p, waitingInitialRest(p)?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:`${p.breakKind === 'meal_rest' ? '饭后剩余休息时间：' : ''}至 ${hm(restUntil(p))}，剩余 ${Math.max(0,Math.ceil(restUntil(p)-n))} 分钟`, '', 'rest'),true);
-  const outside=ps.filter(outsideKind);outside.forEach(p=>displayed.add(p.pid));
-  html+=`<section class="rt-sect rt-outside"><h2>圈外人员<span class="rt-n">${outside.length}</span></h2>${['病假','出圈','OJT'].map(kind=>`<div data-outside-kind="${kind}"><h3>${kind==='出圈'?'出圈（含暂离）':kind}</h3><div class="rt-chips">${outside.filter(p=>outsideKind(p)===kind).map(p=>button(p,esc(p.leaveReason||p.away?.reason||p.label||kind)+(p.away?.until!=null?` · ${hm(p.away.until)} 回`:''),'','dim')).join('')||'暂无'}</div></div>`).join('')}</section>`;
+  const outside=[...ps.filter(outsideKind),...rosterSickPeople(RT.data.day)];outside.forEach(p=>displayed.add(p.pid));
+  html+=`<section class="rt-sect rt-outside"><h2>圈外人员<span class="rt-n">${outside.length}</span></h2>${['病假','出圈','OJT'].map(kind=>`<div data-outside-kind="${kind}"><h3>${kind==='出圈'?'出圈（含暂离）':kind}</h3><div class="rt-chips">${outside.filter(p=>outsideKind(p)===kind).map(p=>p.rosterSick?`<div class="rt-chip dim"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">病假</span></div>`:button(p,esc(p.leaveReason||p.away?.reason||p.label||kind)+(p.away?.until!=null?` · ${hm(p.away.until)} 回`:''),'','dim')).join('')||'暂无'}</div></div>`).join('')}</section>`;
   if(ps.some(p=>p.entryHold))html += section('待本人到场重新领取安排',ps.filter(p=>p.entryHold),p=>button(p,'同行任务已调整 · 不记为缺勤','','dim'));
   const others = by(['op', 'notyet', 'excluded', 'done']).filter(p=>!displayed.has(p.pid)).sort((a, b) => a.start - b.start);
   html += `<section class="rt-sect"><h2>其他人员<span class="rt-n">${others.length}</span><span class="rt-hint">OP、未到岗、不轮岗、已下班</span></h2><div class="rt-scroll"><table class="rt-table">${others.map(p => `<tr data-pid="${esc(p.pid)}" tabindex="0"><td>${esc(p.name)}</td><td>${hm(p.start)}-${hm(p.end)}</td><td>${STATE_NAME[p.state] || ''}${p.label ? `：${esc(p.label)}` : ''}</td></tr>`).join('')}</table></div></section>`;
@@ -714,6 +714,22 @@ async function loadSettings() {
   RT.render();
 }
 
+function lateShiftSettings(config) {
+  if (!config) return '';
+  const selected = config.selected ?? config.defaults;
+  const fields = Array.from({length:4}, (_, index) =>
+    `<label>开班时间 ${index + 1}<select name="lateShift"><option value="">未选择</option>${
+      config.options.map(([seconds, count]) =>
+        `<option value="${seconds}" ${selected[index]===seconds?'selected':''}>${esc(forecastClock(seconds/60))} · ${count}人</option>`).join('')
+    }</select></label>`).join('');
+  return `<section class="panel"><h2>晚班继续轮岗</h2>
+    <p class="field-hint">${esc(config.date)} · 默认选择当天开班时间最晚的两个批次。可从当日班表手动选择最多 4 个开班时间。</p>
+    <form id="lateShiftForm" class="rt-form-grid">${fields}
+      <div class="rt-row"><button type="submit" class="primary" ${config.options.length?'':'disabled'}>保存当日班时</button>
+      <button type="button" class="secondary" data-late-default ${config.selected===null?'disabled':''}>恢复默认</button></div>
+    </form></section>`;
+}
+
 function settingsView() {
   const cfg = view.config;
   if (!cfg) return '<section class="empty">正在加载…</section>';
@@ -724,6 +740,7 @@ function settingsView() {
     return `<label>${label}<input name="${key}" ${isTime ? 'type="time"' : `type="number" step="1" min="${min}"`} value="${esc(value)}" required></label>`;
   };
   return `<section class="panel"><h2>轮岗参数</h2><form id="settingsForm" class="rt-form-grid">${SETTING_LABELS.map(field).join('')}<div class="rt-row"><button type="submit" class="primary">保存参数</button></div></form></section>
+    ${lateShiftSettings(cfg.late_shifts)}
     <section class="panel"><h2>线和岗位</h2><p class="field-hint">每条线按顺序列出岗位，第一个是入口岗，最后一个是出口岗。可选：openAt 定时开岗、closeAt 定时撤岗、seven 7 点岗位顺序、standby 待命线、walk 路程分钟。</p>
       <form id="linesForm"><textarea name="lines" rows="16" class="rt-json" spellcheck="false">${esc(JSON.stringify(cfg.lines, null, 2))}</textarea><div class="rt-row"><button type="submit" class="primary">保存线和岗位</button></div></form></section>
     <section class="panel" ${formalRotation?'hidden':''}><h2>轮岗专用账号</h2><p class="field-hint">在登录页直接登录时使用的密码；测试入口里切换模拟账号不需要密码。</p>
@@ -733,6 +750,28 @@ function settingsView() {
 function bindSettings() {
   const sform = document.getElementById('settingsForm');
   if (!sform) return;
+  const lateForm = document.getElementById('lateShiftForm');
+  if (lateForm) {
+    const save = async selected => {
+      lateForm.querySelectorAll('select,button').forEach(el => { el.disabled = true; });
+      try {
+        await rtApi('/api/rotation/config', { method:'PUT', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({work_date:view.config.late_shifts.date, late_shifts:selected}) });
+        toast(selected===null?'已恢复默认班时':'已保存当日班时');
+      } catch (error) { toast(error.message, true); }
+      await loadSettings();
+    };
+    lateForm.onsubmit = event => {
+      event.preventDefault();
+      const selected = new FormData(lateForm).getAll('lateShift').filter(Boolean).map(Number);
+      if (!selected.length || new Set(selected).size !== selected.length) {
+        toast('请选择 1 至 4 个不同开班时间', true);
+        return;
+      }
+      void save(selected);
+    };
+    lateForm.querySelector('[data-late-default]').onclick = () => void save(null);
+  }
   sform.onsubmit = async event => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(sform).entries());

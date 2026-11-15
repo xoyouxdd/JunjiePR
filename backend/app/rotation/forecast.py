@@ -77,11 +77,15 @@ def shift_counts(eng):
     return eng._forecast_shift_counts
 
 
+def default_late_shifts(counts):
+    return sorted(counts, reverse=True)[:2]
+
+
 def late_shift(eng, p):
-    counts = shift_counts(eng)
-    starts = sorted(counts, reverse=True)[:2]
-    return any(round(p['start'] * 60) == start and counts[start] >= minimum
-               for start, minimum in zip(starts, (3, 10)))
+    selected = eng.S.get('lateShiftsByDay', {}).get(eng.d['date'])
+    if selected is None:
+        selected = default_late_shifts(shift_counts(eng))
+    return round(p['start'] * 60) in selected
 
 
 def finishes_on_exit(eng, p, now):
@@ -671,8 +675,6 @@ def execute(eng, pid, now, actor, expected_line, expected_push7=UNSPECIFIED_ROUT
     a, task = confirmation_plan(eng, pid, now)
     if not a:
         raise ActionError('当前没有可确认的轮岗路线，请刷新查看安排')
-    if a['kind'] == 'push7' and getattr(actor, 'kind', None) not in (None, 'member'):
-        raise ActionError('推7点须由接替人通过本人待办确认')
     if now + EPS < a.get('notBefore', 0):
         raise ActionError('尚未到计划加岗时间')
     route_changed = expected_push7 is not UNSPECIFIED_ROUTE and expected_push7 != task['push7Route']

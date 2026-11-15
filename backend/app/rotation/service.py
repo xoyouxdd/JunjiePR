@@ -148,7 +148,8 @@ def load_config(db: Session, attraction_id: int) -> RotationConfig:
 
 def settings_of(cfg: RotationConfig) -> dict:
     saved = json.loads(cfg.settings_json or "{}")
-    return {**E.DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in E.DEFAULT_SETTINGS}}
+    return {**E.DEFAULT_SETTINGS, **{k: v for k, v in saved.items()
+                                    if k in E.DEFAULT_SETTINGS or k == 'lateShiftsByDay'}}
 
 
 def lines_of(cfg: RotationConfig) -> list[dict]:
@@ -1258,7 +1259,8 @@ def action_time(value) -> int:
 
 
 @transactional
-def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict | None:
+def do_live_action(db: Session, attraction_id: int, actor, body: dict, *,
+                   add_identity: tuple[str, dict] | None = None) -> dict | None:
     from app.employee_numbers import employee_number
     if isinstance(body.get('pid'), str):
         body = {**body, 'pid': employee_number(body['pid'])}
@@ -1284,6 +1286,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         if not row:
             raise ActionError("今天的轮岗还没有发布")
         state = day_state(row)
+        if add_identity is not None and (add_identity[0] != day or state.get('ruleVersion') != 2):
+            raise ConfirmationConflict('轮岗工作日已变化，请重新核对')
         if body.get('expected_snapshot'):
             from app.rotation.manual import fingerprint
             if body['expected_snapshot'] != fingerprint(state):
@@ -1310,7 +1314,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict) -> dict |
         hooks.now = now
         if state.get('ruleVersion') == 2:
             from app.rotation.forecast_service import action as forecast_action
-            return forecast_action(db, cfg, row, eng, body, now, actor)
+            return forecast_action(db, cfg, row, eng, body, now, actor,
+                                   add_identity=add_identity[1] if add_identity is not None else None)
         if act == 'batch_check_in':
             raise ActionError('当前轮岗日不支持班前签到')
         from app.rotation import history as H, workflow as W
@@ -1875,6 +1880,6 @@ def update_config(cfg: RotationConfig, lines, settings, employee_id: int | None)
                     raise ActionError('用餐工时门槛至少为390分钟')
         if merged['mealReserveMinPeople'] < 1:
             raise ActionError('允许自选吃饭所需的储备人数至少为1人')
-        cfg.settings_json = _dumps({k: v for k, v in merged.items() if v != E.DEFAULT_SETTINGS[k]})
+        cfg.settings_json = _dumps({k: v for k, v in merged.items() if v != E.DEFAULT_SETTINGS.get(k)})
     cfg.updated_by_id = employee_id
     cfg.updated_at = datetime.now()

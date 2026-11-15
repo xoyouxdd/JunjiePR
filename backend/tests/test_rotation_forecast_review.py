@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from test_rotation_forecast import fixture as engine, occupants
+from test_rotation_forecast import add_later_shifts, fixture as engine, occupants
 from test_rotation_forecast_api import rotation, current, board, act, person, DAY
 from app.rotation import forecast as F, service as S, engine as E, workflow as W
 from test_rotation_engine import Hooks
@@ -40,6 +40,8 @@ def test_first_shift_is_automatic_but_subsequent_ready_forecast_requires_click()
                                       if {a, b} != {'opening', 'vacancy'}])
 def test_confirmed_business_priority_matrix(strong, weak):
     e = engine()
+    if 'off' in (strong, weak):
+        add_later_shifts(e.P)
     for lid, purpose in [('A', weak), ('B', strong)]:
         target = e.P[lid+'2']
         if purpose in ('sick', 'out'):
@@ -81,6 +83,7 @@ def test_high_priority_target_is_actually_relieved_even_with_a_prefix_gap(purpos
     elif purpose == 'push7':
         target.update(start=420, flags=['7点岗'])
     else:
+        add_later_shifts(e.P)
         target.update(start=430, end=620)
     F.plan(e, 600)
     assert e.P['new0']['assign']['kind'] == purpose
@@ -94,6 +97,7 @@ def test_high_priority_target_is_actually_relieved_even_with_a_prefix_gap(purpos
 
 def test_reserved_push7_does_not_hide_other_special_demands():
     e = engine((3,))
+    add_later_shifts(e.P)
     e.P['A0'].update(start=420, flags=['7点岗'])
     e.P['A2'].update(start=430, end=620)
     e.d['push7History'] = {'new0': [1, '2026-11-01', 435]}
