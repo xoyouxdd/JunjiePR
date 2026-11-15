@@ -181,31 +181,29 @@ async function main(){try{
     assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'12:30'}})).ok());
     await context.request.get(base+'/api/rotation/board');
     assert.deepEqual((await data()).day,frozen.day,'opening changed after later shift');
-    // An unpublished draft also freezes at first_start without repeated reads.
+    // Frozen live history ignores later live-board version changes.
+    let dailyReads=0;
+    page.on('request',request=>{if(request.method()==='GET'&&new URL(request.url()).pathname==='/api/rotation/daily/2026-10-06')dailyReads++;});
+    const frozenReads=dailyReads;
+    await page.evaluate(()=>{RT.data.version++;RT.render(false);});
+    await page.waitForFunction(()=>!daily.loading);
+    assert.equal(dailyReads,frozenReads);
+    // An unpublished draft can still be reviewed and published after the first start.
     assert((await context.request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-06',force:true}})).ok());
-    let draftReads=0;
-    page.on('request',request=>{if(request.method()==='GET'&&new URL(request.url()).pathname==='/api/rotation/daily/2026-10-06')draftReads++;});
     await page.locator('[data-daily-reload]').click();
-    await page.waitForFunction(()=>daily.data?.frozen&&!daily.data.can_edit&&!daily.loading);
+    await page.waitForFunction(()=>daily.data?.can_edit&&daily.data.can_publish&&!daily.data.frozen&&!daily.loading);
     await page.evaluate(async()=>{await RT.load();});
     await page.waitForFunction(()=>!daily.loading);
     assert(await page.evaluate(()=>nowMin()>=daily.data.first_start));
-    let settledReads=draftReads;
+    assert(await page.locator('[data-daily-person]').count()>0);
+    const draftReads=dailyReads;
     for(let i=0;i<4;i++){
       await page.evaluate(()=>RT.render(true));
       await page.waitForFunction(()=>!daily.loading);
-      assert.equal(draftReads,settledReads,'unpublished draft refetched on a clock render');
+      assert.equal(dailyReads,draftReads,'unpublished draft refetched on a clock render');
       assert(await page.locator('.rt-daily-board').isVisible());
       assert.equal(await page.getByText('正在读取班表…',{exact:true}).count(),0);
     }
-    // Frozen daily history ignores later live-board version changes.
-    await page.evaluate(()=>{RT.data.version++;RT.render(false);});
-    await page.waitForFunction(()=>!daily.loading);
-    assert.equal(draftReads,settledReads);
-    settledReads=draftReads;
-    await page.evaluate(()=>{RT.render(true);RT.render(false);});
-    await page.waitForFunction(()=>!daily.loading);
-    assert.equal(draftReads,settledReads);
     // Member and screen identities retain the original initialization restriction.
     await context.request.post(base+'/api/rotation/enter',{data:{account:'9100000'}});
     assert.equal((await context.request.get(base+'/api/rotation/daily?month=2026-10')).status(),403);
