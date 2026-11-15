@@ -3,7 +3,10 @@ from io import BytesIO
 
 import pytest
 from openpyxl import Workbook
-from app.rotation.roster import parse_any, parse_roster
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
+from openpyxl.styles import Font
+from app.rotation.roster import classify, parse_any, parse_roster
 
 
 def workbook(rows):
@@ -70,3 +73,26 @@ def test_ztp_same_spelling_repeated_row_preserves_last_row(number):
 def test_ztp_mixed_alias_rows_are_still_rejected(numbers):
     with pytest.raises(ValueError, match='混用'):
         parse_roster(ztp([['张三', no, 'CM', '', *(['08:00-16:00'] * 7)] for no in numbers]))
+
+
+def test_ztp_sick_shift_accepts_cell_font_rich_text_and_attached_sl():
+    wb = Workbook()
+    sheet = wb.active
+    sheet.append(['', '', '', '', 46000, 46001, 46002, 46003, 46004, 46005, 46006])
+    sheet.append(['Name', 'ID', 'Type', 'Mark', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
+    struck = InlineFont(strike=True)
+    sheet.append(['合成测试', '1234567', 'CM', '', '07:15-16:00', '09:00-18:00sl',
+                  CellRichText(TextBlock(struck, '07:15-13:45'), ' 备注'),
+                  CellRichText('07:15-16:00', TextBlock(struck, ' 备注')), 'OFF'])
+    sheet['E3'].font = Font(strike=True)
+    sheet['F3'].font = Font(strike=True)
+    out = BytesIO()
+    wb.save(out)
+    parsed = list(parse_any(out)['days'].values())
+    shifts = [classify(day['1234567']) for day in parsed]
+    assert [(x['label'], x['start'], x['end']) for x in shifts[:3]] == [
+        ('病假', 435, 960), ('病假', 540, 1080), ('病假', 435, 825),
+    ]
+    assert all(x['kind'] == 'off' for x in shifts[:3])
+    assert shifts[3]['kind'] == 'rotation'
+    assert shifts[4] == {'kind': 'off', 'label': 'OFF'}

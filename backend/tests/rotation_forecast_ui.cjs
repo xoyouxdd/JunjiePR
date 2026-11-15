@@ -58,10 +58,17 @@ async function main(){try{
     await page.getByRole('button',{name:'新增',exact:true}).click();
     await page.waitForFunction(()=>RT.data.day.persons.some(p=>p.name==='临时伙伴'));
     const dragPid=(await board()).lines[0].posts[0].occ;
-    await page.evaluate(()=>{window.forecastDragEvents=[];for(const type of ['dragstart','dragover','drop','dragend'])document.addEventListener(type,e=>{if(type!=='dragover'||!window.forecastDragEvents.some(x=>x.type==='dragover'))window.forecastDragEvents.push({type,types:[...(e.dataTransfer?.types||[])],target:e.target.closest('[data-f-drag],[data-f-pool],[data-f-slot]')?.outerHTML.slice(0,160)});},true);});
-    await page.locator('[data-f-drag="'+dragPid+'"]').first().dragTo(page.locator('[data-f-pool=rest]'));
-    await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='rest',dragPid).catch(async error=>{console.error(engine,await page.evaluate(pid=>({events:window.forecastDragEvents,state:RT.data.day.persons.find(p=>p.pid===pid),toast:document.getElementById('toast').textContent}),dragPid));throw error;});
-    await page.locator('[data-f-drag="'+dragPid+'"]').first().dragTo(page.locator('[data-f-slot="A#0"]'));
+    // Keep drag events on one board render, including when polling refreshes the live view.
+    const dropPerson=(source,targetSelector)=>page.locator(source).evaluate((element,selector)=>{
+      const target=document.querySelector(selector),dataTransfer=new DataTransfer();
+      element.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer}));
+      target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer}));
+      target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer}));
+      element.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));
+    },targetSelector);
+    await dropPerson('[data-f-slot="A#0"] [data-f-drag="'+dragPid+'"]','[data-f-pool=rest]');
+    await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='rest',dragPid);
+    await dropPerson('[data-f-pool=rest] [data-f-drag="'+dragPid+'"]','[data-f-slot="A#0"]');
     await page.locator('[name=place_mode]').selectOption('swap');
     await page.getByRole('button',{name:'确定',exact:true}).click();
     await page.waitForFunction(pid=>RT.data.day.lines[0].posts[0].occ===pid,dragPid);

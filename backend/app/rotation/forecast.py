@@ -305,6 +305,42 @@ def awaiting_shift_entry(p):
     return p['state'] == 'ready' and p.get('directShiftEntry') == p['start']
 
 
+def opening_push7_candidates(eng, *, planned=False, now=435):
+    """Choose unseated 07:15 staff for targets expected to need relief."""
+    from app.rotation import daily as D
+    from app.rotation.engine import _m
+
+    if planned:
+        targets = []
+        for key, pid in D.push7_target_slots(eng.d).items():
+            line, _, post = eng.plan_post(key)
+            if (not line.get('standby') and not post.get('draftClosed') and not post.get('draftHold')
+                    and _m(post.get('openAt'), 0) <= 420 and _m(post.get('closeAt'), 1440) > 435):
+                targets.append(pid)
+    else:
+        targets = [pid for line in eng.d['lines'] for i in indexes(line, now)
+                   if (pid := line['posts'][i].get('occ')) in eng.P and seven_target(eng.P[pid])
+                   and eng.P[pid].get('requestedExit') != 'sick']
+    if not targets:
+        return {}
+    plan = eng.d['plan']
+    seated = set(plan['seven'].values()) | set(plan['crew'].values())
+    candidates = {p['pid']: p for p in eng.P.values()
+                  if p['start'] == 435 and p['role'] == 'rotation' and p.get('state', 'notyet') == 'notyet'
+                  and not p.get('initialPool') and not p.get('manualPaused') and p['pid'] not in seated
+                  and eng.can_board(p, max(435, now), max(435, now))}
+    if not candidates:
+        return {}
+    bindings = {pid: target for pid, target in plan.get('push7Targets', {}).items()
+                if pid in candidates and target in targets}
+    remaining = [target for target in targets if target not in bindings.values()]
+    history = push7_history(eng)
+    ranked = sorted((p for pid, p in candidates.items() if pid not in bindings),
+                    key=lambda p: (push7_rank(history, p['pid']), p['name'], p['pid']))
+    bindings.update((p['pid'], target) for p, target in zip(ranked, remaining))
+    return bindings
+
+
 def shift_previews(eng, now):
     """Run the same planner on provisional candidates without changing live tasks."""
     from app.rotation.engine import Engine
@@ -313,6 +349,7 @@ def shift_previews(eng, now):
     if not upcoming or eng.d.get('closed'):
         return {}
     seats = {pid: key for kind in ('crew', 'seven') for key, pid in eng.d['plan'][kind].items()}
+    opening_relief = opening_push7_candidates(eng, planned=now < 420) if any(p['start'] == 435 for p in upcoming) else {}
     previews, expected_ready = {}, {}
     for p in upcoming:
         pid, start = p['pid'], p['start']
@@ -321,7 +358,7 @@ def shift_previews(eng, now):
             if i in indexes(line, start) and occupant(eng, post, start) in (None, pid):
                 previews[pid] = {'line': line['id'], 'entryPost': post['name'], 'why': '开班预排'}
                 continue
-        delay = eng.S['breakMin'] if eng.opening_rest_candidate(p) else 0
+        delay = eng.S['breakMin'] if eng.opening_rest_candidate(p, opening_relief if start == 435 else None) else 0
         if p.get('initialPool') == 'rest':
             delay = 15
         expected_ready[pid] = start + delay
@@ -853,7 +890,11 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
             if post.get('closeAt') and post.get('open') and not post.get('closedAuto') and not post.get('closeAfterRelief') and now >= _m(post['closeAt']):
                 if not post.get('hold') and not post.get('hold101'):
                     schedule_closure(eng, line, i, now)
-    for p in list(eng.P.values()):
+    people = list(eng.P.values())
+    opening_relief = None
+    if now >= 435 and any(p['start'] == 435 and p['state'] == 'notyet' for p in people):
+        people.sort(key=lambda p: p['start'])
+    for p in people:
         if p['state'] == 'notyet' and now >= p['start'] and not p.get('manualPaused'):
             initial = p.pop('initialPool', None)
             if initial:
@@ -874,9 +915,12 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
                          breakKind='rest', directShiftEntry=p['start'])
                 p.pop('timeoutAt', None)
             else:
-                eng._shift_start(p, now, seats, seven)
+                if p['start'] == 435 and opening_relief is None:
+                    opening_relief = opening_push7_candidates(eng, now=now)
+                eng._shift_start(p, now, seats, seven, opening_relief if p['start'] == 435 else None)
             if p['state'] == 'ready' and not awaiting_shift_entry(p):
-                if p['pid'] not in eng.d['plan']['push7']:
+                push7 = opening_relief if p['start'] == 435 else eng.d['plan']['push7']
+                if p['pid'] not in push7:
                     p.update(state='pending', readyAt=None)
                 elif p['start'] == 435:
                     arriving_relief.append(p['pid'])

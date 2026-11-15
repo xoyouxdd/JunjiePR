@@ -6,6 +6,8 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.16.1", "date": "2026-11-16", "status": "candidate",
+     "items": [{"summary": "轮岗推7点与班表病假识别", "detail": "每日预排显示推7点的接替建议，班表保留病假人员原班时并识别带删除线的班时。更新有效班表后，旧预排须重新生成并核对才能启用。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]}]},
     {"version": "2026.11.15.1", "date": "2026-11-15", "status": "candidate",
      "items": [{"summary": "轮岗晚班设置与临时人员补录", "detail": "支持按工作日配置晚班，按工号核对并补录临时轮岗人员，完善推7点确认和病假状态处理。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]}]},
     {"version": "2026.11.14.1", "date": "2026-11-14", "status": "candidate",

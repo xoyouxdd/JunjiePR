@@ -106,6 +106,9 @@ function restUntil(p) {
 function waitingInitialRest(p) {
   return p.state === 'notyet' && p.scheduledRestStart !== null && p.scheduledRestStart !== undefined;
 }
+function plannedReturnRestLabel(p){
+  return p.state==='notyet'&&p.initialPool==='rest'?`班次未开始 · ${hm(p.start)} 开始休息`:null;
+}
 function restSummary(people) {
   const waiting=people.filter(waitingInitialRest).length;
   return `休息中 ${people.length-waiting} 人 · 待开始 ${waiting} 人`;
@@ -117,10 +120,13 @@ function rosterSickPeople(day){
   return (day.off||[]).filter(p=>!live.has(p.pid)&&/(^SL\b|病假)/i.test(p.label||''))
     .map(p=>({...p,state:'sick',label:'病假',rosterSick:true}));
 }
+function sickLeaveLabel(p){
+  return Number.isFinite(p.start)&&Number.isFinite(p.end)?`病假 · ${hm(p.start)}-${hm(p.end)}`:'病假';
+}
 function outsideKind(p){
   if(p.state==='sick'||p.initialPool==='sick'||p.state==='done'&&/病假/.test(p.leaveReason||''))return '病假';
   if(p.role==='excluded'&&/OJT/i.test([p.label,p.note,p.type].join(' ')))return 'OJT';
-  return p.state==='away'?'出圈':null;
+  return p.state==='away'||p.initialPool==='away'?'出圈':null;
 }
 function groupCanDepart(group,n){
   return !group.blocked&&group.members.every(m=>{const p=personOf(m.pid);return p&&p.state==='ready'&&p.assign&&n>=Math.max(p.readyAt??n,p.assign.departAt,p.assign.notBefore??0)-.01;});
@@ -599,8 +605,7 @@ function lineCard(L, n, ops, view = {}) {
       cls+=' rt-daily-slot'+(!x.open?' closed':'');
       const key=L.id+'#'+i,p=lookup(x.occ);
       const label=view.editable?`<button type="button" class="rt-pn rt-daily-post" data-daily-rename="${esc(key)}" ${editable?`draggable="true" data-daily-post="${esc(key)}"`:''} aria-label="${esc(x.name)}，双击改名${editable?'，拖拽交换岗位':''}">${esc(x.name)}</button>`:`<span class="rt-pn">${esc(x.name)}</span>`;
-      const sevenPlan=view.day?.plan?.seven;
-      const plannedSeven=p?.start===420 && (sevenPlan ? sevenPlan[key]===p.pid : !!x.seven);
+      const plannedSeven=p?.start===420&&!p.sevenReplaced;
       const addTime=pendingAddTime(x),who=p?.name||(addTime?`${addTime} 加岗`:'空岗');
       const personName=esc(who)+rotationPostShiftEnd(p)+rotationSevenBadge(p,plannedSeven);
       const livePerson=p&&typeof forecastActive==='function'&&forecastActive()&&RT.data.day.status==='live'&&view.day?.date===RT.data.day.date;

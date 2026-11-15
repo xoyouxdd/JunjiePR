@@ -57,7 +57,7 @@ def present(db,cfg,attraction_id,work_date,state,minute,settings=None):
     persons=[S.person_view(eng,p,minute,taken) for p in state['persons'].values()]
     for p in persons:
         p.pop('confirmationTokens',None);p['canDepart']=False;p['canArrive']=False
-    return {'date':work_date,'status':state['status'],'lines':S.lines_view(eng),'persons':persons,'off':state.get('off',[]),'closeAt':state.get('closeAt'),'rotationEnd':S.E.rotation_end(state),'plan':state.get('plan',{})}
+    return {'date':work_date,'status':state['status'],'lines':S.lines_view(eng),'persons':persons,'off':S.off_people_view(db,attraction_id,state),'closeAt':state.get('closeAt'),'rotationEnd':S.E.rotation_end(state),'plan':state.get('plan',{})}
 
 
 def first_start(state):
@@ -70,7 +70,7 @@ def prestart(state, now):
             and all(p['state'] in ('notyet', 'excluded') for p in state['persons'].values()))
 
 
-def draft_editable(state, work_date, today, now):
+def before_first_start(state, work_date, today, now):
     return work_date > today or work_date == today and now < first_start(state)
 
 
@@ -116,7 +116,7 @@ def day_payload(db,attraction_id,work_date,at=None):
     # Templates do not retrofit already-generated plans. Only upgrade editable
     # pre-start states; historical/frozen snapshots and existing assignments stay intact.
     editable = bool(state and at is None and
-        (row.status == 'draft' and draft_editable(state,work_date,today,now)
+        (row.status == 'draft' and before_first_start(state,work_date,today,now)
          or work_date == today and prestart(state,now)))
     if editable:
         added = fill_prestart_spares(state)
@@ -135,8 +135,7 @@ def day_payload(db,attraction_id,work_date,at=None):
             'times':[{'id':s.id,'minute':s.minute} for s in snapshots], 'as_of':latest.minute if latest else None,'requested_time':at,
             'legacy_history':bool(row and row.status!='draft' and not snapshots),'roster_changed':False}
     if row and row.status=='draft':
-        upload=S.roster_upload_for(db,attraction_id,work_date)
-        result['roster_changed']=bool(upload and state.get('rosterUploadId') and state['rosterUploadId']!=upload.id)
+        result['roster_changed'] = S.draft_roster_changed(db, attraction_id, work_date, state)
     if latest and (at is not None or state is None):
         saved=json.loads(zlib.decompress(base64.b64decode(latest.payload)))
         result['day']=present(db,cfg,attraction_id,work_date,saved['state'],minute if minute is not None else latest.minute,saved['settings'])
@@ -148,13 +147,21 @@ def day_payload(db,attraction_id,work_date,at=None):
     result['opening_source'] = None
     if at is None and state:
         editable_live = work_date == today and prestart(state, now)
-        result['can_edit'] = bool(row.status == 'draft' and draft_editable(state, work_date, today, now) or editable_live)
+        result['can_edit'] = result['can_edit'] or editable_live
         result['can_generate'] = result['can_generate'] and result['can_edit']
-        result['can_publish'] = row.status == 'draft' and work_date == today
+        result['can_publish'] = row.status == 'draft' and work_date == today and not result['roster_changed']
         if result['can_edit']:
             result['draft'] = deepcopy(state)
             result['day'] = planned_view(db, cfg, attraction_id, work_date, state) if row.status == 'draft' else present(db, cfg, attraction_id, work_date, state, now)
             result['prestart_live'] = editable_live
+            if state.get('ruleVersion') == 2:
+                from app.rotation.forecast import opening_push7_candidates
+                eng = S.E.Engine(deepcopy(state), S.settings_of(cfg), S.DbHooks(db, attraction_id, work_date))
+                candidates = opening_push7_candidates(eng, planned=True)
+                by_target = {target: relay for relay, target in candidates.items()}
+                result['push7_recommendations'] = [
+                    {'target': pid, 'candidate': by_target.get(pid)} for pid in push7_target_slots(state).values()
+                ]
         else:
             result['frozen'] = True
             opening = state.get('dailyOpening')
@@ -194,7 +201,7 @@ def slot(state,key):
 def seven_relief_slots(state):
     plan=state['plan']
     if 'push7Targets' in plan:
-        positions={pid:key for key,pid in plan['seven'].items()}
+        positions={pid:key for key,pid in push7_target_slots(state).items()}
         return {positions[target]:pid for pid,target in plan['push7Targets'].items() if target in positions and pid in plan['push7']}
     order=seven_slot_order(state)
     return dict(zip(order,plan['push7']))
@@ -202,6 +209,21 @@ def seven_relief_slots(state):
 
 def seven_slot_order(state):
     return sorted(state['plan']['seven'],key=lambda key:slot(state,key)[0]['posts'][slot(state,key)[1]].get('seven') or 9)
+
+
+def push7_target_slots(state):
+    """Keep configured slots first, then other posts with a planned 07:00 worker."""
+    plan = state['plan']
+    targets = {key: plan['seven'][key] for key in seven_slot_order(state)}
+    if state.get('ruleVersion') == 2:
+        for line in state['lines']:
+            for i, _ in enumerate(line['posts']):
+                key = f"{line['id']}#{i}"
+                pid = plan['crew'].get(key)
+                p = state['persons'].get(pid)
+                if p and p['start'] == 420 and p['role'] == 'rotation' and not p.get('initialPool'):
+                    targets[key] = pid
+    return targets
 
 
 def normalize_seven_assignments(state, previous_slots=None):
@@ -217,6 +239,8 @@ def normalize_seven_assignments(state, previous_slots=None):
     # remaining list onto a different target when an intermediate post changes.
     assigned=set(plan['seven'].values())|set(plan['crew'].values())
     targets={previous_slots[key]:target for key,target in plan['seven'].items() if key in previous_slots}
+    ordinary_targets = {pid for key, pid in push7_target_slots(state).items() if key in plan['crew']}
+    targets.update({relay: target for relay, target in plan.get('push7Targets', {}).items() if target in ordinary_targets})
     plan['push7']=[pid for pid in plan['push7'] if pid not in assigned and pid in targets]
     plan['push7Targets']={pid:targets[pid] for pid in plan['push7']}
     return plan!=before
@@ -251,7 +275,8 @@ def fill_new_seven_slots(state, previous_slots, settings, read_history=None):
                          and p['start'] == S.E._m(settings['lineOpenAt']) and not p.get('absences')
                          and not p.get('initialPool') and p['pid'] not in assigned and p['pid'] not in plan['push7']),
                         key=lambda p: (S.E.push7_rank(history, p['pid']), p['name'], p['pid']))
-    bindings = {pid: plan['seven'][key] for key, pid in prior_relief.items()}
+    target_slots = push7_target_slots(state)
+    bindings = {pid: target_slots[key] for key, pid in prior_relief.items()}
     for target, p in zip(added, candidates):
         plan['push7'].append(p['pid'])
         bindings[p['pid']] = target
@@ -382,8 +407,6 @@ def edit(db,attraction_id,actor,work_date,body):
     if not valid_live and (type(revision) is not int or revision!=(row.version if row else 0)):raise S.ConfirmationConflict('班表已更新，请刷新后重新调整')
     action=body.get('action')
     if not isinstance(action,str):raise S.ActionError('操作必须是字符串')
-    if state and row.status=='draft' and not draft_editable(state,work_date,today,now) and action!='publish':
-        raise S.ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
     if action=='draft_generate':
         if body.get('force'):raise S.ActionError('每日班表不支持清空运行记录')
         S.do_draft_action(db,attraction_id,actor,{'action':action,'date':work_date})
@@ -395,9 +418,6 @@ def edit(db,attraction_id,actor,work_date,body):
         'draft_rename_post', 'draft_post') else ()
     def read_push7_history():
         return S.completed_push7(db, attraction_id, work_date)
-    upload=S.roster_upload_for(db,attraction_id,work_date)
-    if action=='publish' and upload and state.get('rosterUploadId') and state['rosterUploadId']!=upload.id:
-        raise S.ActionError('上传班表已更新，请重新生成并核对预排后启用')
     if action == 'draft_person':
         from app.rotation.forecast_service import shift_values
         pid = body.get('pid')

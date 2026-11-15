@@ -59,6 +59,20 @@ def test_roster_sick_leave_appears_in_board_and_screen_without_entering_rotation
             day = payload(db, rotation.attraction_id)['day']
             assert {p['pid'] for p in day['persons']} == {'23'}
             assert {p['pid']: p['label'] for p in day['off']} == {'21': '病假', '22': '病假', '24': 'OFF'}
+            assert next(p for p in day['off'] if p['pid'] == '22') == {
+                'pid': '22', 'name': '备注病假', 'label': '病假', 'start': 435, 'end': 975,
+            }
+
+        with S.transaction(db):
+            row = S.day_row(db, rotation.attraction_id, FUTURE)
+            state = S.day_state(row)
+            sick = next(p for p in state['off'] if p['pid'] == '22')
+            sick.pop('start')
+            sick.pop('end')
+            S.save_day(db, row, state)
+        day = S.board_payload(db, rotation.attraction_id)['day']
+        assert next(p for p in day['off'] if p['pid'] == '22')['end'] == 975
+        assert 'end' not in next(p for p in S.day_state(row)['off'] if p['pid'] == '22')
 
 
 def prepare(rotation):
@@ -776,24 +790,57 @@ def test_late_publish_labels_actual_capture_instead_of_claiming_earlier_snapshot
     assert result['opening_source']=='late_publish' and result['as_of']==600
 
 
-def test_unpublished_today_freezes_at_first_shift_but_can_still_publish(rotation):
-    draft(rotation)
-    before=read(rotation,DAY)
-    assert before['can_edit']
-    set_clock(rotation,DAY,before['first_start'])
-    frozen=read(rotation,DAY)
-    assert frozen['frozen'] and not frozen['can_edit'] and not frozen['can_generate']
-    assert frozen['can_publish']
-    for action in ('draft_rename_post','draft_swap_people','draft_generate','draft_discard'):
-        with rotation.factory() as db,pytest.raises(S.ActionError,match='已固定'):
-            D.edit(db,rotation.attraction_id,'test',DAY,{'action':action,'revision':frozen['revision']})
-    with rotation.factory() as db,pytest.raises(S.ActionError,match='已固定'):
-        S.do_draft_action(db,rotation.attraction_id,'test',{'action':'draft_role','date':DAY,'pid':'1','role':'excluded'})
+def test_replaced_roster_can_be_regenerated_and_manually_published_after_first_shift(rotation):
+    day = '2026-11-17'
+    aid = rotation.attraction_id
+    set_clock(rotation, '2026-11-16', 21 * 60)
     with rotation.factory() as db:
-        D.edit(db,rotation.attraction_id,'test',DAY,{'action':'publish','revision':frozen['revision']})
-    published=read(rotation,DAY)
-    assert published['frozen'] and not published['can_edit']
-    assert [[(p['name'],p['occ']) for p in l['posts']] for l in published['day']['lines']]==[[ (p['name'],p['occ']) for p in l['posts']] for l in frozen['day']['lines']]
+        def upload(pid):
+            parsed = {'people': {pid: {'name': f'测试员工{pid}'}},
+                      'days': {day: {pid: '05:00-15:30'}}, 'hours': {}}
+            return S.save_roster(db, aid, parsed, scope='week', file_name='同名班表.xlsx',
+                                 uploader_id=None, uploader_name='测试').id
+
+        first_upload = upload('101')
+        D.edit(db, aid, 'test', day, {'action': 'draft_generate', 'revision': 0})
+        original = D.day_payload(db, aid, day)
+        assert original['draft']['rosterUploadId'] == first_upload
+        assert original['draft']['dailyAutoStart']
+        new_upload = upload('102')
+
+    now = 7 * 60 + 11 + 2 / 60
+    set_clock(rotation, day, now)
+    with rotation.factory() as db:
+        for payload in (S.board_payload, S.screen_payload):
+            assert payload(db, aid)['day'] is None
+        assert S.board_payload(db, aid)['roster_changed']
+        stale = D.day_payload(db, aid, day)
+        assert stale['roster_changed'] and stale['can_edit'] and stale['can_generate']
+        assert not stale['can_publish'] and not stale['frozen']
+        assert stale['first_start'] == 300
+        assert set(stale['draft']['persons']) == {'101'}
+        assert not stale['times']
+        with pytest.raises(S.ActionError, match='旧预排已过期'):
+            D.edit(db, aid, 'test', day, {'action': 'publish', 'revision': stale['revision']})
+        with pytest.raises(S.ActionError, match='旧预排已过期'):
+            S.do_draft_action(db, aid, 'test', {'action': 'publish', 'date': day})
+        D.edit(db, aid, 'test', day, {'action': 'draft_generate', 'revision': stale['revision']})
+
+    with rotation.factory() as db:
+        current = D.day_payload(db, aid, day)
+        assert current['can_edit'] and current['can_publish'] and not current['roster_changed']
+        assert current['draft']['rosterUploadId'] == new_upload
+        assert set(current['draft']['persons']) == {'102'}
+        assert not current['draft']['dailyAutoStart']
+        assert S.board_payload(db, aid)['day'] is None
+        D.edit(db, aid, 'test', day, {'action': 'publish', 'revision': current['revision']})
+        active = S.board_payload(db, aid)['day']
+        assert active['status'] == 'live'
+        assert {p['pid'] for p in active['persons']} == {'102'}
+        published = D.day_payload(db, aid, day)
+        assert published['frozen'] and not published['can_edit']
+        assert published['opening_source'] == 'late_publish'
+        assert published['as_of'] == pytest.approx(now)
 
 
 def legacy_standard_day(rotation,formal=False,work_date=FUTURE):
@@ -910,12 +957,13 @@ def test_legacy_draft_opens_with_closed_spares_without_daily_page_visit(rotation
     before, _ = legacy_standard_day(rotation, work_date=DAY)
     with rotation.factory() as db:
         cfg = S.load_config(db, rotation.attraction_id)
+        with S.transaction(db):
+            row = S.day_row(db, rotation.attraction_id, DAY)
+            state = S.day_state(row)
+            # The fixture copies a plan from another date. Bind it to today's upload.
+            state.update(dailyAutoStart=automatic, rosterUploadId=S.roster_upload_for(db, rotation.attraction_id, DAY).id)
+            S.save_day(db, row, state)
         if automatic:
-            with S.transaction(db):
-                row = S.day_row(db, rotation.attraction_id, DAY)
-                state = S.day_state(row)
-                state.update(dailyAutoStart=True, rosterUploadId=S.roster_upload_for(db, rotation.attraction_id, DAY).id)
-                S.save_day(db, row, state)
             S.ensure_prearranged_day(db, cfg, rotation.attraction_id, DAY, 240)
         else:
             S.do_draft_action(db, rotation.attraction_id, 'test', {'action': 'publish', 'date': DAY})

@@ -509,10 +509,17 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
                 row=call(S.save_roster,db,aid,selected,scope=scope,file_name=filename,
                          uploader_id=user.id,uploader_name=user.name,only_date=date or None)
                 save_metadata(db,row,batch)
+                db.flush()
+                today, _ = S.clock_now(S.load_config(db, aid))
+                stale_draft_dates = []
                 # Refresh only identity facts for an already-running participant.
                 # Imported rosters never silently move posts or restart live shifts.
                 for day in batch['dates']:
                     running=S.day_row(db,aid,day)
+                    if running and running.status == 'draft' and day >= today:
+                        effective = S.roster_upload_for(db, aid, day)
+                        if effective and effective.id == row.id:
+                            stale_draft_dates.append(day)
                     if running and running.status=='live':
                         state=S.day_state(running)
                         facts={no:metadata for no,metadata in batch['identities'].items()
@@ -521,7 +528,8 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
                             state.setdefault('rosterIdentities',{}).update(facts)
                             S.save_day(db,running,state)
             return {'ok':True,'scope':row.scope,'start_date':row.start_date,'end_date':row.end_date,
-                    'entry_count':row.entry_count,'temporary_created':len(batch['new']),'skipped':batch['skipped']}
+                    'entry_count':row.entry_count,'temporary_created':len(batch['new']),'skipped':batch['skipped'],
+                    'stale_draft_dates':stale_draft_dates}
         except IntegrityError as exc:
             db.rollback()
             raise HTTPException(409,'人员身份刚刚变化，请重新预检班表') from exc

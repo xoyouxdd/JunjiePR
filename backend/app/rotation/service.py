@@ -231,6 +231,11 @@ def roster_upload_for(db: Session, attraction_id: int, day: str) -> RotationRost
     return None
 
 
+def draft_roster_changed(db: Session, attraction_id: int, day: str, state: dict) -> bool:
+    upload = roster_upload_for(db, attraction_id, day)
+    return upload is not None and state.get('rosterUploadId') != upload.id
+
+
 def roster_for(db: Session, attraction_id: int, day: str) -> dict | None:
     """把某天的名单转成引擎使用的结构。"""
     RotationRosterEntry = tables_for(db).RotationRosterEntry
@@ -312,6 +317,25 @@ def roster_summary(db: Session, attraction_id: int, day: str) -> dict:
         "hours": roster["hours"].get(day),
         "people": people,
     }
+
+
+def off_people_view(db: Session, attraction_id: int, state: dict) -> list[dict]:
+    off = state.get('off', [])
+    missing_shifts = {p['pid'] for p in off if p['label'].strip().lower() in ('病假', 'sl') and 'start' not in p}
+    upload_id = state.get('rosterUploadId')
+    if not missing_shifts or not upload_id:
+        return off
+    entry = tables_for(db).RotationRosterEntry
+    rows = db.query(entry.employee_no, entry.cell_raw).filter(
+        entry.attraction_id == attraction_id, entry.upload_id == upload_id,
+        entry.work_date == state['date'], entry.employee_no.in_(missing_shifts),
+    )
+    shifts = {}
+    for pid, cell in rows:
+        shift = classify(cell)
+        if shift.get('label') == '病假' and 'start' in shift:
+            shifts[pid] = {'start': shift['start'], 'end': shift['end']}
+    return [{**p, **shifts.get(p['pid'], {})} for p in off]
 
 
 # ---------------------------------------------------------------- 本周统计
@@ -1039,7 +1063,7 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
                                if state['status'] == 'live' and not d.get('owner')],
         "lines": lines_view(eng),
         "persons": [person_view(eng, p, now, taken) for p in state["persons"].values()],
-        "off": state.get("off", []),
+        "off": off_people_view(db, row.attraction_id, state),
         "alerts": eng.alerts(now) if state["status"] == "live" else [],
         "notices": state.get("notices", [])[-10:],
         "plan": state["plan"],
@@ -1066,12 +1090,11 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
             do_draft_action(db, attraction_id, 'system', {"action": "draft_generate", "date": day})
             row = day_row(db, attraction_id, day)
         state = day_state(row)
-        upload=roster_upload_for(db,attraction_id,day)
-        if state.get('dailyAutoStart') and upload and state.get('rosterUploadId')!=upload.id:
+        if draft_roster_changed(db, attraction_id, day, state):
             # Never run a superseded roster or silently overwrite manual adjustments.
             return
         from app.rotation import daily as D
-        if D.draft_editable(state, day, day, minute):
+        if D.before_first_start(state, day, day, minute):
             D.fill_prestart_spares(state)
         remember_initial_draft(state, cfg)
         eng, hooks = engine_for(db, cfg, row, state)
@@ -1108,6 +1131,7 @@ def board_payload(db: Session, attraction_id: int) -> dict:
         out["day"] = live_view(db, cfg, row, minute)
     elif row and row.status == "draft":
         out["draft"] = day_state(row)
+        out["roster_changed"] = draft_roster_changed(db, attraction_id, day, out["draft"])
     return out
 
 
@@ -1587,10 +1611,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
         except ValueError as exc:
             raise ActionError("日期格式需为 YYYY-MM-DD") from exc
         row = day_row(db, attraction_id, day)
-        if row and row.status == 'draft' and act != 'publish' and not body.get('force'):
-            from app.rotation.daily import draft_editable
-            if not draft_editable(day_state(row), day, clock_day, now):
-                raise ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
+        if row and row.status == 'draft' and day < clock_day and act != 'publish' and not body.get('force'):
+            raise ActionError('往日班表只读，不能修改')
         if act == "draft_generate":
             if row and any(x.get('hold') for L in day_state(row).get('lines', []) for x in L['posts']):
                 raise ActionError('当日还有定岗人员，请先取消定岗再重新生成班表')
@@ -1675,9 +1697,9 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                     raise ActionError("名单里没有这个人")
             plan[body["kind"]] = pids
             if body['kind']=='push7' and 'targets' in body:
-                from app.rotation.daily import seven_slot_order
+                from app.rotation.daily import push7_target_slots
                 targets=body['targets']
-                expected=[plan['seven'][key] for key in seven_slot_order(state)]
+                expected=list(push7_target_slots(state).values())
                 if targets!=expected or len(targets)!=len(body.get('pids',[])):
                     raise ConfirmationConflict('7点岗位或接替对象已变化，请刷新预排')
                 bindings={}
@@ -1713,10 +1735,12 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
         elif act == "publish":
             if day != clock_day:
                 raise ActionError(f"只能发布当天（{clock_day}）的轮岗；测试时请先把测试时钟调到 {day}")
+            if draft_roster_changed(db, attraction_id, day, state):
+                raise ActionError('上传班表已更新，旧预排已过期。请重新生成并核对预排后启用')
             hooks = DbHooks(db, attraction_id, day)
             hooks.now = now
             from app.rotation import daily as D
-            if D.draft_editable(state, day, clock_day, now):
+            if D.before_first_start(state, day, clock_day, now):
                 D.fill_prestart_spares(state)
             remember_initial_draft(state, cfg)
             eng = E.Engine(state, state["initialSettings"], hooks)

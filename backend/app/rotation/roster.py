@@ -9,6 +9,8 @@ from app.employee_numbers import employee_number_cell
 NS = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
 WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+SHIFT_RE = re.compile(r'^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(.*)$', re.S)
+SICK_LEAVE_RE = re.compile(r'\bSL\b|病假', re.I)
 
 # 注释中出现这些词：当天不进入轮岗，单独列出
 EXCLUDE_WORDS = ['OJT', 'ZPD', '考试', 'Open', 'AP M&G', 'summer break']
@@ -28,13 +30,45 @@ def _text(node):
     return ''.join(t.text or '' for t in node.iter('{%s}t' % NS['m']))
 
 
+def _strike_enabled(strike):
+    return strike is not None and strike.get('val', '1').lower() not in ('0', 'false', 'off')
+
+
+def _strike_styles(z):
+    if 'xl/styles.xml' not in z.namelist():
+        return set()
+    root = ET.fromstring(z.read('xl/styles.xml'))
+    fonts = {str(i) for i, font in enumerate(root.findall('m:fonts/m:font', NS))
+             if _strike_enabled(font.find('m:strike', NS))}
+    return {str(i) for i, style in enumerate(root.findall('m:cellXfs/m:xf', NS))
+            if style.get('fontId', '0') in fonts}
+
+
+def _rich_shift_text(node):
+    value = _text(node)
+    match = SHIFT_RE.match(value)
+    if not match or SICK_LEAVE_RE.search(match.group(3)):
+        return value
+    start, stop = match.start(1), match.end(2)
+    offset = 0
+    for run in node.findall('m:r', NS):
+        end = offset + len(_text(run))
+        if end > start and offset < stop and not _strike_enabled(run.find('m:rPr/m:strike', NS)):
+            return value
+        if end >= stop:
+            return value + '\nSL'
+        offset = end
+    return value
+
+
 def read_xlsx(path_or_file):
     """返回 {sheet_name: [[cell,...], ...]}，数值保持 float，字符串保持 str。"""
     z = zipfile.ZipFile(path_or_file)
+    strike_styles = _strike_styles(z)
     shared = []
     if 'xl/sharedStrings.xml' in z.namelist():
         root = ET.fromstring(z.read('xl/sharedStrings.xml'))
-        shared = [_text(si) for si in root.findall('m:si', NS)]
+        shared = [_rich_shift_text(si) for si in root.findall('m:si', NS)]
     wb = ET.fromstring(z.read('xl/workbook.xml'))
     rels = ET.fromstring(z.read('xl/_rels/workbook.xml.rels'))
     target = {r.get('Id'): r.get('Target') for r in rels}
@@ -58,7 +92,8 @@ def read_xlsx(path_or_file):
                 if typ == 's' and v is not None:
                     val = shared[int(v.text)]
                 elif typ == 'inlineStr':
-                    val = _text(c)
+                    inline = c.find('m:is', NS)
+                    val = _rich_shift_text(inline) if inline is not None else ''
                 elif v is None:
                     val = None
                 elif typ in ('str', 'e'):
@@ -70,6 +105,10 @@ def read_xlsx(path_or_file):
                         val = float(v.text)
                     except (TypeError, ValueError):
                         val = v.text
+                if c.get('s', '0') in strike_styles and isinstance(val, str):
+                    shift = SHIFT_RE.match(val)
+                    if shift and not SICK_LEAVE_RE.search(shift.group(3)):
+                        val += '\nSL'
                 while len(cells) <= ci:
                     cells.append(None)
                 cells[ci] = val
@@ -91,23 +130,19 @@ def fmt(m):
     return '%02d:%02d' % ((m // 60) % 24, m % 60)
 
 
-SHIFT_RE = re.compile(r'^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(.*)$', re.S)
-SICK_LEAVE_RE = re.compile(r'\bSL\b|病假', re.I)
-
-
 def classify(cell):
     """把一个单元格解释为当天安排。"""
     s = '' if cell is None else str(cell).strip()
     if not s:
         return {'kind': 'off', 'label': ''}
-    if SICK_LEAVE_RE.search(s):
-        return {'kind': 'off', 'label': '病假'}
     m = SHIFT_RE.match(s)
     if not m:
-        return {'kind': 'off', 'label': s.replace('\n', ' ')}
+        return {'kind': 'off', 'label': '病假' if SICK_LEAVE_RE.search(s) else s.replace('\n', ' ')}
     start, end = hm(m.group(1)), hm(m.group(2))
     if end <= start:
         end += 1440
+    if SICK_LEAVE_RE.search(m.group(3)):
+        return {'kind': 'off', 'label': '病假', 'start': start, 'end': end}
     note = re.sub(r'\s+', ' ', m.group(3)).strip()
     info = {'start': start, 'end': end, 'note': note, 'tags': [], 'absences': []}
     low = note.lower()

@@ -171,7 +171,10 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
         base = roster['people'].get(pid, {'name': pid, 'type': '', 'mark': ''})
         if info['kind'] == 'off':
             if info.get('label'):
-                off.append({'pid': pid, 'name': base['name'], 'label': info['label']})
+                entry = {'pid': pid, 'name': base['name'], 'label': info['label']}
+                if 'start' in info:
+                    entry.update(start=info['start'], end=info['end'])
+                off.append(entry)
             continue
         persons[pid] = {
             'pid': pid, 'name': base['name'], 'type': base.get('type', ''), 'mark': base.get('mark', ''),
@@ -585,11 +588,11 @@ class Engine:
                                   'state': state, 'settings': deepcopy(self.S)}
         return True
 
-    def opening_rest_candidate(self, p):
+    def opening_rest_candidate(self, p, push7=None):
         """Unseated 07:15 crew rest at shift start; push7 and seated crew keep their flow."""
         plan = self.d['plan']
         return (p['start'] in ((420,435) if self.d.get('taskWorkflow') else (435,)) and p['role'] == 'rotation'
-                and p['pid'] not in plan['push7']
+                and p['pid'] not in (plan['push7'] if push7 is None else push7)
                 and all(p['pid'] not in plan[kind].values() for kind in ('crew', 'seven'))
                 and not any(a['start'] <= p['start'] < a['end'] for a in p.get('absences', [])))
 
@@ -601,7 +604,7 @@ class Engine:
             p.update(state='ready', readySince=p['readyAt'])
         self.h.log('initial_rest', 'system', p['pid'], None, None, {'start': start, 'until': p['readyAt']})
 
-    def _shift_start(self, p, now, seat, seat7):
+    def _shift_start(self, p, now, seat, seat7, push7=None):
         t = p['start']
         if p['role'] == 'op':
             p['state'] = 'op'
@@ -630,13 +633,13 @@ class Engine:
                 if hold and hold['pid'] == p['pid']:
                     self.act_post_hold(lid, i, p['pid'], True, hold['reason'], t, hold['by'])
                 return
-        if self.opening_rest_candidate(p):
+        if self.opening_rest_candidate(p, push7):
             self.start_opening_rest(p, now)
             return
         p['state'] = 'ready'
         p['readyAt'] = now
         p['readySince'] = now
-        if p['pid'] in self.d['plan']['push7']:
+        if p['pid'] in (self.d['plan']['push7'] if push7 is None else push7):
             p['flags'].append('推7点')
 
     # -------- 下线
@@ -918,7 +921,8 @@ class Engine:
     def _push7_pairs(self):
         plan = self.d['plan']
         if 'push7Targets' in plan:
-            actual=set(plan['seven'].values())
+            from app.rotation.daily import push7_target_slots
+            actual=set(push7_target_slots(self.d).values())
             return [(i,pid,plan['push7Targets'][pid]) for i,pid in enumerate(plan['push7'])
                     if plan['push7Targets'].get(pid) in actual]
         order = sorted(plan['seven'], key=self._seven_order)
