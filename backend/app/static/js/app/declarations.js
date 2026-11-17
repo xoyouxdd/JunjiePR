@@ -81,7 +81,34 @@ async function renderDeclarationStatistics(){
   const circleOptions=initial.attractions.map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join('');
   const typeOptions=initial.types.map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join('');
   const canExport=has('DECLARATION_STATS_EXPORT');
-  if(!request.write(`<div class="section-gap declaration-statistics-page"><section class="panel"><div class="statistics-page-heading"><h2>声明登记统计</h2><span class="access-mode ${canExport?'can-export':'read-only'}">${canExport?'可导出':'只读'}</span></div><p>汇总全部处分等级的登记事件；景点圈按登记时归属统计，升级关联记录不重复计数。</p><form id="declarationFilter" class="statistics-filter declaration-filter"><label>月份<input name="month" type="month" value="${monthNow()}" required></label><label>景点圈<select name="attraction_id"><option value="">全部景点圈</option>${circleOptions}</select></label><label>处分等级<select name="level_id"><option value="">全部等级</option>${levelOptions}</select></label><label>处分类型<select name="type_id"><option value="">全部类型</option>${typeOptions}</select></label><label>业务状态<select name="status" title="默认全部状态包含已生效、审核中、待补材料"><option value="current">全部状态</option><option value="">全部含作废</option>${['已生效','待补材料','审核中','已作废'].map(name=>`<option value="${name}">${name}</option>`).join('')}</select></label><div class="declaration-search"><label for="declarationEmployeeSearch">员工搜索</label><div class="declaration-search-control"><input id="declarationEmployeeSearch" name="keyword" placeholder="输入姓名或工号，支持模糊查询" autocomplete="off" inputmode="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="declarationEmployeeResults"><div id="declarationEmployeeResults" class="employee-search-results" role="listbox" aria-label="匹配员工" hidden></div></div><small class="field-hint" id="declarationEmployeeHint" aria-live="polite">可输入部分姓名或工号，也可从候选中选择</small></div><div class="statistics-actions"><button type="submit" class="primary">查询</button>${canExport?'<button type="button" class="secondary" id="declarationExport">导出 Excel</button>':''}</div></form></section><div id="declarationResults"></div></div>`))return;
+  const defaultSearchHint='可输入部分姓名或工号，也可从候选中选择';
+  if(!request.write(`<div class="section-gap declaration-statistics-page">
+    <section class="panel">
+      <div class="statistics-page-heading"><h2>声明登记统计</h2><span class="access-mode ${canExport?'can-export':'read-only'}">${canExport?'可导出':'只读'}</span></div>
+      <p>汇总全部处分等级的登记事件；景点圈按登记时归属统计，升级关联记录不重复计数。</p>
+      <form id="declarationFilter" class="statistics-filter declaration-filter">
+        <label>月份<input name="month" type="month" value="${monthNow()}" required></label>
+        <label>景点圈<select name="attraction_id"><option value="">全部景点圈</option>${circleOptions}</select></label>
+        <label>处分等级<select name="level_id"><option value="">全部等级</option>${levelOptions}</select></label>
+        <label>处分类型<select name="type_id"><option value="">全部类型</option>${typeOptions}</select></label>
+        <label>业务状态<select name="status" title="默认全部状态包含已生效、审核中、待补材料"><option value="current">全部状态</option><option value="">全部含作废</option>${['已生效','待补材料','审核中','已作废'].map(name=>`<option value="${name}">${name}</option>`).join('')}</select></label>
+        <div class="declaration-search">
+          <label for="declarationEmployeeSearch">员工搜索</label>
+          <div class="declaration-search-control">
+            <input id="declarationEmployeeSearch" name="keyword" placeholder="输入姓名或工号，支持模糊查询" autocomplete="off" inputmode="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="declarationEmployeeResults" aria-describedby="declarationEmployeeHint">
+            <div id="declarationEmployeeResults" class="employee-search-results" role="listbox" aria-label="匹配员工" hidden></div>
+          </div>
+        </div>
+        <small class="field-hint declaration-search-hint" id="declarationEmployeeHint" aria-live="polite">${defaultSearchHint}</small>
+        <div class="statistics-actions">
+          <button type="submit" class="primary">查询</button>
+          <button type="reset" class="secondary">重置</button>
+          ${canExport?'<button type="button" class="secondary" id="declarationExport">导出 Excel</button>':''}
+        </div>
+      </form>
+    </section>
+    <div id="declarationResults"></div>
+  </div>`))return;
   const form=document.getElementById('declarationFilter'),host=document.getElementById('declarationResults');
   const isCurrent=()=>request.isCurrent()&&app.contains(form);
   const ensureCurrentEdit=()=>{if(!isCurrent()||!has('SYSTEM_ADMIN'))throw new Error('页面或账号已变化，请关闭弹窗后重新查询');};
@@ -196,10 +223,11 @@ async function renderDeclarationStatistics(){
   };
   const params=()=>new URLSearchParams([...new FormData(form)].filter(([,value])=>value));
   const search=form.elements.keyword,choices=form.querySelector('#declarationEmployeeResults'),searchHint=form.querySelector('#declarationEmployeeHint');
+  const searchArea=search.closest('.declaration-search'),actions=form.querySelector('.statistics-actions');
   let searchTimer,searchSequence=0,searchController;
   const closeSearch=()=>{clearTimeout(searchTimer);++searchSequence;searchController?.abort();choices.hidden=true;choices.replaceChildren();search.setAttribute('aria-expanded','false');};
   search.addEventListener('input',()=>{
-    closeSearch();searchHint.textContent='可输入部分姓名或工号，也可从候选中选择';
+    closeSearch();searchHint.textContent=defaultSearchHint;
     if(!search.value.trim())return;
     const id=searchSequence,filters=params();
     searchTimer=setTimeout(async()=>{
@@ -216,12 +244,18 @@ async function renderDeclarationStatistics(){
       }catch(error){if(error.name!=='AbortError'&&id===searchSequence&&isCurrent())searchHint.textContent='搜索失败，可直接点击查询重试';}
     },120);
   });
-  form.addEventListener('change',event=>{if(event.target!==search){closeSearch();searchHint.textContent='可输入部分姓名或工号，也可从候选中选择';}});
-  const searchArea=search.closest('.declaration-search');
+  form.addEventListener('change',event=>{if(event.target!==search){closeSearch();searchHint.textContent=defaultSearchHint;}});
+  form.addEventListener('reset',()=>{
+    closeSearch();
+    searchHint.textContent=defaultSearchHint;
+    search.blur();
+  });
   // Keep input focus through mouse/synthesized touch mousedown so WebKit's
   // null-relatedTarget blur cannot remove the candidate before its click.
   choices.addEventListener('mousedown',event=>{if(event.target.closest('[data-search-result]'))event.preventDefault();});
-  const outsideSearch=event=>{if(!isCurrent()){disposeSearch();return;}if(!searchArea.contains(event.target))closeSearch();};
+  // Keep the action row under the pointer until the click when closing in-flow suggestions.
+  actions.addEventListener('mousedown',event=>{if(!choices.hidden&&searchArea.contains(document.activeElement))event.preventDefault();});
+  const outsideSearch=event=>{if(!isCurrent()){disposeSearch();return;}if(!searchArea.contains(event.target)&&!actions.contains(event.target))closeSearch();};
   const disposeSearch=()=>{closeSearch();document.removeEventListener('pointerdown',outsideSearch,true);unregisterPageCleanup(disposeSearch);if(disposeDeclarationSearch===disposeSearch)disposeDeclarationSearch=null;};
   document.addEventListener('pointerdown',outsideSearch,true);
   disposeDeclarationSearch=registerPageCleanup(disposeSearch);
@@ -231,6 +265,7 @@ async function renderDeclarationStatistics(){
   form.onsubmit=event=>{event.preventDefault();closeSearch();void load();};
   if(canExport)document.getElementById('declarationExport').onclick=async event=>{
     const button=event.currentTarget,filters=params();
+    closeSearch();
     const confirmed=await confirmModal('导出声明登记统计',`<p>将按当前筛选条件导出 ${esc(filters.get('month'))} 的景点圈、等级汇总和逐条明细。</p>`,'导出 Excel');
     if(!confirmed||!isCurrent()||!has('DECLARATION_STATS_EXPORT')||button.disabled)return;
     button.disabled=true;

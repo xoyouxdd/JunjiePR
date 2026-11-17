@@ -6,6 +6,12 @@ from app.version import APP_VERSION
 
 # audiences: role codes, or "all". permissions: optional extra match on user.permissions.
 RELEASES: list[dict] = [
+    {"version": "2026.11.18.1", "date": "2026-11-18", "status": "candidate",
+     "items": [
+         {"summary": "轮岗班前安排与下班状态修复", "detail": "班前人工安排的临时状态在正式开班时恢复正常班时判断，避免班次结束后仍被视为可继续轮岗。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]},
+         {"summary": "签卡复核提醒与跟进", "detail": "待复核超过48小时提醒对应复核人；超过7天或无人复核的签卡进入最高管理员跟进列表。", "audiences": ["SYSTEM_ADMIN"]},
+         {"summary": "景点数据导出前确认范围", "detail": "导出前显示筛选范围、员工人数及 LOA 人数，确认后进入后台导出。", "audiences": ["all"], "permissions": ["DATA_EXPORT"]},
+     ]},
     {"version": "2026.11.16.1", "date": "2026-11-16", "status": "candidate",
      "items": [{"summary": "轮岗推7点与班表病假识别", "detail": "每日预排显示推7点的接替建议，班表保留病假人员原班时并识别带删除线的班时。更新有效班表后，旧预排须重新生成并核对才能启用。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]}]},
     {"version": "2026.11.15.1", "date": "2026-11-15", "status": "candidate",

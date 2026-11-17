@@ -22,28 +22,54 @@ if(!file.startsWith(root+path.sep)&&!file.startsWith(before+path.sep)||!fs.exist
 async function checkFilterAlignment(page,width) {
   const boxes=await page.locator('#declarationFilter').evaluate(form=>{
     const bounds=el=>{const {x,y,right,bottom,height}=el.getBoundingClientRect();return {x,y,right,bottom,height};};
+    const hint=form.querySelector('#declarationEmployeeHint');
     return {
       form:bounds(form),
+      hint:bounds(hint),
+      hintSeparate:hint.parentElement===form&&form.elements.keyword.getAttribute('aria-describedby')===hint.id,
       controls:Object.fromEntries([...form.querySelectorAll('input,select,button')].map(el=>[el.name||el.id||el.type,bounds(el)])),
     };
   });
   const c=boxes.controls;
   const same=(a,b)=>Math.abs(a-b)<1;
   assert(Object.values(c).every(box=>box.x>=boxes.form.x-1&&box.right<=boxes.form.right+1),width+' controls exceed filter bounds');
-  assert(Object.values(c).every(box=>same(box.height,width<=760?46:44)),width+' controls have inconsistent heights: '+JSON.stringify(Object.fromEntries(Object.entries(c).map(([key,box])=>[key,box.height]))));
-  assert(same(c.submit.y,c.declarationExport.y),width+' action buttons are misaligned');
+  assert([c.month,c.attraction_id,c.level_id,c.type_id,c.status,c.keyword].every(box=>same(box.height,width<=760?46:44)),width+' input heights are inconsistent');
+  assert(boxes.hintSeparate&&boxes.hint.y>=c.keyword.bottom&&c.submit.y>=boxes.hint.bottom,width+' hint and actions must occupy their own rows');
+  assert(same(c.submit.y,c.reset.y),width+' query and reset are misaligned');
   if(width>=1200) {
     assert([c.attraction_id,c.level_id,c.type_id].every(box=>same(box.y,c.month.y)),width+' first row is misaligned');
-    assert([c.keyword,c.submit,c.declarationExport].every(box=>same(box.y,c.status.y)),width+' second row is misaligned');
+    assert(same(c.keyword.y,c.status.y),width+' second row is misaligned');
   } else if(width>760) {
     assert([c.type_id,c.keyword].every(box=>same(box.y,c.status.y)),width+' tablet fields are misaligned');
-    assert(c.submit.y>=c.keyword.bottom,width+' tablet actions overlap the fields');
   } else {
     assert(c.keyword.y>=c.status.bottom&&c.submit.y>=c.keyword.bottom,width+' stacked fields or actions overlap');
     assert(same(c.status.x,c.keyword.x)&&same(c.status.right,c.keyword.right),width+' stacked fields have inconsistent widths');
+    assert(c.submit.height>=48&&c.reset.height>=48&&c.submit.right<=c.reset.x,width+' query and reset need separate touch targets: '+JSON.stringify({query:c.submit,reset:c.reset}));
+    assert(c.declarationExport.y>=Math.max(c.submit.bottom,c.reset.bottom),width+' export must sit below query and reset');
   }
 }
 
-(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));try{for(const [engine,type,opts] of [['edge',chromium,{channel:'msedge'}],['webkit',webkit,{}]]){const browser=await type.launch({...opts,headless:true});try{for(const width of [1440,1200,1199,820,768,390,320]){for(const version of compare&&engine==='edge'&&[1440,390].includes(width)?['before','after']:['after']){const page=await browser.newPage({viewport:{width,height:1000},deviceScaleFactor:1,hasTouch:width===820}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.route('**/api/declaration-statistics**',route=>route.fulfill({json:data}));await page.goto('http://127.0.0.1:'+server.address().port+'/?version='+version);await page.waitForFunction(()=>window.ready);if(version==='after')await checkFilterAlignment(page,width);await page.locator('[data-declaration-circle="1"]').click();const visible=version==='before'?page.locator(width<=760?'.declaration-mobile':'.declaration-desktop'):page.locator('[data-declaration-circle-detail="1"]');if(version==='after'){const summaries=visible.locator('[data-declaration-list-row] > summary');assert.equal(await summaries.count(),4);assert.equal(await visible.locator('.declaration-record').count(),0);for(const summary of await summaries.all()){await summary.click();await visible.locator('.declaration-record:visible').waitFor();}await summaries.first().click();}assert.equal(await visible.locator('[data-correct-type]').count(),4);assert.equal(await visible.locator('[data-declaration-action="restore"]').count(),1);assert.ok((await visible.innerText()).includes('岗位交接时'));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,engine+' '+width+' overflow: '+JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(el=>el.scrollWidth>el.clientWidth+1).map(el=>({tag:el.tagName,name:el.name,cls:el.className,text:el.tagName==='LABEL'?el.textContent.slice(0,100):'',right:el.getBoundingClientRect().right,width:el.getBoundingClientRect().width,scroll:el.scrollWidth,client:el.clientWidth})))));
+async function checkReset(page) {
+  const month=page.locator('#declarationFilter [name=month]');
+  const defaults=await month.inputValue();
+  await month.fill('2026-10');
+  for(const key of ['attraction_id','level_id','type_id'])await page.selectOption('#declarationFilter [name='+key+']','1');
+  await page.selectOption('#declarationFilter [name=status]','待补材料');
+  const search=page.locator('#declarationEmployeeSearch');
+  await search.fill('陈');
+  await page.locator('#declarationEmployeeResults').waitFor();
+  await page.getByRole('button',{name:'重置',exact:true}).tap();
+  assert.equal(await month.inputValue(),defaults);
+  for(const key of ['attraction_id','level_id','type_id','keyword'])assert.equal(await page.locator('#declarationFilter [name='+key+']').inputValue(),'');
+  assert.equal(await page.locator('#declarationFilter [name=status]').inputValue(),'current');
+  assert.equal(await search.getAttribute('aria-expanded'),'false');
+  assert(await page.locator('#declarationEmployeeResults').isHidden());
+  assert.equal(await page.locator('#declarationEmployeeHint').textContent(),'可输入部分姓名或工号，也可从候选中选择');
+  const request=page.waitForRequest(r=>r.url().includes('/api/declaration-statistics?'));
+  await page.getByRole('button',{name:'查询',exact:true}).tap();
+  assert.deepEqual(Object.fromEntries(new URL((await request).url()).searchParams),{month:defaults,status:'current'});
+}
+
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));try{for(const [engine,type,opts] of [['edge',chromium,{channel:'msedge'}],['webkit',webkit,{}]]){const browser=await type.launch({...opts,headless:true});try{for(const width of [1440,1200,1199,820,768,390,320]){for(const version of compare&&engine==='edge'&&[1440,390].includes(width)?['before','after']:['after']){const page=await browser.newPage({viewport:{width,height:1000},deviceScaleFactor:1,hasTouch:width===820||width===390}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.route('**/api/declaration-statistics**',route=>route.fulfill({json:data}));await page.goto('http://127.0.0.1:'+server.address().port+'/?version='+version);await page.waitForFunction(()=>window.ready);if(version==='after'){await checkFilterAlignment(page,width);if(width===390)await checkReset(page);}await page.locator('[data-declaration-circle="1"]').click();const visible=version==='before'?page.locator(width<=760?'.declaration-mobile':'.declaration-desktop'):page.locator('[data-declaration-circle-detail="1"]');if(version==='after'){const summaries=visible.locator('[data-declaration-list-row] > summary');assert.equal(await summaries.count(),4);assert.equal(await visible.locator('.declaration-record').count(),0);for(const summary of await summaries.all()){await summary.click();await visible.locator('.declaration-record:visible').waitFor();}await summaries.first().click();}assert.equal(await visible.locator('[data-correct-type]').count(),4);assert.equal(await visible.locator('[data-declaration-action="restore"]').count(),1);assert.ok((await visible.innerText()).includes('岗位交接时'));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,engine+' '+width+' overflow: '+JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(el=>el.scrollWidth>el.clientWidth+1).map(el=>({tag:el.tagName,name:el.name,cls:el.className,text:el.tagName==='LABEL'?el.textContent.slice(0,100):'',right:el.getBoundingClientRect().right,width:el.getBoundingClientRect().width,scroll:el.scrollWidth,client:el.clientWidth})))));
 if(width===820){assert.equal(await page.evaluate(()=>matchMedia('(pointer: coarse)').matches),true);assert.ok(await visible.locator('[data-correct-type]:visible').first().evaluate(el=>el.getBoundingClientRect().height>=44&&parseFloat(getComputedStyle(el).fontSize)>=16));}
 if(engine==='edge'&&[1440,390].includes(width)){await page.screenshot({path:path.join(out,`declaration-${version}-${width}.png`),fullPage:true});if(width===390)await visible.locator('.declaration-record:visible').first().screenshot({path:path.join(out,`declaration-mobile-card-${version}.png`)});if(width===1440)await visible.screenshot({path:path.join(out,`declaration-details-${version}.png`)});await fs.promises.writeFile(path.join(out,`declaration-snapshot-${version}-${width}.html`),await page.content());}assert.deepEqual(errors,[]);await page.close();}}console.log(engine+': filter alignment and document bounds from 320 to 1440px, with touch checks at 820px passed');}finally{await browser.close();}}}finally{server.closeAllConnections();await new Promise(r=>server.close(r));}})().catch(e=>{console.error(e);process.exitCode=1;});

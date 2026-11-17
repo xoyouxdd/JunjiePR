@@ -55,6 +55,50 @@ def person(r, pid='5'):
     return next(p for p in board(r)['persons'] if p['pid'] == pid)
 
 
+def test_early_0715_staff_waiting_for_rest_is_done_thirty_minutes_before_end(current):
+    aid = current.attraction_id
+    early = 426 + 17/60
+    with current.factory() as db, S.transaction(db):
+        cfg = S.load_config(db, aid)
+        row = S.day_row(db, aid, DAY)
+        state = S.day_state(row)
+        S.set_sim_clock(cfg, DAY, early, paused=True)
+        state['lastTick'] = early
+        state['persons']['5'].update(state='notyet', start=435, end=960, readyAt=None, assign=None)
+        add_later_shifts(state['persons'], (945, 975))
+        S.save_day(db, row, state)
+
+    act(current, {'action': 'place', 'pid': '5', 'line': 'A', 'i': 0, 'place_mode': 'swap',
+                  'expected_snapshot': board(current)['forecastSnapshot']})
+    assert person(current)['state'] == 'onpost'
+
+    def advance_to(minute):
+        with current.factory() as db, S.transaction(db):
+            cfg = S.load_config(db, aid)
+            row = S.day_row(db, aid, DAY)
+            S.set_sim_clock(cfg, DAY, minute, paused=True)
+            S.advance(db, cfg, row, S.day_state(row), minute)
+
+    advance_to(930 - 1/60)
+    act(current, {'action': 'pool', 'pid': '5', 'pool': 'pending'})
+    waiting = person(current)
+    assert waiting['canArrive']
+    old_token = waiting['confirmationTokens']['arrive']
+    advance_to(930)
+    advance_to(958 + 48/60)
+
+    manager = person(current)
+    with current.factory() as db:
+        screen = next(p for p in S.screen_payload(db, aid)['day']['persons'] if p['pid'] == '5')
+        member = S.member_payload(db, aid, '5')['person']
+    for view in (manager, screen, member):
+        assert view['state'] == 'done'
+        assert not view['canArrive'] and not view['canDepart']
+        assert view['readyAt'] is None and view['assign'] is None
+    with pytest.raises(S.ConfirmationConflict):
+        act(current, {'action': 'arrive', 'pid': '5', 'confirmation_token': old_token})
+
+
 @pytest.mark.parametrize('count,skip', [(6, ()), (2, ()), (6, ('快迎1', '铁马入口', '熊出口'))])
 def test_new_workday_prearranges_open_early_posts_in_priority_order(rotation, count, skip):
     names = ['迎宾', '快迎1', '小C', '铁马入口', '铁马检票1', '熊出口']

@@ -56,6 +56,26 @@ def test_statistics_split_frontline_and_supervisor_pages() -> None:
         assert trend.status_code == 200, trend.text
 
 
+def test_statistics_export_preview_matches_filters_and_requires_export_permission() -> None:
+    month = date.today().strftime("%Y-%m")
+    with TestClient(app) as client:
+        login(client, "SUPTEST01")
+        assert client.get("/api/statistics/export-preview", params={"month": month}).status_code == 403
+        login(client, "GSMTEST01")
+        for scope, has_supervisor_sheets in (({}, True), ({"keyword": "CMTEST01"}, False),
+                                             ({"title": "SUPERVISOR"}, False)):
+            filters = {"month": month, **scope}
+            stats = client.get("/api/statistics", params=filters)
+            preview = client.get("/api/statistics/export-preview", params=filters)
+            assert stats.status_code == preview.status_code == 200, preview.text
+            data = stats.json()
+            assert preview.json() == {
+                "employee_count": data["summary"]["employee_count"],
+                "loa_count": len(data["loa_rows"]),
+                "has_supervisor_sheets": has_supervisor_sheets,
+            }
+
+
 def test_pr_ranking_has_a_supervisor_population() -> None:
     start = date.today().replace(day=1).isoformat()
     end = date.today().isoformat()

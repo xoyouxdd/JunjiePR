@@ -552,8 +552,8 @@ def remove(eng, p, now):
 
 
 def restore(p, now):
-    p['manualRestored'] = bool(p.get('manualRestored') or now < p['start'] or now >= p['end']
-                               or p.get('state') in ('sick', 'done', 'excluded'))
+    if now < p['start'] or now >= p['end'] or p.get('state') in ('sick', 'done', 'excluded'):
+        p.update(manualRestored=True, manualRestoredAt=now)
     p['manualPaused'] = False
     p['role'] = 'rotation'
     p.pop('requestedExit', None)
@@ -895,6 +895,12 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
     if now >= 435 and any(p['start'] == 435 and p['state'] == 'notyet' for p in people):
         people.sort(key=lambda p: p['start'])
     for p in people:
+        # A pre-shift placement only overrides the clock until the shift starts.
+        # Older saved flags have no timestamp and expire at the same boundary.
+        if (p.get('manualRestored') and now >= p['start']
+                and p.get('manualRestoredAt', -1) < p['start']):
+            p['manualRestored'] = False
+            p.pop('manualRestoredAt', None)
         if p['state'] == 'notyet' and now >= p['start'] and not p.get('manualPaused'):
             initial = p.pop('initialPool', None)
             if initial:

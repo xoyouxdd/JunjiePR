@@ -381,3 +381,88 @@ def test_direct_review_action_details_paginate_every_pending_record() -> None:
         exhausted = client.get(path, params={"cursor": tenth_detail["next_cursor"]}).json()
         assert exhausted["total"] == 498 and exhausted["items"] == []
         assert client.get(path).json()["items"][0]["id"] == expected[1]
+
+
+def test_review_reminders_and_management_followup_keep_existing_scopes():
+    from app.v2_models import EmployeeActingDuty
+    from review_followup_fixture import seed_review_followup_cases
+
+    base = "/api/action-center"
+    management = f"{base}/overdue_review/details"
+    direct = f"{base}/recognition_review/details"
+    shared = f"{base}/supervisor_review/details"
+    with TestClient(app) as client:
+        now = datetime.now()
+
+        def switch(account, password="1234"):
+            client.post("/api/logout")
+            login(client, account, password)
+
+        def details(path):
+            response = client.get(path)
+            assert response.status_code == 200, response.text
+            return {row["id"]: row for row in response.json()["items"]}
+
+        def reminder():
+            return client.get(base).json()["overdue_review_reminder"]
+
+        def escalation_count():
+            items = client.get(base).json()["items"]
+            return next((row["count"] for row in items if row["type"] == "overdue_review"), 0)
+
+        switch("HR01", "HR123")
+        baseline = escalation_count()
+        ids = seed_review_followup_cases(now)
+        assert escalation_count() == baseline + 4
+        assert reminder() == 0
+        full = {key: row for key, row in details(management).items() if key in ids.values()}
+        assert set(full) == set(ids.values()) - {ids["direct_recent"]}
+        assert list(full)[0] == ids["direct_old"]
+        assert full[ids["unassigned"]]["unassigned"]
+        assert full[ids["unassigned"]]["waiting_hours"] < 48
+        assert full[ids["shared"]]["reviewer_name"] == "GSM 共同复核"
+        assert full[ids["shared_acting"]]["reviewer_name"] == "GSM / AM 共同复核"
+        assert not full[ids["shared_acting"]]["unassigned"]
+        assert set(details(management + "?escalated_only=true")) & set(ids.values()) == {
+            ids[key] for key in ("direct_old", "acting_old", "shared_acting", "unassigned")
+        }
+
+        switch("SUPTEST01")
+        assert reminder() == 2
+        assert ids["direct_recent"] in details(direct)
+        assert ids["acting_old"] not in details(direct)
+        assert client.get(management).status_code == 403
+
+        switch("TATEST01")
+        assert reminder() == 2
+        assert {ids["acting_old"], ids["acting_late"]} <= set(details(direct))
+
+        switch("GSMTEST01")
+        assert reminder() == 2
+        assert set(details(shared)) == {ids["shared"], ids["shared_acting"]}
+        switch("AMTEST01")
+        assert reminder() == 1
+        assert set(details(shared)) == {ids["shared_acting"]}
+
+        for account in ("CMTEST01", "OMTEST01", "HR-HEAT"):
+            enable_circle_hr_test_login()
+            switch(account)
+            assert reminder() == 0
+            for path in (direct, shared, management):
+                assert client.get(path).status_code == 403
+
+        with SessionLocal() as db:
+            acting = db.query(Employee).filter_by(employee_no="TATEST01").one()
+            duty = db.query(EmployeeActingDuty).filter_by(employee_id=acting.id).one()
+            duty.starts_on = (now.date() - timedelta(days=2)).isoformat()
+            duty.ends_on = (now.date() - timedelta(days=1)).isoformat()
+            db.commit()
+
+        switch("HR01", "HR123")
+        assert details(management)[ids["acting_old"]]["reviewer_no"] == "TAGSMTEST01"
+        switch("TAGSMTEST01")
+        assert reminder() == 2
+        assert details(direct)[ids["acting_old"]]["reviewer_no"] == "TAGSMTEST01"
+        switch("TATEST01")
+        assert reminder() == 0
+        assert client.get(direct).status_code == 403

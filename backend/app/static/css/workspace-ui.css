@@ -217,8 +217,6 @@
   #app[data-workspace-ui] :is(input[type=date],input[type=month])::-webkit-datetime-edit { min-width: 0; padding: 0; }
   #app[data-workspace-ui] :is(.statistics-actions,.pr-ranking-actions) { grid-column: 1/-1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
   #app[data-workspace-ui] .declaration-filter > label { line-height: 20px; }
-  #app[data-workspace-ui] .declaration-filter .statistics-actions > button { min-height: 46px; }
-  #app[data-workspace-ui] .declaration-filter .statistics-actions > button:only-child { grid-column: 1/-1; }
   #app[data-workspace-ui] .statistics-actions button { min-width: 0; }
   #app[data-workspace-ui] :is(.entry-filter,.statistics-filter,.pr-ranking-filter) > button:last-child { grid-column: 1/-1; }
   #app[data-workspace-ui] .work-card { padding: 14px; }
@@ -332,7 +330,7 @@
   #app .video-card:hover { border-color: var(--primary); }
 }
 @media (max-width: 359px) {
-  #app[data-workspace-ui] :is(.entry-filter,.statistics-filter,.pr-ranking-filter) { grid-template-columns: minmax(0,1fr); }
+  #app[data-workspace-ui] :is(.entry-filter,.statistics-filter:not(.declaration-filter),.pr-ranking-filter) { grid-template-columns: minmax(0,1fr); }
 }
 .recent-export-history > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; cursor: pointer; color: var(--text-label); }
 .recent-export-history > summary span { margin-left: auto; color: var(--text-secondary); font-size: 13px; font-weight: 400; }

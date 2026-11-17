@@ -13,7 +13,9 @@ from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, 
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
 from app.month_closure import month_close_period_policy, month_close_work_queries, reserve_month_write
+from app.services.identity import roles_at
 from app.services.monthly_ranks import capture_month_ranks, prepare_rank_attendance
+from app.services.review_followup import PendingReview, REVIEW_REMINDER_AGE, pending_reviews_for_management, shared_review_label
 from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
 from app.routers._shared import (
     MATERIAL_COLLABORATOR_CODES,
@@ -118,24 +120,15 @@ def action_center_wait_hours(submitted_at: datetime, now: datetime) -> float:
 
 
 def action_center_recognition_details(
-    db: Session, rows: list[RecognitionRecord], now: datetime, *, current_reviewer: V2User | None = None,
+    db: Session, entries: list[PendingReview], now: datetime,
 ) -> list[dict]:
-    reviewer_ids = {row.assigned_reviewer_id for row in rows if row.assigned_reviewer_id} if current_reviewer is None else set()
-    reviewers = {
-        employee.id: employee
-        for employee in db.query(Employee).filter(Employee.id.in_(reviewer_ids)).all()
-    } if reviewer_ids else {}
+    reviewer_roles = roles_at(db, {entry.reviewer.id for entry in entries if entry.reviewer}, now.date())
     details = []
-    for row in rows:
-        if current_reviewer is None:
-            reviewer = reviewers.get(row.assigned_reviewer_id)
-            reviewer_role = role_at(db, reviewer.id) if reviewer else None
-        else:
-            reviewer = current_reviewer.employee
-            reviewer_role = current_reviewer.role
-        group = current_group_for_employee(db, row.employee_id)
+    for entry in entries:
+        row, reviewer = entry.row, entry.reviewer
+        reviewer_role = reviewer_roles.get(reviewer.id) if reviewer else None
         details.append({
-            "group_name": group.name if group else "未分组",
+            "group_name": entry.group_name,
             "id": row.id,
             "employee_name": row.employee_name,
             "employee_no": row.employee_no,
@@ -144,9 +137,11 @@ def action_center_recognition_details(
             "recognition_date": row.recognition_date,
             "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
             "waiting_hours": action_center_wait_hours(row.submitted_at, now),
-            "reviewer_name": reviewer.name if reviewer else "未设置",
+            "reviewer_name": reviewer.name if reviewer else entry.shared_queue or "未设置",
             "reviewer_no": reviewer.employee_no if reviewer else "",
             "reviewer_role_name": reviewer_role.name if reviewer_role else "",
+            "reviewer_group": f"employee:{reviewer.id}" if reviewer else entry.shared_queue or "unassigned",
+            "unassigned": entry.unassigned,
         })
     return details
 
@@ -227,22 +222,28 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     if announcement_counts["handovers"]:
         items.append(action_center_item("announcement_handover", "公告待交接", announcement_counts["handovers"], "announcements", "warning", "确认继任者交接申请。"))
     role_code = user.role.code
+    now = datetime.now()
+    overdue_queries = []
     current_month = date.today().strftime("%Y-%m")
     month_to_close = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
 
     if "REVIEW_SUPERVISOR" in user.permissions:
         from app.routers.recognitions import supervisor_review_query
 
-        pending_supervisor = supervisor_review_query(db, user).filter(RecognitionRecord.status == "pending").count()
+        supervisor_queue = supervisor_review_query(db, user).filter(RecognitionRecord.status == "pending")
+        pending_supervisor = supervisor_queue.count()
         if pending_supervisor:
             items.append(action_center_item("supervisor_review", "主管待复核签卡", pending_supervisor, "supervisorReview", "warning", "主管本人提交的签卡由任一正式GSM复核（不限景点圈）；代理TA GSM期间的签卡也可由AM复核，不含本人，OM不能复核。"))
+            overdue_queries.append(supervisor_queue)
 
     if "REVIEW_DIRECT" in user.permissions:
         from app.routers.recognitions import direct_review_query
 
-        pending_reviews = direct_review_query(db, user.id, pending=True).count()
+        direct_queue = direct_review_query(db, user.id, pending=True)
+        pending_reviews = direct_queue.count()
         if pending_reviews:
             items.append(action_center_item("recognition_review", "待复核签卡", pending_reviews, "review", "warning", "直属组员提交的签卡等待复核。"))
+            overdue_queries.append(direct_queue)
     if role_code in LEADER_CODES:
         follow_ups = db.query(DeductionFollowUp).filter(
             DeductionFollowUp.supervisor_id == user.id,
@@ -307,16 +308,22 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
             ).count()
             if closed_count:
                 items.append(action_center_item("month_close", "本月已关闭月结", closed_count, "operations", "info", "最高管理员可在系统运营页汇总查看，并通过原月结流程进行复查。"))
-            overdue_reviews = db.query(RecognitionRecord).filter(
-                RecognitionRecord.status == "pending",
-                RecognitionRecord.submitted_at < datetime.now() - timedelta(hours=48),
-            ).count()
-            if overdue_reviews:
-                items.append(action_center_item("overdue_review", "超过48小时未复核签卡", overdue_reviews, "operations", "warning", "站内待复核已超出运营时限，请按现有复核边界跟进。"))
+            escalated = sum(entry.needs_followup(now) for entry in pending_reviews_for_management(db, now))
+            if escalated:
+                items.append(action_center_item("overdue_review", "签卡复核待跟进", escalated, "operations", "warning", "超出7天或暂无应复核人的签卡，请按现有复核边界跟进。"))
 
+    reminder_queries = [
+        query.filter(RecognitionRecord.submitted_at < now - REVIEW_REMINDER_AGE).with_entities(RecognitionRecord.id)
+        for query in overdue_queries
+    ]
+    if len(reminder_queries) > 1:
+        overdue_count = reminder_queries[0].union(*reminder_queries[1:]).count()
+    else:
+        overdue_count = reminder_queries[0].count() if reminder_queries else 0
     order = {"critical": 0, "warning": 1, "info": 2}
     items.sort(key=lambda row: (order.get(row["severity"], 9), row["title"]))
     return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month,
+            "overdue_review_reminder": overdue_count,
             "announcement_counts": announcement_counts,"rotation_timeout_cases":rotation_timeout_cases}
 
 
@@ -385,6 +392,7 @@ def recognition_detail_page(query, page_size: int, cursor: str | None, direction
 def action_center_details(
     item_type: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100),
     cursor: str | None = Query(None, max_length=64), direction: Literal["next", "previous"] = "next",
+    escalated_only: bool = False,
     db: Session = Depends(get_db), user: V2User = Depends(current_user),
 ):
     """Expose only the concrete records behind a visible action-center item."""
@@ -463,28 +471,42 @@ def action_center_details(
             })
         return {"type": item_type, "title": "在职CM/TR待分组明细", "items": rows}
 
-    if item_type == "recognition_review":
-        if "REVIEW_DIRECT" not in user.permissions:
-            raise HTTPException(403, "当前账号不能查看直属签卡复核明细")
+    if item_type in {"recognition_review", "supervisor_review"}:
+        from app.routers.recognitions import direct_review_query, supervisor_review_query
+
+        shared = item_type == "supervisor_review"
+        if shared:
+            query = supervisor_review_query(db, user).filter(RecognitionRecord.status == "pending")
+        else:
+            if "REVIEW_DIRECT" not in user.permissions:
+                raise HTTPException(403, "当前账号不能查看直属签卡复核明细")
+            query = direct_review_query(db, user.id, pending=True)
         if page > 1 and cursor is None:
             raise HTTPException(400, "翻页位置已变更，请刷新并重新打开明细")
-        from app.routers.recognitions import direct_review_query
-
-        query = direct_review_query(db, user.id, pending=True)
         total = query.count()
         rows, previous_cursor, next_cursor = recognition_detail_page(query, page_size, cursor, direction)
-        return {"type": item_type, "title": "待复核签卡明细", "total": total, "page_size": page_size,
+        entries = []
+        for row in rows:
+            group = current_group_for_employee(db, row.employee_id)
+            entries.append(PendingReview(row, group.name if group else "未分组",
+                                         reviewer=None if shared else user.employee,
+                                         shared_queue=shared_review_label(row) if shared else ""))
+        return {"type": item_type, "title": "主管签卡复核明细" if shared else "待复核签卡明细",
+                "total": total, "page_size": page_size,
                 "previous_cursor": previous_cursor, "next_cursor": next_cursor,
-                "items": action_center_recognition_details(db, rows, now, current_reviewer=user)}
+                "items": action_center_recognition_details(db, entries, now)}
 
     if item_type == "overdue_review":
         if role_code != "SYSTEM_ADMIN":
             raise HTTPException(403, "只有最高管理员可以查看超时签卡复核明细")
-        rows = db.query(RecognitionRecord).filter(
-            RecognitionRecord.status == "pending",
-            RecognitionRecord.submitted_at < now - timedelta(hours=48),
-        ).order_by(RecognitionRecord.submitted_at.asc(), RecognitionRecord.id.asc()).limit(500).all()
-        return {"type": item_type, "title": "超过48小时未复核签卡明细", "items": action_center_recognition_details(db, rows, now)}
+        pending = pending_reviews_for_management(db, now)
+        if escalated_only:
+            entries = [entry for entry in pending if entry.needs_followup(now)]
+        else:
+            entries = [entry for entry in pending if entry.unassigned or entry.row.submitted_at < now - REVIEW_REMINDER_AGE]
+        title = "签卡复核待跟进明细" if escalated_only else "超期及无人复核的签卡明细"
+        return {"type": item_type, "title": title, "escalated_only": escalated_only,
+                "items": action_center_recognition_details(db, entries, now)}
 
     raise HTTPException(404, "该待办暂无可展开的异常明细")
 

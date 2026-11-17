@@ -487,6 +487,27 @@ def my_statistics_exports(
     }
 
 
+def _statistics_export_has_supervisor_sheets(title: str, keyword: str | None) -> bool:
+    return title != "SUPERVISOR" and not (keyword or "").strip()
+
+
+@router.get("/statistics/export-preview")
+def statistics_export_preview(
+    month: str,
+    attraction_id: int | None = None,
+    keyword: str | None = None,
+    title: str | None = None,
+    db: Session = Depends(get_db),
+    user: V2User = Depends(require_permissions("DATA_EXPORT")),
+):
+    data = statistics_payload(db, month, attraction_id, keyword, title, user, include_hierarchy=False)
+    return {
+        "employee_count": data["summary"]["employee_count"],
+        "loa_count": len(data["loa_rows"]),
+        "has_supervisor_sheets": _statistics_export_has_supervisor_sheets(data["title"], keyword),
+    }
+
+
 @router.get("/statistics/export")
 def export_statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_EXPORT")), issuer_keyword: str = "", issuer_population: str = "frontline"):
     data = statistics_payload(db, month, attraction_id, keyword, title, user, include_records=True, issuer_keyword=issuer_keyword, issuer_population=issuer_population)
@@ -501,7 +522,7 @@ def export_statistics(month: str, attraction_id: int | None = None, keyword: str
         exporter_role_name=user.role.name,
         exporter_role_code=user.role.code,
     )
-    if data["title"] != "SUPERVISOR" and not (keyword or "").strip():
+    if _statistics_export_has_supervisor_sheets(data["title"], keyword):
         supervisor_data = statistics_payload(db, month, attraction_id, None, "SUPERVISOR", user, include_records=True)
         append_supervisor_score_sheets(wb, db, supervisor_data, month)
     finalize_statistics_workbook(wb)

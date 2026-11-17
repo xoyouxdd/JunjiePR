@@ -86,6 +86,22 @@
 .recognition-card-detail summary{color:var(--primary);padding:8px 0;cursor:pointer}
 .recognition-card-detail p{overflow-wrap:anywhere}
 
+.review-overdue-reminder{margin:0 0 12px;padding:10px 12px;border-left:3px solid var(--warn-accent);background:var(--warn-bg-soft);color:var(--text-strong);overflow-wrap:anywhere}
+.table-wrap .review-detail-table{min-width:540px}
+.review-owner-heading th{background:var(--surface-soft);color:var(--text-strong);white-space:normal;text-align:left}
+.review-owner-heading span{margin-left:8px;color:var(--text-secondary);font-size:12px;font-weight:400}
+.review-owner-heading .review-owner-count{white-space:nowrap}
+[data-operations-review]{width:auto;margin-top:8px}
+[data-operations-review-detail]:not([hidden]){margin-top:12px;min-width:0}
+@media(max-width:640px){
+  .table-wrap .review-detail-table{min-width:0}
+  .review-detail-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .review-detail-table,.review-detail-table tbody,.review-detail-table tr,.review-detail-table .review-owner-heading th{display:block}
+  .review-detail-table tr:not(.review-owner-heading){padding:5px 10px;border-bottom:1px solid var(--line)}
+  .review-detail-table td{display:grid;grid-template-columns:5.75em minmax(0,1fr);gap:6px;padding:4px 0;border:0;white-space:normal;overflow-wrap:anywhere}
+  .review-detail-table td::before{content:attr(data-label);color:var(--text-secondary)}
+}
+
 /* Keep exact statistics and the original aggregate/circle series alongside interaction. */
 #app[data-workspace-ui] .compact-trend-panel .trend-cards{display:flex;flex-wrap:wrap;gap:8px 20px;margin:12px 0;padding:10px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 #app[data-workspace-ui] .compact-trend-panel .trend-card{display:flex;align-items:baseline;flex-wrap:wrap;gap:7px;padding:0;background:transparent;border:0;border-radius:0;box-shadow:none}

@@ -394,6 +394,51 @@ def test_restored_future_and_sick_person_can_be_manually_placed_without_changing
     assert e.P['new1']['state'] == 'rest' and e.P['new1']['assign']
 
 
+@pytest.mark.parametrize('legacy', [False, True])
+def test_early_manual_placement_obeys_inclusive_shift_end_on_push(legacy):
+    early = 426 + 17/60
+    eng = fixture((1,), now=early)
+    person = eng.P['new0']
+    person.update(state='notyet', start=435, end=960, readyAt=None)
+    relief = eng.P['new1']
+    relief.update(start=600, readyAt=930)
+    for pid in ('new2', 'new3'):
+        eng.P[pid].update(state='other')
+    add_later_shifts(eng.P, (945, 975))
+
+    F.manual_place(eng, person['pid'], 'A', 0, 'swap', early, 'test')
+    assert person['manualRestored'] and occupants(eng) == [person['pid']]
+    if legacy:
+        person.pop('manualRestoredAt')
+    F.tick(eng, 435)
+    assert not person['manualRestored'] and occupants(eng) == [person['pid']]
+    F.tick(eng, 930)
+    assert F.execute(eng, relief['pid'], 930, 'screen', 'A')['executed']
+    assert occupants(eng) == [relief['pid']]
+    assert person['state'] == 'done' and person['readyAt'] is None
+
+
+def test_early_manual_placement_keeps_late_shift_in_rotation_in_last_twenty_minutes():
+    eng = fixture((1,), now=944)
+    add_later_shifts(eng.P, (810, 975))
+    person = eng.P['new0']
+    person.update(state='notyet', start=945, end=1275, readyAt=None)
+    for pid in ('new1', 'new2', 'new3'):
+        eng.P[pid].update(state='other')
+
+    F.manual_place(eng, person['pid'], 'A', 0, 'swap', 944, 'test')
+    F.tick(eng, 945)
+    assert not person['manualRestored']
+    eng.d['closeAt'] = '23:59'
+    F.pool(eng, person['pid'], 'pending', 1240, 'test')
+    F.tick(eng, 1240)
+    assert person['state'] == 'pending'
+    F.pool(eng, person['pid'], 'rest', 1240, 'screen')
+    F.tick(eng, 1255)
+    assert F.execute(eng, person['pid'], 1255, 'screen', 'A')['executed']
+    assert occupants(eng) == [person['pid']]
+
+
 def test_scheduled_opening_is_forecast_but_cannot_execute_early_or_timeout_while_closed():
     e = fixture((1,))
     e.line('A')['posts'][0].update(open=False, opened=False, openAt='10:30', manual=False, occ=None)
