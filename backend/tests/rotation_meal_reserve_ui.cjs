@@ -109,15 +109,18 @@ async function main(){try{
     await page.waitForFunction(()=>nowMin()===655);
     const [moved]=await Promise.all([
       page.waitForResponse(r=>r.request().method()==='POST'&&r.url().endsWith('/api/rotation-board/act')&&r.request().postDataJSON()?.pid===extra),
-      resting.evaluate(source=>{
+      page.evaluate(pid=>{
+        // Resolve both nodes during the same render, before dispatching the drag.
+        const source=document.querySelector('[data-f-pool=rest] [data-f-drag="'+pid+'"]');
         const target=document.querySelector('[data-f-pool=meal] > h2');
+        if(!source||!target)throw new Error('Meal-pool drag elements missing');
         const dataTransfer=new DataTransfer();
-        // Keep the drag events on the same board render across browsers.
         source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer}));
+        if(dataTransfer.getData('application/x-rotation-person')!==pid)throw new Error('Drag did not identify the resting person');
         target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer}));
         target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer}));
         source.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));
-      }),
+      },extra),
     ]);
     assert(moved.ok(),await moved.text());
     const mealCard=page.locator('[data-f-pool=meal] [data-f-drag="'+extra+'"]');

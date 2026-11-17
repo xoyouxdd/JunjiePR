@@ -452,6 +452,10 @@ def test_upgrade_slot_only_for_unused_statements_in_current_window(monkeypatch):
             registrar = db.query(Employee).filter_by(employee_no="TATEST01").one()
             assert employee.attraction_id == registrar.attraction_id
             employee_id = employee.id
+            # Seed the base role before the fixed scoring dates used by this test.
+            assignment = db.query(EmployeeRoleAssignment).filter_by(employee_id=employee_id).one()
+            assignment.starts_on = "2026-08-01"
+            employee.hired_on = assignment.starts_on
             repeat = db.query(DeductionType).filter_by(code="SICK_LEAVE_VIOLATION").one()
             repeat_id = repeat.id
             standalone = next(kind for kind in db.query(DeductionType).filter_by(active=True)
