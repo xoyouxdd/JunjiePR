@@ -12,13 +12,13 @@ function form(file,id,extra={}){
 const statsSource=fs.readFileSync(path.join(root,'js/app/statistics.js'),'utf8'),historyStart=statsSource.indexOf('host.innerHTML=data.items.length?`')+'host.innerHTML=data.items.length?`'.length,historyEnd=statsSource.indexOf("`:'<span class=\"field-hint\">当前账号暂无",historyStart);
 assert(historyEnd>historyStart);
 const historyHtml=vm.runInNewContext('`'+statsSource.slice(historyStart,historyEnd)+'`',{data:{items:history},esc});
-const fixtures=[form('statistics.js','statsFilter'),form('rankings.js','prFilter'),form('entries.js','entryFilter'),form('declarations.js','declarationFilter'),form('entries.js','entryFilter',{scopeField:'<label>查看范围<select name="scope"><option value="mine">我的登记记录</option></select></label>'})];
+const fixtures=[form('statistics.js','statsFilter'),form('rankings.js','prFilter'),form('entries.js','entryFilter'),form('declarations.js','declarationFilter',{defaultSearchHint:'可输入部分姓名或工号，也可从候选中选择'}),form('entries.js','entryFilter',{scopeField:'<label>查看范围<select name="scope"><option value="mine">我的登记记录</option></select></label>'})];
 const hrFixture=fixtures.push(form('rankings.js','prFilter',{scopedHr:true,circleOptions:'<option value="1">热力追踪</option>'}))-1;
 const server=http.createServer((req,res)=>{
   const url=new URL(req.url,'http://fixture');
   if(url.pathname==='/'){
     const fixture=fixtures[Number(url.searchParams.get('case')||0)];
-    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/workspace-ui.css"><body><div class="app-frame"><main class="app-shell"><div id="app" data-workspace-ui><section class="panel"><h2>合成筛选布局</h2>${fixture}<div class="recent-exports">${historyHtml}</div></section></div></main></div></body></html>`);return;
+    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/workspace-ui.css"><body><div class="app-frame"><main class="app-shell"><div id="app" data-workspace-ui><section class="panel${fixture.includes('id="declarationFilter"')?' declaration-statistics-page':''}"><h2>合成筛选布局</h2>${fixture}<div class="recent-exports">${historyHtml}</div></section></div></main></div></body></html>`);return;
   }
   const file={'/style.css':'style.css','/workspace-ui.css':'workspace-ui.css'}[url.pathname];
   if(!file){res.writeHead(404);res.end();return;}res.writeHead(200,{'Content-Type':'text/css'});res.end(fs.readFileSync(path.join(root,'css',file)));
