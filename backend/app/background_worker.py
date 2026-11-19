@@ -2,8 +2,9 @@
 
 Start and stop share one guard. The thread is published only after it has
 started, so stop never joins a half-started thread and start never clears a
-concurrent stop. Each run gets a fresh stop event, so a thread that outlived
-its join timeout still sees its own stop request instead of a cleared one.
+concurrent stop. If the join times out, keep the thread reference so a start
+cannot prepare the queue or start a replacement while that thread is alive.
+Once the previous thread exits, a later start gets a fresh stop event.
 With ``counted=True`` every start needs a matching stop before the thread ends
 (the app lifespan and tests may start the same worker more than once).
 """
@@ -44,6 +45,8 @@ class BackgroundWorker:
             if self.counted and self._users:
                 return
             self._stop.set()
-            thread, self._thread = self._thread, None
+            thread = self._thread
             if thread:
                 thread.join(timeout=self.join_timeout)
+                if not thread.is_alive():
+                    self._thread = None

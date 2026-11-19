@@ -5,6 +5,71 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require('./support/browser-runtime.cjs');
 const root=path.join(__dirname,'../app/static');
+
+async function checkRepeatMeal(page){
+  await page.addScriptTag({content:fs.readFileSync(path.join(root,'js/rotation-forecast.js'),'utf8')});
+  await page.evaluate(()=>{
+    me={kind:'supervisor',name:'测试主管'};
+    RT.data.day={date:'2026-10-11'};
+    RT.render=()=>{};
+    RT.load=async()=>{};
+    window.mealPerson={pid:'1',name:'测试员工',ate:true,state:'pending',start:420,end:1000,
+      mealOptions:{canChoose:true},confirmationTokens:{arrive:'a'.repeat(64)}};
+    window.mealPosts=[];
+    rtApi=async (path,options)=>{
+      assertRotationPost(path,options);
+      const body=JSON.parse(options.body);
+      window.mealPosts.push(body);
+      if(body.action==='pool') await new Promise(resolve=>{window.finishMealPost=resolve;});
+      return {ok:true};
+    };
+    function assertRotationPost(path,options){
+      if(path!=='/api/rotation/act'||options?.method!=='POST')throw new Error('Unexpected rotation request');
+    }
+    forecastArrive(window.mealPerson);
+    window.mealForm=document.querySelector('[data-form]');
+  });
+
+  const dialog=page.getByRole('dialog');
+  const confirmation=dialog.getByRole('heading',{name:'再次进入吃饭区'});
+  const choice=dialog.getByLabel('本次安排');
+  const submit=dialog.getByRole('button',{name:'确定',exact:true});
+  await choice.selectOption('meal');
+  await submit.click();
+  await confirmation.waitFor();
+  assert.equal(await page.evaluate(()=>activeRotationConfirmation?.tokenAction),'arrive');
+  await dialog.getByRole('button',{name:'取消',exact:true}).click();
+  await dialog.getByRole('heading',{name:'测试员工 · 确认餐休'}).waitFor();
+  assert.equal(await page.evaluate(()=>document.querySelector('[data-form]')===window.mealForm),true);
+  assert.equal(await choice.inputValue(),'meal');
+  assert.deepEqual(await page.evaluate(()=>window.mealPosts),[]);
+  await choice.selectOption('rest');
+  await submit.click();
+  await dialog.waitFor({state:'hidden'});
+  assert.deepEqual(await page.evaluate(()=>window.mealPosts.map(body=>[body.action,body.meal_choice,body.repeat_meal])),[['arrive','rest',false]]);
+
+  await page.evaluate(()=>forecastPerson(window.mealPerson));
+  await dialog.getByRole('button',{name:'移动到人员池'}).click();
+  const pool=dialog.getByLabel('目标池');
+  await pool.selectOption('meal');
+  await submit.click();
+  await confirmation.waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await pool.inputValue(),'meal');
+  assert.equal(await page.evaluate(()=>window.mealPosts.length),1);
+  await submit.click();
+  await confirmation.waitFor();
+  await dialog.getByRole('button',{name:'继续',exact:true}).click();
+  await page.keyboard.press('Escape');
+  await page.evaluate(()=>{
+    document.querySelector('[data-ok]').click();
+    window.finishMealPost();
+  });
+  await dialog.waitFor({state:'hidden'});
+  assert.deepEqual(await page.evaluate(()=>window.mealPosts.slice(1).map(body=>[body.action,body.pool,body.repeat_meal])),[['pool','meal',true]]);
+  console.log('Repeat meal: cancel restores the form and selection, continue sends one request');
+}
+
 async function main(){
   const browser=await chromium.launch({channel:'msedge',headless:true});
   try{
@@ -58,6 +123,7 @@ async function main(){
     await page.evaluate(()=>{RT.sync='offline';renderSyncStatus();});
     assert.match(await page.locator('#rtSync').innerText(),/连接中断/);
     console.log('Rotation mobile DOM: confirm, original target post, one write, result card, offline badge and 390px layout passed');
+    await checkRepeatMeal(page);
   }finally{await browser.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

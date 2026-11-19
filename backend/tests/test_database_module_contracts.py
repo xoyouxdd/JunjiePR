@@ -148,10 +148,14 @@ def test_models_and_live_scope_service_do_not_depend_on_database_facade() -> Non
 
 def test_code_imports_owning_modules_not_removed_facades() -> None:
     removed = {"app.v2_database", "app.v2_services", "app.routers._shared"}
-    for path in [*APP.rglob("*.py"), *(APP.parent / "tests").rglob("*.py"), *(APP.parents[1] / "local_tools").rglob("*.py")]:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
-        assert not imports & removed, path
+    root = BACKEND.parent
+    source_dirs = (APP, BACKEND / "tests", BACKEND / "scripts", root / "scripts", root / "local_tools")
+    for source_dir in source_dirs:
+        for path in source_dir.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+            imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+            imports.update(alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names)
+            assert not imports & removed, path
     for relative in ("v2_database.py", "v2_services.py", "routers/_shared.py"):
         assert not (APP / relative).exists()
 

@@ -1,4 +1,8 @@
 [
+  {"version": "2026.11.19.1", "date": "2026-11-19", "status": "candidate", "items": [
+    {"summary": "轮岗取消二次确认后返回原表单", "detail": "再次进入吃饭区时，取消二次确认会返回原餐休或人员池表单，可以直接修改选择。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]},
+    {"summary": "页面资源加载兼容性修复", "detail": "页面资源按浏览器支持的方式传输压缩内容，分段请求保持原有读取方式。", "audiences": ["all"]}
+  ]},
   {"version": "2026.11.18.1", "date": "2026-11-18", "status": "candidate", "items": [
     {"summary": "轮岗班前安排与下班状态修复", "detail": "班前人工安排的临时状态在正式开班时恢复正常班时判断，避免班次结束后仍被视为可继续轮岗。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]},
     {"summary": "签卡复核提醒与跟进", "detail": "待复核超过48小时提醒对应复核人；超过7天或无人复核的签卡进入最高管理员跟进列表。", "audiences": ["SYSTEM_ADMIN"]},

@@ -224,31 +224,48 @@ function renderClock() {
 // ---------------------------------------------------------------- 弹窗
 
 let activeRotationConfirmation = null;
+let cancelRotationModal = closeModal;
 
 function closeModal() {
   activeRotationConfirmation = null;
+  cancelRotationModal = closeModal;
   document.getElementById('rtModal').innerHTML = '';
   RT.modalOpen = false;
   RT.render();
 }
-function openModal(html, bind) {
+function openModal(html, bind, cancel = closeModal) {
   activeRotationConfirmation = null;
+  cancelRotationModal = cancel;
   const host = document.getElementById('rtModal');
   host.innerHTML = `<div class="modal-overlay rt-overlay"><section class="modal-card rt-card" role="dialog" aria-modal="true">${html}</section></div>`;
   RT.modalOpen = true;
   const overlay = host.querySelector('.rt-overlay');
-  overlay.addEventListener('click', event => { if (event.target === overlay) closeModal(); });
-  host.querySelectorAll('[data-close]').forEach(button => { button.onclick = closeModal; });
+  overlay.addEventListener('click', event => { if (event.target === overlay) cancel(); });
+  host.querySelectorAll('[data-close]').forEach(button => { button.onclick = cancel; });
   if (bind) bind(host);
   const first = host.querySelector('input, select, textarea, button.primary, button');
   if (first) first.focus();
 }
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && RT.modalOpen) closeModal(); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && RT.modalOpen) cancelRotationModal(); });
 
-function confirmBox(title, message, okText, run, { warn = false, autoCancel = 0 } = {}) {
+function confirmBox(title, message, okText, run, { warn = false, autoCancel = 0, returnToForm } = {}) {
+  const previousOverlay = returnToForm?.closest('.rt-overlay');
+  const previousConfirmation = activeRotationConfirmation;
+  const previousFocus = document.activeElement;
+  const previousCancel = cancelRotationModal;
   let timer = null;
+  let ok;
+  const cancel = previousOverlay ? () => {
+    const host = document.getElementById('rtModal');
+    if (!host.contains(ok) || ok.disabled) return;
+    clearTimeout(timer);
+    host.replaceChildren(previousOverlay);
+    activeRotationConfirmation = previousConfirmation;
+    cancelRotationModal = previousCancel;
+    if (previousOverlay.contains(previousFocus)) previousFocus.focus();
+  } : closeModal;
   openModal(`<h3>${title}</h3><div class="modal-message">${message}</div><div class="modal-actions"><button type="button" class="secondary" data-close>取消</button><button type="button" class="${warn ? 'danger' : 'primary'}" data-ok>${esc(okText)}</button></div>`, host => {
-    const ok = host.querySelector('[data-ok]');
+    ok = host.querySelector('[data-ok]');
     const isCurrent = () => RT.modalOpen && host.contains(ok);
     const startAutoCancel = () => {
       if (autoCancel) timer = setTimeout(() => {
@@ -256,6 +273,7 @@ function confirmBox(title, message, okText, run, { warn = false, autoCancel = 0 
       }, autoCancel);
     };
     ok.onclick = async () => {
+      if (ok.disabled) return;
       clearTimeout(timer);
       ok.disabled = true;
       const done = await run();
@@ -268,15 +286,17 @@ function confirmBox(title, message, okText, run, { warn = false, autoCancel = 0 
       startAutoCancel();
     };
     startAutoCancel();
-  });
+  }, cancel);
+  if (previousOverlay) activeRotationConfirmation = previousConfirmation;
 }
 
 function formBox(title, fields, run, { warn = false, okText = '确定' } = {}) {
   openModal(`<h3>${title}</h3><form class="form-stack" data-form>${fields}<div class="modal-actions"><button type="button" class="secondary" data-close>取消</button><button type="submit" class="${warn ? 'danger' : 'primary'}">${esc(okText)}</button></div></form>`, host => {
     host.querySelector('[data-form]').onsubmit = async event => {
       event.preventDefault();
-      const values = Object.fromEntries(new FormData(event.target).entries());
-      if (await run(values) !== false) closeModal();
+      const form = event.currentTarget;
+      const values = Object.fromEntries(new FormData(form).entries());
+      if (await run(values, form) !== false) closeModal();
     };
   });
 }

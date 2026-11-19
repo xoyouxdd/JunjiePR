@@ -97,15 +97,10 @@ function forecastArrive(p){
   const date=RT.data.day.date,mealSignature=JSON.stringify(p.mealOptions);
   const choices=p.mealOptions?.forced?'<option value="meal">吃饭（已到强制饭点）</option>':'<option value="rest">休息</option>'+(p.mealOptions?.canChoose?'<option value="meal">吃饭</option>':'');
   const reserve=p.mealOptions?.reserveText?`<p class="field-hint">${esc(p.mealOptions.reserveText)}。基础用餐条件及强制饭点沿用现有规则。</p>`:'';
-  formBox(`${p.name} · 确认餐休`,'<label>本次安排<select name="kind">'+choices+'</select></label>'+reserve,async values=>{
+  formBox(`${p.name} · 确认餐休`,'<label>本次安排<select name="kind">'+choices+'</select></label>'+reserve,(values, form)=>{
     const repeat=values.kind==='meal'&&p.ate;
     const send=()=>forecastRun({action:'arrive',pid:p.pid,confirmation_token:p.confirmationTokens.arrive,meal_choice:values.kind,repeat_meal:repeat});
-    if(!repeat)return send();
-    // The confirm step replaces this form; keep watching for changed meal conditions.
-    const tracker=activeRotationConfirmation;
-    confirmRepeatMeal(send);
-    activeRotationConfirmation=tracker;
-    return false;
+    return repeat?confirmRepeatMeal(send,form):send();
   });
   activeRotationConfirmation={pid:p.pid,date,token:p.confirmationTokens.arrive,tokenAction:'arrive',refresh:current=>{
     if(JSON.stringify(current.mealOptions)!==mealSignature){closeModal();toast('餐休条件已更新，请重新确认');}
@@ -121,7 +116,7 @@ function forecastPerson(p){
       if(action==='shift')formBox('修改当天班次',forecastShiftFields(p.start,p.end),v=>forecastRun({...base,...v,start_day_offset:Number(v.start_day_offset)}));
       else if(action==='break_time')formBox('修改剩余时间',`<label>剩余分钟<input type="number" name="remaining" min="0" max="1440" step="0.1" value="${Math.max(0,Math.ceil(p.readyAt-nowMin()))}" required></label>`,v=>forecastRun({...base,remaining:Number(v.remaining)}));
       else if(action==='post_hold')confirmBox(button.textContent,`<p>${esc(p.name)} · ${esc(p.post||'')}</p>`,'确认',()=>forecastRun({...base,line:p.line,i:p.postIndex,on:!p.postHold,reason:'现场持续定岗'}));
-      else if(action==='pool')formBox('移动人员池','<label>目标池<select name="pool"><option value="pending">待确定休息</option><option value="rest">休息区</option><option value="meal">吃饭区</option><option value="away">圈外人员</option><option value="other">其他人员</option></select></label>',v=>forecastPoolMove(p,v.pool));
+      else if(action==='pool')formBox('移动人员池','<label>目标池<select name="pool"><option value="pending">待确定休息</option><option value="rest">休息区</option><option value="meal">吃饭区</option><option value="away">圈外人员</option><option value="other">其他人员</option></select></label>',(v,form)=>forecastPoolMove(p,v.pool,form));
       else confirmBox(button.textContent,`<p>${esc(p.name)}</p>`,'确认',()=>forecastRun(base));
     });
   });
@@ -174,12 +169,11 @@ function forecastBindHeaderOption(select,affected){
   };
   select.addEventListener('change',update);update();
 }
-// Rotation modals are single-slot: the confirm replaces the current form, so callers get false.
-function confirmRepeatMeal(send){confirmBox('再次进入吃饭区','此人已进过吃饭区，是否继续？','继续',send,{warn:true});return false;}
-async function forecastPoolMove(p,pool){
+function confirmRepeatMeal(send,returnToForm){confirmBox('再次进入吃饭区','此人已进过吃饭区，是否继续？','继续',send,{warn:true,returnToForm});return false;}
+async function forecastPoolMove(p,pool,form){
   const repeat=pool==='meal'&&p.ate&&!['rest','ready'].includes(p.state);
   const send=()=>forecastRun({action:'pool',pid:p.pid,pool,repeat_meal:repeat,person_context:{state:p.state,readyAt:p.readyAt??null,sequence:p.confirmationSequence??0,line:p.state==='onpost'?p.line:null,postIndex:p.postIndex??null}});
-  return repeat?confirmRepeatMeal(send):send();
+  return repeat?confirmRepeatMeal(send,form):send();
 }
 function forecastPlace(pid,line,i){
   const p=personOf(pid),L=RT.data.day.lines.find(x=>x.id===line),post=L?.posts[i];if(!p||!post)return;

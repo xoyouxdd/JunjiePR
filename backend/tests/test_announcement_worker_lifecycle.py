@@ -7,6 +7,7 @@ import pytest
 
 os.environ["RECOGNITION_V2_DATA_DIR"] = tempfile.mkdtemp(prefix="announcement-worker-lifecycle-")
 from app import announcement_worker as worker
+from app.background_worker import BackgroundWorker
 
 
 @pytest.fixture
@@ -123,3 +124,48 @@ def test_failed_start_does_not_publish_unjoinable_thread(isolated_worker, monkey
     assert worker._worker._thread is None
     worker.stop_worker()
     assert worker._worker._stop.is_set()
+
+
+@pytest.mark.parametrize("counted", [False, True])
+def test_restart_does_not_prepare_queue_until_previous_thread_exits(counted):
+    entered, release = threading.Event(), threading.Event()
+    prepared = []
+
+    def run(_stop):
+        entered.set()
+        release.wait()
+
+    queue_worker = BackgroundWorker("test-queue", run, join_timeout=0, counted=counted)
+
+    def prepare():
+        prepared.append(True)
+
+    queue_worker.start(prepare)
+    previous = queue_worker._thread
+    try:
+        assert entered.wait(3)
+        if counted:
+            queue_worker.start(prepare)
+            queue_worker.stop()
+            assert not queue_worker._stop.is_set()
+
+        queue_worker.stop()
+        assert queue_worker._stop.is_set() and previous.is_alive()
+        queue_worker.start(prepare)
+        assert prepared == [True]
+        assert queue_worker._thread is previous
+
+        release.set()
+        previous.join(3)
+        assert not previous.is_alive()
+
+        queue_worker.start(prepare)
+        assert prepared == [True, True]
+        assert queue_worker._thread is not previous
+        if counted:
+            queue_worker.stop()
+            assert not queue_worker._stop.is_set()
+    finally:
+        release.set()
+        previous.join(3)
+        queue_worker.stop()

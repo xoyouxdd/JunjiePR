@@ -32,7 +32,8 @@ def main():
         source.backup(target)
         if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("本地备份完整性检查失败")
-    from app.v2_database import init_db, SessionLocal
+    from app.database.bootstrap import init_db
+    from app.database.connection import SessionLocal
     from app.services.activity_points import backfill_apply, backfill_preview
     from app.v2_models import AuditLog
     from sqlalchemy import text

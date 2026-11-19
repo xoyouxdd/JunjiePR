@@ -35,7 +35,7 @@ GSM/TA GSM 管理范围同步在 `services/management_scopes.py`，由人员变�
 
 版本来源：`backend/app/version.py`（`年.月.日.当天第几版`，以文件为准）。用户在导航「更新记录」看到的内容来自 `backend/app/changelog.json`（`changelog.py` 负责读取和按角色过滤）。
 
-静态文本资源（`/static` 下的 css/js/html/json/svg）由 `static_compression.py` 按需 gzip；视频、附件和事件流不压缩。后台定时任务（活动结算、公告补收、视频队列、实习到期）共用 `background_worker.py` 的启停与竞态保护。
+`static_compression.py` 对客户端接受 gzip 的静态文本完整 GET 请求按需压缩，分段请求保留原始字节。视频、附件和事件流直接传输。后台定时任务（活动结算、公告补收、视频队列、实习到期）共用 `background_worker.py`；停止等待超时后仍保留旧线程，直到线程退出才允许下一次启动接管。
 
 月结允许关闭上月及更早月份，保留历史补结；当月和未来月份禁止关闭。`month_close_period_policy` 以服务端日历月份统一状态接口和关闭接口；未结束月份返回不可关闭状态，直接请求关闭返回400且不写封存或审计。月份查询和既有封存的受控重开不受此关闭限制影响，继续沿用原角色、景点圈范围、原因必填和待办检查。
 
