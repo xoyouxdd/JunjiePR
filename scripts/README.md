@@ -4,7 +4,7 @@
 
 ## 文件
 
-- `Invoke-SqliteOnlineBackup.ps1`：调用生产虚拟环境中的 Python `sqlite3.Connection.backup()`，在线生成一致性快照，执行 `PRAGMA quick_check`，写入 SHA-256 清单，并按保留天数清理本脚本管理的历史文件。
+- `Invoke-SqliteOnlineBackup.ps1`：通过生产虚拟环境调用同目录的 `sqlite_backup.py`，在线生成一致性快照，执行 `PRAGMA quick_check`，写入 SHA-256 清单，并按保留天数清理本脚本管理的历史文件。共享源文件位于仓库 `backend/app/sqlite_backup.py`，供应用内手动备份直接使用。应用发布使用同一个文件在已校验候选包中的源码，在替换线上应用之前即可生成快照。
 - `Test-SqliteBackupRestore.ps1`：把指定备份复制到专用恢复演练目录，核对 SHA-256、`quick_check` 和关键业务表。它不会停止服务或覆盖生产数据库。
 - `Run-MonthlyRestoreRehearsal.ps1`：自动选择最新受管备份并调用恢复演练脚本；只在独立恢复目录验证，默认不保留副本，也不写入生产数据库。
 - `Install-DailyBackupTask.ps1`：可选安装每日 Windows 计划任务。任务使用 `SYSTEM` 服务身份，不保存账号、密码或服务器凭据。
@@ -53,6 +53,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Invoke-SqliteOnlin
 - 专用备份目录：`C:\Server\zhaojunjie\backups\recognition-card-system-sqlite`
 
 每次成功会生成一份 `recognition_v2-时间戳.db` 和相邻的 `.manifest.json`。清单包含文件大小、SHA-256、SQLite 版本和 `quick_check` 结果。保留策略只识别这个严格命名格式；删除前会再次确认解析后的文件仍位于专用备份目录中。
+
+同步新版计划备份脚本时，确认任务实际调用的是 `ops/` 或 `scripts/` 下的哪一份文件。先将同一提交的 `backend/app/sqlite_backup.py` 复制到该脚本旁，保留文件名 `sqlite_backup.py`。分别在源码目录和安装目录对副本执行 `Get-FileHash -Algorithm SHA256`，确认摘要一致，再替换 PowerShell 脚本并执行 `-DryRun`。独立 `-TestMode` 也把两个文件放在同一目录运行。此副本随运维脚本保留，应用回滚到旧版本后仍能启动每日备份；应用发布不会自动同步这些运维脚本。
 
 ## 独立恢复演练
 
@@ -110,7 +112,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Run-MonthlyRestore
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-DailyBackupTask.ps1 -DailyAt "02:15" -RetentionDays 30 -DryRun
 ```
 
-正式发布将 `backend/app` 展开为项目根目录下的 `app`，数据库和虚拟环境同样位于根目录。日常运维脚本须单独核对并同步到根目录下的 `scripts/`；应用发布不自动安装每日计划任务。脚本就位后，以管理员 PowerShell 执行安装：
+正式发布将 `backend/app` 展开为项目根目录下的 `app`，数据库和虚拟环境同样位于根目录。日常运维脚本须单独核对并同步，应用发布不自动安装每日计划任务。新装使用下列默认 `scripts/` 路径。已有任务按其当前路径同步即可，无须重新注册。安装预检要求备份脚本与共享 helper 已就位：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\Server\zhaojunjie\recognition-card-system\scripts\Install-DailyBackupTask.ps1 -DailyAt "02:15" -RetentionDays 30
@@ -140,7 +142,10 @@ Get-ChildItem C:\Server\zhaojunjie\backups\recognition-card-system-sqlite | Sort
 
 ```powershell
 $root = "C:\Temp\recognition-backup-test"
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Invoke-SqliteOnlineBackup.ps1 `
+# 在已准备好隔离数据库的目录中放置配套脚本。
+New-Item -ItemType Directory -Path "$root\ops" -Force | Out-Null
+Copy-Item -LiteralPath .\scripts\Invoke-SqliteOnlineBackup.ps1, .\backend\app\sqlite_backup.py -Destination "$root\ops"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$root\ops\Invoke-SqliteOnlineBackup.ps1" `
   -LiveRoot "$root\live" -BackupRoot "$root\backups" -Python python `
   -TestMode -TestRoot $root
 ```

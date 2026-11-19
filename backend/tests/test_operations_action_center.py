@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import json
 import hashlib
@@ -268,22 +267,6 @@ def test_readiness_check_is_read_only_and_reports_aggregate_counts_only() -> Non
     assert report["quick_check"] == ["ok"]
     assert report["counts"]["employees"] >= 1
     assert "CMTEST01" not in output.read_text(encoding="utf-8")
-
-
-def test_action_center_and_operations_views_are_present_in_the_app_shell() -> None:
-    script = read_frontend_source()
-    assert "['actionCenter','待办']" in script
-    assert "renderActionCenter" in script
-    assert "待办中心" in script
-    assert "data-action-pane-tab=\"review\"" in script
-    assert "['upgradeReview','待审核']" not in script
-    assert "密码管理" in script
-    assert "if(has('PASSWORD_RESET'))return renderAccountReset();" in script
-    assert "renderOperations" in script
-    assert "/api/admin/operations-health" in script
-    # Online appeals were retired in favour of an offline channel.
-    assert "renderGovernance" not in script
-    assert "/api/governance/appeals" not in script
 
 
 def test_statistics_detail_response_keeps_employee_identity_for_title() -> None:

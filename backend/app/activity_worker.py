@@ -1,7 +1,6 @@
 """Recoverable periodic draw/auction settlement, safe across processes."""
 import logging
 from sqlalchemy import text
-from app.background_worker import BackgroundWorker
 from app.database.connection import SessionLocal
 from app.activities_models import Activity, ActivityLot
 from app.services.activities import now, settle_lot
@@ -21,16 +20,3 @@ def process_due():
             except Exception:
                 db.rollback()
                 logging.getLogger(__name__).exception('奖池/拍品%s结算失败，将重试', lot_id)
-
-
-def _run(stop):
-    while not stop.wait(5):
-        try:
-            process_due()
-        except Exception:
-            logging.getLogger(__name__).exception('活动结算扫描失败，将重试')
-
-
-_worker = BackgroundWorker('activity-settlement', _run, join_timeout=2, counted=True)
-start_worker = _worker.start
-stop_worker = _worker.stop

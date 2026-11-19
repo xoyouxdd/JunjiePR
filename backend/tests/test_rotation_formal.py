@@ -73,7 +73,7 @@ def test_formal_entry_and_permissions(index,operate,manage):
         if not operate:assert c.post('/api/rotation-board/act',json={'action':'line','line':'A1','active':False}).status_code==403
 
 
-def seed_today(rule_version=1):
+def seed_today(rule_version=1, *, leave_draft=False):
     """Materialized real-day fixture; never change the formal clock to a simulation."""
     with SessionLocal() as db:
         circle=db.query(Attraction).filter_by(name='热力追踪').one(); aid=circle.id
@@ -92,9 +92,27 @@ def seed_today(rule_version=1):
         # core is exercised separately by test_rotation_forecast_formal.py.
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat()); state=S.day_state(row)
-            state['ruleVersion']=rule_version; state.pop('taskWorkflow',None)
+            if rule_version is None:
+                state.pop('ruleVersion')
+            else:
+                state['ruleVersion']=rule_version
+            state.pop('taskWorkflow',None)
+            if not leave_draft and rule_version != 2:
+                # Store a simulated pre-upgrade live day without going through
+                # the current production path for enabling new drafts.
+                cfg = S.load_config(db, aid)
+                S.remember_initial_draft(state, cfg)
+                eng, hooks = S.engine_for(db, cfg, row, state)
+                hooks.now = minute
+                eng.publish(minute, 'fixture')
+                state['lastTick'] = minute
+                S.write_duties(db, aid, row.work_date, state['plan'])
+                S.sync_notices(db, aid, state, eng, minute)
             S.save_day(db,row,state)
-        S.do_draft_action(db,aid,'fixture',{'action':'publish','date':date.today().isoformat()})
+        if leave_draft:
+            return aid
+        if rule_version == 2:
+            S.do_draft_action(db,aid,'fixture',{'action':'publish','date':date.today().isoformat()})
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             state['lastTick']=minute
@@ -105,6 +123,37 @@ def seed_today(rule_version=1):
             p=state['persons']['9710000'];p['assign']={'line':'A1','mode':'push','departAt':minute-1}
             S.save_day(db,row,state)
         return aid
+
+
+@pytest.mark.parametrize('rule_version', [None, 1])
+def test_unstarted_legacy_formal_draft_stays_read_only_until_regenerated(rule_version):
+    aid = seed_today(rule_version, leave_draft=True)
+    work_date = date.today().isoformat()
+    with SessionLocal() as db, S.transaction(db):
+        db.info['rotation_formal'] = True
+        row = S.day_row(db, aid, work_date)
+        state = S.day_state(row)
+        state['dailyAutoStart'] = True
+        S.save_day(db, row, state)
+        original = row.state_json
+    with TestClient(app) as c:
+        login(c, '9710040')
+        board = ok(c.get('/api/rotation-board/board'))
+        assert board['day'] is None and board['requires_current_rules']
+        path = f'/api/rotation-board/daily/{work_date}'
+        draft = ok(c.get(path))
+        assert draft['requires_current_rules'] and draft['can_generate'] and draft['frozen']
+        assert not draft['can_edit'] and not draft['can_publish']
+        reject = c.post(path, json={'action': 'publish', 'revision': draft['revision']})
+        assert reject.status_code == 400 and '重新生成' in reject.json()['detail']
+        with SessionLocal() as db:
+            db.info['rotation_formal'] = True
+            assert S.day_row(db, aid, work_date).state_json == original
+        ok(c.post(path, json={'action': 'draft_generate', 'revision': draft['revision']}))
+        current = ok(c.get(path))
+        assert current['draft']['ruleVersion'] == 2 and not current['requires_current_rules']
+        ok(c.post(path, json={'action': 'publish', 'revision': current['revision']}))
+        assert ok(c.get('/api/rotation-board/board'))['day']['ruleVersion'] == 2
 
 
 def test_personal_confirmation_updates_shared_formal_board_without_touching_sandbox():

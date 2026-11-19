@@ -7,12 +7,12 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 from time import monotonic
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from sqlalchemy.exc import IntegrityError
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -41,6 +41,27 @@ from app.services.performance_rankings import pr_ranking_payload, pr_ranking_sco
 from app.services.statistics_trends import TREND_DEFAULT_MONTHS, TREND_MAX_MONTHS, TREND_SCORE_FIELDS, statistics_trend_payload as _statistics_trend_payload, trend_month_keys
 
 router = APIRouter()
+require_statistics_export = require_permissions("DATA_EXPORT")
+
+
+class StatisticsExportQuery(BaseModel):
+    month: str
+    attraction_id: int | None = None
+    keyword: str | None = None
+    title: str | None = None
+    issuer_keyword: str = ""
+    issuer_population: str = "frontline"
+
+
+class RankingsExportQuery(BaseModel):
+    start_date: str
+    end_date: str
+    category: str = "overall"
+    subtype_id: int | None = None
+    sort_by: str = "score"
+    keyword: str = ""
+    attraction_id: int | None = None
+    population: str = "frontline"
 
 
 class AvatarPreferenceUpdate(BaseModel):
@@ -323,6 +344,18 @@ def pr_rankings(
 
 
 @router.get("/pr-rankings/export")
+def export_pr_rankings_route(
+    query: Annotated[RankingsExportQuery, Query()],
+    db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
+    return export_pr_rankings(**query.model_dump(), db=db, user=user)
+
+
+def require_rankings_export(user: V2User) -> None:
+    if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
+        raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
+
+
 def export_pr_rankings(
     start_date: str,
     end_date: str,
@@ -332,11 +365,10 @@ def export_pr_rankings(
     keyword: str = "",
     attraction_id: int | None = None,
     population: str = "frontline",
-    db: Session = Depends(get_db),
-    user: V2User = Depends(current_user),
+    *, db: Session,
+    user: V2User,
 ):
-    if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
-        raise HTTPException(403, "当前角色仅支持查询PR排名，不能导出景点圈数据")
+    require_rankings_export(user)
     data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, 5000, attraction_id, population)
     if data["total"] > len(data["rows"]):
         data = pr_ranking_payload(db, user, start_date, end_date, category, subtype_id, sort_by, keyword, 1, data["total"], attraction_id, population)
@@ -509,7 +541,14 @@ def statistics_export_preview(
 
 
 @router.get("/statistics/export")
-def export_statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_EXPORT")), issuer_keyword: str = "", issuer_population: str = "frontline"):
+def export_statistics_route(
+    query: Annotated[StatisticsExportQuery, Query()],
+    db: Session = Depends(get_db), user: V2User = Depends(require_statistics_export),
+):
+    return export_statistics(**query.model_dump(), db=db, user=user)
+
+
+def export_statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, *, db: Session, user: V2User, issuer_keyword: str = "", issuer_population: str = "frontline"):
     data = statistics_payload(db, month, attraction_id, keyword, title, user, include_records=True, issuer_keyword=issuer_keyword, issuer_population=issuer_population)
     wb, attraction_label, title_label = build_statistics_workbook(
         db,

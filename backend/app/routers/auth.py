@@ -32,7 +32,7 @@ router = APIRouter()
 
 
 def user_payload(db: Session, user: V2User) -> dict:
-    if getattr(user,'rotation_temporary',False):
+    if user.rotation_temporary:
         return {'id':user.id,'name':user.name,'employee_no':user.employee.employee_no,
                 'attraction_name':user.employee.attraction.name,'rotation_entry':True,
                 'rotation_temporary':True,'must_change_password':False,'permissions':[]}

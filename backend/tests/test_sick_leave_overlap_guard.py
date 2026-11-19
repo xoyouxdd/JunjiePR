@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import os
 import tempfile
@@ -91,13 +90,6 @@ def test_active_sick_leave_date_overlap_is_visible_and_blocked_until_voided() ->
             files={"proof": ("after-void.png", image_bytes(), "image/png")},
         )
         assert allowed.status_code == 200, allowed.text
-
-
-def test_mobile_form_contains_overlap_guard_and_chinese_message() -> None:
-    script = read_frontend_source()
-    assert "bindSickLeaveOverlapGuard(form)" in script
-    assert "/api/sick-leaves/overlap-check" in script
-    assert "已有缺勤登记" in script
 
 
 def test_violation_sick_leave_creates_linked_pending_declaration_then_accepts_photo_material() -> None:

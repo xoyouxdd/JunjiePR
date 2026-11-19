@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 import tempfile
 from datetime import datetime, timedelta
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlsplit
 
 import pytest
 
@@ -31,7 +33,6 @@ from app.database.reference_data import ROLE_PERMISSION_CODES
 from app.database.connection import SessionLocal
 from app.database.accounts import disable_test_accounts, ensure_highest_admin_account
 from app.v2_models import Employee, UserAccount, UserSession  # noqa: E402
-from frontend_source import STATIC_ROOT, frontend_sources  # noqa: E402
 
 
 def login(client: TestClient, login_account: str, password: str = "1234"):
@@ -314,56 +315,73 @@ def test_cross_site_state_changes_are_rejected() -> None:
         assert cross_site_get.status_code == 200  # GET is not CSRF-guarded; session from the login above still works
 
 
+class _ShellResources(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.resources = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        reference = attributes.get("src") or attributes.get("href")
+        if reference and reference.startswith(("static/", "./static/", "/static/")):
+            kind = attributes.get("rel") if tag == "link" else attributes.get("type") if tag == "script" else None
+            self.resources.append((tag, kind, reference))
+
+
 def test_versions_come_from_a_single_source() -> None:
     with TestClient(app) as client:
         assert client.get("/health").json()["version"] == APP_VERSION
 
-        login_page = client.get("/login").text
         app_response = client.get("/")
-        app_page = app_response.text
-        # Both pages now render a brand image as well as the touch icon.
-        # Assert the exact resource multiset, not just a relaxed total count:
-        # missing, unversioned, stale, extra or duplicate references must fail.
-        for page, entrypoint, extra_resources in (
-            (login_page, "login.js", []),
-            (app_page, "app.js", ["static/css/workspace-ui.css", "static/css/announcements.css", "static/css/workbench.css", "static/css/avatars.css", "static/css/learning-shares.css", "static/css/appearance.css", "static/css/monthly-memory.css", "static/css/score-settings.css", "static/css/activities.css", "static/css/activity-points.css", "static/css/attendance-medals.css", "static/css/legacy-points.css", "static/css/personal-center.css", "static/js/appearance-boot.js"]),
+        for response, entries in (
+            (client.get("/login"), {("script", None, "static/js/login.js")}),
+            (app_response, {("script", "module", "static/js/app.js"), ("script", None, "static/js/appearance-boot.js")}),
         ):
-            resources = re.findall(r'(?:src|href)="(static/[^\"]+)"', page)
-            expected_resources = [
-                "static/manifest.json",
-                "static/images/fzpr-icon.png",
-                "static/css/style.css",
-                "static/images/fzpr-icon.png",
-                f"static/js/{entrypoint}",
-                *extra_resources,
-            ]
-            assert sorted(resources) == sorted(
-                f"{path}?v={STATIC_CACHE_VERSION}" for path in expected_resources
-            )
-        assert login_page.count(f"v={STATIC_CACHE_VERSION}") == 5
-        importmap = re.search(r'<script\b[^>]*type="importmap"[^>]*>(.*?)</script>', app_page, re.DOTALL)
+            assert response.status_code == 200
+            assert "no-store" in response.headers["cache-control"]
+            assert "__STATIC_CACHE_VERSION__" not in response.text
+            parser = _ShellResources()
+            parser.feed(response.text)
+            seen = set()
+            for tag, kind, reference in parser.resources:
+                resource = urlsplit(reference)
+                path = resource.path.removeprefix("./")
+                key = tag, kind, path
+                assert path.startswith("static/"), reference  # Keep resources relative to the deployment prefix.
+                assert resource.query == f"v={STATIC_CACHE_VERSION}", reference
+                assert key not in seen, reference
+                seen.add(key)
+                assert client.head("/" + reference.removeprefix("./")).status_code == 200, reference
+            assert seen >= entries | {
+                ("link", "manifest", "static/manifest.json"),
+                ("link", "apple-touch-icon", "static/images/fzpr-icon.png"),
+                ("link", "stylesheet", "static/css/style.css"),
+                ("img", None, "static/images/fzpr-icon.png"),
+            }
+
+        importmap = re.search(r'<script\b[^>]*type="importmap"[^>]*>(.*?)</script>', app_response.text, re.DOTALL)
         assert importmap is not None
         imports = json.loads(importmap.group(1))["imports"]
-        app_root = Path(__file__).resolve().parents[1] / "app"
-        # The appearance bootstrap is a classic script loaded before styles;
-        # app.js is the module entrypoint. Neither belongs in the import map.
-        entrypoints = {STATIC_ROOT.resolve() / "js" / name for name in ("app.js", "appearance-boot.js")}
-        assert f'<script src="static/js/appearance-boot.js?v={STATIC_CACHE_VERSION}"></script>' in app_page
-        reachable = {"./" + path.relative_to(app_root).as_posix() for path in frontend_sources() if path not in entrypoints}
-        assert set(imports) == reachable
         assert all(target == f"{specifier}?v={STATIC_CACHE_VERSION}" for specifier, target in imports.items())
-        assert app_page.count(f"v={STATIC_CACHE_VERSION}") == 19 + len(imports)
-        assert f'static/css/style.css?v={STATIC_CACHE_VERSION}' in app_page
-        assert f'src="static/js/app.js?v={STATIC_CACHE_VERSION}"' in app_page
-        assert 'type="module"' in app_page
+        # Follow declared imports from the served entry, so both missing map
+        # entries and extra entries for abandoned modules are detected.
+        declared_import = re.compile(r"""^\s*(?:import|export)\s+(?:[\w*$ {},\n]+\s+from\s+)?['"]([^'"\n]+)['"]""", re.MULTILINE)
+        pending = [("/" + path, "/" + path + f"?v={STATIC_CACHE_VERSION}") for tag, kind, path in seen
+                   if tag == "script" and kind == "module"]
+        reachable = set()
+        while pending:
+            path, target = pending.pop()
+            module = client.get(target)
+            assert module.status_code == 200, target
+            for reference in declared_import.findall(module.text):
+                specifier = "." + urljoin(path, reference)
+                assert specifier in imports, (path, reference)
+                if specifier not in reachable:
+                    reachable.add(specifier)
+                    pending.append((specifier[1:], imports[specifier][1:]))
+        assert set(imports) == reachable
         normalized_map = importmap.group(1).replace("\r\n", "\n").replace("\r", "\n")
         digest = base64.b64encode(hashlib.sha256(normalized_map.encode("utf-8")).digest()).decode("ascii")
         policy = app_response.headers["content-security-policy"]
         assert f"'sha256-{digest}'" in policy
         assert "'unsafe-inline'" not in policy
-        assert f'static/manifest.json?v={STATIC_CACHE_VERSION}' in login_page
-        assert f'static/images/fzpr-icon.png?v={STATIC_CACHE_VERSION}' in login_page
-        assert f'static/manifest.json?v={STATIC_CACHE_VERSION}' in app_page
-        assert f'static/images/fzpr-icon.png?v={STATIC_CACHE_VERSION}' in app_page
-        assert "__STATIC_CACHE_VERSION__" not in login_page
-        assert "__STATIC_CACHE_VERSION__" not in app_page

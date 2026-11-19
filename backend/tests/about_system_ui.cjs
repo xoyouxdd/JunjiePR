@@ -1,39 +1,45 @@
 // Real about dialog, modal lifecycle and product styles; no live accounts or writes.
-const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const assert=require('node:assert/strict');
 const {chromium}=require('./support/browser-runtime.cjs');
-const root=path.resolve(__dirname,'../app/static');
-const navigation=fs.readFileSync(path.join(root,'js/app/navigation.js'),'utf8');
-const about=navigation.slice(navigation.indexOf('function showAboutSystem('),navigation.indexOf('\nfunction renderTabs()'));
-const dialogSource=fs.readFileSync(path.join(root,'js/app/dialogs.js'),'utf8');
-const dialogs=dialogSource.slice(dialogSource.indexOf('function isNativePickerControl('),dialogSource.indexOf('\nfunction confirmModal('));
-const css=['style.css','workspace-ui.css','appearance.css'].map(f=>fs.readFileSync(path.join(root,'css',f),'utf8')).join('\n');
-const logo='data:image/png;base64,'+fs.readFileSync(path.join(root,'images/fzpr-icon.png')).toString('base64');
+const {routeFrontend}=require('./support/frontend-page.cjs');
+
+const html=`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/css/style.css"><link rel="stylesheet" href="/static/css/workspace-ui.css">
+<link rel="stylesheet" href="/static/css/appearance.css">
+<div class="app-frame"><header class="app-topbar"><img class="app-brand-logo" src="/static/images/fzpr-icon.png" width="30" height="30"></header>
+<nav id="tabs"></nav><div style="position:relative;z-index:2">今日小祝福</div><main class="app-shell"><div id="app"></div></main></div><div id="toast"></div>`;
 (async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{
 for(const width of [320,390,1280]){
  const page=await browser.newPage({viewport:{width,height:850},reducedMotion:'reduce'}),errors=[];
  page.on('pageerror',e=>errors.push(e.message));
- await page.setContent('<style>'+css+'</style><div class="app-frame"><img class="app-brand-logo" src="'+logo+'" width="30" height="30"><div style="position:relative;z-index:2">今日小祝福</div><nav id="tabs"></nav><button id="trigger">关于系统</button></div>');
- await page.evaluate('(()=>{\n'+dialogs+'\n'+about+`\n
-  window.credits={maintainers:'赵君杰、张森',feedback:'',revision:0,can_edit:false};window.failSave=false;window.readFail=false;window.deferSave=false;window.saveCount=0;window.destination='';
-  window.state={me:{role_code:'SYSTEM_ADMIN',employee_no:'HR01'}};
-  window.tabs=document.getElementById('tabs');
-  window.esc=v=>String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
-  window.prefersReducedMotion=()=>true;
-  window.json=(method,body)=>({method,body:JSON.stringify(body)});
-  window.gotoTab=tab=>window.destination=tab;
-  window.api=async(url,options={})=>{
-   if(url==='/api/changelog')return {app_version:'2026.11.01.1'};
-   if(window.readFail&&!options.method)throw new Error('读取失败');
-   if(options.method==='PUT'){
-    window.saveCount++;if(window.deferSave)await new Promise(resolve=>window.finishSave=resolve);
-    if(window.failSave)throw new Error('仅ADMIN账号可修改关于系统名单');
-    const body=JSON.parse(options.body);window.credits={...window.credits,maintainers:body.maintainers,feedback:body.feedback,revision:body.revision+1};
-   }
-   return {...window.credits};
-  };
-  document.getElementById('trigger').onclick=()=>showAboutSystem(document.getElementById('trigger'));
- })();`);
- const open=async()=>{await page.locator('#trigger').click();await page.locator('[data-about-maintainers]').filter({hasText:'张森'}).waitFor();await page.locator('[data-about-dialog]').evaluate(async el=>{await Promise.all(el.getAnimations({subtree:true}).map(animation=>animation.finished));});};
+ let credits={maintainers:'赵君杰、张森',feedback:'',revision:0,can_edit:false};
+ let failSave=false,readFail=false,deferSave=false,saveCount=0,finishSave;
+ await page.route('**/api/changelog',route=>route.fulfill({json:{app_version:'2026.11.01.1'}}));
+ await page.route('**/api/about-system',async route=>{
+  if(route.request().method()==='GET'&&readFail)return route.fulfill({status:500,json:{detail:'读取失败'}});
+  if(route.request().method()==='PUT'){
+   saveCount++;
+   if(deferSave)await new Promise(resolve=>{finishSave=resolve;});
+   if(failSave)return route.fulfill({status:403,json:{detail:'仅ADMIN账号可修改关于系统名单'}});
+   const {maintainers,feedback,revision}=route.request().postDataJSON();
+   credits={...credits,maintainers,feedback,revision:revision+1};
+  }
+  await route.fulfill({json:credits});
+ });
+ await page.goto(await routeFrontend(page,{html}));
+ await page.evaluate(async()=>{
+  const {state}=await import('/static/js/app/state.js');
+  const {renderTabs}=await import('/static/js/app/navigation.js');
+  const {configureViews}=await import('/static/js/app/context.js');
+  state.me={role_code:'SYSTEM_ADMIN',base_role_code:'SYSTEM_ADMIN',employee_no:'HR01',permissions:[]};
+  state.tab='home';
+  configureViews({home:()=>{},changelog:()=>{document.getElementById('app').textContent='测试更新记录';}});
+  renderTabs();
+ });
+ const trigger=page.locator(width<=760?'.mobile-more-drawer [data-open-about]':'.tabs-desktop [data-open-about]').last();
+ const more=page.locator('[data-open-more]');
+ const openDialog=async()=>{if(width<=760)await more.click();await trigger.click();};
+ const open=async()=>{await openDialog();await page.locator('[data-about-maintainers]').filter({hasText:'张森'}).waitFor();await page.locator('[data-about-dialog]').evaluate(async el=>{await Promise.all(el.getAnimations({subtree:true}).map(animation=>animation.finished));});};
  await open();
  assert.equal(await page.locator('.about-system-credits dt').allTextContents().then(x=>x.join('|')),'建设与维护|建议与反馈');
  assert.equal(await page.locator('[data-about-feedback]').textContent(),'—');
@@ -44,11 +50,11 @@ for(const width of [320,390,1280]){
  assert.equal(geometry.closeWidth,44);
  assert(await page.locator('.about-system-brand img').evaluate(el=>el.src===document.querySelector('.app-brand-logo').src));
  await page.keyboard.press('Escape');assert.equal(await page.locator('[data-about-dialog]').count(),0);
- assert(await page.locator('#trigger').evaluate(el=>el===document.activeElement));
- await page.evaluate(()=>credits.can_edit=true);await open();
+ assert(await (width<=760?more:trigger).evaluate(el=>el===document.activeElement));
+ credits.can_edit=true;await open();
  await page.locator('[data-about-edit]').click();
  await page.locator('#aboutMaintainers').fill('未保存');await page.locator('#aboutFeedback').fill('未保存建议人');await page.locator('[data-about-cancel]').click();
- assert.equal(await page.evaluate(()=>saveCount),0);
+ assert.equal(saveCount,0);
  await page.locator('[data-about-edit]').click();assert.equal(await page.locator('#aboutMaintainers').inputValue(),'赵君杰、张森');
  assert.equal(await page.locator('#aboutFeedback').inputValue(),'');
  await page.locator('#aboutMaintainers').fill('<img src=x onerror=alert(1)>\n李晓');
@@ -59,15 +65,15 @@ for(const width of [320,390,1280]){
  assert.equal(await page.locator('[data-about-feedback]').textContent(),'<b>建议人甲</b>\n建议人乙');
  assert.equal(await page.locator('[data-about-feedback] b').count(),0);
  await page.locator('[data-about-edit]').click();await page.locator('#aboutMaintainers').fill('保留输入');
- await page.evaluate(()=>failSave=true);await page.locator('[data-about-form] [type=submit]').click();
+ failSave=true;await page.locator('[data-about-form] [type=submit]').click();
  await page.locator('[data-about-status]').filter({hasText:'仅ADMIN'}).waitFor();
  assert.equal(await page.locator('#aboutMaintainers').inputValue(),'保留输入');assert(await page.locator('[data-about-form]').isVisible());
- await page.evaluate(()=>{failSave=false;deferSave=true;});await page.locator('[data-about-form] [type=submit]').click();
+ failSave=false;deferSave=true;await page.locator('[data-about-form] [type=submit]').click();
  assert(await page.locator('[data-about-close]').isDisabled());await page.keyboard.press('Escape');assert.equal(await page.locator('[data-about-dialog]').count(),1);
- await page.evaluate(()=>finishSave());await page.locator('[data-about-status]').filter({hasText:'已保存'}).waitFor();
- await page.locator('[data-about-updates]').click();assert.equal(await page.evaluate(()=>destination),'changelog');
+ assert.equal(typeof finishSave,'function');finishSave();await page.locator('[data-about-status]').filter({hasText:'已保存'}).waitFor();
+ await page.locator('[data-about-updates]').click();await page.getByText('测试更新记录',{exact:true}).waitFor();
  assert.equal(await page.locator('[data-about-dialog]').count(),0);assert.equal(await page.evaluate(()=>document.body.style.overflow),'');
- await page.evaluate(()=>{credits.maintainers='赵君杰、张森';readFail=true;});await page.locator('#trigger').click();
+ credits.maintainers='赵君杰、张森';readFail=true;await openDialog();
  await page.locator('[data-about-maintainers]').filter({hasText:'名单读取失败'}).waitFor();assert(!(await page.locator('[data-about-edit]').isVisible()));
  assert.equal(errors.length,0,errors.join('\n'));
  console.log('PASS about dialog',width,'layout, original logo, HR01 read-only, ADMIN edit/cancel/save/error, XSS, focus and updates');

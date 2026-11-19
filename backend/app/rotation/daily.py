@@ -112,9 +112,10 @@ def day_payload(db,attraction_id,work_date,at=None):
     row=S.day_row(db,attraction_id,work_date)
     roster=S.roster_summary(db,attraction_id,work_date)
     state=S.day_state(row) if row else None
+    retired = state is not None and S.retired_formal_draft(db, state)
     # Templates do not retrofit already-generated plans. Only upgrade editable
     # pre-start states; historical/frozen snapshots and existing assignments stay intact.
-    editable = bool(state and at is None and
+    editable = bool(state and not retired and at is None and
         (row.status == 'draft' and before_first_start(state,work_date,today,now)
          or work_date == today and prestart(state,now)))
     if editable:
@@ -128,11 +129,12 @@ def day_payload(db,attraction_id,work_date,at=None):
     snapshots=query.with_entities(RotationSnapshot.id,RotationSnapshot.minute).order_by(RotationSnapshot.minute,RotationSnapshot.id).all()
     latest=(query.filter(RotationSnapshot.minute<=minute) if minute is not None else query).order_by(RotationSnapshot.minute.desc(),RotationSnapshot.id.desc()).first()
     result={'date':work_date,'today':today,'clock':S.clock_payload(cfg),'roster':roster,'revision':row.version if row else 0,
-            'can_edit':bool(row and row.status=='draft' and work_date>=today),
+            'can_edit':bool(row and row.status=='draft' and work_date>=today and not retired),
             'can_generate':bool(roster['available'] and work_date>=today and (not row or row.status=='draft')),
             'draft':state if row and row.status=='draft' else None,'day':None,
             'times':[{'id':s.id,'minute':s.minute} for s in snapshots], 'as_of':latest.minute if latest else None,'requested_time':at,
-            'legacy_history':bool(row and row.status!='draft' and not snapshots),'roster_changed':False}
+            'legacy_history':bool(row and row.status!='draft' and not snapshots),'roster_changed':False,
+            'requires_current_rules':retired}
     if row and row.status=='draft':
         result['roster_changed'] = S.draft_roster_changed(db, attraction_id, work_date, state)
     if latest and (at is not None or state is None):
@@ -147,8 +149,8 @@ def day_payload(db,attraction_id,work_date,at=None):
     if at is None and state:
         editable_live = work_date == today and prestart(state, now)
         result['can_edit'] = result['can_edit'] or editable_live
-        result['can_generate'] = result['can_generate'] and result['can_edit']
-        result['can_publish'] = row.status == 'draft' and work_date == today and not result['roster_changed']
+        result['can_generate'] = result['can_generate'] and (result['can_edit'] or retired)
+        result['can_publish'] = row.status == 'draft' and work_date == today and not (retired or result['roster_changed'])
         if result['can_edit']:
             result['draft'] = deepcopy(state)
             result['day'] = planned_view(db, cfg, attraction_id, work_date, state) if row.status == 'draft' else present(db, cfg, attraction_id, work_date, state, now)
@@ -412,6 +414,8 @@ def edit(db,attraction_id,actor,work_date,body):
         planned=S.day_row(db,attraction_id,work_date);state=S.day_state(planned);state['dailyAutoStart']=work_date>today;S.save_day(db,planned,state);return
     if not row or (row.status!='draft' and not live_edit):raise S.ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
     state=S.day_state(row)
+    if action != 'draft_discard' and S.retired_formal_draft(db, state):
+        raise S.ActionError('旧版未启用预排仅供查看。请重新生成并核对后启用')
     previous_slots=seven_relief_slots(state)
     previous_open=S.E.open_seven_slots(state['lines']) if state.get('ruleVersion') == 2 and action in (
         'draft_rename_post', 'draft_post') else ()

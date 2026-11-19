@@ -643,21 +643,8 @@ def build_statistics_workbook(
         recognition_total = round(sum(float(row.get("credited_fraction", row.get("fraction") or 0)) for row in data["recognitions"] if row.get("status") == "confirmed"), 2)
         deduction_total = round(sum(float(row.get("points") or 0) for row in data["deductions"] if row.get("status") == "active"), 2)
     attendance_values = [float(row.get("attendance_score") or 0) for row in scores]
-    perfect_threshold = None
-    for row in scores:
-        base = row.get("base_score")
-        bonus = row.get("perfect_bonus")
-        if base is not None and bonus is not None:
-            perfect_threshold = max(perfect_threshold or 0.0, float(base) + float(bonus))
-        elif bonus is not None and float(bonus) > 0:
-            max_att = max(attendance_values) if attendance_values else 0.0
-            perfect_threshold = max(perfect_threshold or 0.0, max_att)
-    if perfect_threshold is None:
-        max_att = max(attendance_values) if attendance_values else 0.0
-        if max_att >= 11.99:
-            perfect_threshold = 11.99
-    if perfect_threshold is not None:
-        perfect_count = sum(1 for value in attendance_values if value >= perfect_threshold)
+    if max(attendance_values, default=0.0) >= 11.99:
+        perfect_count = sum(value >= 11.99 for value in attendance_values)
     else:
         sick_ids = {int(row["employee_id"]) for row in data["sick_leaves"] if row.get("status") != "void" and row.get("employee_id") is not None}
         perfect_count = sum(1 for row in scores if float(row.get("attendance_score") or 0) > 0 and int(row["employee_id"]) not in sick_ids)

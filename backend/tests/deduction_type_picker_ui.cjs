@@ -1,30 +1,31 @@
 // Run with Node.js and Playwright installed; exercises only a local DOM fixture.
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const { chromium } = require('./support/browser-runtime.cjs');
-const {frontendFunctionSource} = require('./frontend_source.js');
+const {routeFrontend} = require('./support/frontend-page.cjs');
 
 (async () => {
-  const css = fs.readFileSync(path.join(__dirname, '../app/static/css/style.css'), 'utf8');
-  const functions = ['deductionUpgradeGroup', 'deductionUpgradeOptionName', 'deductionUpgradeOptionMarkup', 'bindDeductionTypePicker'].map(frontendFunctionSource).join('\n');
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    await page.setContent(`<style>${css}</style><main style="padding:20px"><section class="panel" style="max-width:800px"><form id="testForm"><label>扣分类型<select id="deductionTypeSelect" name="deduction_type_id"><option value="11">考勤-早打卡（升级）</option><option value="12">考勤-迟到30分钟内（升级）</option><option value="13">安全</option><option value="14">违规病假（升级）</option></select><span id="deductionUpgradeHint"></span></label><button type="button" id="outside">其他字段</button></form></section></main>`);
-    await page.addScriptTag({ content: `
-      const state={options:{deduction_types:[
+    const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+      <link rel="stylesheet" href="/static/css/style.css">
+      <main id="app" style="padding:20px;max-width:800px"></main><div id="tabs"></div><div id="toast"></div>`;
+    await page.goto(await routeFrontend(page,{html}));
+    await page.evaluate(async () => {
+      const {state}=await import('/static/js/app/state.js');
+      const {deductionForm,bindDeductionUpgradeHint}=await import('/static/js/app/deductions.js');
+      state.me={permissions:['DEDUCTION_ALL']};
+      state.options={deduction_levels:[{id:1,code:'STATEMENT',name:'声明',points:1}],deduction_types:[
         {id:11,name:'考勤-早打卡',code:'ATT_EARLY_CLOCK',repeat_check:true},
         {id:12,name:'考勤-迟到30分钟内',code:'ATT_LATE_WITHIN_30',repeat_check:true},
         {id:13,name:'安全',code:'SAFETY',repeat_check:false},
         {id:14,name:'违规病假',code:'SICK_LEAVE_VIOLATION',repeat_check:true}
-      ]}};
-      const esc=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-      const cleanups=[];const registerPageCleanup=callback=>cleanups.push(callback);
-      ${functions}
-      bindDeductionTypePicker(document.getElementById('deductionTypeSelect'));
-      window.typeChanges=0;document.getElementById('deductionTypeSelect').addEventListener('change',()=>window.typeChanges++);
-    ` });
+      ]};
+      document.getElementById('app').innerHTML=deductionForm();
+      bindDeductionUpgradeHint();
+      window.typeChanges=0;
+      document.getElementById('deductionTypeSelect').addEventListener('change',()=>window.typeChanges++);
+    });
     const trigger = page.locator('.deduction-type-picker .recognizer-trigger');
     const menu = page.locator('#deductionTypeMenu');
     const note = trigger.locator('.deduction-upgrade-note');
@@ -37,7 +38,7 @@ const {frontendFunctionSource} = require('./frontend_source.js');
     assert.equal(await menu.locator('.deduction-upgrade-note').first().evaluate(node => getComputedStyle(node).color), 'rgb(0, 0, 0)');
     await page.locator('[data-deduction-type-option="12"]').click();
     assert.ok(!(await menu.isVisible()));
-    assert.equal(await page.evaluate(() => new FormData(document.getElementById('testForm')).get('deduction_type_id')), '12');
+    assert.equal(await page.evaluate(() => new FormData(document.getElementById('deductionForm')).get('deduction_type_id')), '12');
     assert.equal(await page.evaluate(() => window.typeChanges), 1);
     assert.match(await trigger.innerText(), /迟到早退/);
     await trigger.press('ArrowDown');
@@ -50,7 +51,7 @@ const {frontendFunctionSource} = require('./frontend_source.js');
     assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
     await trigger.click();await page.mouse.click(10, 10);
     assert.ok(!(await menu.isVisible()));
-    await page.evaluate(() => document.getElementById('testForm').reset());
+    await page.evaluate(() => document.getElementById('deductionForm').reset());
     assert.equal(await page.locator('#deductionTypeSelect').inputValue(), '11');
     assert.match(await trigger.innerText(), /考勤异常/);
     await page.setViewportSize({ width: 375, height: 812 });

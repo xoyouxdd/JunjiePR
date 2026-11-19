@@ -1,4 +1,4 @@
-"""Run Python and frontend regressions in their own processes.
+"""Run isolated regressions, reusing browser processes within each UI domain.
 
 Each test file sets its own isolated RECOGNITION_V2_DATA_DIR at module level
 and imports `app.main`, so a single-process `pytest tests` run makes only the
@@ -19,6 +19,7 @@ API and FFmpeg fixture. None connects to a deployed application by default.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -30,48 +31,13 @@ from temp_storage import finish_test_workspace, test_log, test_workspace
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 PYTHON = sys.executable
-BROWSER_TESTS = {"announcement_layout_ui.cjs", "announcement_design_ui.cjs", "deduction_type_picker_ui.cjs", "frontend_modules.cjs", "mobile_filter_layout_ui.cjs", "monthly_rank_ui.cjs", "recognition_upload_ui.cjs", "rotation_confirmation_ui.cjs", "rotation_adjustment_ui.cjs", "rotation_tablet_ui.cjs", "rotation_daily_ui.cjs", "rotation_formal_ui.cjs", "rotation_post_holds_ui.cjs", "rotation_cooperation_ui.cjs", "rotation_temporary_ui.cjs", "rotation_roster_independence_ui.cjs", "employee_types_ui.cjs", "video_learning_ui.cjs"}
-BROWSER_TESTS.update({"rotation_assignment_window_ui.cjs", "month_close_scope_ui.cjs", "recognition_photo_ui.cjs", "recognition_inbox_ui.cjs"})
-BROWSER_TESTS.add("workspace_compact_ui.cjs")
-BROWSER_TESTS.add("rotation_workflow_ui.cjs")
-BROWSER_TESTS.add("rotation_forecast_ui.cjs")
-BROWSER_TESTS.add("rotation_local_clock_ui.cjs")
-BROWSER_TESTS.add("rotation_confirmation_order_ui.cjs")
-BROWSER_TESTS.add("rotation_route_comparison_ui.cjs")
-BROWSER_TESTS.add("rotation_prepare_end_ui.cjs")
-BROWSER_TESTS.add("rotation_meal_reserve_ui.cjs")
-BROWSER_TESTS.add("rotation_access_policy_ui.cjs")
-BROWSER_TESTS.add("rotation_person_swap_ui.cjs")
-BROWSER_TESTS.add("rotation_overdue_ui.cjs")
-BROWSER_TESTS.add("rotation_post_edit_ui.cjs")
-BROWSER_TESTS.add("rotation_manual_sort_time_ui.cjs")
-BROWSER_TESTS.add("rotation_display_consistency_ui.cjs")
-BROWSER_TESTS.add("rotation_early_post_ui.cjs")
-BROWSER_TESTS.update({"rotation_break_window_ui.cjs", "rotation_waiting_notice_ui.cjs"})
-BROWSER_TESTS.add("avatar_ui.cjs")
-BROWSER_TESTS.add("attendance_medals_ui.cjs")
-BROWSER_TESTS.add("attendance_medal_art_ui.cjs")
-BROWSER_TESTS.add("activity_points_ui.cjs")
-BROWSER_TESTS.add("activities_ui.cjs")
-BROWSER_TESTS.add("activities_read_ui.cjs")
-BROWSER_TESTS.add("personal_center_ui.cjs")
-BROWSER_TESTS.add("supervisor_roster_refresh_ui.cjs")
-BROWSER_TESTS.add("legacy_points_ui.cjs")
-BROWSER_TESTS.add("avatar_integration_ui.cjs")
-BROWSER_TESTS.add("announcement_all_leads_ui.cjs")
-BROWSER_TESTS.add("learning_shares_ui.cjs")
-BROWSER_TESTS.add("rotation_shift_groups_ui.cjs")
-BROWSER_TESTS.add("rotation_timeout_cases_ui.cjs")
-BROWSER_TESTS.add("employee_number_aliases_ui.cjs")
-BROWSER_TESTS.update({"appearance_ui.cjs", "appearance_review_ui.cjs", "hr_pr_rankings_ui.cjs", "temporary_recognizers_ui.cjs"})
-ESM_VM_TESTS = {"view_lifecycle.cjs"}
-BROWSER_TESTS.update({"avatar_crop_ui.cjs", "declaration_admin_ui.cjs", "declaration_layout_ui.cjs",
-                      "declaration_association_ui.cjs",
-                      "material_upgrade_entry_ui.cjs",
-                      "material_submit_failure_ui.cjs",
-                      "declaration_pending_ui.cjs", "declaration_review_ui.cjs",
-                      "workspace_alignment_ui.cjs", "workspace_mobile_alignment_ui.cjs"})
-BROWSER_TESTS.update({"about_system_ui.cjs", "monthly_memory_failure_ui.cjs", "monthly_memory_review_ui.cjs", "monthly_memory_ui.cjs", "rotation_daily_refresh_ui.cjs", "rotation_screen_scroll_ui.cjs", "scoring_config_ui.cjs", "sick_import_identity_ui.cjs"})
+ESM_VM_TESTS = {"frontend_api_errors.cjs", "self_recognition_batch_fields.cjs", "view_lifecycle.cjs"}
+BROWSER_DOMAINS = {
+    "rotation": ("rotation_", "supervisor_roster_"),
+    "communication": ("announcement_", "learning_", "video_"),
+    "personal": ("appearance_", "avatar_", "activities_", "activity_", "monthly_", "attendance_medal", "legacy_points", "personal_"),
+}
+BROWSER_RESULT_PREFIX = "BROWSER_RESULTS "
 
 
 def collect_tests(suite: str) -> list[tuple[Path, str]]:
@@ -79,7 +45,7 @@ def collect_tests(suite: str) -> list[tuple[Path, str]]:
     if suite in {"all", "python"}:
         files.extend((path, "python") for path in sorted(HERE.glob("test_*.py")))
     for path in sorted(HERE.glob("*.cjs")):
-        kind = "browser" if path.name in BROWSER_TESTS else "node"
+        kind = "browser" if path.name.endswith("_ui.cjs") or path.name == "frontend_modules.cjs" else "node"
         if suite in {"all", kind}:
             files.append((path, kind))
     return files
@@ -111,6 +77,47 @@ def check_frontend_runtime(files: list[tuple[Path, str]]) -> str | None:
     return node
 
 
+def run_command(command, on_line=print) -> int:
+    with subprocess.Popen(
+        command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    ) as child:
+        try:
+            for line in child.stdout:
+                on_line(line, end="", flush=True)
+            return child.wait()
+        except BaseException:
+            if child.poll() is None:
+                child.terminate()
+            raise
+
+
+def run_browser_domain(node, domain, names) -> list[tuple[str, bool]]:
+    print(f"\n=== browser suite: {domain} ({len(names)} fixtures) ===", flush=True)
+    summaries = []
+
+    def report(line, **kwargs):
+        if line.startswith(BROWSER_RESULT_PREFIX):
+            summaries.append(line[len(BROWSER_RESULT_PREFIX):])
+        else:
+            print(line, **kwargs)
+
+    try:
+        returncode = run_command([node, "tests/support/browser-suite.cjs", *names], report)
+        if len(summaries) != 1:
+            raise ValueError("expected one fixture result summary")
+        results = json.loads(summaries[0])
+        if not isinstance(results, list) or [item["name"] for item in results] != names:
+            raise ValueError("fixture result summary does not match the requested suite")
+        if any(type(item["passed"]) is not bool for item in results) or (returncode == 0) != all(item["passed"] for item in results):
+            raise ValueError("fixture results disagree with suite exit status")
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        print(f"cannot complete browser suite {domain}: {error}", file=sys.stderr)
+        return [(name, False) for name in names]
+    return [(item["name"], item["passed"]) for item in results]
+
+
 def run_suite(suite: str) -> int:
     files = collect_tests(suite)
     if not files:
@@ -123,32 +130,25 @@ def run_suite(suite: str) -> int:
         return 2
     passed_modules: list[str] = []
     failed_modules: list[str] = []
+    browser_groups: dict[str, list[str]] = {}
     for path, kind in files:
+        if kind == "browser":
+            domain = next((name for name, prefixes in BROWSER_DOMAINS.items() if path.name.startswith(prefixes)), "workbench")
+            browser_groups.setdefault(domain, []).append(path.name)
+            continue
         relative = path.relative_to(ROOT).as_posix()
         print(f"\n=== {path.name} ({kind}) ===", flush=True)
         command = ([PYTHON, "-m", "pytest", relative, "-q", "-p", "no:warnings"]
                    if kind == "python" else [node, *(["--experimental-vm-modules"] if path.name in ESM_VM_TESTS else []), relative])
         try:
-            with subprocess.Popen(
-                command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                encoding="utf-8", errors="replace",
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-            ) as child:
-                try:
-                    for line in child.stdout:
-                        print(line, end="", flush=True)
-                    passed = child.wait() == 0
-                except BaseException:
-                    if child.poll() is None:
-                        child.terminate()
-                    raise
+            passed = run_command(command) == 0
         except OSError as error:
             print(f"cannot execute {path.name}: {error}", file=sys.stderr)
             passed = False
-        if passed:
-            passed_modules.append(path.name)
-        else:
-            failed_modules.append(path.name)
+        (passed_modules if passed else failed_modules).append(path.name)
+    for domain, names in browser_groups.items():
+        for name, passed in run_browser_domain(node, domain, names):
+            (passed_modules if passed else failed_modules).append(name)
     print(f"\nmodules: {len(passed_modules)} passed, {len(failed_modules)} failed")
     if passed_modules:
         print("passed:", ", ".join(passed_modules))

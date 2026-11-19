@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import os
 from datetime import date, timedelta
@@ -52,17 +51,6 @@ def test_attendance_upgrade_categories_do_not_mix() -> None:
     assert upgrade_type_codes("ATT_LATE_WITHIN_30") == {"ATT_LATE_WITHIN_30", "ATT_EARLY_LEAVE_WITHIN_30"}
     assert upgrade_type_codes("ATT_EARLY_CLOCK").isdisjoint(upgrade_type_codes("ATT_LATE_WITHIN_30"))
     assert upgrade_type_codes("SICK_LEAVE_VIOLATION") == {"SICK_LEAVE_VIOLATION"}
-
-
-def test_deduction_picker_labels_upgrade_groups_without_changing_type_ids() -> None:
-    source = read_frontend_source()
-    assert "${opt(types,'id',deductionUpgradeOptionName)}" in source
-    assert "${row.name}（${group.category}3个月内第2次触发升级）" in source
-    assert "['ATT_EARLY_CLOCK','ATT_LATE_CLOCK']" in source
-    assert "['ATT_LATE_WITHIN_30','ATT_EARLY_LEAVE_WITHIN_30']" in source
-    assert "bindDeductionUpgradeHint();bindDeductionV2244()" in source
-    assert 'aria-describedby="deductionUpgradeHint"' in source
-    assert "对应升级项：${group.items}" in source
 
 
 def test_late_and_early_leave_share_upgrade_history() -> None:

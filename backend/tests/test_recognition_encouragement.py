@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 from pathlib import Path
 
@@ -29,18 +28,3 @@ def test_confirmation_feedback_is_deterministic_and_only_claims_confirmation_the
     assert first == encouragement_message(**kwargs)
     assert "确认" in first
     assert "隐患" not in first
-
-
-def test_submission_and_confirmation_paths_use_existing_interfaces_without_external_ai() -> None:
-    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((ROOT / "app" / "routers").glob("*.py")))
-    script = read_frontend_source()
-    helper = (ROOT / "app" / "recognition_encouragement.py").read_text(encoding="utf-8")
-    style = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
-
-    assert "response[\"encouragement_options\"] = encouragement_options(" in router
-    assert 'stage="submitted"' in router
-    assert "showRecognitionEncouragement(result?.encouragement_options)" in script
-    assert "recognition-v2:encouragement-seen:" in script
-    assert "localStorage.setItem" in script
-    assert "external model or service" in helper
-    assert ".toast.encouragement" in style

@@ -1,15 +1,8 @@
 'use strict';
 // Real renderers, synthetic day snapshots, no production requests.
-const fs=require('fs'),path=require('path'),assert=require('node:assert/strict');
+const assert=require('node:assert/strict');
 const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
-const root=path.resolve(__dirname,'../app/static');
-const common=fs.readFileSync(path.join(root,'js/rotation-common.js'),'utf8');
-const workflow=fs.readFileSync(path.join(root,'js/rotation-workflow.js'),'utf8').split('const workflowTimeoutSeen=')[0];
-const source=fs.readFileSync(path.join(root,'js/rotation.js'),'utf8');
-const manager=source.slice(0,source.lastIndexOf('(async () => {'));
-const personal=fs.readFileSync(path.join(root,'js/app/rotation.js'),'utf8')
- .replace(/^import .*;\r?\n/gm,'').replace(/^export .*;\r?\n?/gm,'')
- .replaceAll('import.meta.url',"'https://example.invalid/rotation.js'");
+const {openRotationPage,origin,serveRotationFixture}=require('./support/rotation-browser.cjs');
 const basePerson={pid:'1',name:'轮岗测试人员',role:'rotation',state:'rest',start:420,end:1080,
  readyAt:585,breakKind:'rest',flags:[],tags:[],visited:[],absences:[],mealOptions:{canChoose:false},
  assign:{line:'D1',entryPost:'河马池',mode:'push',departAt:620},task:null};
@@ -30,37 +23,148 @@ async function boardViews(page,p,minute,extra={}){
   return {board,screen,readonly,legacy,can:canDepartNow(p,minute),time:hm(585.75),precise:taskTime(585.75)};
  },{p,minute,extra});
 }
-async function phoneView(page,p,minute,extra={}){
- await page.evaluate(({p,minute,extra})=>{
-  window.cleanups.splice(0).forEach(fn=>fn());
-  window.fixture={taskWorkflow:true,clock:{date:'2026-11-03',minute},person:p,
-   confirmations:[{action:'arrive',status:'executed',minute:540,source:'screen'}],rotation_circles:[],...extra};
-  const host=document.getElementById('host');host.innerHTML='';
-  window.confirmationReply=extra.confirmationReply??{confirmed:false};
-  window.confirmationOffline=!!extra.confirmationOffline;
-  sessionStorage.removeItem('formalRotation.todo.1');
-  if(extra.pendingRecord)sessionStorage.setItem('formalRotation.todo.1',JSON.stringify(extra.pendingRecord));
-  mountRotationTasks(host,{isCurrent:()=>true});
- },{p,minute,extra});
+async function openPhone(page){
+  const feed={};
+  await serveRotationFixture(page,{'/phone':'<!doctype html><meta name="viewport" content="width=device-width"><div id="app"><div id="host"></div></div><nav id="tabs"></nav><div id="toast"></div>'},pathname=>{
+   if(pathname==='/api/rotation-board/confirmation')return feed.offline?{status:503,json:{detail:'offline'}}:{json:feed.confirmation};
+   if(pathname==='/api/rotation-board/me')return {json:feed.data};
+   throw new Error(`Unexpected personal request: ${pathname}`);
+  });
+  await page.goto(origin+'/phone');
+  await page.evaluate(async()=>{
+   const {state}=await import('/static/js/app/state.js');
+   const {clearPageResources}=await import('/static/js/app/context.js');
+   const {mountRotationTasks}=await import('/static/js/app/rotation.js');
+   state.me={rotation_entry:true,id:1};
+   window.mountFixtureTasks=pendingRecord=>{
+    clearPageResources();
+    const host=document.getElementById('host');host.innerHTML='';
+    sessionStorage.removeItem('formalRotation.todo.1');
+    if(pendingRecord)sessionStorage.setItem('formalRotation.todo.1',JSON.stringify(pendingRecord));
+    mountRotationTasks(host,{isCurrent:()=>true});
+   };
+  });
+  return feed;
+}
+async function mountPhone(page,feed,p,minute,extra={}){
+  const {confirmationReply,confirmationOffline,pendingRecord,...snapshot}=extra;
+  feed.data={taskWorkflow:true,clock:{date:'2026-11-03',minute},person:p,
+   confirmations:[{action:'arrive',status:'executed',minute:540,source:'screen'}],rotation_circles:[],...snapshot};
+  feed.offline=!!confirmationOffline;
+  feed.confirmation=confirmationReply??{confirmed:false};
+  await page.evaluate(pending=>window.mountFixtureTasks(pending),pendingRecord);
+}
+async function readPhone(page){
  await page.locator('#host .rt-personal-task').waitFor();
  return {html:await page.locator('#host').innerHTML(),text:await page.locator('#host').innerText()};
 }
-(async()=>{for(const [engine,type,opts]of [['edge',chromium,{channel:'msedge'}],['webkit',webkit,{}],['firefox',firefox,{}]]){
- const browser=await type.launch({...opts,headless:true});
+
+async function checkBreakBoundary(board) {
+ for(const width of [1920,390]){
+  await board.setViewportSize({width,height:1000});
+  for(const kind of ['rest','meal','meal_rest'])for(const ops of [true,false]){
+   const state=kind==='meal'?'meal':'rest';
+   await board.evaluate(({state,kind,ops})=>{
+    document.body.classList.add('rotation-screen');
+    const person=window.breakFixturePerson={pid:'break-test',name:'餐休测试',role:'rotation',state,
+     start:420,end:1080,readyAt:585,breakStart:540,breakKind:kind,flags:[],tags:[],
+     assign:{line:'A1',entryPost:'塔台',mode:'push',departAt:620},task:null};
+    RT.data={day:{date:'2026-11-03',taskWorkflow:true,lines:[],persons:[person]},settings:{departEarly:1}};
+    RT.lastSyncedAt=Date.now();RT.sync='live';
+    window.drawBreakFixture=minute=>{document.getElementById('rtApp').innerHTML=workflowPools(minute,ops);};
+    window.drawBreakFixture(540);
+   },{state,kind,ops});
+   const original=board.locator(`${state==='meal'?'.rt-meals':'.rt-resting'} .rt-chip`);
+   const waiting=board.locator('.rt-ready .rt-chip');
+   const depart=board.locator('.rt-ready [data-wf-action=depart]');
+   assert.equal(await original.count(),1);
+   assert.equal(await original.locator('.rt-go,.rt-task-summary').count(),0);
+   assert.match(await original.innerText(),/剩 45 分钟/);
+   assert.equal(await waiting.count(),0);
+   // The clock reaches the break end both before and after the server sets ready.
+   for(const ready of [false,true]){
+    await board.evaluate(ready=>{if(ready)window.breakFixturePerson.state='ready';window.drawBreakFixture(585);},ready);
+    assert.equal(await original.count(),0);
+    assert.equal(await waiting.count(),1);
+    assert.match(await waiting.innerText(),/等待派发/);
+    assert.equal(await waiting.locator('.rt-go').count(),0);
+    assert.equal(await board.locator('.rt-ready [data-wf-action]').count(),0);
+    assert.doesNotMatch(await waiting.innerText(),/塔台|可出发/);
+   }
+   await board.evaluate(()=>{
+    Object.assign(window.breakFixturePerson,{task:{status:'assigned',allowedAt:620,deadlineAt:623,routes:[]},canDepart:false});
+    window.drawBreakFixture(617);
+   });
+   assert.match(await waiting.innerText(),/塔台.*10:20/s);
+   assert.doesNotMatch(await waiting.innerText(),/餐休剩 0 分钟/);
+   assert.equal(await depart.getAttribute('aria-disabled'),'true');
+   await board.evaluate(()=>{window.breakFixturePerson.canDepart=true;window.drawBreakFixture(620);});
+   assert.equal(await depart.getAttribute('aria-disabled'),null);
+   await board.evaluate(state=>{
+    const p=window.breakFixturePerson;
+    p.assign.departAt=585;
+    Object.assign(p,{state,task:{status:'assigned',allowedAt:585,deadlineAt:588,routes:[]},canDepart:false});
+    window.drawBreakFixture(582);
+   },state);
+   assert.equal(await original.count(),0);
+   assert.equal(await waiting.count(),1);
+   for(const [now,remaining] of [[582,3],[583,2],[584,1]]){
+    await board.evaluate(minute=>window.drawBreakFixture(minute),now);
+    assert.ok((await waiting.innerText()).includes('餐休剩 '+remaining+' 分钟'));
+    assert.equal(await depart.getAttribute('aria-disabled'),'true');
+   }
+   await board.evaluate(()=>{
+    Object.assign(window.breakFixturePerson,{state:'ready',canDepart:true});
+    window.drawBreakFixture(585);
+   });
+   assert.equal(await depart.getAttribute('aria-disabled'),null);
+   assert.equal(await waiting.locator('.rt-go').count(),1);
+  }
+ }
+}
+
+async function checkWaitingNotices(board) {
+ await board.setViewportSize({width:1920,height:1080});
+ const result=await board.evaluate(()=>{
+  const host=document.getElementById('rtApp');
+  host.innerHTML='<div id="fixtureAlerts"></div><section id="fixtureBoard">轮岗岗位与人员</section>';
+  const alerts=document.getElementById('fixtureAlerts'),lineBoard=document.getElementById('fixtureBoard');
+  const waiting=Array.from({length:500},(_,i)=>({line:['A1','A2','B1','B2','C2'][i%5],id:'wait-'+i}));
+  const day={timeoutCases:[],timeoutWaitingMatch:waiting};
+  const before=JSON.stringify(day),tops=[];
+  for(const ops of [true,false])for(const timeoutWaitingMatch of [[],waiting]){
+   alerts.innerHTML=workflowTimeoutBanner({...day,timeoutWaitingMatch},ops);
+   if(alerts.innerHTML)throw new Error('Waiting bookkeeping was rendered');
+   tops.push(lineBoard.getBoundingClientRect().top);
+  }
+  const realCase={id:'real-case',line:'A1',people:[{pid:'1'}],handler:null};
+  RT.data.day={timeoutCases:[realCase],timeoutWaitingMatch:[{line:'A2'}]};
+  alerts.innerHTML=workflowTimeoutBanner(RT.data.day,false);
+  return {tops,unchanged:JSON.stringify(day)===before};
+ });
+ assert.ok(result.tops.every(y=>y===result.tops[0]));
+ assert.equal(result.unchanged,true);
+ assert.equal(await board.locator('.rt-timeout-waiting').count(),0);
+ assert.equal(await board.locator('.rt-timeout-banner').count(),1);
+ assert.equal(await board.locator('[data-wf-timeout]').count(),0);
+ await board.evaluate(()=>{
+  RT.modalOpen=true;
+  document.getElementById('fixtureAlerts').innerHTML=workflowTimeoutBanner(RT.data.day,true);
+ });
+ assert.equal(await board.locator('[data-wf-timeout]').count(),1);
+ assert.equal(await board.locator('[data-wf-timeout]').getAttribute('data-wf-timeout'),'real-case');
+ assert.equal(await board.locator('#rtModal [role=dialog]').count(),0);
+}
+(async()=>{for(const engine of (process.env.ROTATION_DISPLAY_ENGINES||'edge,webkit,firefox').split(',')){
+ const type={edge:chromium,webkit,firefox}[engine];
+ const browser=await type.launch({headless:true,...(engine==='edge'?{channel:'msedge'}:{})});
  try{
   const board=await browser.newPage({viewport:{width:390,height:844}}),phone=await browser.newPage({viewport:{width:390,height:844}}),errors=[];
   for(const page of [board,phone])page.on('pageerror',e=>errors.push(e.message));
-  await board.setContent('<body data-formal-rotation><main id="rtApp"></main><div id="rtTabs"></div><button id="rtSwitch"></button></body>');
-  await board.addStyleTag({content:fs.readFileSync(path.join(root,'css/rotation.css'),'utf8')});
-  for(const content of [common,workflow,manager])await board.addScriptTag({content});
-  await phone.setContent('<body><link id="formalRotationStyles"><div id="host"></div></body>');
-  await phone.addStyleTag({content:fs.readFileSync(path.join(root,'css/rotation.css'),'utf8')});
-  await phone.addScriptTag({content:`window.fixture={};window.cleanups=[];window.state={me:{rotation_entry:true,id:1}};
-   const storage=new Map();Object.defineProperty(window,'sessionStorage',{value:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)}});
-   window.api=async url=>{if(url.includes('/confirmation?')){if(window.confirmationOffline)throw new Error('offline');return structuredClone(window.confirmationReply);}return structuredClone(window.fixture);};window.json=()=>{};window.beginViewRequest=()=>{};
-   window.registerPageCleanup=fn=>window.cleanups.push(fn);window.confirmModal=()=>{};window.formModal=()=>{};
-   window.refreshActionBadge=()=>{};window.toast=()=>{};window.esc=x=>String(x??'').replaceAll('<','&lt;');window.portalPath=x=>x;`});
-  await phone.addScriptTag({content:personal});
+  await openRotationPage(board,'/rotation-board');
+  await board.evaluate(()=>{RT.load=async()=>{};RT.render=()=>{};});
+  const feed=await openPhone(phone);
+  const phoneView=async(page,p,minute,extra)=>{await mountPhone(page,feed,p,minute,extra);return readPhone(page);};
   for(const state of ['rest','meal']){
    const p={...basePerson,state};const v=await boardViews(board,p,540),f=await phoneView(phone,p,540);
    for(const html of [v.board,v.screen,v.legacy,f.html]){
@@ -105,13 +209,11 @@ async function phoneView(page,p,minute,extra={}){
    assert(await phone.locator('[data-rotation-task=depart]').isEnabled());
   }
   // Unknown transport result remains pending; an authoritative negative result clears it on reconnect.
-  await phone.evaluate(({p,pendingRecord})=>{
-   cleanups.splice(0).forEach(fn=>fn());fixture={taskWorkflow:true,clock:{date:'2026-11-03',minute:585.75},person:p,confirmations:[],rotation_circles:[]};
-   confirmationOffline=true;sessionStorage.setItem('formalRotation.todo.1',JSON.stringify(pendingRecord));document.getElementById('host').innerHTML='';mountRotationTasks(document.getElementById('host'),{isCurrent:()=>true});
-  },{p:recovered,pendingRecord});
+  await mountPhone(phone,feed,recovered,585.75,{confirmations:[],pendingRecord,confirmationOffline:true});
   await phone.locator('[data-rotation-refresh]').waitFor();
   assert(await phone.evaluate(()=>!!sessionStorage.getItem('formalRotation.todo.1')));
-  await phone.evaluate(()=>{confirmationOffline=false;confirmationReply={confirmed:false};document.querySelector('[data-rotation-refresh]').click();});
+  feed.offline=false;
+  await phone.locator('[data-rotation-refresh]').click();
   await phone.locator('[data-rotation-task=depart]').waitFor();
   assert.equal(await phone.locator('[data-rotation-retry]').count(),0);
   const hold={...basePerson,state:'ready',assign:null,entryHold:{reason:'任务超时'},taskTimeout:{task:'t'},confirmationTokens:{entry_return:'token'}};
@@ -137,7 +239,11 @@ async function phoneView(page,p,minute,extra={}){
   }
   for(const value of [null,0,585.75,1439.999,1440,-.25]){
    const a=await board.evaluate(x=>({minute:hm(x),precise:taskTime(x)}),value);
-   const b=await phone.evaluate(x=>({minute:hm(x),precise:taskTime(x)}),value);assert.deepEqual(a,b);
+   const p=issued({...recovered,end:value},'assigned');
+   p.task.allowedAt=value;
+   await phoneView(phone,p,585.75);
+   assert.equal(await phone.locator('.rt-personal-identity > span').innerText(),a.minute);
+   assert.equal(await phone.locator('.rt-confirm-times strong').first().innerText(),a.precise);
   }
   const reliefFields=await board.evaluate(()=>{
    const persons={};for(const pid of ['1','2','3','4','5','6'])persons[pid]={pid,name:'人员'+pid,role:'rotation',start:Number(pid)<=3?420:435,end:1080};
@@ -159,6 +265,10 @@ async function phoneView(page,p,minute,extra={}){
    await board.evaluate(p=>{RT.data.day={date:'2026-11-03',taskWorkflow:1,persons:[p],lines:[{id:'D1',active:true,posts:[{name:p.post,key:'k',open:true,occ:p.pid}]}]};document.getElementById('rtApp').innerHTML=workflowBoardContent(RT.data.day,600,false);},p);
    await phoneView(phone,p,600);
    for(const page of [board,phone])assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,engine+' overflow '+width);
+  }
+  if(engine!=='firefox'){
+   await checkBreakBoundary(board);
+   await checkWaitingNotices(board);
   }
   assert.deepEqual(errors,[]);
   console.log(engine+': pause/recovery, rest/meal 3/2/1 window, permissions, personal timeout, continuous timing, unverified history, clock seconds and widths 320-1920 passed');

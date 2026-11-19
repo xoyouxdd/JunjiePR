@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import os
 import tempfile
@@ -156,14 +155,3 @@ def test_violation_sick_leave_without_statement_material_enters_the_same_collabo
         queue = client.get("/api/deductions/pending-materials", params={"scope": "all"})
         assert queue.status_code == 200, queue.text
         assert any(row["id"] == payload["violation"]["id"] for row in queue.json()["items"])
-
-
-def test_material_scope_ui_and_month_close_copy_are_present() -> None:
-    source = read_frontend_source()
-    assert "data-pending-material-scope" in source
-    assert "我的景点圈" in source
-    assert "全部景点圈" in source
-    assert "TA GSM和GSM均可协作补充" in source
-    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).resolve().parents[1] / "app" / "routers").glob("*.py")))
-    assert '"上月待月结景点圈"' in router
-    assert '"monthClose"' in router

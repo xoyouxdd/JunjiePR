@@ -14,7 +14,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import v2_models  # Register referenced tables without importing app.main.
-from app.rotation import service as S, test_clock
+from app.rotation import service as S
+import rotation_sandbox_clock as test_clock
 from app.rotation.models import RotationConfig, RotationDay, RotationDuty, RotationEvent, RotationNotice, RotationSegment
 from app.database.connection import Base
 
@@ -24,8 +25,19 @@ LINES = [{"id": "A", "posts": [{"name": "入口"}, {"name": "出口"}]},
          {"id": "B", "posts": [{"name": "入口"}, {"name": "出口"}]}]
 
 
+def test_production_ignores_saved_sandbox_simulation_without_rewriting_it(monkeypatch):
+    cfg = RotationConfig(clock_json='{"mode": "sim", "paused": true}')
+    original = cfg.clock_json
+    monkeypatch.setenv("RECOGNITION_ENVIRONMENT", "production")
+    assert S.clock_state(cfg) == {"mode": "real"}
+    assert cfg.clock_json == original
+    monkeypatch.setenv("RECOGNITION_ENVIRONMENT", "test")
+    assert S.clock_state(cfg) == {"mode": "sim", "paused": True}
+
+
 @pytest.fixture
 def rotation(monkeypatch):
+    monkeypatch.setenv("RECOGNITION_ENVIRONMENT", "test")
     # Use inherited project-directory permissions; pytest's private mode-0700
     # basetemp directories are inaccessible to some Windows sandbox identities.
     test_dir = Path(__file__).resolve().parents[2] / ".handover_review" / "rotation-transaction-tests" / uuid4().hex

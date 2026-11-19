@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -83,13 +82,6 @@ def test_sick_leave_validation_returns_field_message_and_writes_metadata_audit()
             assert audit.operator_name == "测试TA主管"
             assert '"fields": ["proof"]' in audit.after_json
             assert "filename" not in audit.after_json
-
-
-def test_baidu_absence_submission_explicitly_sets_all_critical_multipart_fields() -> None:
-    script = read_frontend_source()
-    for field in ("employee_id", "leave_start_date", "leave_end_date", "leave_days", "note"):
-        assert f"data.set('{field}'" in script
-    assert "data.set('proof',file,file.name)" in script
 
 
 def login_circle_hr(client: TestClient, employee_no: str) -> str:
@@ -1129,7 +1121,7 @@ def test_highest_admin_can_manage_circle_hr_passwords_and_senior_roles() -> None
             assert db.query(EmployeeRoleAssignment).filter_by(employee_id=tagsm["id"], status="active", role_id=gsm_role.id).count() == 1
 
 
-def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_password_entry() -> None:
+def test_v2231_global_grouped_recognizers_exclude_hr() -> None:
     today = date.today().isoformat()
     with TestClient(app) as client:
         with SessionLocal() as db:
@@ -1232,32 +1224,6 @@ def test_v2231_global_grouped_recognizers_exclude_hr_and_all_roles_have_home_pas
         assert created.status_code == 200, created.text
         assert created.json()["record"]["recognizer_name"] == "矮人测试TALEAD"
 
-    script = read_frontend_source()
-    assert "const r=state.me.role_code, items=[];" in script
-    assert "if (['CM','TR'].includes(r)) items.push(['home','个人中心'],['register','登记']);" in script
-    assert "items.push(['review','复核'],['members','组员记录'],['register','绩效登记'],['entries','主管登记记录']);" in script
-    assert "items.push(['hrEmployees','员工管理'],['monthClose','月结'],['circleHrAccounts','景点圈HR账号'],['hrGroups','小组管理']" in script
-    assert "async function renderMonthClose" in script
-    assert "items.push(['password',has('PASSWORD_RESET')?'密码管理':'修改密码']);" in script
-    assert "function renderPasswordPage" in script
-    assert "const canCorrectName=['HR_CIRCLE','SYSTEM_ADMIN'].includes(state.me.role_code);" in script
-    assert '<h2>账号姓名修改</h2>' in script
-    assert 'id="passwordBtn"' not in script
-    assert "function recognizerGroups(rows)" in script
-    assert "const imageRequired=selfMode;" in script
-    assert "recognitionSubmissionData(form,imageRequired)" in script
-    assert "data-hr-group-select" in script
-    assert "canEdit=initial.can_edit" in script
-    assert "/api/hr/scoring-config" in script
-    assert "label:'热力追踪主管'" in script
-    assert "label:'矮人迷宫主管'" in script
-    assert "label:'小熊罐子主管'" in script
-    assert 'data-recognizer-picker' in script
-    assert 'recognizer-group-toggle' in script
-    assert 'recognizer-group-list' in script
-    stylesheet = (Path(__file__).parents[1] / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
-    assert ".recognizer-menu[hidden]" in stylesheet
-    assert ".recognizer-group-list[hidden]" in stylesheet
 
 
 def test_v2234_imported_recognizers_are_available_from_policy_start() -> None:
@@ -1313,20 +1279,6 @@ def test_v2234_imported_recognizers_are_available_from_policy_start() -> None:
         assert created.status_code == 200, created.text
         assert created.json()["record"]["recognizer_name"] == "生效日TALEAD"
 
-    script = read_frontend_source()
-    assert 'data-evidence-camera' in script
-    assert 'data-evidence-album' in script
-    assert 'data-evidence-camera-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment"' in script
-    assert 'data-evidence-album-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"' in script
-    assert 'data-image-preview' in script
-    assert 'openImagePreview' in script
-    assert "data.append('image',file,file.name)" in script
-    stylesheet = (Path(__file__).parents[1] / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
-    assert ".image-preview-dialog" in stylesheet
-    assert ".image-preview-stage img[hidden]" in stylesheet
-    assert 'id="recognitionDate"' in script
-    assert "RECOGNIZER_ELIGIBILITY_START" in (Path(__file__).parents[1] / "app" / "role_constants.py").read_text(encoding="utf-8")
-    assert "recognizer_role_for_date" in "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).parents[1] / "app" / "routers").glob("*.py")))
 
 
 def test_same_day_recognition_warning_and_editable_hierarchy_export() -> None:

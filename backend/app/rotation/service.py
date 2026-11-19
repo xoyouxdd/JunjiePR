@@ -35,6 +35,7 @@ from app.rotation.models import (
 from app.rotation.roster import classify, fmt, hm
 from app.rotation.namespace import tables_for, runtime_for, runtime_for_row
 from app.database.connection import SessionLocal
+from app.runtime_environment import environment_kind
 
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,12 @@ def lines_of(cfg: RotationConfig) -> list[dict]:
 
 
 def clock_state(cfg: RotationConfig) -> dict:
-    return json.loads(cfg.clock_json or '{"mode": "real"}')
+    state = json.loads(cfg.clock_json or '{"mode": "real"}')
+    # Old sandbox dates can be paused in production databases. After removing
+    # the sandbox clock controls, read the real clock without rewriting the row.
+    if state.get("mode") == "sim" and isinstance(cfg, RotationConfig) and environment_kind() == "production":
+        return {"mode": "real"}
+    return state
 
 
 def clock_now(cfg: RotationConfig) -> tuple[str, float]:
@@ -512,6 +518,10 @@ def day_state(row: RotationDay) -> dict:
         from app.rotation.forecast import upgrade_opening_requests
         upgrade_opening_requests(state)
     return state
+
+
+def retired_formal_draft(db: Session, state: dict) -> bool:
+    return bool(db.info.get('rotation_formal') and state['status'] == 'draft' and state.get('ruleVersion') != 2)
 
 
 def save_day(db: Session, row: RotationDay, state: dict, *, notify: bool = True) -> None:
@@ -1090,7 +1100,7 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
             do_draft_action(db, attraction_id, 'system', {"action": "draft_generate", "date": day})
             row = day_row(db, attraction_id, day)
         state = day_state(row)
-        if draft_roster_changed(db, attraction_id, day, state):
+        if retired_formal_draft(db, state) or draft_roster_changed(db, attraction_id, day, state):
             # Never run a superseded roster or silently overwrite manual adjustments.
             return
         from app.rotation import daily as D
@@ -1132,6 +1142,7 @@ def board_payload(db: Session, attraction_id: int) -> dict:
     elif row and row.status == "draft":
         out["draft"] = day_state(row)
         out["roster_changed"] = draft_roster_changed(db, attraction_id, day, out["draft"])
+        out["requires_current_rules"] = retired_formal_draft(db, out["draft"])
     return out
 
 
@@ -1639,7 +1650,6 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 state = E.build_draft(day, roster, {"lines": lines_of(cfg)}, settings_of(cfg),
                                       duty_counts(db, attraction_id, day), week_minutes(db, attraction_id, day),
                                       push7_history=completed_push7(db, attraction_id, day))
-                state.setdefault('ruleVersion', 2)
                 if state['ruleVersion'] == 2:
                     from app.rotation.forecast import initialize as initialize_forecast
                     initialize_forecast(E.Engine(state, settings_of(cfg), None))
@@ -1660,6 +1670,8 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
         if not row or row.status != "draft":
             raise ActionError("没有正在编辑的草稿，请先生成")
         state = day_state(row)
+        if act != 'draft_discard' and retired_formal_draft(db, state):
+            raise ActionError('旧版未启用预排仅供查看。请重新生成并核对后启用')
         plan = state["plan"]
         from app.rotation.daily import seven_relief_slots, normalize_seven_assignments
         previous_relief=seven_relief_slots(state) if 'push7Targets' in plan else None

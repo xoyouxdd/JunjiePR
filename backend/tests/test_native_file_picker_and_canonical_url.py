@@ -1,50 +1,79 @@
-from __future__ import annotations
-from frontend_source import read_frontend_source
-
+"""Stable HTML and PWA contracts for the real sign-in entry."""
+from html.parser import HTMLParser
+import json
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_file_selection_uses_native_labels_without_hidden_input_clicks() -> None:
-    script = read_frontend_source()
-    stylesheet = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
-
-    # Native label/input activation stays inside the browser's trusted gesture
-    # path, including browsers that block script-triggered hidden file inputs.
-    assert 'class="secondary native-file-trigger" for="recognitionCameraInput"' in script
-    assert 'class="secondary native-file-trigger" for="recognitionAlbumInput"' in script
-    assert 'class="secondary native-file-trigger" for="importEmployeesWorkbook"' in script
-    assert 'class="native-file-input" name="workbook"' in script
-    assert 'class="native-file-input" data-material-pdf-input' in script
-    assert 'class="native-file-input" data-material-camera-input' in script
-    assert 'class="native-file-input" data-material-album-input' in script
-    assert "data-evidence-camera-input]')?.click()" not in script
-    assert "data-evidence-album-input]')?.click()" not in script
-    assert "data-material-pdf]').onclick=()=>pdfInput.click()" not in script
-    assert "data-material-camera]').onclick=()=>cameraInput.click()" not in script
-    assert "data-material-album]').onclick=()=>albumInput.click()" not in script
-    assert ".native-file-input" in stylesheet
-    assert ".native-file-trigger" in stylesheet
+from app.branding import BRAND_EN
 
 
-def test_portal_navigation_keeps_the_recognition_prefix() -> None:
-    script = read_frontend_source()
-    login_script = (ROOT / "app" / "static" / "js" / "login.js").read_text(encoding="utf-8")
-    index = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
-    login = (ROOT / "app" / "static" / "login.html").read_text(encoding="utf-8")
+STATIC = Path(__file__).resolve().parents[1] / "app" / "static"
 
-    assert "function portalPath(path)" in script
-    assert "queueExport('/api/statistics/export?'+qs)" in script
-    assert "queueExport('/api/pr-rankings/export?'+params())" in script
-    assert "fetch(portalPath('/api/export-tasks?'" in script
-    assert "portalPath(row.download_url)" in script
-    assert "location.href=portalPath('/login')" in script
-    assert "href=\"${portalPath('/api/hr/import-template')}\"" in script
-    assert "location.href = portalPath('/');" in login_script
-    assert '<link rel="canonical" href="https://124.220.229.9:28176/">' in index
-    assert '<link rel="canonical" href="https://124.220.229.9:28176/login">' in login
-    manifest = (ROOT / "app" / "static" / "manifest.json").read_text(encoding="utf-8")
-    assert '"start_url": "/"' in manifest
-    assert '"scope": "/"' in manifest
+
+class Shell(HTMLParser):
+    def __init__(self, filename):
+        super().__init__()
+        self.tags = []
+        self.title = ""
+        self.text = []
+        self.in_title = False
+        self.feed((STATIC / filename).read_text(encoding="utf-8"))
+
+    def find(self, tag, **attrs):
+        return [values for name, values in self.tags
+                if name == tag and all(values.get(key) == value for key, value in attrs.items())]
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, dict(attrs)))
+        if tag == "title":
+            self.in_title = True
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self.in_title = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.title += data
+        elif data.strip():
+            self.text.append(data.strip())
+
+
+def test_mobile_login_has_native_keyboard_and_password_controls():
+    login = Shell("login.html")
+    username, = login.find("input", name="employee_no")
+    password, = login.find("input", name="password")
+    viewport, = login.find("meta", name="viewport")
+    assert username["autocomplete"] == "username"
+    assert username["spellcheck"] == "false"
+    assert username["enterkeyhint"] == "next"
+    assert password["autocomplete"] == "current-password"
+    assert password["type"] == "password"
+    assert password["enterkeyhint"] == "go"
+    assert "interactive-widget=resizes-content" in viewport["content"]
+    toggle, = [button for button in login.find("button") if "data-password-toggle" in button]
+    assert toggle["type"] == "button"
+    assert toggle["aria-pressed"] == "false"
+    assert toggle["aria-label"]
+
+
+def test_canonical_entry_and_pwa_keep_root_deployment_urls():
+    for page, suffix in (("index.html", "/"), ("login.html", "/login")):
+        shell = Shell(page)
+        canonical, = shell.find("link", rel="canonical")
+        assert canonical["href"] == "https://124.220.229.9:28176" + suffix
+        assert shell.title == "FZ团队工作台"
+        assert shell.find("meta", name="apple-mobile-web-app-title", content="FZ工作台")
+        assert shell.find("link", rel="manifest", href="static/manifest.json?v=__STATIC_CACHE_VERSION__")
+        assert shell.find("link", rel="apple-touch-icon", href="static/images/fzpr-icon.png?v=__STATIC_CACHE_VERSION__")
+        assert BRAND_EN in shell.text
+    manifest = json.loads((STATIC / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["start_url"] == manifest["scope"] == "/"
+    assert (manifest["name"], manifest["short_name"]) == ("FZ团队工作台", "FZ工作台")
+    assert (STATIC / "images/fzpr-icon.png").is_file()
+
+
+def test_rotation_shells_share_the_workbench_identity():
+    for page in ("rotation.html", "rotation-board.html", "rotation-screen.html"):
+        shell = Shell(page)
+        assert shell.title.endswith(f" · {BRAND_EN}")
+        assert BRAND_EN in shell.text

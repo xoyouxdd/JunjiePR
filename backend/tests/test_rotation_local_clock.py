@@ -88,11 +88,12 @@ def find(data, pid):
 
 def test_normal_entry_and_release_have_no_local_extension():
     assert not any(path.startswith('/__local/') for path in NORMAL_PATHS)
+    assert '/api/rotation/test-clock' not in NORMAL_PATHS
     assert '/__local/' not in (ROOT / 'backend/app/static/rotation-board.html').read_text(encoding='utf-8')
     spec = importlib.util.spec_from_file_location('local_release_check', ROOT / 'scripts/build_release.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     names = [name for _, name in module.release_sources()]
-    assert not any('local_tools/' in name or 'rotation_clock/assets' in name or 'test_rotation_local_clock' in name for name in names)
+    assert not any('local_tools/' in name or 'rotation_clock/assets' in name or 'test_rotation_local_clock' in name or 'rotation_sandbox_clock' in name for name in names)
     assert not any('local_tools' in p.read_text(encoding='utf-8') for p in [ROOT / 'backend/app/main.py', ROOT / 'backend/app/routers/v2.py'])
 
 

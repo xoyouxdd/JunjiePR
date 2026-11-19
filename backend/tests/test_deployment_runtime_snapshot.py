@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -170,7 +171,7 @@ def test_generated_caches_are_ignored_when_live_and_cleared_on_restore(tree):
     assert (package / "sourceless.pyc").read_bytes() == b"runtime sourceless bytecode"
 
 
-@pytest.mark.parametrize("damage", ["payload", "metadata", "manifest", "marker", "missing-marker", "extra-file", "extra-cache"])
+@pytest.mark.parametrize("damage", ["payload", "metadata", "manifest", "marker", "missing-marker", "extra-file", "extra-cache", "foreign-name"])
 def test_corrupt_snapshot_is_rejected_before_any_environment_change(tree, damage):
     _, env, snapshot = tree
     runtime.snapshot_environment(env, snapshot)
@@ -191,6 +192,15 @@ def test_corrupt_snapshot_is_rejected_before_any_environment_change(tree, damage
     elif damage == "extra-cache":
         (snapshot / "files" / "__pycache__").mkdir()
         (snapshot / "files" / "__pycache__" / "extra.pyc").write_bytes(b"uncommitted cache")
+    elif damage == "foreign-name":
+        manifest = snapshot / "manifest.json"
+        receipt = json.loads(manifest.read_bytes())
+        receipt["inventory"]["files"]["../outside.txt"] = receipt["inventory"]["files"].pop("pyvenv.cfg")
+        raw = json.dumps(receipt).encode()
+        manifest.write_bytes(raw)
+        (snapshot / "complete.json").write_text(json.dumps({
+            "schema": 1, "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+        }), encoding="utf-8")
     before = runtime._scan(env, include_cache=True)
     with pytest.raises(runtime.EnvironmentSnapshotError):
         runtime.restore_environment(env, snapshot)
@@ -338,9 +348,13 @@ def test_final_verification_failure_is_not_reported_as_restored(tree, monkeypatc
     runtime.snapshot_environment(env, snapshot)
     (env / "pyvenv.cfg").write_bytes(b"new")
 
-    def fail(*args):
-        raise runtime.EnvironmentSnapshotError("injected final verification failure")
+    replace = runtime.os.replace
 
-    monkeypatch.setattr(runtime, "verify_environment", fail)
-    with pytest.raises(runtime.EnvironmentSnapshotError, match="final verification"):
+    def corrupt_after_replace(source, target):
+        replace(source, target)
+        if target == env / "pyvenv.cfg":
+            target.write_bytes(b"corrupted after restoring")
+
+    monkeypatch.setattr(runtime.os, "replace", corrupt_after_replace)
+    with pytest.raises(runtime.EnvironmentSnapshotError, match="Environment differs"):
         runtime.restore_environment(env, snapshot)

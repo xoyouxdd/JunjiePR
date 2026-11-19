@@ -1,11 +1,9 @@
 """Optional identity markers, independent of roles, scoring and group membership."""
 from datetime import datetime, timedelta, timezone
-import logging
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.background_worker import BackgroundWorker
 from app.date_utils import parse_iso_date
 from app.v2_models import Employee, UserAccount, UserSession
 
@@ -68,22 +66,3 @@ def enforce_account_expiry(db, employee_id):
         invalidate_data_caches()
         return True
     return False
-
-
-def _run(stop):
-    from app.database.connection import SessionLocal
-    while not stop.is_set():
-        try:
-            with SessionLocal() as db:
-                if expire_accounts(db):
-                    db.commit()
-                    from app.data_cache import invalidate_data_caches
-                    invalidate_data_caches()
-        except Exception:
-            logging.getLogger(__name__).exception('实习账号到期检查失败，将自动重试')
-        stop.wait(60)
-
-
-_worker = BackgroundWorker('internship-expiry', _run, join_timeout=5, counted=True)
-start_worker = _worker.start
-stop_worker = _worker.stop

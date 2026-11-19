@@ -195,15 +195,6 @@ async function main(){
     assert.equal(rankRequests.length,viewedRequests,'Replay never refetches or recomputes the result');
     assert.equal(await page.locator('.is-assembling').count(),0);
     assert.equal(await page.locator('[data-rank-replay]').evaluate(el=>el===document.activeElement),true);
-    // Deliver an offline, replayable preview using the same DOM, CSS and sprites.
-    let previewCss=fs.readFileSync(path.join(root,'css/style.css'),'utf8');
-    previewCss=previewCss.replace(/url\("\.\.\/images\/ranks\/([^"\)]+)"\)/g,(_,name)=>`url("data:image/png;base64,${fs.readFileSync(path.join(root,'images/ranks',name)).toString('base64')}")`);
-    const soundData='data:audio/wav;base64,'+fs.readFileSync(path.join(root,'audio/medal-soft-seal.wav')).toString('base64');
-    const previewPanel=(await page.locator('.personal-rank-content').evaluate(el=>el.outerHTML)).replace(/src="[^"]*\/static\/audio\/medal-soft-seal.wav"/,`src="${soundData}"`);
-    const homeSource=fs.readFileSync(path.join(root,'js/app/home.js'),'utf8');
-    const binding=homeSource.slice(homeSource.indexOf('const rankCeremonies='),homeSource.indexOf('function homeRankContent('));
-    const descriptions={0:'星光逐层浮现，简洁展示',10:'铜纹平稳铸成，简洁展示',20:'左右银环从两侧扣合，中央勋章显形',30:'盾身自底部铸成，金色纹路沿轮廓点亮',40:'底座浮现，主体轻落，双翼平顺展开',50:'晶徽从侧面翻转到正面，晶面扫光后定格',60:'中央星核先亮，盾身升起，双翼张开，星芒划过',70:'背后秘印先开启，主体从印中推出，双翼分两次伸展',80:'双翼先合拢包住主体，停顿蓄势后猛然展开，名字压印出现',90:'背景压暗，王座升起，主体落座、金翼展开，最后王冠落下、名字亮起'};
-    fs.writeFileSync(path.join(previewDir,'preview.html'),`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>十种月度勋章 · 逐层组成预览</title><style>${previewCss}\nbody{margin:0;padding:20px;background:#edf1f7}main{max-width:760px;margin:auto}#homeMonthSelect,#homeRankView{pointer-events:none}.rank-preview-tools{padding:18px;margin-bottom:18px;border-radius:16px;background:#fff}.rank-preview-tools label{display:grid;gap:8px;font-weight:600}.rank-preview-tools audio{width:100%;max-width:100%}.rank-preview-tools p{font-size:14px;color:#52627a;margin-bottom:0}</style><main><section class="rank-preview-tools"><label>切换勋章，查看不同组成方式<select id="previewTier">${Object.keys(names).reverse().map(value=>`<option value="${value}"${value==='20'?' selected':''}>${names[value]}</option>`).join('')}</select></label><p id="previewDescription"></p><p>白银起八种专属动作：扣环 / 铸纹 / 轻落 / 翻转 / 星核 / 秘印 / 蓄势 / 加冕</p><p>听声音可点下方“试听音效”，也可用此播放器：</p><audio controls preload="none" src="${soundData}"></audio></section>${previewPanel}</main><script>${binding}\nconst demoNames=${JSON.stringify(names)},descriptions=${JSON.stringify(descriptions)};const originalHero=document.querySelector('.member-rank-hero').outerHTML;let previewCleanup=()=>{};function showMedal(tier){previewCleanup();document.querySelector('.member-rank-hero').outerHTML=originalHero;const hero=document.querySelector('.member-rank-hero');hero.querySelector('.member-rank-stage').outerHTML=rankEmblem(tier);hero.querySelector('h3').textContent=demoNames[tier];hero.setAttribute('aria-label',demoNames[tier]+'游戏段位');document.querySelector('.personal-rank-content').dataset.rankTier=tier;document.querySelector('#previewDescription').textContent=rankCeremonies[tier].name+' · '+descriptions[tier];previewCleanup=bindRankCeremony(document.querySelector('main'));}document.querySelector('#previewTier').onchange=event=>showMedal(Number(event.target.value));showMedal(20);</script></html>`);
     await page.screenshot({path:path.join(previewDir,'mobile.png'),fullPage:true});
     const cinema=await browser.newPage({viewport:{width:390,height:844},recordVideo:{dir:previewDir,size:{width:390,height:844}}});
     await cinema.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -212,7 +203,7 @@ async function main(){
     await cinema.waitForFunction(()=>!document.querySelector('.is-assembling'));
     await cinema.waitForTimeout(700); // Hold the completed medal in the preview recording.
     const video=cinema.video();await cinema.close();
-    const videoPath=await video.path();fs.renameSync(videoPath,path.join(previewDir,'ceremony.webm'));
+    await video.saveAs(path.join(previewDir,'ceremony.webm'));
     await page.locator('[data-rank-sample]').click();
     await page.waitForFunction(()=>window.__rankAudioPlays.length===1&&document.querySelector('[data-rank-audio]').ended);
     assert.equal(await page.locator('[data-rank-sound]').getAttribute('aria-pressed'),'false','A sample does not enable automatic sound');

@@ -1,4 +1,4 @@
-"""测试时钟（仅测试阶段使用，正式版删除本文件和 routers/rotation_test_clock.py）。
+"""旧模拟轮岗的隔离回归时钟，不随应用打包。
 
 - 模拟时间：指定日期和时间，可暂停、调倍速；
 - 快进：时间直接往后推若干分钟，规则按顺序逐步生效；
@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import math
 
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
+from app.database.connection import get_db
 from app.rotation import service as S
+from app.rotation.access import require_controller, rotation_attraction_id
 from app.rotation.roster import fmt
+from app.runtime_environment import require_test_initialization
 
 
 MAX_SPEED = 120
@@ -113,3 +117,18 @@ def control(db: Session, attraction_id: int, body: dict) -> dict:
         S.mark_changed(db)
         result["clock"] = S.clock_payload(cfg)
         return result
+
+
+def install(app: FastAPI) -> None:
+    """Attach the fixture adapter only after checking the isolated database."""
+    require_test_initialization()
+    router = APIRouter(prefix="/api/rotation", dependencies=[Depends(require_controller)])
+
+    @router.post("/test-clock")
+    def clock_endpoint(payload: dict, db: Session = Depends(get_db)):
+        try:
+            return control(db, rotation_attraction_id(db), payload)
+        except S.ActionError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    app.include_router(router)

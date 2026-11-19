@@ -140,7 +140,11 @@ def generate(db, user, config, raw_photos):
 
 
 @router.post("/hr-monthly-reports/export")
-async def export(config: str = Form(...), photos: list[UploadFile] = File(default=[]), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+async def export_route(config: str = Form(...), photos: list[UploadFile] = File(default=[]), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    return await export(config, photos, db, user)
+
+
+async def export(config: str, photos: list[UploadFile], db: Session, user: V2User):
     require_report(user)
     try:
         options = ReportOptions.model_validate_json(config)

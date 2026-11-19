@@ -23,42 +23,44 @@ from app.database.migrations import registry
 
 BACKEND = Path(__file__).resolve().parents[1]
 APP = BACKEND / "app"
-EXPECTED_STEPS = (
-    ("2026-08-void-audit-columns", "ensure_void_audit_columns"),
-    ("2026-08-credential-columns", "ensure_credential_columns"),
-    ("2026-08-attraction-dimensions", "ensure_attraction_dimensions"),
-    ("2026-08-performance-indexes", "ensure_performance_indexes"),
-    ("2026-08-governance-case-indexes", "ensure_governance_case_indexes"),
-    ("2026-08-recognition-same-day-duplicate", "ensure_recognition_same_day_duplicate_columns"),
-    ("2026-08-deduction-statement-upgrade", "ensure_deduction_statement_upgrade_columns"),
-    ("2026-09-recognition-credit-cap-and-poc", "ensure_recognition_credit_cap_and_poc_columns"),
-    ("2026-08-employee-number-history", "ensure_employee_number_history"),
-    ("2026-09-deduction-photo-pdf-materials", "ensure_deduction_photo_pdf_materials"),
-    ("2026-09-collaborative-materials-and-violation-absence", "ensure_collaborative_material_columns"),
-    ("2026-09-account-status-password-timestamp", "ensure_account_status_password_timestamp"),
-    ("2026-09-login-account-archive", "ensure_login_account_archive_columns"),
-    ("2026-09-submission-payload-digest", "ensure_submission_payload_digest"),
-    ("2026-09-second-audit-query-indexes", "ensure_second_audit_query_indexes"),
-    ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
-    ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
-    ("2026-10-acting-duties", "ensure_acting_duty_columns_and_migrate"),
-    ("2026-10-recognition-shared-evidence", "ensure_recognition_shared_evidence"),
-    ("2026-10-audit-scope-and-appeal-removal", "backfill_audit_scope_and_remove_appeals"),
-    ("2026-10-group-leader-types", "ensure_group_leader_types"),
-    ("2026-10-group-codes", "ensure_group_codes"),
-    ("2026-10-group-codes-resequence", "resequence_all_group_codes"),
-    ("2026-10-month-rank-comments", "ensure_month_rank_comment_column"),
-    ("2026-10-month-rank-rule-version", "ensure_month_rank_rule_columns"),
-    ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
-    ("2026-10-employee-employment-history", "ensure_employee_employment_history"),
-    ("2026-10-employee-type-internship", "ensure_employee_type_columns"),
-    ("2026-10-learning-library-categories", "ensure_learning_categories"),
-    ("2026-11-about-system-credit-columns", "ensure_about_system_credit_columns"),
-    ("2026-11-rotation-five-posts", "ensure_rotation_five_posts"),
-    ("2026-11-scoring-policy-snapshots", "ensure_scoring_policy_snapshots"),
-    ("2026-11-rotation-six-posts", "ensure_rotation_six_posts"),
-    ("2026-11-rejected-upgrade-claim-release", "ensure_rejected_upgrade_claim_release"),
-)
+# Existing SQLite databases record these keys, and older upgrades run them in
+# order. Keep this historical baseline fixed as new migrations are registered.
+HISTORICAL_STEP_KEYS = """
+2026-08-void-audit-columns
+2026-08-credential-columns
+2026-08-attraction-dimensions
+2026-08-performance-indexes
+2026-08-governance-case-indexes
+2026-08-recognition-same-day-duplicate
+2026-08-deduction-statement-upgrade
+2026-09-recognition-credit-cap-and-poc
+2026-08-employee-number-history
+2026-09-deduction-photo-pdf-materials
+2026-09-collaborative-materials-and-violation-absence
+2026-09-account-status-password-timestamp
+2026-09-login-account-archive
+2026-09-submission-payload-digest
+2026-09-second-audit-query-indexes
+2026-09-material-job-claim-generation
+2026-09-sick-leave-import
+2026-10-acting-duties
+2026-10-recognition-shared-evidence
+2026-10-audit-scope-and-appeal-removal
+2026-10-group-leader-types
+2026-10-group-codes
+2026-10-group-codes-resequence
+2026-10-month-rank-comments
+2026-10-month-rank-rule-version
+2026-09-sick-leave-index-repair
+2026-10-employee-employment-history
+2026-10-employee-type-internship
+2026-10-learning-library-categories
+2026-11-about-system-credit-columns
+2026-11-rotation-five-posts
+2026-11-scoring-policy-snapshots
+2026-11-rotation-six-posts
+2026-11-rejected-upgrade-claim-release
+""".split()
 
 
 def test_employment_history_migration_preserves_legacy_rows_and_is_idempotent():
@@ -161,11 +163,13 @@ def test_code_imports_owning_modules_not_removed_facades() -> None:
 
 
 def test_stable_migration_keys_order_and_explicit_callables() -> None:
-    actual = tuple((key, runner.__name__) for key, runner in registry.MIGRATION_RUNNERS)
-    assert actual == EXPECTED_STEPS
-    assert tuple(registry.SCHEMA_MIGRATION_STEPS) == EXPECTED_STEPS
-    assert len({key for key, _ in actual}) == len(actual)
-    assert all(callable(runner) for _, runner in registry.MIGRATION_RUNNERS)
+    runners = registry.MIGRATION_RUNNERS
+    keys = [key for key, _ in runners]
+    historical = set(HISTORICAL_STEP_KEYS)
+    assert len(set(keys)) == len(keys)
+    assert [key for key in keys if key in historical] == HISTORICAL_STEP_KEYS
+    assert all(callable(runner) for _, runner in runners)
+    assert list(registry.SCHEMA_MIGRATION_STEPS) == [(key, runner.__name__) for key, runner in runners]
 
 
 def test_migrations_commit_each_completed_step_and_skip_applied_steps(monkeypatch) -> None:

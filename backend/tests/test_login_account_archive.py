@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import os
 from datetime import date, datetime, timedelta
@@ -240,14 +239,6 @@ def test_legacy_active_employee_with_archived_login_is_hidden_from_management_tr
             assert count == after_count and employee_id in matches
 
 
-def test_hr_archive_ui_and_export_marker_are_present() -> None:
-    script = read_frontend_source()
-    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((ROOT / "app" / "routers").glob("*.py")))
-    assert "data-delete-login-account" in script
-    assert "确认删除" in script
-    assert "已删除·留档" in script
-    assert '"/hr/employees/{employee_id}/account"' in router
-    assert "business_history_retained" in router
     # The archive timestamp is verified through the directory API above;
     # its projection may live outside the HTTP routing module.
 

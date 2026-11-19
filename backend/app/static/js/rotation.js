@@ -3,7 +3,6 @@
 
 const $app = document.getElementById('rtApp');
 const $tabs = document.getElementById('rtTabs');
-const $bar = document.getElementById('rtClockBar');
 const TABS = [['board', '看板'], ['draft', '每日班表'], ['roster', '名单'], ['records', '记录'], ['settings', '设置']];
 let me = null;
 let tab = 'board';
@@ -19,7 +18,7 @@ function editing() {
   return el && $app.contains(el) && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
 }
 
-// ---------------------------------------------------------------- 顶栏与测试时钟
+// ---------------------------------------------------------------- 顶栏
 
 function renderWho() {
   const who = document.getElementById('rtWho');
@@ -28,49 +27,8 @@ function renderWho() {
   who.textContent = label;
 }
 
-function renderClockBar() {
-  if (formalRotation || !isManager() || me.adjustment) { $bar.hidden = true; return; }
-  const c = RT.data.clock;
-  const sim = c.mode === 'sim';
-  const dates = RT.data.rosterDates || [];
-  $bar.hidden = false;
-  $bar.innerHTML = `<span class="rotation-test-badge">测试时钟</span>
-    <label>日期<input type="date" id="tcDate" value="${esc(c.date)}" list="tcDates"></label>
-    <datalist id="tcDates">${dates.map(d => `<option value="${esc(d)}">`).join('')}</datalist>
-    <label>时间<input type="time" id="tcTime" value="${hm(nowMin())}"></label>
-    <button type="button" class="secondary" data-tc="set">设定模拟时间</button>
-    <button type="button" class="danger" data-tc="reset">初始化到04:00（测试）</button>
-    ${sim ? `<button type="button" class="secondary" data-tc="${c.paused ? 'resume' : 'pause'}">${c.paused ? '继续' : '暂停'}</button>
-    <label>倍速<select id="tcSpeed">${[1, 5, 10, 30, 60].map(s => `<option value="${s}" ${Number(c.speed) === s ? 'selected' : ''}>×${s}</option>`).join('')}</select></label>
-    <button type="button" class="secondary" data-tc="jump">快进 10 分钟</button>
-    <button type="button" class="primary" data-tc="next">下一步</button>
-    <button type="button" class="ghost" data-tc="real">回到真实时间</button>` : '<span class="field-hint">当前为真实时间</span>'}`;
-  $bar.querySelectorAll('[data-tc]').forEach(button => {
-    button.onclick = () => clockAction(button.dataset.tc);
-  });
-  const speed = document.getElementById('tcSpeed');
-  if (speed) speed.onchange = () => clockAction('speed', { speed: Number(speed.value) });
-}
-
-async function clockAction(action, extra = {}) {
-  if (action === 'reset' && !extra.confirmed) {
-    confirmBox('初始化到04:00', '撤回当天拖拽、加撤岗位及所有运行记录，保留原班表，恢复04:00预排并暂停时钟。仅用于测试。', '确认初始化', () => clockAction('reset', {confirmed: true}), {warn: true});
-    return;
-  }
-  const body = { action, ...extra };
-  if (action === 'set') {
-    body.date = document.getElementById('tcDate').value;
-    body.time = document.getElementById('tcTime').value;
-  }
-  if (action === 'jump') body.minutes = 10;
-  try {
-    const out = await rtPost('/api/rotation/test-clock', body);
-    if (action === 'next') toast(out.waiting && out.waiting.length ? `等待个人或大屏确认：${out.waiting.join('；')}` : '已推进到当天结束');
-    await RT.load();
-  } catch (error) {
-    toast(error.message, true);
-  }
-}
+// The standalone local simulator supplies its own controls on the formal board.
+function renderClockBar() {}
 
 function renderTabs() {
   if (!isManager()) { $tabs.hidden = true; return; }
@@ -98,12 +56,13 @@ function openTab() {
 // ---------------------------------------------------------------- 看板
 
 function boardView() {
+  if(RT.data.requires_current_rules&&me.capabilities?.can_manage)return '<section class="panel rt-empty"><h2>尚未启用轮岗</h2><p class="rt-warn">旧版预排仅供查看。请在「每日班表」重新生成并核对后启用。</p></section>';
   const d = RT.data.day;
   if (!d) {
     if(RT.data.roster_changed&&(!formalRotation||me.capabilities.can_manage))return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 尚未启用轮岗</h2><p class="rt-warn">班表已更新，旧预排已过期。请在「每日班表」重新生成预排，核对后手动启用。</p></section>`;
     if(formalRotation)return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 尚未启用轮岗</h2><p>${me.capabilities.can_manage?'请在「名单」上传正式班表，并在「每日班表」核对预排。':'请等待主管发布当日班表。'}</p></section>`;
     const draft = RT.data.draft;
-    return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 还没有发布轮岗</h2><p>${draft ? '草稿已生成，到「每日班表」检查并发布后看板开始运转。' : '先在「名单」上传名单，再到「每日班表」生成当天的初始轮岗。测试时先用上方测试时钟设定日期和时间。'}</p></section>`;
+    return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 还没有发布轮岗</h2><p>${draft ? '草稿已生成，到「每日班表」检查并发布后看板开始运转。' : '先在「名单」上传名单，再到「每日班表」生成当天的初始轮岗。'}</p></section>`;
   }
   if (d.status === 'ended') return `<section class="panel rt-empty"><h2>${esc(d.date)} 的轮岗已结束</h2><p>${!formalRotation||me.capabilities.can_records?'可在「记录」查看当天的操作日志和个人轮岗记录。':'当天轮岗安排已结束。'}</p></section>`;
   const n = nowMin();
@@ -206,47 +165,6 @@ function personMenu(p, fromPool = false) {
   });
 }
 
-function postMenu(key) {
-  if(typeof adjustPostMenu==='function'){const [line,i]=key.split('#');adjustPostMenu(line,Number(i));return;}
-  const [lid, idx] = key.split('#');
-  const L = RT.data.day.lines.find(l => l.id === lid);
-  const x = L.posts[Number(idx)];
-  if (!L.active) { lineMenu(lid); return; }
-  const occ = x.occ ? personOf(x.occ) : null;
-  const actions = [];
-  if (x.open) {
-    if (occ) actions.push(['person', `查看 ${esc(occ.name)}`, 'secondary']);
-    actions.push(['close', `撤岗${occ ? '（在岗的人下线）' : ''}`, 'danger']);
-    if (!occ) {
-      actions.unshift(['open', '安排补岗', 'primary']);
-      actions.push(['place', '更正：放入一个人', 'secondary']);
-    }
-  } else {
-    actions.push(['open', '加岗（默认3分钟后）', 'primary']);
-    if (x.openAt && !x.opened) actions.push(['time', '修改加岗时间', 'secondary']);
-  }
-  openModal(`<h3>${esc(lid)} ${esc(x.name)}</h3><p class="modal-message">${x.open ? (occ ? `在岗：${esc(occ.name)}` : '空岗') : '未开放'}</p><div class="rt-actions">${actions.map(([k, t, c]) => `<button type="button" class="${c}" data-a="${k}">${t}</button>`).join('')}<button type="button" class="ghost" data-close>关闭</button></div>`, host => {
-    host.querySelectorAll('[data-a]').forEach(btn => {
-      btn.onclick = async () => {
-        const k = btn.dataset.a;
-        if (k === 'person') { personMenu(occ); return; }
-        if (k === 'open' || k === 'time') { postScheduleForm(lid, Number(idx), x, k === 'time'); return; }
-        if (k === 'close') { if (await act('/api/rotation/act', { action: 'post', line: lid, i: Number(idx), open: false }, '已撤岗')) closeModal(); return; }
-        const cand = RT.data.day.persons.filter(p => ['walkback', 'pending', 'rest', 'ready', 'away', 'notyet'].includes(p.state) && p.breakKind !== 'meal_rest');
-        if (!cand.length) { toast('池子里没有人可以放入', true); return; }
-        formBox(`放入 ${esc(lid)} ${esc(x.name)}`, `<label>人员<select name="pid">${cand.map(p => `<option value="${esc(p.pid)}">${esc(p.name)}（${STATE_NAME[p.state]}）</option>`).join('')}</select></label><label>调整原因<input type="text" name="reason" maxlength="100" required></label>`, f => act('/api/rotation/act', { action: personOf(f.pid)?.state === 'notyet' ? 'plan_place' : 'fix_place', pid: f.pid, line: lid, i: Number(idx), reason: f.reason }));
-      };
-    });
-  });
-}
-
-function postScheduleForm(lid, index, post, editingTime = false) {
-  const time = editingTime ? post.openAt : hm(Math.ceil(nowMin() + 3));
-  formBox(`${editingTime ? '修改加岗时间' : '安排加岗'} · ${esc(lid)} ${esc(post.name)}`,
-    `<label>加岗时间<input type="time" name="openAt" value="${esc(time)}" required></label><p class="field-hint">默认3分钟后；安排下一位可上岗人员，从入口依次推进补岗。</p>`,
-    f => act('/api/rotation/act', { action: 'post', line: lid, i: index, open: true, openAt: f.openAt }, '加岗时间已保存，系统自动安排人员'));
-}
-
 $app.addEventListener('click', event => {
   if (!isManager() || tab !== 'board' || !RT.data.day || RT.data.day.status !== 'live') return;
   const groupButton=event.target.closest('[data-group-depart]');
@@ -255,7 +173,11 @@ $app.addEventListener('click', event => {
   const person = event.target.closest('[data-pid]');
   if (person) { const p = personOf(person.dataset.pid); if (p) personMenu(p,person.hasAttribute('data-pool-person')); return; }
   const post = event.target.closest('[data-post]');
-  if (post) { postMenu(post.dataset.post); return; }
+  if (post) {
+    const [line, index] = post.dataset.post.split('#');
+    adjustPostMenu(line, Number(index));
+    return;
+  }
   const line = event.target.closest('[data-line]');
   if (line) lineMenu(line.dataset.line);
 });
@@ -367,6 +289,9 @@ function draftView(){
   const controls=`<section class="panel rt-daily"><header><h2>每日班表</h2><p class="field-hint">预排未来班表；首班前与今日看板同步，首班开始后固定，只读回顾。</p></header><div class="rt-row"><label>月份<input type="month" data-daily-month value="${esc(daily.month||RT.data.clock.date.slice(0,7))}"></label><label>日期<input type="date" data-daily-date value="${esc(daily.date||RT.data.clock.date)}"></label><button type="button" class="secondary" data-daily-reload>刷新班表</button></div>${calendar?`<div class="rt-daily-calendar" role="group" aria-label="本月每日班表">${['一','二','三','四','五','六','日'].map(d=>`<span class="rt-daily-weekday">${d}</span>`).join('')}${'<span aria-hidden="true"></span>'.repeat((new Date(calendar.month+'-01T12:00:00').getDay()+6)%7)}${calendar.days.map(d=>`<button type="button" class="${d.date===daily.date?'primary':'secondary'}" data-daily-date-button="${d.date}" aria-pressed="${d.date===daily.date}"><strong>${Number(d.date.slice(-2))}</strong><small>${d.status==='draft'?'预排':d.status==='live'?'已启用':d.status==='ended'?'已结束':d.has_roster?'有班表':'无班表'}</small></button>`).join('')}</div>`:''}<p role="status" data-daily-status ${daily.loading||daily.busy?'':'hidden'}>${daily.busy?'正在保存调整…':daily.loading?'正在读取班表…':''}</p><p role="alert" class="rt-warn" data-daily-error ${daily.error?'':'hidden'}>${daily.error?esc(daily.error)+'，请刷新班表后重试。':''}</p></section>`;
   if(!data||data.date!==daily.date)return controls;
   const roster=`<section class="panel"><details><summary>上传班表 · ${data.roster.people.length}人${data.roster.file_name?' · '+esc(data.roster.file_name):''}</summary><div class="rt-scroll"><table class="rt-table"><thead><tr><th>姓名</th><th>工号</th><th>班次原文</th></tr></thead><tbody>${data.roster.people.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.employee_no)}</td><td>${esc(p.cell)}</td></tr>`).join('')}</tbody></table></div></details></section>`;
+  if(data.requires_current_rules&&data.can_generate){
+    return controls+roster+'<section class="panel"><p class="rt-warn">旧版预排仅供查看。请重新生成并核对后启用。</p><button type="button" class="primary" data-d="generate">按当前规则重新生成预排</button></section>'+dailyHistory(data);
+  }
   if(data.can_edit){
     return controls+roster+`<section class="panel"><h3>调整当日预排</h3>${data.roster_changed?'<p class="rt-warn" role="alert">班表已更新，旧预排已过期。请按新班表重新生成并核对。</p><button type="button" class="primary" data-d="generate">按新班表重新生成预排</button>':''}<p class="field-hint">拖拽人员或岗位进行交换，支持跨线；岗位连同预排人员移动，双击岗位名称修改。</p><span role="status" data-daily-selection class="rt-daily-selection">拖拽到目标位置交换</span></section>`+initialDraftView(data);
   }

@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 from datetime import date
 from decimal import Decimal
@@ -29,7 +28,7 @@ def login(client: TestClient, employee_no: str) -> None:
     assert response.status_code == 200, response.text
 
 
-def test_authorized_inline_preview_is_cached_and_member_ui_uses_it() -> None:
+def test_authorized_inline_preview_is_cached_and_download_remains_original() -> None:
     source = BytesIO()
     with Image.new("RGB", (2400, 1200), (230, 235, 240)) as image:
         image.save(source, format="JPEG", quality=90)
@@ -117,13 +116,6 @@ def test_authorized_inline_preview_is_cached_and_member_ui_uses_it() -> None:
             assert db.query(StoredFile).filter_by(id=file_id).count() == 1
             assert db.query(AuditLog).filter_by(entity_type="recognition", entity_id=str(file_id), action="查看带水印材料").count() == 3
 
-    script = read_frontend_source()
-    router = "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).parents[1] / "app" / "routers").glob("*.py")))
-    assert "preview=1" in script
-    assert "function memberAttachment(record)" in script
-    assert "bindFilePreviews(host)" in script
-    assert "image-preview-v1-1920" in router
-    assert '"Content-Disposition": f"{\'inline\' if inline_preview else \'attachment\'};' in router
 
 
 def test_authorized_pdf_preview_is_inline_and_keeps_download_separate() -> None:

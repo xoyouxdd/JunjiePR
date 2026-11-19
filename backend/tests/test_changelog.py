@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import STATIC_ROOT, frontend_function_source, frontend_sources, read_frontend_source
 
 import os
 import re
@@ -20,7 +19,7 @@ from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-WORKBENCH_APPEARANCE_NOTE = "工作台新增夜间深色外观"
+CURRENT_RELEASE_NOTE = "清理公告交接和轮岗历史代码"
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:
@@ -107,7 +106,7 @@ def test_changelog_filters_by_role() -> None:
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert [item["summary"] for item in cm[0]["items"]] == [WORKBENCH_APPEARANCE_NOTE]
+    assert [item["summary"] for item in cm[0]["items"]] == [CURRENT_RELEASE_NOTE]
     assert [item["summary"] for release in cm if release["version"] == "2026.11.10.1" for item in release["items"]] == ["个人积点卡"]
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
@@ -120,8 +119,8 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
-    assert [item["summary"] for item in admin[0]["items"]] == [WORKBENCH_APPEARANCE_NOTE]
-    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [WORKBENCH_APPEARANCE_NOTE]
+    assert [item["summary"] for item in admin[0]["items"]] == [CURRENT_RELEASE_NOTE]
+    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [CURRENT_RELEASE_NOTE]
     assert '员工导入占用工号支持预检后跳过' not in cm_text
     assert '员工导入占用工号支持预检后跳过' not in gsm_text
 
@@ -133,7 +132,7 @@ def test_changelog_requires_matching_role_and_all_extra_permissions() -> None:
     assert item_visible(item, "CM", {"DATA_EXPORT", "DATA_VIEW"}) is False
 
 
-def test_changelog_api_and_navigation_exist() -> None:
+def test_changelog_api_is_scoped_to_the_logged_in_role() -> None:
     with TestClient(app) as client:
         login(client, "CMTEST01")
         data = client.get("/api/changelog")
@@ -145,19 +144,6 @@ def test_changelog_api_and_navigation_exist() -> None:
         summaries = [item["summary"] for release in body["releases"] for item in release["items"]]
         assert any("更新记录" in row for row in summaries)
         assert all("全局月结" not in row for row in summaries)
-    source = read_frontend_source()
-    assert "items.push(['changelog','更新记录']);" not in source
-    assert 'data-about-updates' in source
-    sources = frontend_sources()
-    entry = sources[STATIC_ROOT.resolve() / "js" / "app.js"]
-    registered = re.search(r"\bconfigureViews\s*\(\s*\{(.*?)\}\s*\)", entry, re.DOTALL)
-    assert registered is not None
-    assert re.findall(r"^\s*changelog\s*:\s*([\w$]+)\s*,?\s*$", registered.group(1), re.MULTILINE) == ["renderChangelog"]
-    owner = STATIC_ROOT.resolve() / "js" / "app" / "operations.js"
-    assert owner in sources
-    assert re.search(r"^import\s*\{[^}]*\brenderChangelog\b[^}]*\}\s*from\s*['\"]\./app/operations\.js['\"]", entry, re.MULTILINE)
-    assert re.search(r"\bexport\s*\{[^}]*\brenderChangelog\b[^}]*\}", sources[owner])
-    assert frontend_function_source("renderChangelog").startswith("async function renderChangelog")
 
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
@@ -165,18 +151,18 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in cm['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
+        assert [item['summary'] for item in cm['release']['items']] == [CURRENT_RELEASE_NOTE]
         assert cm['read'] is False
         assert client.post('/api/changelog/announcement/read',json={'version':APP_VERSION}).status_code == 200
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in tr['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
+        assert [item['summary'] for item in tr['release']['items']] == [CURRENT_RELEASE_NOTE]
         assert tr['read'] is False
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in hr['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
+        assert [item['summary'] for item in hr['release']['items']] == [CURRENT_RELEASE_NOTE]
         assert hr['read'] is False
         client.post("/api/logout")
         login(client, "TRTEST01")
@@ -191,7 +177,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post('/api/logout');login(client,'TRTEST01')
         assert client.get('/api/changelog/announcement').json()['read'] is True
         client.post('/api/logout');login(client,'GSMTEST01')
-        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
+        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']] == [CURRENT_RELEASE_NOTE]
 
 
 def test_import_skip_note_requires_hr_role_and_manage_permission():

@@ -18,6 +18,10 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
+from rotation_sandbox_clock import install  # noqa: E402
+
+
+install(app)
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +82,17 @@ def login(client,account,password='1234'):
 def enter(client,account):ok(client.post('/api/rotation/enter',json={'account':account}))
 def clock(client,**body):return client.post('/api/rotation/test-clock',json=body)
 def person(board,pid):return next(p for p in board['day']['persons'] if p['pid']==pid)
+
+
+def test_force_and_initial_restore_require_test_runtime(monkeypatch):
+    with TestClient(app) as manager:
+        login(manager, 'GSMTEST01')
+        enter(manager, '7777777')
+        with monkeypatch.context() as env:
+            env.setenv('RECOGNITION_ENVIRONMENT', 'production')
+            for flag in ('force', 'restore_initial'):
+                response = manager.post('/api/rotation/draft', json={'action': 'draft_generate', flag: True})
+                assert response.status_code == 403
 
 
 def setup(manager,day,posts,people,time='07:14'):

@@ -153,12 +153,12 @@ def push7_rank(history, pid):
     return tuple(history.get(pid, (0, '', 0)))
 
 
-def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, push7_history=None):
+def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, push7_history):
     """根据周班表生成当天初始轮岗草稿。
 
     duty_counts: {pid: {'push7': n, 'lost': n}} 本周已做次数
     week_minutes: {pid: {line: minutes}} 本周各线累计
-    push7_history: 新版使用实际完成记录。旧调用继续使用原预排统计。
+    push7_history: 使用实际完成记录。
     """
     cells = roster['days'].get(date)
     if cells is None:
@@ -189,8 +189,7 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
             'id': L['id'], 'group': L.get('group', ''), 'standby': bool(L.get('standby')),
             'walk': L.get('walk'),
             'posts': [dict(name=x['name'], openAt=x.get('openAt'), closeAt=x.get('closeAt'),
-                           seven=SEVEN_POST_PRIORITY.get(x['name'].strip(), x.get('seven'))
-                           if push7_history is not None else x.get('seven'),
+                           seven=SEVEN_POST_PRIORITY.get(x['name'].strip(), x.get('seven')),
                            **({'draftClosed': True} if x.get('draftClosed') else {}))
                       for x in L['posts']],
         })
@@ -203,12 +202,8 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
     # 07:00 班按岗位优先级和开放情况依次预排。
     sevens = sorted([p for p in rot if p['role'] == 'rotation' and p['start'] == 420],
                     key=lambda p: (-(p['end'] - p['start']), p['name']))
-    if push7_history is None:
-        seven_posts = sorted((post['seven'], L['id'], i) for L in lines for i, post in enumerate(L['posts'])
-                             if post.get('seven'))
-    else:
-        seven_posts = open_seven_slots(lines)
-        refresh_seven_configuration_alert(alerts, seven_posts, len(sevens))
+    seven_posts = open_seven_slots(lines)
+    refresh_seven_configuration_alert(alerts, seven_posts, len(sevens))
     if len(sevens) < 2:
         alerts.append('07:00 上班只有 %d 人，少于 2 人，7 点岗位需要主管安排' % len(sevens))
     use = seven_posts[:len(sevens)]
@@ -217,10 +212,7 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
         seven['%s#%d' % (lid, i)] = p['pid']
     # 保留可立即上岗的开班候选。新版派发时再从当前可上岗人员中排序。
     early = [p for p in rot if p['role'] == 'rotation' and p['start'] == open_at and not p['absences']]
-    if push7_history is None:
-        early.sort(key=lambda p: (duty_counts.get(p['pid'], {}).get('push7', 0), -(p['end'] - p['start']), p['name']))
-    else:
-        early.sort(key=lambda p: (push7_rank(push7_history, p['pid']), p['name'], p['pid']))
+    early.sort(key=lambda p: (push7_rank(push7_history, p['pid']), p['name'], p['pid']))
     push7 = [p['pid'] for p in early[:len(seven)]]
     if len(push7) < len(seven):
         alerts.append('07:15 班可做推 7 点的只有 %d 人，少于 7 点岗位 %d 个，请主管安排' % (len(push7), len(seven)))
@@ -256,7 +248,7 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
         alerts.append('开园班次人数不足，%d 个开园岗位没有人：%s' % (len(missing), '、'.join(missing)))
     hours = (roster.get('hours') or {}).get(date) or {}
     return {
-        'date': date, 'status': 'draft', 'version': 1,
+        'date': date, 'status': 'draft', 'version': 1, 'ruleVersion': 2,
         'openTime': hours.get('open'), 'closeAt': hours.get('close') or S.get('parkClose', '21:30'),
         'persons': persons, 'off': off, 'lines': lines,
         'plan': {'seven': seven, 'push7': push7, 'lost': lost, 'crew': crew},

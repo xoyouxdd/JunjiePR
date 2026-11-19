@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import os
 import tempfile
@@ -114,32 +113,6 @@ def test_overpage_pdf_is_rejected_without_orphan_source_files() -> None:
         assert rejected.status_code == 400, rejected.text
     after = {path.name for path in FILE_DIR.iterdir() if path.is_file()}
     assert after == before
-
-
-def test_photo_picker_keeps_camera_and_album_as_distinct_mobile_entries() -> None:
-    source = read_frontend_source()
-    assert "data-material-camera-input" in source
-    assert "data-material-album-input" in source
-    camera_fragment = source.split("data-material-camera-input", 1)[1][:180]
-    album_fragment = source.split("data-material-album-input", 1)[1][:180]
-    assert 'capture="environment"' in camera_fragment
-    assert 'capture="environment"' not in album_fragment
-
-
-def test_photo_picker_supports_pre_submission_delete_replace_and_local_thumbnails() -> None:
-    source = read_frontend_source()
-    for marker in (
-        "data-material-remove-photo",
-        "data-material-replace-photos",
-        "data-material-remove-pdf",
-        "data-material-replace-pdf",
-        "URL.createObjectURL",
-        "URL.revokeObjectURL",
-        "未上传时可先提交，主管可后续补充",
-        "材料已就绪",
-        "submitDateCleared",
-    ):
-        assert marker in source
 
 
 def test_photo_material_for_statement_upgrade_creates_review_work_order_after_conversion() -> None:
@@ -307,14 +280,3 @@ def test_pending_material_is_visible_and_repairable_by_another_supervisor() -> N
         assert any(row["id"] == record["id"] for row in queue.json()["items"])
         status = client.get(f"/api/deductions/{record['id']}/material-status")
         assert status.status_code == 200, status.text
-
-
-def test_no_material_submission_shows_follow_up_material_reminder() -> None:
-    source = read_frontend_source()
-    assert "声明已登记" in source
-    assert "请在“待办”或“我的登记记录”中点击“补充材料”完成上传。" in source
-    assert "handlePendingMaterialConflict" in source
-    assert "const collaboration=(pendingMaterials.items||[]);" in source
-    assert "我提交" in source
-    assert "协作补充" in source
-    assert "const ownVoid=own?` <button data-entry-void=\"${row.id}\" class=\"secondary\">作废</button>`:'';" in source

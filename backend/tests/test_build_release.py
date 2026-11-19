@@ -108,6 +108,7 @@ def test_release_whitelist_excludes_tests_and_docs() -> None:
     names = {archive_name for _, archive_name in mod.release_sources()}
 
     assert "backend/app/main.py" in names
+    assert "backend/app/sqlite_backup.py" in names
     assert "backend/requirements.txt" in names
     assert {"scripts/Deploy-RecognitionRelease.ps1", "scripts/server_release.py", "scripts/deployment_runtime.py"} <= names
     # Test-only dependencies must never reach a production server.

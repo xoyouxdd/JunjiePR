@@ -440,7 +440,9 @@ def seven_day(push7_absent=False):
         "hours": {DAY: {"open": "08:30", "close": "21:30"}},
     }
     S = dict(DEFAULT_SETTINGS)
-    day = build_draft(DAY, roster, {"lines": lines}, S, {}, {})
+    day = build_draft(DAY, roster, {"lines": lines}, S, {}, {}, push7_history={})
+    # Exercise the execution of an already-enabled legacy plan.
+    day['ruleVersion'] = 1
     hooks = Hooks()
     eng = Engine(day, S, hooks)
     eng.publish(hm("06:30"), "test")

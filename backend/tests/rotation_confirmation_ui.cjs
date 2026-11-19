@@ -4,10 +4,9 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const {chromium}=require('./support/browser-runtime.cjs');
-const root=path.join(__dirname,'../app/static');
+const {openRotationPage}=require('./support/rotation-browser.cjs');
 
 async function checkRepeatMeal(page){
-  await page.addScriptTag({content:fs.readFileSync(path.join(root,'js/rotation-forecast.js'),'utf8')});
   await page.evaluate(()=>{
     me={kind:'supervisor',name:'测试主管'};
     RT.data.day={date:'2026-10-11'};
@@ -74,13 +73,7 @@ async function main(){
   const browser=await chromium.launch({channel:'msedge',headless:true});
   try{
     const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:1});
-    let html=fs.readFileSync(path.join(root,'rotation.html'),'utf8');
-    html=html.replace(/<link[^>]+>/g,'').replace(/<script[\s\S]*?<\/script>/g,'');
-    html=html.replace('</head>',`<style>${fs.readFileSync(path.join(root,'css/style.css'),'utf8')}\n${fs.readFileSync(path.join(root,'css/rotation.css'),'utf8')}</style></head>`);
-    await page.setContent(html);
-    await page.addScriptTag({content:fs.readFileSync(path.join(root,'js/rotation-common.js'),'utf8')});
-    const source=fs.readFileSync(path.join(root,'js/rotation.js'),'utf8');
-    await page.addScriptTag({content:source.slice(0,source.lastIndexOf('(async () => {'))});
+    await openRotationPage(page,'/rotation');
     await page.evaluate(()=>{
       me={kind:'member',name:'测试员工',employee_no:'1'};
       RT.sync='live';RT.lastSyncedAt=Date.now();RT.fetchedAt=Date.now();

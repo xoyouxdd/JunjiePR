@@ -83,7 +83,7 @@ def _contexts(db,no,day=None):
 def personal_scope(db,user,selected=None):
     choices=contexts(db,user.employee.employee_no)
     home=user.employee.attraction_id
-    if not choices and not getattr(user,'rotation_temporary',False) and home:
+    if not choices and not user.rotation_temporary and home:
         circle=db.get(Attraction,home)
         if circle and circle.active and circle.employee_circle:
             # Home-circle personal access predates roster-specific authorization.

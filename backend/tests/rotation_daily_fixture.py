@@ -14,6 +14,10 @@ os.environ['RECOGNITION_ENVIRONMENT'] = 'test'
 from app.main import app
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+from rotation_sandbox_clock import install
+
+
+install(app)
 
 
 def ok(response):

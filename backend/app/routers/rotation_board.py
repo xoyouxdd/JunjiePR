@@ -46,7 +46,7 @@ ROLES = MANAGERS | {'CM', 'TR'}
 
 
 def capabilities(user):
-    if getattr(user,'rotation_temporary',False):
+    if user.rotation_temporary:
         return dict.fromkeys(('can_operate','can_manage','can_records','can_settings'),False)
     codes = set(user.role_codes)
     manage = bool(codes & MANAGERS)
@@ -61,7 +61,7 @@ def board_attraction_id(db, user):
 
 
 def can_enter(user, db=None):
-    if getattr(user,'rotation_temporary',False): return True
+    if user.rotation_temporary: return True
     if set(user.role_codes) & MANAGERS: return True
     if db is not None:
         from app.rotation.participation import contexts
@@ -104,7 +104,7 @@ def operator(user: V2User = Depends(staff)):
 def actor(user, *, personal=False):
     return RotationActor('member' if personal else 'supervisor', user.name,
                          member_employee_no=user.employee.employee_no,
-                         entered_by=user.employee, formal=True, temporary=getattr(user,'rotation_identity_temporary',getattr(user,'rotation_temporary',False)))
+                         entered_by=user.employee, formal=True, temporary=user.rotation_identity_temporary)
 
 
 def identity(user):
@@ -178,7 +178,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
     if not payload.get('confirmation_token'): raise HTTPException(400, '请刷新待办后重新确认')
     with runtime_for(db).lock:
         try:
-            if getattr(user,'rotation_temporary',False):
+            if user.rotation_temporary:
                 from app.rotation.temporary import current
                 reserve_writer(db)
                 user=current(db,request)

@@ -171,7 +171,7 @@ async function renderAnnouncements(){
   }
   async function handoverCenter(token){
     const data=await api('/api/announcements/handover-center');if(!active()||token!==seq)return;
-    const groups=data.groups||data.items.map(a=>({...a,key:String(a.id),owners:[a.owner],count:1,announcements:[a],can_handover:true}));
+    const {groups}=data;
     const categories=[...new Set([...options.categories,...groups.map(a=>a.category)])];
     host.innerHTML=`<h2>${data.all_visible?'全部板块交接':'我的板块交接'}</h2><p class="field-hint">${data.all_visible?'最高管理员可查看全部公告组':'仅显示本人发布或共同负责的公告组'} · 按板块和景点圈 / 项目整组交接；一人离任，其他共同负责人保留。</p><div class="announcement-handover-center">${categories.map(category=>{
       const rows=groups.filter(a=>a.category===category);if(!rows.length)return '';
@@ -251,16 +251,7 @@ async function renderAnnouncements(){
       host.querySelector('[data-ann-trainers]')?.addEventListener('click',()=>trainerManager(id,a,token));
       host.querySelector('[data-ann-edit]')?.addEventListener('click',async()=>{try{const latest=await api('/api/announcements/'+id);if(active()&&token===seq)publish(latest);}catch(e){fail(e);}});
       host.querySelector('[data-ann-withdraw]')?.addEventListener('click',()=>{const op=host.querySelector('#announcementOperation');op.innerHTML='<form class="form-stack"><label>撤下原因<textarea name="reason" required maxlength="1000" placeholder="说明原因及替代指引"></textarea></label><p class="field-hint">通知历次接收人员，保留正文和签收记录。</p><button type="submit" class="primary">确认撤下</button></form>';op.querySelector('form').onsubmit=e=>{e.preventDefault();withSubmitLock(e.target,async()=>{try{await api('/api/announcements/'+id+'/withdraw',json('POST',{reason:e.target.elements.reason.value,expected_version:a.current_version}));if(active()&&token===seq)await records(id);toast('公告已撤下');}catch(error){fail(error);}});};});
-      host.querySelector('[data-ann-handover]')?.addEventListener('click',async()=>{
-        if(h.scope_key){await responsibilityManager(h.scope_key,'handover');return;}
-        try{
-          const choices=await api('/api/announcements/successors/'+id);if(!active()||token!==seq)return;
-          const op=host.querySelector('[data-ann-handover-form]');
-          op.innerHTML=`<form class="form-stack announcement-handover-form"><h4>发起交接</h4><label>继任者<select name="successor_id" required><option value="">选择继任者</option>${choices.map(x=>`<option value="${x.id}">${esc(x.name)} · ${esc(x.employee_no)}</option>`).join('')}</select></label><label>交接说明<textarea name="reason" required maxlength="1000" placeholder="说明交接背景、持续要求和待跟进事项"></textarea></label>${options.can_admin?`<label class="checkbox-row"><input type="checkbox" name="force" ${a.can_edit?'':'checked'}>管理员兜底交接</label>`:''}<label class="checkbox-row"><input type="checkbox" required>已核对公告内容、附件及待签情况</label><p class="field-hint">${options.can_admin?'正常交接由继任者接受后生效；管理员兜底交接直接生效。':'继任者接受后生效，之前仍由当前负责人负责。'}</p><div class="actions"><button type="submit" class="primary">提交交接</button><button type="button" class="secondary" data-ann-handover-cancel>取消</button></div></form>`;
-          op.querySelector('[data-ann-handover-cancel]').onclick=()=>op.innerHTML='';
-          op.querySelector('form').onsubmit=e=>{e.preventDefault();const form=e.target;withSubmitLock(form,async()=>{try{await api('/api/announcements/'+id+'/handover',json('POST',{successor_id:Number(form.elements.successor_id.value),reason:form.elements.reason.value,expected_version:a.current_version,force:!!form.elements.force?.checked}));if(active()&&token===seq){toast(form.elements.force?.checked?'已完成兜底交接':'等待继任者接受');await records(id,a.version);}}catch(error){fail(error);}});};
-        }catch(e){fail(e);}
-      });
+      host.querySelector('[data-ann-handover]')?.addEventListener('click',()=>responsibilityManager(h.scope_key,'handover'));
     }catch(e){if(active()&&token===seq)screenError(e,()=>records(id,version));}
   }
   async function trainingPanel(id){

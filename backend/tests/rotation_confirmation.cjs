@@ -14,13 +14,14 @@ function context({realScheduling=false}={}) {
     localStorage:{getItem(){return null;}},
     sessionStorage:{setItem(k,v){storage.set(k,v);},getItem(k){return storage.get(k);},removeItem(k){storage.delete(k);}},
     AbortController, encodeURIComponent, setTimeout:()=>0, clearTimeout(){},
+    // Leave the page's real whoami bootstrap waiting. Each probe installs its own transport.
+    fetch:()=>new Promise(()=>{}),
     document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},
       addEventListener(){},body:{classList:{contains(){return false;}}}},
     window:{addEventListener(){}}, messages:[], run:null,
   });
   vm.runInContext(fs.readFileSync(path.join(root,'rotation-common.js'),'utf8'),ctx);
-  const source = fs.readFileSync(path.join(root,'rotation.js'),'utf8');
-  vm.runInContext(source.slice(0,source.lastIndexOf('(async () => {')),ctx);
+  vm.runInContext(fs.readFileSync(path.join(root,'rotation.js'),'utf8'),ctx);
   vm.runInContext(`
     toast=(message,bad)=>messages.push({message,bad});
     closeModal=()=>{RT.modalOpen=false;};

@@ -1,11 +1,14 @@
 """Real export handlers with synthetic users; no deployment/database reuse."""
 from test_rotation_temporary import app, setup, login, ok, TestClient, SessionLocal, Employee, UserAccount
 from app.routers import export_tasks as tasks
+from app.v2_models import AuditLog
 from io import BytesIO
 from zipfile import ZipFile
 from datetime import date
 import time
+import json
 import pytest
+from PIL import Image
 
 
 def wait(c, key):
@@ -72,19 +75,62 @@ def test_other_real_excel_renderers(target):
         with ZipFile(BytesIO(response.content)) as z:assert 'xl/workbook.xml' in z.namelist()
 
 
+def test_announcement_reports_match_direct_download_and_audit_once():
+    with TestClient(app) as c, TestClient(app) as cm:
+        ok(login(c, '9730040'))
+        ok(login(cm, '9730000'))
+        opts = ok(c.get('/api/announcements/options'))
+        announcement = ok(c.post('/api/announcements', json={
+            'title': '签收导出任务', 'summary': '保留导出授权', 'body': '用现有报表函数导出。',
+            'category': opts['categories'][0], 'scope_kind': 'circle',
+            'attraction_ids': opts['publisher']['circles'], 'tiers': ['frontline'],
+            'confirmation_level': 1, 'effective_on': date.today().isoformat(),
+            'request_key': 'export-task-announcement',
+        }))
+        base = f"/api/announcements/{announcement['id']}"
+        for filename, expected_type in [
+            ('export?format=pdf&version=1.0', 'application/pdf'),
+            ('followup-export?version=1.0', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+        ]:
+            target = base + '/' + filename
+            assert cm.post('/api/export-tasks', params={'target': target}).status_code == 403
+            direct = c.get(target)
+            assert direct.status_code == 200, direct.text
+            with SessionLocal() as db:
+                previous = db.query(AuditLog).filter_by(action='导出公告签收').count()
+            task = wait(c, create(c, target)['id'])
+            assert task['status'] == 'completed', task
+            output = c.get(task['download_url'])
+            assert output.status_code == 200, output.text
+            assert output.headers['content-type'] == direct.headers['content-type'] == expected_type
+            assert output.headers['content-disposition'] == direct.headers['content-disposition']
+            if expected_type == 'application/pdf':
+                assert output.content.startswith(b'%PDF-')
+            else:
+                with ZipFile(BytesIO(output.content)) as workbook:
+                    assert 'xl/workbook.xml' in workbook.namelist()
+            with SessionLocal() as db:
+                assert db.query(AuditLog).filter_by(action='导出公告签收').count() == previous + 1
+
+
 def test_real_pptx_preview_contract_is_not_bypassed():
     with TestClient(app) as c:
         ok(login(c,'9730040'))
-        config={'month':date.today().strftime('%Y-%m'),'template':'minimal','sections':['overview']}
-        import json
+        config={'month':date.today().strftime('%Y-%m'),'template':'minimal','sections':['overview','photos']}
         row=wait(c,create(c,'/api/hr-monthly-reports/export',data={'config':json.dumps(config)})['id'])
         assert row['status']=='failed' and '预览' in row['error'],row
         preview=ok(c.get('/api/hr-monthly-reports/preview',params={'month':config['month']}))
         config['preview_digest']=preview['digest']
-        row=wait(c,create(c,'/api/hr-monthly-reports/export',data={'config':json.dumps(config)})['id'])
+        photo = BytesIO()
+        Image.new('RGB', (30, 30), 'red').save(photo, format='PNG')
+        row=wait(c,create(c,'/api/hr-monthly-reports/export',data={'config':json.dumps(config)},
+                          files={'photos': ('activity.png', photo.getvalue(), 'image/png')})['id'])
         assert row['status']=='completed',row
         response=c.get(row['download_url']);assert response.status_code==200
         with ZipFile(BytesIO(response.content)) as z:assert 'ppt/presentation.xml' in z.namelist()
+        with SessionLocal() as db:
+            audit = db.query(AuditLog).filter_by(action='导出HR月报').order_by(AuditLog.id.desc()).first()
+            assert json.loads(audit.after_json)['photo_count'] == 1
 
 
 def test_expiration_and_disabled_account():

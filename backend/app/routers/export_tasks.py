@@ -1,4 +1,4 @@
-"""Bounded exports through the existing HTTP handlers, never a second renderer.
+"""Bounded exports using the same report builders and scope checks as direct downloads.
 
 Task credentials live only in RAM until execution ends. Files expire after 30
 minutes; a service restart intentionally invalidates tasks, rather than replaying
@@ -9,22 +9,29 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-import json
 import logging
 from pathlib import Path
 import re
 import tempfile
 from threading import Lock
 from time import monotonic, time, sleep
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import TypeAdapter, ValidationError
+from python_multipart.multipart import parse_options_header
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
+from starlette.datastructures import Headers, UploadFile
+from starlette.formparsers import FormParser, MultiPartException, MultiPartParser
 
-from app.v2_auth import current_user, V2User
+from app.hr_monthly_report import require_report
+from app.http_utils import client_ip
+from app.routers import announcements, declaration_statistics, hr_monthly_reports, statistics
+from app.services.performance_rankings import pr_ranking_scope
+from app.v2_auth import current_user, session_user, V2User
 from app.database.connection import get_db, EXPORT_DIR, SessionLocal
 
 router = APIRouter()
@@ -35,6 +42,9 @@ TTL = 1800
 MAX_BODY = 32 * 1024 * 1024
 MAX_OUTPUT = 80 * 1024 * 1024
 MAX_CACHE = 256 * 1024 * 1024
+INVALID_EXPORT = "导出未完成，请回原页面核对权限、筛选或预览后重试"
+MONTHLY_REPORT = "/api/hr-monthly-reports/export"
+OPTIONAL_INTEGER = TypeAdapter(int | None)
 
 
 @dataclass
@@ -69,7 +79,7 @@ def target_kind(target):
               "/api/declaration-statistics/export": "声明统计 Excel",
               "/api/hr-monthly-reports/export": "月报 PPTX"}
     if parts.path in labels:
-        if parts.path == "/api/pr-rankings/export" and parse_qs(parts.query, keep_blank_values=True).get("category", [None])[-1] == "points":
+        if parts.path == "/api/pr-rankings/export" and query_args(parts).get("category") == "points":
             return parts, "积点榜 Excel"
         return parts, labels[parts.path]
     if re.fullmatch(r"/api/announcements/[1-9]\d*/(?:export|followup-export)", parts.path):
@@ -77,48 +87,98 @@ def target_kind(target):
     raise HTTPException(400, "此入口不支持后台导出")
 
 
-def scope_key(db, user, target):
-    parts, _ = target_kind(target)
-    if getattr(user, "rotation_temporary", False):
+def query_args(parts):
+    return dict(parse_qsl(parts.query, keep_blank_values=True))
+
+
+def optional_int(params, key, message):
+    try:
+        return OPTIONAL_INTEGER.validate_python(params.get(key))
+    except ValidationError as exc:
+        raise HTTPException(422, message) from exc
+
+
+def export_scope(db, user, parts):
+    """Resolve permission and receipt scope once per authorization boundary."""
+    if user.rotation_temporary:
         raise HTTPException(403, "轮岗专用账号不可导出")
     path = parts.path
-    if path == "/api/statistics/export" and "DATA_EXPORT" not in user.permissions:
-        raise HTTPException(403, "没有导出权限")
-    if path == "/api/pr-rankings/export":
-        if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
-            raise HTTPException(403, "当前角色不能导出PR排名")
-        from app.services.performance_rankings import pr_ranking_scope
-        params = parse_qs(parts.query, keep_blank_values=True)
-        category = params.get("category", ["overall"])[-1]
-        raw = params.get("attraction_id", [None])[-1]
-        try:
-            attraction_id = int(raw) if raw is not None else None
-        except ValueError:
-            raise HTTPException(422, "景点圈参数无效")
-        pr_ranking_scope(db, user, attraction_id, params.get("population", ["frontline"])[-1], category)
-    if path == "/api/declaration-statistics/export" and not {"DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"} <= user.permissions:
-        raise HTTPException(403, "没有声明统计导出权限")
     visible = ()
-    if path == "/api/hr-monthly-reports/export":
-        from app.hr_monthly_report import require_report
+    data = None
+    if path == "/api/statistics/export":
+        statistics.require_statistics_export(user)
+    elif path == "/api/pr-rankings/export":
+        statistics.require_rankings_export(user)
+        params = query_args(parts)
+        attraction_id = optional_int(params, "attraction_id", "景点圈参数无效")
+        pr_ranking_scope(db, user, attraction_id, params.get("population", "frontline"), params.get("category", "overall"))
+    elif path == "/api/declaration-statistics/export":
+        declaration_statistics.require_declaration_export(user)
+    elif path == MONTHLY_REPORT:
         require_report(user)
-    if path.startswith("/api/announcements/"):
-        from app.routers.announcements import records, domain, get_announcement
+    else:
         aid = int(path.split("/")[3])
-        raw = parse_qs(parts.query).get("version", [None])[0]
-        try:
-            version = int(raw) if raw is not None else None
-        except ValueError:
-            raise HTTPException(422, "公告版本格式无效")
-        if path.endswith("followup-export") and not domain.can_view_handover(db, user, get_announcement(db, aid)):
-            raise HTTPException(403, "没有跟进报告导出权限")
-        data = records(aid, version, db, user)
+        version = optional_int(query_args(parts), "version", "公告版本格式无效")
+        data = announcements.announcement_export_records(db, user, aid, version, followup=path.endswith("/followup-export"))
         # Recheck the *actual* visible receipt scope, including changed group
         # leadership and announcement grants, before serving a completed file.
         visible = tuple(sorted(str(row.get("employee_id", row.get("id"))) for row in data["items"]))
-    return (user.id, user.account.id, user.employee.employee_no,
-            user.employee.attraction_id, user.role.code, user.base_role.code,
-            tuple(sorted(user.permissions)), visible)
+    return (user.id, user.account.id, user.employee.employee_no, user.employee.attraction_id,
+            user.role.code, user.base_role.code, tuple(sorted(user.permissions)), visible), data
+
+
+def checked_query(model, params):
+    try:
+        return model.model_validate(params)
+    except ValidationError as exc:
+        raise ValueError(INVALID_EXPORT) from exc
+
+
+async def monthly_report(root, content_type, db, user):
+    """Read the bounded request file using the same form parsers as Starlette."""
+    async def stream():
+        with (root / "request").open("rb") as source:
+            while chunk := source.read(256 * 1024):
+                yield chunk
+        yield b""
+
+    media_type, _ = parse_options_header(content_type)
+    headers = Headers({"Content-Type": content_type})
+    try:
+        if media_type == b"multipart/form-data":
+            form = await MultiPartParser(headers, stream()).parse()
+        elif media_type == b"application/x-www-form-urlencoded":
+            form = await FormParser(headers, stream()).parse()
+        else:
+            raise ValueError(INVALID_EXPORT)
+    except MultiPartException as exc:
+        raise ValueError(exc.message) from exc
+    try:
+        config = form.get("config")
+        photos = form.getlist("photos")
+        if not isinstance(config, str) or not config or any(not isinstance(photo, UploadFile) for photo in photos):
+            raise ValueError(INVALID_EXPORT)
+        return await hr_monthly_reports.export(config, photos, db, user)
+    finally:
+        await form.close()
+
+
+async def render_report(parts, db, user, announcement_data, root, content_type, audit_ip):
+    path, params = parts.path, query_args(parts)
+    if path == "/api/statistics/export":
+        query = checked_query(statistics.StatisticsExportQuery, params)
+        return statistics.export_statistics(**query.model_dump(), db=db, user=user)
+    if path == "/api/pr-rankings/export":
+        query = checked_query(statistics.RankingsExportQuery, params)
+        return statistics.export_pr_rankings(**query.model_dump(), db=db, user=user)
+    if path == "/api/declaration-statistics/export":
+        query = checked_query(declaration_statistics.DeclarationExportQuery, params)
+        return declaration_statistics.export_declaration_statistics(**query.model_dump(), db=db, user=user, audit_ip=audit_ip)
+    if path == MONTHLY_REPORT:
+        return await monthly_report(root, content_type, db, user)
+    followup = path.endswith("/followup-export")
+    format = "xlsx" if followup else checked_query(announcements.AnnouncementExportQuery, params).format
+    return announcements.export_report(int(path.split("/")[3]), format, db, user, announcement_data, followup=followup, audit_ip=audit_ip)
 
 
 def expire():
@@ -137,63 +197,40 @@ def owned(key, user):
         return job
 
 
-def run_job(job, application, original_scope, headers, method):
+def run_job(job, raw_token, content_type, audit_ip):
     started = monotonic()
     job.status = "running"
     root = Path(job.directory.name)
     try:
         async def run():
             parts, _ = target_kind(job.target)
-            source = open(root / "request", "rb")
-            received = False
-            status = 500
-            response_headers = {}
-            error_body = bytearray()
-            size = 0
-            async def receive():
-                nonlocal received
-                if not received:
-                    chunk = source.read(256 * 1024)
-                    if not chunk:
-                        received = True
-                    return {"type": "http.request", "body": chunk, "more_body": not received}
-                # StreamingResponse under ASGI 2.4 doesn't need disconnect polling.
-                await asyncio.Event().wait()
-            with open(root / "result", "wb") as output:
-                async def send(message):
-                    nonlocal status, response_headers, size
-                    if message["type"] == "http.response.start":
-                        status = message["status"]
-                        response_headers = {k.decode().lower(): v.decode("latin1") for k, v in message["headers"]}
-                    elif message["type"] == "http.response.body":
-                        chunk = message.get("body", b"")
-                        size += len(chunk)
-                        if size > MAX_OUTPUT:
-                            raise ValueError("报告超过后台导出容量，请缩小导出范围后重试")
-                        if status == 200:
-                            output.write(chunk)
-                        elif len(error_body) < 8192:
-                            error_body.extend(chunk[:8192-len(error_body)])
-                scope = {**original_scope, "type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
-                         "method": method, "path": parts.path, "raw_path": parts.path.encode(),
-                         "root_path": "", "query_string": parts.query.encode(), "headers": headers}
-                try:
-                    with SessionLocal() as db:
-                        actor = current_user(Request(scope), db)
-                        if scope_key(db, actor, job.target) != job.scope:
-                            raise ValueError("账号权限或可见范围已变化，请重新导出")
-                    await application(scope, receive, send)
-                finally:
-                    source.close()
-            if status != 200:
-                try:
-                    detail = json.loads(error_body).get("detail")
-                except (ValueError, UnicodeError):
-                    detail = None
-                raise ValueError(detail if isinstance(detail, str) else "导出未完成，请回原页面核对权限、筛选或预览后重试")
-            content_type = response_headers.get("content-type", "").split(";")[0]
-            if content_type not in {"application/pdf", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.openxmlformats-officedocument.presentationml.presentation"}:
+            with SessionLocal() as db:
+                actor = session_user(db, raw_token, parts.path)
+                scope, announcement_data = export_scope(db, actor, parts)
+                if scope != job.scope:
+                    raise ValueError("账号权限或可见范围已变化，请重新导出")
+                response = await render_report(parts, db, actor, announcement_data, root, content_type, audit_ip)
+            if response.status_code != 200:
+                raise ValueError(INVALID_EXPORT)
+            response_headers = response.headers
+            media_type = response_headers.get("content-type", "").split(";")[0]
+            if media_type not in {"application/pdf", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.openxmlformats-officedocument.presentationml.presentation"}:
                 raise ValueError("服务器未返回有效报告")
+            size = 0
+
+            async def chunks():
+                if isinstance(response, StreamingResponse):
+                    async for chunk in response.body_iterator:
+                        yield chunk
+                else:
+                    yield response.body
+
+            with open(root / "result", "wb") as output:
+                async for chunk in chunks():
+                    size += len(chunk)
+                    if size > MAX_OUTPUT:
+                        raise ValueError("报告超过后台导出容量，请缩小导出范围后重试")
+                    output.write(chunk)
             job.headers = {k: v for k, v in response_headers.items() if k in {"content-type", "content-disposition"}}
             job.size = size
         for attempt in range(4):
@@ -211,13 +248,14 @@ def run_job(job, application, original_scope, headers, method):
         job.status = "completed"
     except Exception as exc:
         logging.getLogger(__name__).exception("Background export failed: %s", job.id)
-        job.error = str(exc) if isinstance(exc, ValueError) else "报告制作中断，请回原页面重新导出"
+        if isinstance(exc, HTTPException):
+            job.error = exc.detail if isinstance(exc.detail, str) else INVALID_EXPORT
+        else:
+            job.error = str(exc) if isinstance(exc, ValueError) else "报告制作中断，请回原页面重新导出"
         (root / "result").unlink(missing_ok=True)
         job.status = "failed"
     finally:
         (root / "request").unlink(missing_ok=True)
-        headers.clear()  # Session cookie is never persisted and is dropped now.
-        original_scope.clear()
         job.elapsed = monotonic() - started
         job.finished = monotonic()
         with _lock:
@@ -235,8 +273,8 @@ def run_job(job, application, original_scope, headers, method):
 @router.post("/export-tasks", status_code=202)
 async def create_task(request: Request, target: str, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     parts, label = target_kind(target)
-    scope = scope_key(db, user, target)
-    method = "POST" if parts.path == "/api/hr-monthly-reports/export" else "GET"
+    scope, _ = export_scope(db, user, parts)
+    size_limit = MAX_BODY if parts.path == MONTHLY_REPORT else 0
     with _lock:
         expire()
         active = [j for j in _jobs.values() if j.status in {"receiving", "queued", "running"}]
@@ -266,14 +304,11 @@ async def create_task(request: Request, target: str, db: Session = Depends(get_d
         with open(Path(job.directory.name) / "request", "wb") as output:
             async for chunk in request.stream():
                 size += len(chunk)
-                if size > (MAX_BODY if method == "POST" else 0):
+                if size > size_limit:
                     raise HTTPException(413, "导出素材过大，照片总计不得超过30MB")
                 output.write(chunk)
-        headers = [(k, v) for k, v in request.scope["headers"] if k.lower() in {b"cookie", b"host", b"origin", b"content-type", b"user-agent"}]
-        headers.append((b"content-length", str(size).encode()))
-        original = {k: request.scope[k] for k in ("scheme", "server", "client", "http_version") if k in request.scope}
         job.status = "queued"
-        _pool.submit(run_job, job, request.app, original, headers, method)
+        _pool.submit(run_job, job, request.cookies.get("rc_v2_session"), request.headers.get("content-type", ""), client_ip(request))
         return job.payload()
     except BaseException:
         with _lock:
@@ -292,7 +327,9 @@ def list_tasks(user: V2User = Depends(current_user)):
 @router.get("/export-tasks/{key}/file")
 def download_task(key: str, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     job = owned(key, user)
-    if scope_key(db, user, job.target) != job.scope:
+    parts, _ = target_kind(job.target)
+    scope, _ = export_scope(db, user, parts)
+    if scope != job.scope:
         raise HTTPException(403, "账号权限或可见范围已变化，请重新导出")
     if job.status != "completed":
         raise HTTPException(409, "报告尚未制作完成")

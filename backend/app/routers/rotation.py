@@ -39,6 +39,7 @@ from app.security import request_is_https
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, token_hash
 from app.database.connection import SessionLocal, get_db
+from app.runtime_environment import require_test_initialization
 from app.services.audit import write_audit
 
 
@@ -301,6 +302,11 @@ def rotation_act(payload: dict, db: Session = Depends(get_db), actor: RotationAc
 
 @router.post("/draft")
 def rotation_draft(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Depends(require_controller)):
+    if payload.get("force") or payload.get("restore_initial"):
+        try:
+            require_test_initialization()
+        except RuntimeError as exc:
+            raise HTTPException(403, "强制重建预排仅用于隔离回归") from exc
     try:
         service.do_draft_action(db, rotation_attraction_id(db), actor, payload)
     except service.ActionError as exc:

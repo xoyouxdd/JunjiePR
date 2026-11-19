@@ -18,8 +18,7 @@ def test_first_shift_is_automatic_but_subsequent_ready_forecast_requires_click()
     roster = {'people': {str(i): {'name': '员工'+str(i)} for i in range(1, 4)},
               'days': {DAY: {str(i): '07:15-20:00' for i in range(1, 4)}}}
     state = E.build_draft(DAY, roster, {'lines': [{'id': 'A', 'posts': [{'name': '入口'}, {'name': '出口'}]}]},
-                          settings, {}, {})
-    state['ruleVersion'] = 2
+                          settings, {}, {}, push7_history={})
     e = E.Engine(state, settings, Hooks())
     W.initialize(e)
     e.publish(240, 'test')
