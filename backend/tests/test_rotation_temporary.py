@@ -18,6 +18,7 @@ from app.database.connection import SessionLocal
 from app.v2_models import Employee,UserAccount,Attraction,Role,EmployeeRoleAssignment
 from app.v2_crypto import hash_password
 from app.rotation import service as S
+from app.rotation import forecast
 from app.rotation.temporary import TemporaryMember as T,TemporarySession,COOKIE
 from app.rotation.namespace import FORMAL_TABLES as F
 
@@ -159,7 +160,9 @@ def seed_live():
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);state['lastTick']=minute
             state['plan'].update(crew={},seven={},push7=[])
             p=state['persons']['9730100'];p.update(state='ready',role='rotation',start=0,end=1440,readyAt=minute-1,readySince=minute-1,
-                breakKind='rest',absences=[],visited=['A1'],assign={'line':'A1','mode':'push','departAt':minute-1})
+                breakKind='rest',absences=[],visited=['A1'],assign=None)
+            eng, _ = S.engine_for(db, cfg, row, state)
+            forecast.plan(eng, minute)
             S.save_day(db,row,state)
         return aid
 
