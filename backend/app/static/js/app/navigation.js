@@ -319,12 +319,16 @@ function renderTabs() {
   const overflow=items.filter(i=>!ids.includes(i[0]));
   const overflowActive=overflow.some(([id])=>id===state.tab);
   const mobileTab=([id,name])=>tabButton([id,name]).replace(`<span class="nav-label">${esc(name)}</span>`,`<span class="nav-label">${esc(MOBILE_SHORT_LABELS[name]||name)}</span>`);
+  const previousNavScroll=tabs.querySelector('.nav-scroll')?.scrollTop||0;
   tabs.innerHTML=`<div class="tabs-desktop">${desktopPin}<div class="nav-scroll">${desktopGroups}</div>${desktopFooter}</div><div class="tabs-mobile has-overflow">${primary.map(mobileTab).join('')}<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能" title="更多">${navIcon('more')}<span class="nav-label">更多</span></button></div><div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header>${mobileIdentityCard()}${overflow.length?`<div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div>`:''}${aboutButton('secondary mobile-more-item nav-about')}<button type="button" class="secondary mobile-logout" data-mobile-logout>退出登录</button></div></div>`;
+  const nextNavScroll=tabs.querySelector('.nav-scroll');
+  if(nextNavScroll&&previousNavScroll)nextNavScroll.scrollTop=previousNavScroll;
   document.body.classList.add('has-nav');
   renderPageHeading(items);
   const drawer=tabs.querySelector('.mobile-more-drawer');
   let drawerLayer=null;
   const closeDrawer=()=>{drawerLayer?.close();};
+  drawer?.addEventListener('click',event=>{if(event.target===drawer)closeDrawer();});
   tabs.querySelectorAll('[data-open-about]').forEach(button=>button.onclick=()=>{closeDrawer();showAboutSystem(button);});
   tabs.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;closeDrawer();renderTabs();render();});
   tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawerLayer=null;leaveLayer(drawer,()=>{drawer.hidden=true;});}});});

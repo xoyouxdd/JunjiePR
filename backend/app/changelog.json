@@ -1,4 +1,7 @@
 [
+  {"version": "2026.11.19.2", "date": "2026-11-19", "status": "candidate", "items": [
+    {"summary": "工作台新增夜间深色外观", "detail": "可在外观设置切换夜间深色，选择保存在当前浏览器。工作台同步调整导航、弹窗和操作提示的显示。", "audiences": ["all"]}
+  ]},
   {"version": "2026.11.19.1", "date": "2026-11-19", "status": "candidate", "items": [
     {"summary": "轮岗取消二次确认后返回原表单", "detail": "再次进入吃饭区时，取消二次确认会返回原餐休或人员池表单，可以直接修改选择。", "audiences": ["CM", "TR", "SUPERVISOR", "TA_SUPERVISOR", "TA_GSM", "GSM"]},
     {"summary": "页面资源加载兼容性修复", "detail": "页面资源按浏览器支持的方式传输压缩内容，分段请求保持原有读取方式。", "audiences": ["all"]}

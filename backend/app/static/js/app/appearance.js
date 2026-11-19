@@ -39,12 +39,13 @@ const SKINS = [
   {id:'circle',name:'景点圈 · 手绘漫游',caption:'跟随所属景点圈，走进伙伴的故事。',collection:'STORYBOOK COLLECTION'},
   {id:'blue',name:'经典蓝',caption:'清晰有序 · 熟悉的工作台'},
   {id:'green',name:'清新青绿',caption:'柔和清爽 · 从容处理日常'},
-  {id:'ivory',name:'暖米白',caption:'温暖简洁 · 专注阅读与工作'}
+  {id:'ivory',name:'暖米白',caption:'温暖简洁 · 专注阅读与工作'},
+  {id:'dark',name:'夜间深色',caption:'低眩光深蓝灰 · 夜间专注护眼'}
 ];
 
 function mountAppearance(host) {
   const card=s=>`<button type="button" class="appearance-option ${s.collection?'appearance-featured':''}" data-skin-choice="${s.id}" aria-pressed="false"><span class="appearance-preview appearance-preview-${s.id}" aria-hidden="true">${s.collection?`<span class="appearance-collection">${s.collection}</span><span class="appearance-art"></span><span class="appearance-preview-word">${s.id==='medal'?'每一份用心<br>都值得闪耀':'让日常<br>多一点奇想'}</span>`:'<span class="appearance-preview-top"></span><span class="appearance-preview-side"></span><span class="appearance-preview-content"><i></i><i></i><i></i></span>'}</span><span class="appearance-option-title">${s.name}<span class="appearance-check" aria-hidden="true">✓</span></span><span class="appearance-caption">${s.caption}</span></button>`;
-  host.innerHTML=`<section class="appearance-section" aria-label="界面皮肤"><div class="appearance-heading"><div><h3>把喜欢的故事，带进工作台</h3><p>两款主题系列，开启不一样的日常。</p></div><span class="appearance-label">主题精选</span></div><div class="appearance-options appearance-feature-options" role="group" aria-label="主题系列">${SKINS.filter(s=>s.collection).map(card).join('')}</div><p class="appearance-theme-note">勋章主题为外观设计，实际月度勋章仍在个人页面查看。景点圈主题跟随你的所属景点圈。</p><details class="appearance-basics"><summary>基础浅色外观 <span>经典蓝 · 清新青绿 · 暖米白</span></summary><div class="appearance-options" role="group" aria-label="基础浅色外观">${SKINS.filter(s=>!s.collection).map(card).join('')}</div></details><div class="appearance-footer"><p data-skin-status role="status" aria-live="polite">仅保存在当前浏览器，不同设备可分别选择。</p><button type="button" class="appearance-reset" data-skin-reset>恢复经典蓝</button></div></section>`;
+  host.innerHTML=`<section class="appearance-section" aria-label="界面皮肤"><div class="appearance-heading"><div><h3>把喜欢的故事，带进工作台</h3><p>两款主题系列，开启不一样的日常。</p></div><span class="appearance-label">主题精选</span></div><div class="appearance-options appearance-feature-options" role="group" aria-label="主题系列">${SKINS.filter(s=>s.collection).map(card).join('')}</div><p class="appearance-theme-note">勋章主题为外观设计，实际月度勋章仍在个人页面查看。景点圈主题跟随你的所属景点圈。</p><details class="appearance-basics"><summary>基础外观 <span>经典蓝 · 清新青绿 · 暖米白 · 夜间深色</span></summary><div class="appearance-options appearance-basic-options" role="group" aria-label="基础外观">${SKINS.filter(s=>!s.collection).map(card).join('')}</div></details><div class="appearance-footer"><p data-skin-status role="status" aria-live="polite">仅保存在当前浏览器，不同设备可分别选择。</p><button type="button" class="appearance-reset" data-skin-reset>恢复经典蓝</button></div></section>`;
   const me=state.me||{},badge=document.getElementById('userBadge');
   const identity={name:me.name||badge?.dataset.employeeName||'',employeeNo:me.employee_no||badge?.dataset.employeeNo||'',role:me.role_label||me.role_name||badge?.dataset.roleLabel||'',circle:me.attraction_name||badge?.dataset.circleLabel||''};
   const summary=document.createElement('section');summary.className='appearance-identity';summary.setAttribute('aria-label','我的身份');
@@ -53,7 +54,7 @@ function mountAppearance(host) {
   summary.querySelector('[data-appearance-logout]').onclick=async event=>{const button=event.currentTarget;button.disabled=true;try{await logout();}catch(error){summary.querySelector('[role=status]').textContent=error.message||'退出失败，请重试';button.disabled=false;}};
   const artworkHost=document.createElement('div');artworkHost.className='appearance-artwork-host';host.querySelector('.appearance-footer').before(artworkHost);
   const disposeArtwork=mountArtwork(artworkHost);
-  host.querySelector('.appearance-basics').open=['blue','green','ivory'].includes(window.FZAppearance.get());
+  host.querySelector('.appearance-basics').open=['blue','green','ivory','dark'].includes(window.FZAppearance.get());
   const sync=()=>host.querySelectorAll('[data-skin-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.skinChoice===window.FZAppearance.get())));
   const select=value=>{
     const persisted=window.FZAppearance.set(value);

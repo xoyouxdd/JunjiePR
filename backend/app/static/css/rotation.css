@@ -458,3 +458,26 @@ button.rt-chip { cursor: pointer; }
 /* Keep status updates one line under the page CSP (no inline styles). */
 .rt-daily-selection{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rotation-page .rt-main{overflow-anchor:none}
+
+/* Subtle live-status transitions and restrained alerts for dispatch board & lounge screen. */
+@keyframes rt-pulse-warn {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn-accent) 0%, transparent); }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn-accent) 26%, transparent); }
+}
+@keyframes rt-pulse-danger {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 0%, transparent); }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 28%, transparent); }
+}
+@keyframes rt-pulse-board {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 80%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 26%, transparent); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rt-tabs button, .rt-post, .rt-chip, .rt-confirm-choice { transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out); }
+  button.rt-chip:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--line)); }
+  button.rt-chip:active:not([aria-disabled="true"]) { transform: translateY(1px); }
+  .rt-chip.due { animation: rt-pulse-warn 2.6s var(--ease-in-out) infinite; }
+  .rt-chip.late { animation: rt-pulse-danger 2s var(--ease-in-out) infinite; }
+  .rt-chip.rt-can-board { animation: rt-pulse-board 2.4s var(--ease-in-out) infinite; }
+}
+html[data-skin="dark"] .rt-line-head:is(.g-A,.g-B,.g-C,.g-D,.g-E) { color: #162230; }

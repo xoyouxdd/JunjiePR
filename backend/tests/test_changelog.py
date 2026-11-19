@@ -20,8 +20,7 @@ from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-ROTATION_CANCEL_NOTE = "轮岗取消二次确认后返回原表单"
-STATIC_COMPRESSION_NOTE = "页面资源加载兼容性修复"
+WORKBENCH_APPEARANCE_NOTE = "工作台新增夜间深色外观"
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:
@@ -108,7 +107,7 @@ def test_changelog_filters_by_role() -> None:
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert [item["summary"] for item in cm[0]["items"]] == [ROTATION_CANCEL_NOTE, STATIC_COMPRESSION_NOTE]
+    assert [item["summary"] for item in cm[0]["items"]] == [WORKBENCH_APPEARANCE_NOTE]
     assert [item["summary"] for release in cm if release["version"] == "2026.11.10.1" for item in release["items"]] == ["个人积点卡"]
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
@@ -121,8 +120,8 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
-    assert [item["summary"] for item in admin[0]["items"]] == [STATIC_COMPRESSION_NOTE]
-    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [ROTATION_CANCEL_NOTE, STATIC_COMPRESSION_NOTE]
+    assert [item["summary"] for item in admin[0]["items"]] == [WORKBENCH_APPEARANCE_NOTE]
+    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [WORKBENCH_APPEARANCE_NOTE]
     assert '员工导入占用工号支持预检后跳过' not in cm_text
     assert '员工导入占用工号支持预检后跳过' not in gsm_text
 
@@ -166,18 +165,18 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         # Current items are filtered by base/acting role and permissions.
         login(client, "CMTEST01")
         cm = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in cm['release']['items']] == [ROTATION_CANCEL_NOTE, STATIC_COMPRESSION_NOTE]
+        assert [item['summary'] for item in cm['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
         assert cm['read'] is False
         assert client.post('/api/changelog/announcement/read',json={'version':APP_VERSION}).status_code == 200
         client.post("/api/logout")
         login(client, "TRTEST01")
         tr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in tr['release']['items']] == [ROTATION_CANCEL_NOTE, STATIC_COMPRESSION_NOTE]
+        assert [item['summary'] for item in tr['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
         assert tr['read'] is False
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in hr['release']['items']] == [STATIC_COMPRESSION_NOTE]
+        assert [item['summary'] for item in hr['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
         assert hr['read'] is False
         client.post("/api/logout")
         login(client, "TRTEST01")
@@ -192,7 +191,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post('/api/logout');login(client,'TRTEST01')
         assert client.get('/api/changelog/announcement').json()['read'] is True
         client.post('/api/logout');login(client,'GSMTEST01')
-        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']] == [ROTATION_CANCEL_NOTE, STATIC_COMPRESSION_NOTE]
+        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']] == [WORKBENCH_APPEARANCE_NOTE]
 
 
 def test_import_skip_note_requires_hr_role_and_manage_permission():

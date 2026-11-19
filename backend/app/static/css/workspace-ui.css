@@ -92,7 +92,17 @@
 #app[data-workspace-ui] .pagination > span { color: var(--text-secondary); font-size: var(--fs-base); }
 #app[data-workspace-ui] .empty:not(:has(*)):not(.skeleton) { min-height: 100px; display: grid; place-content: center; padding: 24px 16px; line-height: 1.65; }
 #app[data-workspace-ui] .empty.skeleton { min-height: 140px; padding: 24px; }
-#app[data-workspace-ui] .empty.skeleton::after { width: 72%; height: 68px; background: linear-gradient(#e6ecf4 0 0) 0 0 / 55% 14px no-repeat,linear-gradient(#edf1f6 0 0) 0 30px / 100% 10px no-repeat,linear-gradient(#edf1f6 0 0) 0 54px / 80% 10px no-repeat; animation: none; }
+#app[data-workspace-ui] .empty.skeleton::after {
+  width: 72%;
+  height: 68px;
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--panel) 55%, transparent) 50%, transparent 100%) 0 0 / 200% 100% no-repeat,
+    linear-gradient(var(--line) 0 0) 0 0 / 55% 14px no-repeat,
+    linear-gradient(var(--neutral-bg) 0 0) 0 30px / 100% 10px no-repeat,
+    linear-gradient(var(--neutral-bg) 0 0) 0 54px / 80% 10px no-repeat;
+  animation: skeleton-shimmer 1.35s var(--ease-in-out) infinite;
+}
 #app[data-workspace-ui] .action-center-heading { padding: 20px 22px; }
 #app[data-workspace-ui] .action-center-heading h2 { font-size: var(--fs-3xl); }
 #app[data-workspace-ui] .action-center-heading .eyebrow { display: none; }

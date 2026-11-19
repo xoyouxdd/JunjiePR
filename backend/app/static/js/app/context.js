@@ -43,6 +43,9 @@ async function render(){
   renderAbortController?.abort();
   const controller=new AbortController();
   renderAbortController=controller;
+  const shell=document.querySelector?.('.app-shell');
+  if(shell&&typeof shell.scrollTop==='number')shell.scrollTop=0;
+  if(typeof window!=='undefined'&&typeof window.scrollTo==='function')window.scrollTo(0,0);
   app.innerHTML='<section class="empty skeleton" aria-busy="true">正在加载…</section>';
   let viewContext;
   try {
