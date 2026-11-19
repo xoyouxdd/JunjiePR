@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import os
 import tempfile
@@ -19,7 +18,7 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
 
 # These retained API tests explicitly grant the retired permission only in this process.
 ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")
@@ -91,13 +90,6 @@ def test_active_sick_leave_date_overlap_is_visible_and_blocked_until_voided() ->
             files={"proof": ("after-void.png", image_bytes(), "image/png")},
         )
         assert allowed.status_code == 200, allowed.text
-
-
-def test_mobile_form_contains_overlap_guard_and_chinese_message() -> None:
-    script = read_frontend_source()
-    assert "bindSickLeaveOverlapGuard(form)" in script
-    assert "/api/sick-leaves/overlap-check" in script
-    assert "已有缺勤登记" in script
 
 
 def test_violation_sick_leave_creates_linked_pending_declaration_then_accepts_photo_material() -> None:

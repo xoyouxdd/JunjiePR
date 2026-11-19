@@ -6,9 +6,9 @@ from hashlib import sha256
 import json
 
 from fastapi import HTTPException
-from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 
+from app.database.connection import reserve_writer
 from app.access_policy import ensure_scoped_hr_employee, scoped_hr_attraction_ids
 from app.services.audit import write_audit
 from app.services.identity import base_role_at, base_roles_at, duty_code_at, employed_on, TEMPORARY_RECOGNIZER_LABEL
@@ -66,8 +66,7 @@ def qualification_overview(db, user):
 
 def update_qualification(db, user, employee_id, payload, ip):
     # Serialize with recognition writes: a referenced day cannot disappear.
-    db.rollback()
-    db.execute(text("BEGIN IMMEDIATE"))
+    reserve_writer(db)
     employee = db.get(Employee, employee_id)
     if not employee:
         raise HTTPException(404, "员工不存在")
@@ -93,7 +92,7 @@ def update_qualification(db, user, employee_id, payload, ip):
     if added and not eligible_employee(db, employee):
         raise HTTPException(400, "仅可为在职、账号启用的CM/TR设置临时主管认可资格")
     # Preserve the same month-close protection used by the employee editor.
-    from app.routers._shared import ensure_month_open
+    from app.month_closure import ensure_month_open
     ensure_month_open(db, date.today().strftime("%Y-%m"), employee.attraction_id, "修改临时主管认可资格")
     for day in added:
         base = base_role_at(db, employee_id, day)

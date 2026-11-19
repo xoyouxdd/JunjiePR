@@ -3,7 +3,7 @@ import { api, json } from './api.js';
 import { setAnnouncementBadge, startAnnouncementNotifications } from './announcement-state.js';
 import { logout } from './auth.js';
 import { render } from './context.js';
-import { bindDialogLayer, leaveLayer, confirmModal } from './dialogs.js';
+import { bindDialogLayer, leaveLayer } from './dialogs.js';
 import { esc } from './format.js';
 import { app, has, state, tabs } from './state.js';
 import { avatarMarkup, showAvatarSettings } from './avatars.js';
@@ -255,18 +255,7 @@ async function refreshActionBadge(){
     if(state.me?.id!==employeeId)return;
     setActionBadge(Number(data.total||0)+(upgradeData.items||[]).length+(upgradeData.notices||[]).length+(recoveryData.items||[]).length);
     if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
-    notifyRotationTimeoutCases(data.rotation_timeout_cases||[]);
   }catch(_){/* A badge refresh must never interrupt the existing page workflow. */}
-}
-
-const seenRotationTimeoutCases=new Set();
-function notifyRotationTimeoutCases(cases){
-  if(document.querySelector('.modal-overlay'))return;
-  const item=cases.find(c=>{const key='fz.rotation.timeout.notice:'+c.id;try{return !seenRotationTimeoutCases.has(key)&&!sessionStorage.getItem(key);}catch(_){return !seenRotationTimeoutCases.has(key);}});
-  if(!item)return;
-  const key='fz.rotation.timeout.notice:'+item.id;seenRotationTimeoutCases.add(key);try{sessionStorage.setItem(key,'1');}catch(_){}
-  const employeeId=state.me?.id;
-  void confirmModal('轮岗强提醒 · '+item.line+'站位待核实',`<p>超时任务影响同线关联安排，相关任务已暂停。</p><p>${item.handler?'当前处理人：'+esc(item.handler):'请接手核实，代确认已执行，或顺接未执行任务。'}</p><p>关闭提醒后，异常仍保留在待办顶部。</p>`,'立即处理').then(yes=>{if(yes&&state.me?.id===employeeId){state.tab='rotationTest';renderTabs();render();}});
 }
 
 function showAboutSystem(trigger){
@@ -319,12 +308,16 @@ function renderTabs() {
   const overflow=items.filter(i=>!ids.includes(i[0]));
   const overflowActive=overflow.some(([id])=>id===state.tab);
   const mobileTab=([id,name])=>tabButton([id,name]).replace(`<span class="nav-label">${esc(name)}</span>`,`<span class="nav-label">${esc(MOBILE_SHORT_LABELS[name]||name)}</span>`);
+  const previousNavScroll=tabs.querySelector('.nav-scroll')?.scrollTop||0;
   tabs.innerHTML=`<div class="tabs-desktop">${desktopPin}<div class="nav-scroll">${desktopGroups}</div>${desktopFooter}</div><div class="tabs-mobile has-overflow">${primary.map(mobileTab).join('')}<button type="button" data-open-more class="${overflowActive?'active':''}" aria-label="打开更多功能" title="更多">${navIcon('more')}<span class="nav-label">更多</span></button></div><div class="mobile-more-drawer" hidden><div class="mobile-more-drawer-panel" role="dialog" aria-modal="true" aria-label="更多功能"><header><strong>更多功能</strong><button type="button" class="secondary" data-close-more>关闭</button></header>${mobileIdentityCard()}${overflow.length?`<div class="mobile-more-menu" role="group" aria-label="更多功能">${overflow.map(item=>tabButton(item,'mobile-more-item')).join('')}</div>`:''}${aboutButton('secondary mobile-more-item nav-about')}<button type="button" class="secondary mobile-logout" data-mobile-logout>退出登录</button></div></div>`;
+  const nextNavScroll=tabs.querySelector('.nav-scroll');
+  if(nextNavScroll&&previousNavScroll)nextNavScroll.scrollTop=previousNavScroll;
   document.body.classList.add('has-nav');
   renderPageHeading(items);
   const drawer=tabs.querySelector('.mobile-more-drawer');
   let drawerLayer=null;
   const closeDrawer=()=>{drawerLayer?.close();};
+  drawer?.addEventListener('click',event=>{if(event.target===drawer)closeDrawer();});
   tabs.querySelectorAll('[data-open-about]').forEach(button=>button.onclick=()=>{closeDrawer();showAboutSystem(button);});
   tabs.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;closeDrawer();renderTabs();render();});
   tabs.querySelector('[data-open-more]')?.addEventListener('click',()=>{if(!drawer||!drawer.hidden)return;drawer.hidden=false;drawerLayer=bindDialogLayer(drawer,{root:drawer.querySelector('.mobile-more-drawer-panel')||drawer,initialFocus:drawer.querySelector('[data-close-more]'),remove:false,inertRoots:[document.getElementById('app'),document.getElementById('pageHeading'),tabs.querySelector('.tabs-desktop'),tabs.querySelector('.tabs-mobile')].filter(Boolean),onClose:()=>{drawerLayer=null;leaveLayer(drawer,()=>{drawer.hidden=true;});}});});
@@ -336,4 +329,4 @@ function renderTabs() {
 
 function gotoTab(tab){state.tab=tab;renderTabs();render();}
 
-export { gotoTab, menuItems, mobilePrimaryIds, navIcon, refreshActionBadge, renderTabs, renderUserBadge, setActionBadge, notifyRotationTimeoutCases, updateIdentityMemberCount };
+export { gotoTab, menuItems, mobilePrimaryIds, navIcon, refreshActionBadge, renderTabs, renderUserBadge, setActionBadge, updateIdentityMemberCount };

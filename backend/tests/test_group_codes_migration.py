@@ -15,9 +15,15 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import SessionLocal, ensure_group_codes  # noqa: E402
+from app.database.connection import SessionLocal
+from app.database.migrations import ensure_group_codes
 from app.v2_models import AuditLog, Employee, EmployeeRoleAssignment, GroupLeaderAssignment, Role, SystemAlert, WorkGroup  # noqa: E402
-from app.v2_services import group_code_for_index, group_code_index, next_group_code, resequence_group_codes  # noqa: E402
+from app.services.organization import (
+    group_code_for_index,
+    group_code_index,
+    next_group_code,
+    resequence_group_codes,
+)
 
 
 def test_code_letters_roll_over_after_z() -> None:

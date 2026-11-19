@@ -1,4 +1,5 @@
 'use strict';
+const {resetAndPublish}=require('./support/rotation-daily-fixture.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process');const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'rotation-post-edit-'));
@@ -14,14 +15,12 @@ async function main(){try{
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
     const context=await browser.newContext({viewport:{width:1280,height:900}}),request=context.request;
     await ok(await request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}}));
-    await ok(await request.post(base+'/api/rotation/enter',{data:{account:'7777777'}}));
-    await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-04',time:'07:15'}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-04',force:true}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'publish',date:'2026-10-04'}}));
-    const board=async()=>(await ok(await request.get(base+'/api/rotation/board'))).day;
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-04',time:'07:15'}}));
+    await resetAndPublish(request,base,'2026-10-04',ok);
+    const board=async()=>(await ok(await request.get(base+'/api/rotation-board/board'))).day;
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));let renameWrites=0;
     page.on('request',r=>{if(r.method()==='POST'&&r.postDataJSON()?.action==='rename_post')renameWrites++;});
-    await page.goto(base+'/rotation');await page.locator('[data-f-post="A#0"]').waitFor();
+    await page.goto(base+'/rotation-board');await page.locator('[data-f-post="A#0"]').waitFor();
     const original=(await board()).lines[0].posts[0],name='新入口<&>';
     await page.locator('[data-f-post="A#0"]').dblclick();await page.getByRole('textbox',{name:'岗位名称',exact:true}).fill(name);
     await page.getByRole('textbox',{name:'岗位名称',exact:true}).press('Enter');

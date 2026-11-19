@@ -1,4 +1,5 @@
 'use strict';
+const {resetAndPublish}=require('./support/rotation-daily-fixture.cjs');
 // Real isolated API + browsers, random local port; never touches the running service.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process');
@@ -17,18 +18,16 @@ async function main(){try{
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
     const context=await browser.newContext({viewport:{width:1280,height:900}}),request=context.request;
     await ok(await request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}}));
-    await ok(await request.post(base+'/api/rotation/enter',{data:{account:'7777777'}}));
-    const post=async data=>ok(await request.post(base+'/api/rotation/act',{data}));
-    await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-04',time:'07:15'}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-04',force:true}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'publish',date:'2026-10-04'}}));
-    const board=async()=>(await ok(await request.get(base+'/api/rotation/board'))).day;
+    const post=async data=>ok(await request.post(base+'/api/rotation-board/act',{data}));
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-04',time:'07:15'}}));
+    await resetAndPublish(request,base,'2026-10-04',ok);
+    const board=async()=>(await ok(await request.get(base+'/api/rotation-board/board'))).day;
     let day=await board();assert.equal(day.ruleVersion,2);
     const seated=day.lines[0].posts.find(p=>p.occ).occ;
     await post({action:'pool',pid:seated,pool:'rest'});
     await post({action:'break_time',pid:seated,remaining:0});
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
-    await page.goto(base+'/rotation');
+    await page.goto(base+'/rotation-board');
     await page.locator('[data-f-board="'+seated+'"]').waitFor({timeout:15000});
     assert.equal(await page.locator('h2').filter({hasText:'待出发'}).count(),0);
     assert(await page.locator('[data-f-board="'+seated+'"]').locator('..').evaluate(el=>el.classList.contains('rt-can-board')));
@@ -91,7 +90,7 @@ async function main(){try{
     // than leaving an executable-looking dialog above the exception pool.
     await post({action:'pool',pid:reviewPid,pool:'rest'});await post({action:'break_time',pid:reviewPid,remaining:0});await page.evaluate(()=>RT.load());
     await page.locator('[data-f-board="'+reviewPid+'"]').click();
-    await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'jump',minutes:3}}));await page.evaluate(()=>RT.load());
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'jump',minutes:3}}));await page.evaluate(()=>RT.load());
     assert.equal(await page.getByRole('dialog').count(),0);
     assert.equal((await board()).persons.find(p=>p.pid===reviewPid).state,'exception');
     assert.equal(await page.locator('[data-f-board="'+reviewPid+'"]').count(),0);
@@ -99,9 +98,9 @@ async function main(){try{
     // the blue action use the same time base instead of clamping at 24:00.
     await post({action:'shift',pid:reviewPid,start:'07:15',end:'01:30'});
     await post({action:'pool',pid:reviewPid,pool:'rest'});
-    const clock=await ok(await request.get(base+'/api/rotation/board'));
+    const clock=await ok(await request.get(base+'/api/rotation-board/board'));
     await post({action:'break_time',pid:reviewPid,remaining:1445-clock.clock.minute});
-    await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-05',time:'00:05'}}));await page.evaluate(()=>RT.load());
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-05',time:'00:05'}}));await page.evaluate(()=>RT.load());
     assert.equal(await page.evaluate(()=>RT.data.clock.date),'2026-10-04');
     const liveMinute=await page.evaluate(()=>{const paused=RT.data.clock.paused,fetched=RT.fetchedAt;RT.data.clock.paused=false;RT.fetchedAt=Date.now()-1000;const value=nowMin();RT.data.clock.paused=paused;RT.fetchedAt=fetched;return value;});
     assert(liveMinute>=1445&&liveMinute<1446,'overnight live clock '+liveMinute);
@@ -123,7 +122,7 @@ async function main(){try{
     assert.equal(await page.locator('[name=day_offset]').inputValue(),'1');
     await page.locator('[name=time]').fill('00:15');await page.getByRole('button',{name:'确定',exact:true}).click();
     await page.waitForFunction(()=>RT.data.day.lines[0].posts[1].closeAt==='24:15:00');
-    await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-05',time:'00:20'}}));
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-05',time:'00:20'}}));
     await page.evaluate(()=>RT.load());
     await upcoming.locator('[data-f-board]').waitFor();
     const support=(await board()).persons.find(p=>p.name==='午夜支援');

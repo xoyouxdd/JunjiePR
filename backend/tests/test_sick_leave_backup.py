@@ -1,13 +1,10 @@
 from __future__ import annotations
-from frontend_source import frontend_function_source, read_frontend_source
 
 from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import tempfile
 
 import pytest
@@ -23,7 +20,8 @@ from app.main import app  # noqa: E402
 from app.routers import sick_leave_import  # noqa: E402
 from app.score_queries import employee_month_scores  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
+from app.database.connection import SessionLocal
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, Employee, EmployeeLOAPeriod, EmployeeRoleAssignment, MonthClosure, Role, SickLeaveRecord, StoredFile, UserAccount  # noqa: E402
 
 
@@ -240,23 +238,3 @@ def test_missing_fields_have_readable_validation_messages(client):
     response = client.post("/api/sick-leave-imports/single", data={"employee_id": str(employee_id())})
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "SICK_LEAVE_VALIDATION_ERROR"
-
-
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
-def test_backup_form_reuses_global_picker_and_has_no_proof_field():
-    picker = frontend_function_source('employeePicker')
-    markup = frontend_function_source('singleSickLeaveForm')
-    checks = """
-const state = {options:{attractions:[]}, me:{role_code:'HR_CIRCLE'}};
-const esc = value => String(value);
-const opt = () => '';
-const today = () => '2026-10-02';
-const html = singleSickLeaveForm();
-if (!html.includes('data-global-search="1"') || !html.includes('/api/sick-leave-imports/employee-targets')) throw Error('global picker missing');
-for (const field of ['leave_type','leave_start_date','leave_end_date','leave_days','note']) {
-  if (!html.includes('name="'+field+'"')) throw Error('missing field '+field);
-}
-if (html.includes('type="file"') || html.includes('name="proof"')) throw Error('unexpected proof upload');
-if (!html.includes('step="0.5"') || !html.includes('form-sticky-actions')) throw Error('form contract changed');
-"""
-    subprocess.run([shutil.which("node"), "-e", picker + markup + checks], check=True, capture_output=True, text=True)

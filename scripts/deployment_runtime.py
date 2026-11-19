@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import stat
 import uuid
 
@@ -84,8 +84,6 @@ def _relative_name(name: str) -> str:
     parts = name.split("/")
     if any(part in {"", ".", ".."} or part.endswith((" ", ".")) for part in parts):
         raise _unsafe(f"Unsafe manifest path: {name!r}")
-    if PurePosixPath(name).is_absolute():
-        raise _unsafe(f"Unsafe manifest path: {name!r}")
     return name
 
 
@@ -135,13 +133,12 @@ def _scan(root: Path, *, include_cache: bool = False) -> dict:
     while pending:
         parent = pending.pop()
         _checked_path(parent)
-        for entry in sorted(parent.iterdir()):
-            name = _relative_name(entry.relative_to(root).as_posix())
+        for path in sorted(parent.iterdir()):
+            name = _relative_name(path.relative_to(root).as_posix())
             folded = os.path.normcase(name)
             if folded in seen:
                 raise _unsafe(f"Aliased filesystem path: {name}")
             seen.add(folded)
-            path = _child(root, name)
             info = _check_node(path)
             ignored = not include_cache and _is_generated_cache(path, root)
             if stat.S_ISDIR(info.st_mode):
@@ -177,8 +174,6 @@ def _copy_file(source: Path, target: Path, expected: dict) -> None:
     if total != expected["size"] or digest.hexdigest() != expected["sha256"]:
         raise _unsafe(f"Source changed/corrupted while copying: {source}")
     _set_metadata(target, expected)
-    if _file_entry(target) != expected:
-        raise _unsafe(f"Copied file failed verification: {target}")
 
 
 def _canonical(value: dict) -> bytes:
@@ -196,47 +191,7 @@ def _atomic_json(path: Path, value: dict) -> None:
     os.replace(temp, path)
 
 
-def _validate_manifest(manifest: dict, env: Path, snapshot: Path) -> dict:
-    if (not isinstance(manifest, dict) or manifest.get("schema") != 1
-            or manifest.get("environment") != str(env) or manifest.get("snapshot") != str(snapshot)
-            or manifest.get("policy") != _POLICY):
-        raise _unsafe("Snapshot manifest identity/policy mismatch")
-    inventory = manifest.get("inventory")
-    if not isinstance(inventory, dict) or set(inventory) != {"files", "directories"}:
-        raise _unsafe("Invalid snapshot inventory")
-    names: set[str] = set()
-    for kind in ("directories", "files"):
-        entries = inventory[kind]
-        if not isinstance(entries, dict):
-            raise _unsafe("Invalid snapshot entries")
-        for name, entry in entries.items():
-            if not (kind == "directories" and name == ""):
-                _relative_name(name)
-                normalized = os.path.normcase(name)
-                if normalized in names:
-                    raise _unsafe(f"Duplicate snapshot path: {name}")
-                names.add(normalized)
-            fields = {"mode"} | ({"mtime_ns", "size", "sha256"} if kind == "files" else set())
-            if not isinstance(entry, dict) or set(entry) != fields:
-                raise _unsafe(f"Invalid snapshot metadata: {name}")
-            if type(entry["mode"]) is not int or not 0 <= entry["mode"] <= 0o7777:
-                raise _unsafe(f"Invalid snapshot metadata values: {name}")
-            if kind == "files" and (type(entry["mtime_ns"]) is not int or entry["mtime_ns"] < 0
-                    or type(entry["size"]) is not int or entry["size"] < 0
-                    or not isinstance(entry["sha256"], str) or len(entry["sha256"]) != 64
-                    or any(c not in "0123456789abcdef" for c in entry["sha256"])):
-                raise _unsafe(f"Invalid snapshot file digest: {name}")
-    if "" not in inventory["directories"]:
-        raise _unsafe("Snapshot root metadata is missing")
-    for name in (*inventory["files"], *inventory["directories"]):
-        if name:
-            parent = PurePosixPath(name).parent.as_posix()
-            if ("" if parent == "." else parent) not in inventory["directories"]:
-                raise _unsafe(f"Snapshot parent directory is missing: {name}")
-    return inventory
-
-
-def _read_snapshot(env: Path, snapshot: Path) -> dict:
+def _read_receipt(snapshot: Path) -> dict:
     try:
         if {path.name for path in snapshot.iterdir()} != {"files", _MANIFEST, _COMPLETE}:
             raise _unsafe("Snapshot is incomplete or has unexpected entries")
@@ -248,14 +203,24 @@ def _read_snapshot(env: Path, snapshot: Path) -> dict:
                 or marker["schema"] != 1 or marker["size"] != len(raw)
                 or marker["sha256"] != hashlib.sha256(raw).hexdigest()):
             raise _unsafe("Snapshot manifest commit/hash mismatch")
-        manifest = json.loads(raw)
-        inventory = _validate_manifest(manifest, env, snapshot)
-        payload = _child(snapshot, "files")
-        if _scan(payload, include_cache=True) != inventory:
-            raise _unsafe("Snapshot payload content/metadata differs from its manifest")
-        return manifest
+        return json.loads(raw)
     except (OSError, ValueError, TypeError) as exc:
         raise _unsafe(f"Cannot verify snapshot: {exc}") from exc
+
+
+def _receipt(env: Path, snapshot: Path, inventory: dict) -> dict:
+    return {"schema": 1, "environment": str(env), "snapshot": str(snapshot),
+            "policy": dict(_POLICY), "inventory": inventory}
+
+
+def _read_snapshot(env: Path, snapshot: Path) -> dict:
+    stored = _read_receipt(snapshot)
+    # Reconstruct the expected manifest from safe, existing paths. No name or
+    # metadata from the JSON is ever used to open or modify a file.
+    inventory = _scan(_child(snapshot, "files"), include_cache=True)
+    if _canonical(stored) != _canonical(_receipt(env, snapshot, inventory)):
+        raise _unsafe("Snapshot identity, policy or payload differs from its manifest")
+    return inventory
 
 
 def snapshot_environment(env_path: Path, snapshot_path: Path) -> dict:
@@ -277,29 +242,32 @@ def snapshot_environment(env_path: Path, snapshot_path: Path) -> dict:
             _copy_file(_child(env, name), _child(payload, name, required=False), entry)
         for name in sorted(inventory["directories"], key=lambda name: (name.count("/"), name), reverse=True):
             _set_metadata(payload if not name else _child(payload, name), inventory["directories"][name])
-        if _scan(env) != inventory or _scan(payload) != inventory:
+        if _scan(env) != inventory or _scan(payload, include_cache=True) != inventory:
             raise _unsafe("Environment changed during snapshot, or its copy is incomplete")
-        receipt = {"schema": 1, "environment": str(env), "snapshot": str(snapshot),
-                   "policy": dict(_POLICY), "inventory": inventory}
+        receipt = _receipt(env, snapshot, inventory)
         _atomic_json(snapshot / _MANIFEST, receipt)
-        raw = (snapshot / _MANIFEST).read_bytes()
+        raw = _canonical(receipt)
         _atomic_json(snapshot / _COMPLETE, {"schema": 1, "size": len(raw),
                                           "sha256": hashlib.sha256(raw).hexdigest()})
-        _read_snapshot(env, snapshot)
+        if _read_receipt(snapshot) != receipt:
+            raise _unsafe("Snapshot receipt differs from the verified copy")
         return receipt
     except OSError as exc:
         raise _unsafe(f"Snapshot failed: {exc}") from exc
+
+
+def _verify_inventory(env: Path, snapshot: Path, inventory: dict) -> dict:
+    if _scan(env) != inventory:
+        raise _unsafe("Environment differs from the committed snapshot")
+    return {"verified": True, "files": len(inventory["files"]),
+            "directories": len(inventory["directories"]), "snapshot": str(snapshot)}
 
 
 def verify_environment(env_path: Path, snapshot_path: Path) -> dict:
     """Read-only full snapshot and environment verification; raise on mismatch."""
     try:
         env, snapshot = _paths(env_path, snapshot_path, snapshot_required=True)
-        manifest = _read_snapshot(env, snapshot)
-        if _scan(env) != manifest["inventory"]:
-            raise _unsafe("Environment differs from the committed snapshot")
-        return {"verified": True, "files": len(manifest["inventory"]["files"]),
-                "directories": len(manifest["inventory"]["directories"]), "snapshot": str(snapshot)}
+        return _verify_inventory(env, snapshot, _read_snapshot(env, snapshot))
     except OSError as exc:
         raise _unsafe(f"Environment verification failed: {exc}") from exc
 
@@ -324,7 +292,7 @@ def restore_environment(env_path: Path, snapshot_path: Path) -> dict:
     """
     try:
         env, snapshot = _paths(env_path, snapshot_path, snapshot_required=True)
-        inventory = _read_snapshot(env, snapshot)["inventory"]  # Validate everything before mutation.
+        inventory = _read_snapshot(env, snapshot)  # Validate everything before mutation.
         current = _scan(env, include_cache=True)
         copied = reused = deleted = 0
         for name in sorted(set(current["files"]) - set(inventory["files"])):
@@ -341,12 +309,11 @@ def restore_environment(env_path: Path, snapshot_path: Path) -> dict:
         payload = _child(snapshot, "files")
         for name, expected in sorted(inventory["files"].items()):
             target = _child(env, name, required=False)
-            if target.exists():
-                live = _file_entry(target)
-                if (live["size"], live["sha256"]) == (expected["size"], expected["sha256"]):
-                    _set_metadata(target, expected)
-                    reused += 1
-                    continue
+            live = current["files"].get(name)
+            if live and (live["size"], live["sha256"]) == (expected["size"], expected["sha256"]):
+                _set_metadata(target, expected)
+                reused += 1
+                continue
             # Windows derives executable permission bits from the extension.
             # Keep it on the private temporary file so mode verification is real.
             temp_name = name + ".restore-" + uuid.uuid4().hex + target.suffix
@@ -360,7 +327,7 @@ def restore_environment(env_path: Path, snapshot_path: Path) -> dict:
             copied += 1
         for name in sorted(inventory["directories"], key=lambda name: (name.count("/"), name), reverse=True):
             _set_metadata(env if not name else _child(env, name), inventory["directories"][name])
-        result = verify_environment(env, snapshot)
+        result = _verify_inventory(env, snapshot, inventory)
         return {**result, "copied": copied, "reused": reused, "deleted": deleted}
     except OSError as exc:
         raise _unsafe(f"Environment restore failed; recovery is incomplete: {exc}") from exc

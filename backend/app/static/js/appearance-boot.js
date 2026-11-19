@@ -15,7 +15,7 @@
     else document.documentElement.style.removeProperty('--header-portrait');
   };
   applyArtwork();
-  const skins = ['blue', 'green', 'ivory', 'medal', 'circle'];
+  const skins = ['blue', 'green', 'ivory', 'dark', 'medal', 'circle'];
   const valid = value => skins.includes(value) ? value : 'blue';
   let current = 'blue';
   try { current = valid(localStorage.getItem(key)); } catch { /* Storage may be disabled. */ }

@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
-import sqlite3
 import uuid
 
 from sqlalchemy import or_, update
@@ -17,9 +15,10 @@ from sqlalchemy.orm import Session
 
 from app.operations_health import BACKUP_HEALTH_STATUS_PATH
 from app.runtime_environment import validate_runtime_paths
-from app.v2_database import DB_PATH, SessionLocal
+from app.sqlite_backup import create_online_backup
+from app.database.connection import DB_PATH, SessionLocal
 from app.v2_models import AuditLog, Employee, SystemJobRun
-from app.v2_services import write_audit
+from app.services.audit import write_audit
 
 
 JOB_TYPE = "manual_sqlite_backup"
@@ -95,11 +94,6 @@ def claim_manual_backup(db: Session, operator: Employee, ip_address: str | None)
     return token
 
 
-def _quick_check(connection: sqlite3.Connection) -> None:
-    if [row[0] for row in connection.execute("PRAGMA quick_check")] != ["ok"]:
-        raise RuntimeError("SQLite quick_check failed")
-
-
 def _create_backup() -> str:
     """Create one verified snapshot in the configured backup directory; never prune old files."""
     source_path = Path(DB_PATH).resolve()
@@ -110,60 +104,8 @@ def _create_backup() -> str:
     backup_root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S-%f")[:19]
     file_name = f"recognition_v2-{stamp}.db"
-    target_path = backup_root / file_name
-    partial_path = backup_root / f".{file_name}.partial-{uuid.uuid4().hex}"
-    manifest_path = backup_root / f"{file_name}.manifest.json"
-    manifest_partial = backup_root / f".{file_name}.manifest-{uuid.uuid4().hex}.partial"
-    source = target = None
-    complete = False
-    created_target = False
-    try:
-        source = sqlite3.connect(source_path.as_uri() + "?mode=ro", uri=True, timeout=60)
-        source.execute("PRAGMA busy_timeout=60000")
-        _quick_check(source)
-        target = sqlite3.connect(partial_path, timeout=60)
-        target.execute("PRAGMA busy_timeout=60000")
-        source.backup(target, pages=256, sleep=0.10)
-        target.commit()
-        _quick_check(target)
-        target.close()
-        target = None
-        source.close()
-        source = None
-        digest = hashlib.sha256()
-        with partial_path.open("rb") as backup_stream:
-            for chunk in iter(lambda: backup_stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        size_bytes = partial_path.stat().st_size
-        if target_path.exists() or manifest_path.exists():
-            raise FileExistsError("Backup target already exists")
-        os.replace(partial_path, target_path)
-        created_target = True
-        manifest = {
-            "schema_version": 1,
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
-            "source_database": "data_v2/recognition_v2.db",
-            "backup_file": file_name,
-            "size_bytes": size_bytes,
-            "sha256": digest.hexdigest(),
-            "quick_check": "ok",
-            "sqlite_version": sqlite3.sqlite_version,
-            "retention_days": 30,
-        }
-        manifest_partial.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(manifest_partial, manifest_path)
-        complete = True
-        return file_name
-    finally:
-        if target is not None:
-            target.close()
-        if source is not None:
-            source.close()
-        partial_path.unlink(missing_ok=True)
-        manifest_partial.unlink(missing_ok=True)
-        if created_target and not complete:
-            target_path.unlink(missing_ok=True)
-            manifest_path.unlink(missing_ok=True)
+    create_online_backup(source_path, backup_root / file_name, retention_days=30)
+    return file_name
 
 
 def run_manual_backup(operator_id: int, ip_address: str | None, token: str) -> None:

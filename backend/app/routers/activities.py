@@ -9,8 +9,9 @@ from starlette.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from sqlalchemy import text
+from app.database.connection import write_transaction
 from app.v2_auth import current_user
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.activities_models import Activity, ActivityLot, ActivityAward, ActivityOperation, ActivityPrizePhoto, ActivityPrize, ActivityBid
 from app.services import activities as service
 from app.services.activity_points import digest
@@ -150,9 +151,7 @@ def read_photo(photo_id: str, request: Request, db=Depends(get_db), user=Depends
 def atomic(db, user, payload, action, operation):
     employee_id = user.id
     fingerprint = digest([action, payload.model_dump(mode='json', exclude={'request_key'})])
-    db.rollback()
-    try:
-        db.execute(text('BEGIN IMMEDIATE'))
+    with write_transaction(db):
         prior = db.query(ActivityOperation).filter_by(employee_id=employee_id, request_key=payload.request_key).first()
         if prior:
             if prior.fingerprint != fingerprint:
@@ -164,9 +163,6 @@ def atomic(db, user, payload, action, operation):
                                     fingerprint=fingerprint, result_json=json.dumps(result, ensure_ascii=False)))
         db.commit()
         return result
-    except Exception:
-        db.rollback()
-        raise
 
 
 def refresh_due(db):

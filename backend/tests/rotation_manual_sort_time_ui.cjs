@@ -1,4 +1,5 @@
 'use strict';
+const {resetAndPublish}=require('./support/rotation-daily-fixture.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process');const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'rotation-manual-sort-'));
@@ -14,16 +15,14 @@ async function main(){try{
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
     const context=await browser.newContext({viewport:{width:1280,height:900}}),request=context.request;
     await ok(await request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}}));
-    await ok(await request.post(base+'/api/rotation/enter',{data:{account:'7777777'}}));
-    const clock=async data=>ok(await request.post(base+'/api/rotation/test-clock',{data}));
+    const clock=async data=>ok(await request.post(base+'/__fixture/rotation-clock',{data}));
     await clock({action:'set',date:'2026-10-04',time:'07:15'});
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-04',force:true}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'publish',date:'2026-10-04'}}));
+    await resetAndPublish(request,base,'2026-10-04',ok);
     await clock({action:'set',date:'2026-10-04',time:'07:30'});
-    const board=async()=>(await ok(await request.get(base+'/api/rotation/board'))).day;
-    const post=async data=>ok(await request.post(base+'/api/rotation/act',{data}));
+    const board=async()=>(await ok(await request.get(base+'/api/rotation-board/board'))).day;
+    const post=async data=>ok(await request.post(base+'/api/rotation-board/act',{data}));
     const page=await context.newPage(),errors=[],writes=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST')writes.push(r.postDataJSON());});
-    await page.goto(base+'/rotation');await page.waitForFunction(()=>RT.data?.day?.ruleVersion===2);
+    await page.goto(base+'/rotation-board');await page.waitForFunction(()=>RT.data?.day?.ruleVersion===2);
     const checkbox=()=>page.locator('[name=update_sort_time]');
     const open=async(pid,line,i)=>{await page.evaluate(()=>RT.load());await page.evaluate(({pid,line,i})=>forecastPlace(pid,line,i),{pid,line,i});};
     const save=async()=>{await page.getByRole('button',{name:'确定',exact:true}).click();await page.waitForFunction(()=>!RT.modalOpen);};

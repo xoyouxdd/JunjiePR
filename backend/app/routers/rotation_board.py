@@ -1,4 +1,5 @@
 """Formal rotation: authenticated employee identity, scoped data, real clock only."""
+from app.database.connection import reserve_writer
 from app.employee_numbers import employee_number
 import asyncio
 from collections import Counter
@@ -12,7 +13,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
-from app.v2_database import SessionLocal, get_db
+from app.database.connection import SessionLocal, get_db
 from app.v2_models import Employee
 from app.rotation import service as S
 from app.rotation import daily as D
@@ -21,6 +22,7 @@ from app.rotation.access import RotationActor, ROTATION_ATTRACTION_NAME, rotatio
 from app.rotation.namespace import runtime_for
 from app.rotation.roster import classify, parse_any
 from app.date_utils import parse_iso_date
+from app.routers.rotation_screen import can_manage_screen_accounts
 
 _request_gates = WeakKeyDictionary()
 
@@ -44,14 +46,15 @@ MANAGERS = {'SUPERVISOR', 'TA_SUPERVISOR', 'GSM', 'TA_GSM'}
 ROLES = MANAGERS | {'CM', 'TR'}
 
 
-def capabilities(user):
-    if getattr(user,'rotation_temporary',False):
-        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings'),False)
+def capabilities(user, db=None):
+    if user.rotation_temporary:
+        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings','screen_account_admin'),False)
     codes = set(user.role_codes)
     manage = bool(codes & MANAGERS)
     local_tr = 'TR' in codes and getattr(user.employee.attraction, 'name', None) == ROTATION_ATTRACTION_NAME
     return {'can_operate': manage or local_tr, 'can_manage': manage,
-            'can_records': manage, 'can_settings': manage}
+            'can_records': manage, 'can_settings': manage,
+            'screen_account_admin': db is not None and can_manage_screen_accounts(db, user)}
 
 
 def board_attraction_id(db, user):
@@ -60,7 +63,7 @@ def board_attraction_id(db, user):
 
 
 def can_enter(user, db=None):
-    if getattr(user,'rotation_temporary',False): return True
+    if user.rotation_temporary: return True
     if set(user.role_codes) & MANAGERS: return True
     if db is not None:
         from app.rotation.participation import contexts
@@ -103,7 +106,7 @@ def operator(user: V2User = Depends(staff)):
 def actor(user, *, personal=False):
     return RotationActor('member' if personal else 'supervisor', user.name,
                          member_employee_no=user.employee.employee_no,
-                         entered_by=user.employee, formal=True, temporary=getattr(user,'rotation_identity_temporary',getattr(user,'rotation_temporary',False)))
+                         entered_by=user.employee, formal=True, temporary=user.rotation_identity_temporary)
 
 
 def identity(user):
@@ -119,12 +122,12 @@ def call(fn, *args, **kwargs):
 
 
 @router.get('/whoami')
-def whoami(user: V2User = Depends(staff)):
+def whoami(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     if not set(user.role_codes)&ROLES:raise HTTPException(403,'此身份只可使用本人轮岗待办')
     return {'kind': 'supervisor' if capabilities(user)['can_operate'] else 'member',
             'kind_label': user.display_role_name, 'name': user.name, 'employee_no': user.employee.employee_no,
-            'attraction_name': identity(user)['attraction_name'], 'test_mode': False, 'formal': True,
-            'adjustment': False, 'can_authorize': False, 'capabilities': capabilities(user)}
+            'attraction_name': identity(user)['attraction_name'], 'formal': True,
+            'capabilities': capabilities(user, db)}
 
 
 @router.get('/board')
@@ -133,7 +136,7 @@ def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     aid = board_attraction_id(db,user)
     db.rollback()
     data = call(S.board_payload, db, aid, committed_only=True)
-    data.update(capabilities=capabilities(user),identity=identity(user))
+    data.update(capabilities=capabilities(user, db),identity=identity(user))
     if not capabilities(user)['can_manage']:
         for key in ('roster','rosterDates','days','draft'): data.pop(key, None)
         data['settings']={'departEarly':data['settings']['departEarly']}
@@ -147,7 +150,7 @@ def me(attraction_id: int | None = None, db: Session = Depends(formal_db), user:
     from app.rotation.participation import personal_scope
     member_no = user.employee.employee_no
     member_identity = identity(user)
-    member_capabilities = capabilities(user)
+    member_capabilities = capabilities(user, db)
     db.rollback()
     # SQLite's legacy driver does not begin a transaction on SELECT. Pin a
     # committed read snapshot so a batch cannot split the state and notices.
@@ -170,14 +173,13 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
         raise HTTPException(403,'个人待办只能确认本人到位，不能整组代确认')
     if employee_number(payload.get('pid',user.employee.employee_no)) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
-    if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust','batch_check_in'): raise HTTPException(403, '只可确认本人轮岗待办')
+    if payload.get('action') not in ('arrive','depart','batch_check_in'): raise HTTPException(403, '只可确认本人轮岗待办')
     if not payload.get('confirmation_token'): raise HTTPException(400, '请刷新待办后重新确认')
     with runtime_for(db).lock:
         try:
-            if getattr(user,'rotation_temporary',False):
-                from sqlalchemy import text
+            if user.rotation_temporary:
                 from app.rotation.temporary import current
-                db.rollback();db.execute(text('BEGIN IMMEDIATE'))
+                reserve_writer(db)
                 user=current(db,request)
             selected=payload.get('attraction_id')
             if selected is not None and (not isinstance(selected,int) or isinstance(selected,bool)):
@@ -194,7 +196,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
 def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(operator)):
     if not capabilities(user)['can_manage'] and payload.get('action') in ('set_close',):
         raise HTTPException(403, '此操作需要主管或经理权限')
-    if payload.get('action') in ('arrive','depart','entry_return','entry_adjust','batch_check_in') and not payload.get('confirmation_token'):
+    if payload.get('action') in ('arrive','depart','batch_check_in') and not payload.get('confirmation_token'):
         raise HTTPException(400, '请刷新看板后重新确认')
     if payload.get('action') in ('post','move','post_order') and not payload.get('expected_snapshot'):
         raise HTTPException(400,'请先预览当日调整影响')
@@ -285,50 +287,10 @@ def add_numbered_person(db, aid, entered_by, payload):
         raise HTTPException(409, '人员身份刚刚变化，请重新核对') from exc
 
 
-@router.post('/timeout/preview')
-def timeout_preview(payload: dict,db: Session=Depends(formal_db),user: V2User=Depends(operator)):
-    return call(S.timeout_case_preview,db,board_attraction_id(db,user),actor(user),payload)
-
-
 @router.get('/people-search')
 def people_search(q: str = '', db: Session = Depends(formal_db), user: V2User = Depends(operator)):
     from app.rotation.forecast_service import search_people
     return {'people': search_people(db, q)}
-
-
-@router.post('/me/entry-preview')
-def entry_preview(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
-    from app.rotation.cooperation import adjustment
-    from app.rotation.participation import personal_scope
-    selected=payload.get('attraction_id')
-    if selected is not None and (not isinstance(selected,int) or isinstance(selected,bool)):raise HTTPException(400,'轮岗景点圈无效')
-    aid,_=personal_scope(db,user,selected)
-    db.rollback()
-    with S.transaction(db):
-        cfg=S.load_config(db,aid)
-        day,now=S.clock_now(cfg)
-        row=S.day_row(db,aid,day)
-        if not row or row.status!='live': raise HTTPException(400,'当日轮岗尚未运行')
-        eng,_=S.engine_for(db,cfg,row,S.day_state(row))
-        p=eng.P.get(user.employee.employee_no)
-        if not p: raise HTTPException(400,'当日名单没有本人')
-        if payload.get('confirmation_token')!=S.confirmation_token(eng,p,'entry_adjust'):
-            raise HTTPException(409,'同行任务已变化，请刷新')
-        return call(adjustment,eng,p['pid'],now,payload.get('missing'))
-
-
-@router.post('/adjust/preview')
-def preview(payload: dict,db: Session = Depends(formal_db),user: V2User = Depends(operator)):
-    from app.rotation.manual import preview as preview_change
-    return call(preview_change,db,board_attraction_id(db,user),payload)
-
-
-@router.post('/adjust/act')
-def execute_preview(payload: dict,db: Session = Depends(formal_db),user: V2User = Depends(operator)):
-    if not payload.get('expected_snapshot') or payload.get('action') not in ('post','move','post_order'):
-        raise HTTPException(400,'请先预览当日调整影响')
-    call(S.do_live_action,db,board_attraction_id(db,user),actor(user),payload)
-    return {'ok':True}
 
 
 @router.get('/confirmation')
@@ -421,6 +383,7 @@ def save_config(payload: dict, db: Session = Depends(formal_db), user: V2User = 
                 ):
                     raise S.ActionError('请选择当天班表中 1 至 4 个不同开班时间')
                 if row and row.status == 'live':
+                    S.require_current_rules(state)
                     S.advance(db, cfg, row, state, now)
                     if state['status'] != 'live':
                         raise S.ActionError('当天轮岗已结束')
@@ -440,7 +403,8 @@ def save_config(payload: dict, db: Session = Depends(formal_db), user: V2User = 
                     S.sync_notices(db, aid, state, eng, now)
                     S.save_day(db, row, state)
             S.mark_changed(db)
-    except S.ActionError as exc: raise HTTPException(400,str(exc)) from exc
+    except S.ActionError as exc:
+        raise HTTPException(409 if isinstance(exc, S.ConfirmationConflict) else 400, str(exc)) from exc
     return {'ok':True}
 
 
@@ -486,12 +450,10 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
     db.rollback()
     passwords={p['employee_no']:hash_password(p['employee_no'][-4:]) for p in preliminary['new']}
     with runtime_for(db).lock:
-        from sqlalchemy import text
         from sqlalchemy.exc import IntegrityError
         try:
             # A writer reservation serializes roster provisioning against HR registration.
-            db.rollback()
-            db.execute(text('BEGIN IMMEDIATE'))
+            reserve_writer(db)
             batch=preflight(db,parsed,aid,scope,date or None,skip)
             if preliminary['digest']!=batch['digest']:
                 raise HTTPException(409,'班表或人员身份已变化，请重新预检')

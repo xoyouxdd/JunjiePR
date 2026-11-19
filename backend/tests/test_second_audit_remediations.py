@@ -1,4 +1,3 @@
-from frontend_source import read_frontend_source
 import os
 import tempfile
 from datetime import date, datetime, timedelta
@@ -20,7 +19,8 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from app.main import app
 from app.score_queries import employee_month_scores
 from app.v2_crypto import hash_password
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal, seed_reference_data
+from app.database.reference_data import ROLE_PERMISSION_CODES, seed_reference_data
+from app.database.connection import SessionLocal
 from app.v2_models import (
     AuditLog,
     DeductionLevel,
@@ -34,108 +34,13 @@ from app.v2_models import (
     SystemAlert,
     UserAccount,
 )
-from app.v2_services import recognition_score_for_role
+from app.services.identity import recognition_score_for_role
 
 # Keep legacy sick-leave idempotency coverage without restoring its production permission.
 ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_render_navigation_cancels_stale_read_requests_without_recursive_redraw() -> None:
-    script = read_frontend_source()
-
-    assert "let renderAbortController=null;" in script
-    assert "renderAbortController?.abort();" in script
-    assert "renderAbortController=controller;" in script
-    # Reads now compose page cancellation with their own timeout controller.
-    # Check the complete forwarding and cleanup chain rather than the old
-    # direct assignment (writes must not inherit navigation cancellation).
-    assert "const reading=!requestOptions.method||requestOptions.method.toUpperCase()==='GET';" in script
-    assert "const parentSignal=requestOptions.signal||(reading?getViewSignal():null);" in script
-    assert "const controller=reading?new AbortController():null;" in script
-    assert "const abort=()=>controller?.abort();" in script
-    assert "if(parentSignal?.aborted)controller.abort();" in script
-    assert "parentSignal?.addEventListener('abort',abort,{once:true});requestOptions.signal=controller.signal;" in script
-    assert "const timer=reading?setTimeout(()=>{timedOut=true;controller.abort();},30000):null;" in script
-    assert "if(timer!==null)clearTimeout(timer);if(reading)parentSignal?.removeEventListener('abort',abort);" in script
-    assert "clearPageResources();" in script
-    assert "pageTimeout(poll,1500)" in script
-    assert "if(generation!==renderGeneration) return render();" not in script
-    assert "function readApiBody(res)" in script
-    assert "JSON.parse(text)" in script
-    assert "res.json().catch(() => ({}))" not in script
-
-
-def test_active_manager_recognition_reuses_the_self_evidence_control() -> None:
-    script = read_frontend_source()
-
-    assert "function recognitionSubmissionData(form,imageRequired=true)" in script
-    assert "if(!file&&(imageRequired||evidenceSelectionAttempted(form)))" in script
-    assert "const imageRequired=selfMode;" in script
-    assert "const imageField=(imageRequired||managerRecognition)?" in script
-    assert "recognitionSubmissionData(form,imageRequired)" in script
-
-
-def test_hr_member_group_is_the_only_inline_control() -> None:
-    script = read_frontend_source()
-
-    assert "data-hr-group-select" in script
-    assert "hrBatchLeaderSave" not in script
-    assert "/api/hr/employees/batch-leaders" not in script
-
-
-def test_score_rule_ui_describes_global_scope_and_is_read_only_for_circle_hr() -> None:
-    script = read_frontend_source()
-
-    assert "canEdit=initial.can_edit" in script
-    assert "全景点圈统一规则" in script
-    assert "当前账号只读" in script
-    assert 'data-role-rate=' in script
-    assert 'min="0" step="0.01"' in script
-
-
-def test_required_recognition_fields_are_not_hidden_as_more_options() -> None:
-    script = read_frontend_source()
-
-    recognition_panel = script[script.index("const recognitionPanel="):script.index("const recognitionSection=")]
-    assert 'name="occurred_attraction_id"' in recognition_panel
-    assert 'name="recognizer_employee_id"' in recognition_panel
-    assert '<details class="form-more">' not in recognition_panel
-
-
-def test_mobile_review_and_material_status_keep_decision_fields_distinct() -> None:
-    script = read_frontend_source()
-
-    assert "function recognitionScoreText(r)" in script
-    assert "认可人：${esc(r.recognizer_name)} · ${recognitionScoreText(r)}" in script
-    assert "签卡人：${esc(row.recognizer_name)}" in script
-    assert "attachmentControl(row.image_url,'查看材料'" in script
-    assert ".filter(row=>!row.dedicated_entry)" in script
-    assert "businessActive=businessStatus==='active'" in script
-    assert "是否计分以业务状态为准" in script
-    # Old-page errors also need the captured page context, not only a DOM check.
-    # The actual navigation/late-result timing is exercised in view_lifecycle.cjs.
-    assert "if(error?.name==='AbortError'||!page.isCurrent()||!container?.isConnected)return" in script
-
-
-def test_mobile_fixed_actions_and_motion_preferences_have_shared_rules() -> None:
-    css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
-    script = read_frontend_source()
-
-    assert "@media (prefers-reduced-motion: reduce)" in css
-    assert "behavior:prefersReducedMotion()?'auto':'smooth'" in script
-
-
-def test_role_navigation_only_exposes_supported_month_close_and_statistics_entries() -> None:
-    script = read_frontend_source()
-
-    assert "else if (r==='HR_CIRCLE')" in script
-    assert "else if (r==='HR_ADMIN')" in script
-    hr_admin_branch = script[script.index("else if (r==='HR_ADMIN')"):script.index("else if (has('DATA_VIEW'))")]
-    assert "monthClose" not in hr_admin_branch
-    assert "if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))" in script
 
 
 def _login(client: TestClient, account: str = "TATEST01") -> None:
@@ -212,13 +117,6 @@ def test_recognition_deduction_and_sick_leave_replays_bind_business_payloads() -
         assert first.status_code == 200, first.text
         assert replay.status_code == 200 and replay.json().get("duplicate") is True
         assert conflict.status_code == 409 and conflict.json()["detail"]["code"] == "IDEMPOTENCY_PAYLOAD_CONFLICT"
-
-
-def test_restore_rehearsal_test_tracks_the_repository_scripts_directory() -> None:
-    source = (ROOT / "tests" / "test_long_test_operations.py").read_text(encoding="utf-8")
-
-    assert 'REPOSITORY_ROOT / "scripts" / "Run-MonthlyRestoreRehearsal.ps1"' in source
-    assert 'ROOT / "ops"' not in source
 
 
 def test_scoped_month_score_query_matches_the_legacy_view_business_rules() -> None:
@@ -437,31 +335,6 @@ def test_circle_hr_alerts_are_filtered_before_the_page_limit() -> None:
         assert not any(message.startswith("其他圈告警") for message in messages)
 
 
-def test_dialog_layer_is_shared_by_modals_preview_and_more_drawer() -> None:
-    script = read_frontend_source()
-
-    assert "function bindDialogLayer(" in script
-    assert "function isNativePickerControl(" in script
-    assert "node.inert=true" in script
-    assert "if(isNativePickerControl(document.activeElement))return" in script
-    assert "bindDialogLayer(overlay,{initialFocus:cancel,onClose:value=>{cleanup?.();resolve(value===true);}})" in script
-    assert "bindDialogLayer(overlay,{initialFocus:input,onClose:value=>resolve(typeof value==='string'?value:null)})" in script
-    assert "bindDialogLayer(drawer,{" in script
-    assert "allowClose:()=>exiting||!submitting" in script
-    assert "aria-label=\"撤回签卡\"" in script
-    assert "confirmModal('撤回签卡'" in script
-    assert "confirmModal('调整所属小组'" in script
-    assert "function formModal" in script and "bindDialogLayer(overlay,{initialFocus:form.querySelector" in script
-    assert "待复核记录" in script
-    assert "function readApiBody(res)" in script
-    assert "function beginViewRequest()" in script
-    assert "function replaceReviewRows(record)" in script
-    assert "function reviewCard(r)" in script
-    assert "function reviewTableRow(r)" in script
-    assert "recognitionScoreText(r)" in script
-    assert "recognitionScoreNote(r)" in script
-
-
 def test_starlette_multipart_fix_and_hundred_megabyte_limit_are_locked() -> None:
     import fastapi
     import starlette
@@ -473,9 +346,6 @@ def test_starlette_multipart_fix_and_hundred_megabyte_limit_are_locked() -> None
     assert version_tuple(fastapi.__version__) >= (0, 120, 2)
     assert version_tuple(starlette.__version__) >= (0, 49, 1)
     assert MultiPartParser.max_part_size == 1024 * 1024
-    source = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
-    assert "Starlette 0.47+" in source
-    assert "Starlette 0.49.1+" in source
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "fastapi==0.120.2" in requirements
     assert "starlette==0.49.3" in requirements

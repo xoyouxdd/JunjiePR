@@ -34,15 +34,15 @@ $env:RECOGNITION_BOOTSTRAP_ADMIN_PASSWORD = "由负责人现场设置的初始�
 .\backend\.venv\Scripts\python.exe backend\tests\run_all.py
 ```
 
-`run_all.py` 用当前解释器逐个文件起子进程，工作目录固定为 `backend/`，所以在仓库根目录直接执行即可。
+`run_all.py` 的工作目录固定为 `backend/`，可在仓库根目录直接执行。Python 和普通 Node 用例按文件隔离。浏览器用例按轮岗、公告与学习、个人功能、工作台四组顺序运行；同组内引擎和启动选项相同的用例复用浏览器进程，每个用例仍有独立的 Node 进程、浏览器上下文和临时数据目录。
 
 Windows 有 D 盘时，直接运行 Pytest、`run_all.py`、浏览器用例或备份健康场景测试，临时数据默认写入 `D:\JunjiePR-testing\scratch\native` 下的独立目录。没有 D 盘时使用系统临时目录。成功后自动清理本次临时目录，失败时保留测试数据和 `test.log`，终端会显示目录路径。浏览器用例显式保存的截图仍保存在原有位置。
 
-默认入口同时执行 Python、纯 Node.js 回归和 Playwright/Edge 本地 DOM 夹具；Node.js 须在 PATH 中，Playwright 须能由 `backend/` 解析，Microsoft Edge 须已安装。可配置 `NODE_PATH` 指向已有 Playwright 模块目录。运行器不自动安装依赖，缺少必需运行时会明确失败；浏览器夹具不启动应用服务器，也不连接部署环境。
+默认入口同时执行 Python、纯 Node.js 回归和 Playwright 浏览器用例。Node.js 须在 PATH 中，Playwright 须能由 `backend/` 解析，并准备对应的 Edge、WebKit、Firefox 运行时。可配置 `NODE_PATH` 指向已有 Playwright 模块目录。运行器不自动安装依赖，缺少必需运行时会明确失败。浏览器用例使用模拟 API 或隔离本地服务，不连接部署环境。
 
 定向检查可追加 `--suite python`、`--suite node` 或 `--suite browser`；它们只证明相应范围通过，不能替代默认完整验证。新增 Python 回归继续使用 `test_*.py`，前端回归使用 `.cjs`。
 
-`frontend_modules.cjs` 在本地 HTTP 静态夹具中加载真实 HTML、import map 和全部 ES 模块，模拟 API 验证菜单、页面生命周期、路径前缀、缓存版本、CSP 及手机提交，不启动业务后端。`view_lifecycle.cjs` 通过 Node 的真实 ES 模块执行请求竞态，运行器为它追加 `--experimental-vm-modules`；其他纯 Node 回归保持常规启动。源码读取 helper 使用 `.py` / `.js`，不会被识别为独立 CJS 回归。
+`frontend_modules.cjs` 在本地夹具中加载真实 HTML、import map 和 ES 模块，通过模拟 API 验证菜单、生命周期、路径前缀、缓存版本、CSP 及手机提交。`view_lifecycle.cjs`、`frontend_api_errors.cjs` 和 `self_recognition_batch_fields.cjs` 使用 Node 加载完整 ES 模块，运行器为这些用例追加 `--experimental-vm-modules`。轮岗等使用普通脚本的页面按实际顺序加载完整脚本。`tests/support/` 下的共用夹具不会作为独立用例执行。
 
 中文 Windows 默认按 GBK 读取子进程输出，`test_audit_score_rules.py` 会因此报 `UnicodeDecodeError`。跑测试前先在同一个 PowerShell 里执行 `$env:PYTHONUTF8 = "1"`。
 

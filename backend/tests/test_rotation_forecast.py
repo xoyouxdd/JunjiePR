@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.rotation import engine as E, forecast as F, forecast_service as API, workflow as W
-from test_rotation_engine import Hooks
+from app.rotation import engine as E, forecast as F, forecast_service as API
+from app.rotation.manual import Hooks
 
 
 def fixture(counts=(3, 3), now=600):
@@ -29,8 +29,8 @@ def fixture(counts=(3, 3), now=600):
                            forecastOrder=str(i), arriveAnchor=now-15)
     day = dict(date='2026-11-05', status='live', ruleVersion=2, persons=people, lines=lines,
                plan=dict(crew={}, seven={}, push7=[], lost=[]), confirmationEpoch='test', lastTick=now)
-    eng = E.Engine(day, deepcopy(E.DEFAULT_SETTINGS), Hooks())
-    W.initialize(eng)
+    eng = E.Engine(day, deepcopy(E.DEFAULT_SETTINGS), Hooks({}))
+    F.initialize(eng)
     return eng
 
 
@@ -190,7 +190,8 @@ def test_version2_cross_midnight_does_not_end_at_24_and_legacy_still_does():
     assert e.d['status'] == 'ended'
     old = deepcopy(e.d)
     old.pop('ruleVersion')
-    assert E.rotation_end(old) == 1440
+    from app.rotation.replay import board_view
+    assert board_view(old, 1440)['rotationEnd'] == 1440
 
 
 def test_tie_order_is_stable_and_seconds_are_not_rounded_to_minutes():

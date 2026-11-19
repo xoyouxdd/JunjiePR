@@ -1,7 +1,5 @@
 """Optional identity markers, independent of roles, scoring and group membership."""
 from datetime import datetime, timedelta, timezone
-import logging
-from threading import Event, Lock, Thread
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -68,45 +66,3 @@ def enforce_account_expiry(db, employee_id):
         invalidate_data_caches()
         return True
     return False
-
-
-_lock = Lock()
-_stop = Event()
-_thread = None
-_users = 0
-
-
-def start_worker():
-    global _thread, _users, _stop
-    with _lock:
-        _users += 1
-        if _thread and _thread.is_alive():
-            return
-        _stop = Event()
-        stop = _stop
-        def run():
-            from app.database.connection import SessionLocal
-            while not stop.is_set():
-                try:
-                    with SessionLocal() as db:
-                        if expire_accounts(db):
-                            db.commit()
-                            from app.data_cache import invalidate_data_caches
-                            invalidate_data_caches()
-                except Exception:
-                    logging.getLogger(__name__).exception('实习账号到期检查失败，将自动重试')
-                stop.wait(60)
-        _thread = Thread(target=run, name='internship-expiry', daemon=True)
-        _thread.start()
-
-
-def stop_worker():
-    global _users, _thread
-    with _lock:
-        _users = max(0, _users - 1)
-        if _users:
-            return
-        _stop.set()
-        if _thread:
-            _thread.join(timeout=5)
-            _thread = None

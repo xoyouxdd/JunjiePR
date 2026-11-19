@@ -10,12 +10,12 @@
 
 修复补丁可在当前 `RELEASES` 条目中设置 `announcement_items_from`，使弹窗沿用指定旧版本对当前角色可见的公告内容；弹窗仍显示当前版本号，并按当前版本记录已读。当前版本自己的更新条目仍会在「更新记录」中展示，不受复用设置影响。
 
-**数据源只有一处：`backend/app/changelog.py`。** 不要在文档里另写一份变更列表，避免和代码分叉。
+**数据源只有一处：`backend/app/changelog.json`**（`changelog.py` 只负责读取和按角色过滤）。 不要在文档里另写一份变更列表，避免和代码分叉。
 
 发版时：
 
 1. 改 `backend/app/version.py` 的 `APP_VERSION`（`STATIC_CACHE_VERSION` 与它相同，不用另写）
-2. 在 `changelog.py` 的 `RELEASES` **最前面**加一个与 `APP_VERSION` 相同版本号的块
+2. 在 `changelog.json` **最前面**加一个与 `APP_VERSION` 相同版本号的块
 3. 每条写 `audiences`（角色代码或 `all`），必要时加 `permissions`。两者是**且**的关系：只有角色命中 `audiences`（或 `audiences` 含 `all`）**并且**同时具备 `permissions` 里全部权限的用户才看得到该条目；`permissions` 留空时只按角色判断。配置前确认目标用户确实有这些权限，否则条目对他们不可见。
 4. `tests/test_changelog.py` 会检查最新版本号必须等于 `APP_VERSION`
 

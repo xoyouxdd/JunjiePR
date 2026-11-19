@@ -63,8 +63,6 @@ def test_reserve_counts_waiting_and_preparing_including_preassigned_opening_staf
     crew[4]['readyAt'] = 615
     assert eng.meal_options(eater, 600)['supply'] == 4
     assert eng.meal_options(eater, 600 + 1 / 60)['supply'] == 5
-    eng.d['ruleVersion'] = 1
-    assert eng.meal_options(eater, 600)['supply'] == 1
 
 
 def test_historical_settings_without_new_field_remain_readable_and_unmodified():

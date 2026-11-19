@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from datetime import date
 from io import BytesIO
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.excel_export_utils import content_disposition, excel_row
@@ -19,12 +21,21 @@ from app.services.declaration_statistics import (
     MATERIAL_LABELS, STATUS_LABELS, UPGRADE_LABELS, checked_month, declaration_payload,
 )
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_database import get_db
-from app.v2_services import write_audit
+from app.database.connection import get_db
+from app.services.audit import write_audit
 from app.v2_watermark import watermark_workbook
-from app.routers._shared import client_ip
+from app.http_utils import client_ip
 
 router = APIRouter()
+
+
+class DeclarationExportQuery(BaseModel):
+    month: str | None = None
+    attraction_id: int | None = None
+    level_id: int | None = None
+    type_id: int | None = None
+    status: str = ""
+    keyword: str = ""
 
 
 @router.get("/declaration-statistics")
@@ -74,19 +85,30 @@ def build_declaration_workbook(data: dict) -> Workbook:
 
 
 @router.get("/declaration-statistics/export")
-def export_declaration_statistics(
-    request: Request, month: str | None = None, attraction_id: int | None = None,
-    level_id: int | None = None, type_id: int | None = None, status: str = "", keyword: str = "",
+def export_declaration_statistics_route(
+    request: Request, query: Annotated[DeclarationExportQuery, Query()],
     db: Session = Depends(get_db), user: V2User = Depends(current_user),
 ):
+    return export_declaration_statistics(**query.model_dump(), db=db, user=user, audit_ip=client_ip(request))
+
+
+def require_declaration_export(user: V2User) -> None:
     if not {"DECLARATION_STATS_VIEW", "DECLARATION_STATS_EXPORT"}.issubset(user.permissions):
         raise HTTPException(403, "没有权限执行该操作")
+
+
+def export_declaration_statistics(
+    month: str | None = None, attraction_id: int | None = None,
+    level_id: int | None = None, type_id: int | None = None, status: str = "", keyword: str = "",
+    *, db: Session, user: V2User, audit_ip: str | None = None,
+):
+    require_declaration_export(user)
     data = declaration_payload(db, month or date.today().strftime("%Y-%m"), attraction_id, level_id, type_id, status, keyword)
     workbook = build_declaration_workbook(data)
     watermark_workbook(workbook, user.employee.employee_no)
     output = BytesIO()
     save_export_workbook(workbook, output)
     output.seek(0)
-    write_audit(db, user.employee, "导出声明登记统计", "declaration_statistics_export", data["month"], after={"attraction_id": attraction_id, "level_id": level_id, "type_id": type_id, "status": status, "keyword": keyword, "record_count": data["total_records"]}, ip_address=client_ip(request))
+    write_audit(db, user.employee, "导出声明登记统计", "declaration_statistics_export", data["month"], after={"attraction_id": attraction_id, "level_id": level_id, "type_id": type_id, "status": status, "keyword": keyword, "record_count": data["total_records"]}, ip_address=audit_ip)
     db.commit()
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": content_disposition(f"declaration_statistics_{data['month']}.xlsx", f"声明登记统计_{data['month']}.xlsx")})

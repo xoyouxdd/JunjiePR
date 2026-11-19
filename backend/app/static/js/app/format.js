@@ -21,6 +21,10 @@ const today = () => {const value=new Date();return `${value.getFullYear()}-${pad
 
 const monthNow = () => today().slice(0, 7);
 
+// YYYY-MM of a local Date, and of the month `delta` months away from a YYYY-MM string.
+const monthKey = value => `${value.getFullYear()}-${pad2(value.getMonth()+1)}`;
+const shiftMonth = (month, delta) => {const [year,index]=String(month).split('-').map(Number);return monthKey(new Date(year,index-1+delta,1));};
+
 const monthStart = () => `${monthNow()}-01`;
 
 const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -28,8 +32,7 @@ const prefersReducedMotion = () => window.matchMedia('(prefers-reduced-motion: r
 function memberHomeMonths(){
   const now=new Date();
   return [0,1,2].map(offset=>{
-    const value=new Date(now.getFullYear(),now.getMonth()-offset,1);
-    return `${value.getFullYear()}-${pad2(value.getMonth()+1)}`;
+    return monthKey(new Date(now.getFullYear(),now.getMonth()-offset,1));
   });
 }
 
@@ -50,4 +53,4 @@ function actingNoteMarkup(row){return row.acting_note?`<small class="field-hint 
 
 function avatarAssetFile(key,size=64){return `${key}-${size}${/^(?:base-01-(?:0[1-9]|1[0-6])|base-03-0[23])$/.test(key)?'-crop.svg':'.webp'}`;}
 
-export { avatarAssetFile, actingNoteMarkup, circleTheme, employeeNumber, esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, monthNow, monthStart, pad2, portalPath, prefersReducedMotion, recognitionScoreNote, recognitionScoreText, today };
+export { avatarAssetFile, actingNoteMarkup, circleTheme, employeeNumber, esc, fmt, fmtDeduction, memberHomeMonthLabel, memberHomeMonths, monthKey, monthNow, monthStart, pad2, portalPath, prefersReducedMotion, recognitionScoreNote, recognitionScoreText, shiftMonth, today };

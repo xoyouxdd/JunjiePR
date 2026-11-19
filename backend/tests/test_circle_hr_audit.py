@@ -13,7 +13,7 @@ os.environ['RECOGNITION_TEST_DEFAULT_PASSWORD']='audit-fixture-only'
 os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='audit-admin-only'
 
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, UserAccount, Role, EmployeeRoleAssignment, EmployeeActingDuty, AuditLog
 from app.v2_crypto import hash_password
 from app.services.audit import write_audit

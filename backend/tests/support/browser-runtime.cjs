@@ -45,4 +45,47 @@ process.on('exit', code => {
   fs.writeSync(2, `Test artifacts retained: ${tempRoot}\n`);
 });
 
-module.exports = require('playwright');
+const playwright = require('playwright');
+
+// A dedicated connection per call keeps fixture contexts separate. Closing the
+// returned browser closes this connection, while the domain runner owns the
+// shared browser process. Direct fixture launches still use local Playwright.
+if (process.env.JUNJIEPR_BROWSER_SUITE === '1') {
+  if (!process.send) throw new Error('Shared browser fixture requires its suite IPC channel');
+  process.channel.unref();
+  let nextId = 0;
+  let pending = 0;
+  function requestBrowser(engine, options) {
+    return new Promise((resolve, reject) => {
+      const id = nextId++;
+      pending++;
+      process.channel?.ref();
+      const finish = (error, endpoint) => {
+        process.off('message', receive);
+        process.off('disconnect', disconnected);
+        if (--pending === 0) process.channel?.unref();
+        if (error) reject(error);
+        else resolve(endpoint);
+      };
+      const receive = reply => {
+        if (reply.id === id) finish(reply.error ? new Error(reply.error) : null, reply.endpoint);
+      };
+      const disconnected = () => finish(new Error('Shared browser suite disconnected'));
+      process.on('message', receive);
+      process.once('disconnect', disconnected);
+      process.send({id, engine, options}, error => {
+        if (error && process.listeners('message').includes(receive)) finish(error);
+      });
+    });
+  }
+  for (const engine of ['chromium', 'webkit', 'firefox']) {
+    const type = playwright[engine];
+    type.launch = async (options = {}) => {
+      const {slowMo, ...settings} = options;
+      const endpoint = await requestBrowser(engine, settings);
+      return type.connect(endpoint, {slowMo, timeout: settings.timeout});
+    };
+  }
+}
+
+module.exports = playwright;

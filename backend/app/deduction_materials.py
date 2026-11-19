@@ -12,10 +12,11 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, or_, tuple_, update
 import fitz
 
-from app.v2_database import FILE_DIR, SessionLocal
+from app.background_worker import BackgroundWorker
+from app.database.connection import FILE_DIR, SessionLocal
 from app.deduction_policy import statement_upgrade_reviewer
 from app.v2_models import AuditLog, DeductionFollowUp, DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, StoredFile
 
@@ -39,9 +40,8 @@ MAX_PDF_UPLOAD_BYTES = 100 * 1024 * 1024
 PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD = 30 * 1024 * 1024
 MAX_PDF_PAGES = 6
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
-_worker_started = False
-_worker_lock = threading.Lock()
-_worker_stop = threading.Event()
+_active_claims: set[tuple[int, str]] = set()
+_claims_lock = threading.Lock()
 
 
 class MaterialError(ValueError):
@@ -410,7 +410,6 @@ def _commit(db) -> None:
 
 
 STALE_PROCESSING_AFTER = timedelta(minutes=15)
-HEARTBEAT_SECONDS = 30
 MAX_SOURCE_CLEANUP_ATTEMPTS = 8
 
 
@@ -470,28 +469,23 @@ def _mark_job_terminal(db, job_id: int, token: str, **values) -> bool:
     return result.rowcount == 1
 
 
-def _heartbeat_claim(job_id: int, token: str, stop_event: threading.Event) -> None:
-    while not stop_event.wait(HEARTBEAT_SECONDS):
-        db = SessionLocal()
-        try:
-            result = db.execute(
-                update(DeductionMaterialJob)
-                .where(
-                    DeductionMaterialJob.id == job_id,
-                    DeductionMaterialJob.claim_token == token,
-                    DeductionMaterialJob.status == "processing",
-                )
-                .values(started_at=datetime.now())
-                .execution_options(synchronize_session=False)
+def refresh_material_leases() -> None:
+    """Renew active claims together on the shared periodic worker."""
+    with _claims_lock:
+        claims = tuple(_active_claims)
+    if not claims:
+        return
+    with SessionLocal() as db:
+        db.execute(
+            update(DeductionMaterialJob)
+            .where(
+                tuple_(DeductionMaterialJob.id, DeductionMaterialJob.claim_token).in_(claims),
+                DeductionMaterialJob.status == "processing",
             )
-            db.commit()
-            if result.rowcount != 1:
-                return
-        except Exception:
-            logger.exception("材料任务心跳失败 job_id=%s", job_id)
-            return
-        finally:
-            db.close()
+            .values(started_at=datetime.now())
+            .execution_options(synchronize_session=False)
+        )
+        db.commit()
 
 
 def _source_storage_keys(db, job: DeductionMaterialJob) -> list[str]:
@@ -620,7 +614,6 @@ def process_next_deduction_material_job() -> bool:
     job_id: int | None = None
     token: str | None = None
     generated_key: str | None = None
-    heartbeat_stop = threading.Event()
     try:
         job_id = claim_next_deduction_material_job(db)
         if not job_id:
@@ -629,12 +622,8 @@ def process_next_deduction_material_job() -> bool:
         if not job or not job.claim_token:
             return False
         token = job.claim_token
-        threading.Thread(
-            target=_heartbeat_claim,
-            args=(job_id, token, heartbeat_stop),
-            daemon=True,
-            name=f"material-heartbeat-{job_id}",
-        ).start()
+        with _claims_lock:
+            _active_claims.add((job_id, token))
         deduction = db.get(DeductionRecord, job.deduction_id)
         output = db.get(StoredFile, job.output_file_id)
         source_ids = _source_ids(job)
@@ -682,7 +671,8 @@ def process_next_deduction_material_job() -> bool:
         _unlink_storage_keys([generated_key] if generated_key else [])
         return False
     finally:
-        heartbeat_stop.set()
+        with _claims_lock:
+            _active_claims.discard((job_id, token))
         db.close()
 
 
@@ -697,16 +687,12 @@ def worker_tick() -> bool:
         return False
 
 
-def start_deduction_material_worker() -> None:
-    global _worker_started
-    with _worker_lock:
-        if _worker_started:
-            return
-        _worker_started = True
+def _run_material_worker(stop) -> None:
+    while not stop.is_set():
+        processed = worker_tick()
+        stop.wait(0.35 if processed else 1.5)
 
-    def run() -> None:
-        while not _worker_stop.is_set():
-            processed = worker_tick()
-            _worker_stop.wait(0.35 if processed else 1.5)
 
-    threading.Thread(target=run, name="deduction-photo-pdf-worker", daemon=True).start()
+_worker = BackgroundWorker("deduction-photo-pdf-worker", _run_material_worker, join_timeout=5, counted=True)
+start_deduction_material_worker = _worker.start
+stop_deduction_material_worker = _worker.stop

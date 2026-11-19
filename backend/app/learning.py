@@ -12,7 +12,7 @@ ACTING_PUBLISHER_ROLES = {'TA_SUPERVISOR', 'TA_GSM'}
 
 
 def eligible(user):
-    if getattr(user, 'rotation_temporary', False) or user.account is None or user.role.code == 'ROTATION':
+    if user.rotation_temporary or user.account is None or user.role.code == 'ROTATION':
         raise HTTPException(403, '请使用本人正式账号')
 
 

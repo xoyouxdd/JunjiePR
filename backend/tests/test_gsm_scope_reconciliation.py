@@ -12,7 +12,9 @@ os.environ["RECOGNITION_ENABLE_TEST_ACCOUNTS"] = "1"
 os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "test-default"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "test-admin"
 
-from app.v2_database import SessionLocal, ensure_gsm_management_scopes, init_db, synchronize_gsm_management_scope  # noqa: E402
+from app.database.connection import SessionLocal
+from app.services.management_scopes import ensure_gsm_management_scopes, synchronize_gsm_management_scope
+from app.database.bootstrap import init_db
 from app.v2_models import Attraction, Employee, EmployeeRoleAssignment, ManagementScope, Role  # noqa: E402
 
 

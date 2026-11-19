@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.hr_monthly_pptx import NS, ROOT
 from app.hr_monthly_report import REPORT_ROLES
-from app.v2_database import ROLE_PERMISSION_CODES
+from app.database.reference_data import ROLE_PERMISSION_CODES
 from app.hr_monthly_pptx import build_pptx
 
 
@@ -242,7 +242,7 @@ def test_native_charts_tables_pagination_and_photos(tmp_path):
 
 
 def test_history_loa_credited_scores_and_read_only():
-    from app.v2_database import SessionLocal
+    from app.database.connection import SessionLocal
     from app.v2_models import Employee, Attraction, RecognitionRecord, EmployeeMonthOrganizationSnapshot, EmployeeLOAPeriod, AttendanceMonthlyScore, GroupMembership
     from app.hr_monthly_report import report_data
     month = REPORT_TEST_MONTH

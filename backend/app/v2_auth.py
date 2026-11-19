@@ -9,9 +9,10 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.v2_crypto import token_hash
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Employee, Role, UserAccount, UserSession
-from app.v2_services import base_role_at, duties_at, process_role_expirations, role_permissions
+from app.services.identity import base_role_at, duties_at, role_permissions
+from app.services.role_lifecycle import process_role_expirations
 
 
 ROLE_EXPIRATION_CHECK_INTERVAL_SECONDS = 300
@@ -47,6 +48,8 @@ class V2User:
     permissions: set[str]
     base_role: Role | None = None
     duty_roles: list[Role] = field(default_factory=list)
+    rotation_temporary: bool = False
+    rotation_identity_temporary: bool = False
 
     def __post_init__(self) -> None:
         if self.base_role is None:
@@ -93,6 +96,13 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> V2User:
         from app.rotation.temporary import current, COOKIE
         if request.cookies.get(COOKIE): return current(db, request)
         raise HTTPException(401, "请先登录")
+    return session_user(db, raw_token, request.url.path)
+
+
+def session_user(db: Session, raw_token: str, path: str) -> V2User:
+    """Resolve a regular login without depending on a request or ASGI scope."""
+    if not raw_token:
+        raise HTTPException(401, "请先登录")
     session = db.query(UserSession).filter(UserSession.token_hash == token_hash(raw_token)).first()
     if not session or session.expires_at <= datetime.now():
         raise HTTPException(401, "登录已过期，请重新登录")
@@ -108,7 +118,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> V2User:
         raise HTTPException(401, "员工账号已停用")
     maybe_process_role_expirations(db)
     user = load_user_identity(db, employee, account)
-    if account.must_change_password and request.url.path not in {"/api/me", "/api/password", "/api/logout"}:
+    if account.must_change_password and path not in {"/api/me", "/api/password", "/api/logout"}:
         raise HTTPException(
             status_code=403,
             detail={"code": "PASSWORD_CHANGE_REQUIRED", "message": "请先修改密码后再使用系统功能"},

@@ -3,10 +3,10 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, File, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
+from app.database.connection import write_transaction
 from app.v2_auth import current_user
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, AuditLog
 from app.services import activity_points as points
 from app.services import legacy_points as legacy
@@ -48,29 +48,19 @@ class BackfillRequest(BaseModel):
 @router.post("/activity-points/backfill")
 def apply(payload: BackfillRequest, db=Depends(get_db), user=Depends(current_user)):
     admin(user)
-    db.rollback()
-    try:
-        db.execute(text("BEGIN IMMEDIATE"))
+    with write_transaction(db):
         result = points.backfill_apply(db, payload.fingerprint)
         db.add(AuditLog(operator_id=user.id, operator_name=user.name,
             action="历史活动积点补计", entity_type="activity_points", after_json=json.dumps(result, ensure_ascii=False)))
         db.commit()
         return result
-    except Exception:
-        db.rollback()
-        raise
 
 
 def legacy_locked(db, operation):
-    db.rollback()
-    try:
-        db.execute(text('BEGIN IMMEDIATE'))
+    with write_transaction(db):
         result = operation()
         db.commit()
         return result
-    except Exception:
-        db.rollback()
-        raise
 
 
 @router.get('/activity-points/legacy/options')

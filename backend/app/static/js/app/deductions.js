@@ -84,7 +84,7 @@ function bindDeductionV2244(){
           return;
         }
       }
-      if(!confirm(materialMode==='photos'?'确认提交照片材料？PDF生成成功后才会正式扣分。':materialMode==='pdf'?'确认提交PDF材料？系统会后台优化后生效。':'未上传材料：将创建待补充记录，TA主管、主管、TA GSM和GSM均可补充；在材料就绪前不扣分。是否继续？'))return;
+      if(!await confirmModal('确认提交声明',materialMode==='photos'?'确认提交照片材料？PDF生成成功后才会正式扣分。':materialMode==='pdf'?'确认提交PDF材料？系统会后台优化后生效。':'未上传材料：将创建待补充记录，TA主管、主管、TA GSM和GSM均可补充；在材料就绪前不扣分。是否继续？','确认提交'))return;
       form.dataset.submitting='true';submit.disabled=true;
       const out=await api('/api/deductions',{method:'POST',body:data});clearSubmissionKey(form);form.reset();material.reset();if(!page.isCurrent()){toast('声明已登记');return;}
       if(out.record?.material_status==='processing')showDeductionMaterialState(stateBox,out.record);

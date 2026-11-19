@@ -10,24 +10,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
-from app.v2_database import EMPLOYEE_CIRCLES, FILE_DIR, LEGACY_CIRCLE_BY_VENUE, RECOGNITION_VENUES, get_db
+from app.database.reference_data import EMPLOYEE_CIRCLES, LEGACY_CIRCLE_BY_VENUE, RECOGNITION_VENUES
+from app.database.connection import FILE_DIR, get_db
 from app.v2_models import AnnouncementAsset, AnnouncementDelivery, AnnouncementMedia, Attraction, DeductionLevel, DeductionRecord, DeductionType, Employee, RecognitionRecord, RecognitionAttachment, RecognitionInboxItem, RecognitionType, Role, SickLeaveRecord, StoredFile
-from app.v2_services import direct_member_ids, write_audit
+from app.services.organization import direct_member_ids
+from app.services.audit import write_audit
 from app.v2_watermark import watermark_image, watermark_pdf
 from app.v2_preview_cache import watermarked_preview_cache
-from app.routers._shared import (
-    CIRCLE_HR_MANAGED_ROLE_CODES,
-    DEDICATED_RECOGNITION_TYPE_CODES,
+from app.access_policy import CIRCLE_HR_MANAGED_ROLE_CODES, SCOPED_HR_ROLE_CODE, scoped_hr_attraction_ids
+from app.recognition_policy import DEDICATED_RECOGNITION_TYPE_CODES, SPECIAL_RECOGNITION_TYPES
+from app.deduction_policy import (
     DEDUCTION_TYPE_ORDER,
     DIRECT_HIDDEN_DEDUCTION_CODES,
-    PREVIEW_IMAGE_EXTENSIONS,
-    PREVIEW_PDF_EXTENSIONS,
     REPEAT_CONTROLLED_DEDUCTION_CODES,
-    SCOPED_HR_ROLE_CODE,
-    SPECIAL_RECOGNITION_TYPES,
     direct_only_deduction_user,
-    scoped_hr_attraction_ids,
 )
+from app.file_types import PREVIEW_IMAGE_EXTENSIONS, PREVIEW_PDF_EXTENSIONS
 
 router = APIRouter()
 

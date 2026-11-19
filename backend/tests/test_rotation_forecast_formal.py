@@ -64,14 +64,33 @@ def test_post_editing_allows_tr_but_rejects_member_and_screen(today):
         day = ok(tr.get('/api/rotation-board/board'))['day']; post = day['lines'][0]['posts'][0]
         body = {'action': 'rename_post', 'post_key': post['key'], 'expected_name': post['name'], 'name': '恢复改名'}
         assert cm.post('/api/rotation-board/act', json=body).status_code == 403
-        assert screen.post('/api/rotation/screen/act', json=body).status_code == 403
+        assert screen.post('/api/rotation-screen/act', json=body).status_code == 403
         ok(tr.post('/api/rotation-board/act', json=body))
         day = ok(tr.get('/api/rotation-board/board'))['day']
         body = {'action': 'post_order', 'line': 'A1', 'i': 0, 'target_i': 1, 'swapMode': 'posts',
                 'expected_snapshot': day['forecastSnapshot']}
         assert cm.post('/api/rotation-board/act', json=body).status_code == 403
-        assert screen.post('/api/rotation/screen/act', json=body).status_code == 403
+        assert screen.post('/api/rotation-screen/act', json=body).status_code == 403
         ok(tr.post('/api/rotation-board/act', json=body))
+
+
+def test_post_edit_rejects_stale_board_snapshot(today):
+    with TestClient(app) as operator:
+        login(operator, '9710010')
+        board_url = '/api/rotation-board/board'
+        action_url = '/api/rotation-board/act'
+        before = ok(operator.get(board_url))['day']
+        line = before['lines'][0]
+        body = {'action': 'post_order', 'line': line['id'], 'i': 0, 'target_i': 1, 'swapMode': 'posts'}
+        post = line['posts'][0]
+        ok(operator.post(action_url, json={'action': 'rename_post', 'post_key': post['key'],
+                                          'expected_name': post['name'], 'name': '现场改名'}))
+        current = ok(operator.get(board_url))['day']
+        assert operator.post(action_url, json={**body, 'expected_snapshot': before['forecastSnapshot']}).status_code == 409
+        assert ok(operator.get(board_url))['day']['lines'] == current['lines']
+        ok(operator.post(action_url, json={**body, 'expected_snapshot': current['forecastSnapshot']}))
+        after = ok(operator.get(board_url))['day']['lines'][0]['posts']
+        assert [post['name'] for post in after[:2]] == [line['posts'][1]['name'], '现场改名']
 
 
 def test_cm_confirms_own_forecast_and_receipt_is_exactly_once(today):
@@ -115,16 +134,16 @@ def test_personal_todo_reads_previous_commit_while_writer_holds_rotation_lock(to
 def test_screen_cannot_drag_or_modify_shift_or_sort_time(today):
     with TestClient(app) as screen:
         ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
-        day = ok(screen.get('/api/rotation/screen/state'))['day']
+        day = ok(screen.get('/api/rotation-screen/state'))['day']
         assert day['ruleVersion'] == 2
-        result = screen.post('/api/rotation/screen/act', json={'action': 'place', 'pid': '9710000',
+        result = screen.post('/api/rotation-screen/act', json={'action': 'place', 'pid': '9710000',
                              'line': 'A1', 'i': 0, 'place_mode': 'swap', 'expected_snapshot': day['forecastSnapshot']})
         assert result.status_code==403
-        after = ok(screen.get('/api/rotation/screen/state'))['day']
+        after = ok(screen.get('/api/rotation-screen/state'))['day']
         assert after['lines']==day['lines']
-        assert screen.post('/api/rotation/screen/act',json={'action':'pool','pid':'9710000','pool':'rest'}).status_code==403
-        assert screen.post('/api/rotation/screen/act', json={'action': 'sort_time', 'line': 'A1', 'time': '00:00:00'}).status_code == 403
-        assert screen.post('/api/rotation/screen/act', json={'action': 'shift', 'pid': '9710000', 'start': '08:00', 'end': '20:00'}).status_code == 403
+        assert screen.post('/api/rotation-screen/act',json={'action':'pool','pid':'9710000','pool':'rest'}).status_code==403
+        assert screen.post('/api/rotation-screen/act', json={'action': 'sort_time', 'line': 'A1', 'time': '00:00:00'}).status_code == 403
+        assert screen.post('/api/rotation-screen/act', json={'action': 'shift', 'pid': '9710000', 'start': '08:00', 'end': '20:00'}).status_code == 403
 
 
 def test_tr_queries_across_circles_max_three_and_adds_temporary_record_only(today):
@@ -279,18 +298,18 @@ def test_batch_sign_in_is_shared_by_screen_and_personal_todo(today):
         S.tick_attraction(today, formal=True)
         mine = ok(cm.get('/api/rotation-board/me'))['person']
         assert any(item['type'] == 'rotation_step' for item in ok(cm.get('/api/action-center'))['items'])
-        view = ok(screen.get('/api/rotation/screen/state'))['day']
+        view = ok(screen.get('/api/rotation-screen/state'))['day']
         everyone = {p['pid']: p for p in view['persons']}
         assert everyone[mine['pid']]['canBatchCheckIn'] and mine['canBatchCheckIn']
         other = everyone['8990000']
         payload = {'action': 'batch_check_in', 'pid': other['pid'],
                    'confirmation_token': other['confirmationTokens']['batch_check_in']}
         assert cm.post('/api/rotation-board/me/act', json=payload).status_code == 403
-        assert ok(screen.post('/api/rotation/screen/act', json=payload))['executed']
+        assert ok(screen.post('/api/rotation-screen/act', json=payload))['executed']
         own = {'action': 'batch_check_in', 'pid': mine['pid'],
                'confirmation_token': mine['confirmationTokens']['batch_check_in']}
         assert ok(cm.post('/api/rotation-board/me/act', json=own))['executed']
-        assert ok(screen.post('/api/rotation/screen/act', json=own))['duplicate']
+        assert ok(screen.post('/api/rotation-screen/act', json=own))['duplicate']
         assert ok(cm.get('/api/rotation-board/me'))['person']['batchCheckedIn']
 
 

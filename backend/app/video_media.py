@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont, ImageStat
 
-from app.v2_database import FILE_DIR
+from app.database.connection import FILE_DIR
 
 VIDEO_DIR = FILE_DIR / "learning-videos"
 MAX_BYTES = 500 * 1024 * 1024
@@ -240,7 +240,7 @@ def erase_video_files(video_id):
             if (item.is_symlink() or getattr(item,'is_junction',lambda:False)()) or not item.resolve().is_relative_to(root):raise RuntimeError('Unsafe video media link')
         shutil.rmtree(directory)
     cache_root=(VIDEO_DIR/'playbacks').resolve()
-    from app.v2_database import SessionLocal
+    from app.database.connection import SessionLocal
     from app.video_models import VideoJob
     with SessionLocal() as db:
         for job in db.query(VideoJob).filter_by(video_id=video_id,kind='playback'):

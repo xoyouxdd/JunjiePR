@@ -26,7 +26,9 @@ from app.deduction_materials import (  # noqa: E402
     process_next_deduction_material_job,
     worker_tick,
 )
-from app.v2_database import FILE_DIR, SessionLocal, ensure_material_job_claim_generation, init_db  # noqa: E402
+from app.database.connection import FILE_DIR, SessionLocal
+from app.database.migrations import ensure_material_job_claim_generation
+from app.database.bootstrap import init_db
 from app.v2_models import AuditLog, DeductionLevel, DeductionMaterialJob, DeductionRecord, DeductionType, Employee, StoredFile  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
@@ -126,6 +128,28 @@ def test_claim_writes_generation_and_token() -> None:
     assert job.claim_generation == 1
     assert job.claim_token
     assert len(job.claim_token) == 32
+
+
+def test_shared_lease_renewal_protects_active_conversion(monkeypatch) -> None:
+    job_id, _ = _queued_job()
+    expired = datetime.now() - timedelta(minutes=16)
+
+    def convert(_sources):
+        with SessionLocal() as db:
+            job = db.get(DeductionMaterialJob, job_id)
+            job.started_at = expired
+            db.commit()
+        materials.refresh_material_leases()
+        with SessionLocal() as db:
+            assert db.get(DeductionMaterialJob, job_id).started_at > expired
+            assert claim_next_deduction_material_job(db) is None
+        return _write_output(f"renewed-{uuid4().hex}.pdf")
+
+    monkeypatch.setattr(materials, "_make_pdf", convert)
+    assert process_next_deduction_material_job() is True
+    job = _job_state(job_id)
+    assert job.status == "succeeded" and job.attempts == 1
+    assert (job_id, job.claim_token) not in materials._active_claims
 
 
 def test_failure_commit_fault_keeps_source_and_processing() -> None:
@@ -246,6 +270,10 @@ def test_stale_owner_cannot_overwrite_new_owner() -> None:
         worker_b = threading.Thread(target=run_b, name="worker-B")
         worker_b.start()
         worker_b.join(timeout=10)
+        # The shared scheduler still sees worker A, but its token is obsolete.
+        last_start = _job_state(job_id).started_at
+        materials.refresh_material_leases()
+        assert _job_state(job_id).started_at == last_start
         proceed.set()
         worker_a.join(timeout=10)
     finally:

@@ -16,7 +16,8 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.deduction_materials import claim_next_deduction_material_job  # noqa: E402
-from app.v2_database import SessionLocal, init_db  # noqa: E402
+from app.database.connection import SessionLocal
+from app.database.bootstrap import init_db
 from app.v2_models import DeductionLevel, DeductionMaterialJob, DeductionRecord, DeductionType, Employee, StoredFile  # noqa: E402
 
 init_db()

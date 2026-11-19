@@ -12,38 +12,30 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, require_permissions
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, GroupLeaderAssignment, GroupMembership, GroupTransfer, GroupTransferMember, RecognitionRecord, Role, SickLeaveRecord, SystemAlert, WorkGroup
-from app.v2_services import (
-    FRONTLINE_CODES,
+from app.role_constants import FRONTLINE_CODES
+from app.services.organization import (
     active_group_memberships_bulk,
-    base_role_at,
-    base_roles_at,
     current_group_for_employee,
     current_leader_for_employee,
-    duties_at_bulk,
     group_acting_eligible,
     group_code_sort_key,
     group_display_name,
     group_leader_of_type,
     group_supervisor_eligible,
     gsm_candidates_for_attractions_bulk,
-    identity_labels,
     next_group_code,
-    recalculate_attendance,
     sync_pending_reviewers,
-    write_audit,
 )
-from app.routers._shared import (
-    client_ip,
-    employee_payloads,
-    ensure_month_open,
-    ensure_scoped_hr_attraction,
-    ensure_scoped_hr_employee,
-    group_display_metadata_bulk,
-    invalidate_data_caches,
-    scoped_hr_attraction_ids,
-)
+from app.services.identity import base_role_at, base_roles_at, duties_at_bulk, identity_labels
+from app.services.attendance import recalculate_attendance
+from app.services.audit import write_audit
+from app.http_utils import client_ip
+from app.organization_queries import employee_payloads, group_display_metadata_bulk
+from app.month_closure import ensure_month_open
+from app.access_policy import ensure_scoped_hr_attraction, ensure_scoped_hr_employee, scoped_hr_attraction_ids
+from app.data_cache import invalidate_data_caches
 
 router = APIRouter()
 

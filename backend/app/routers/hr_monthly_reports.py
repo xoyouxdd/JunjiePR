@@ -1,6 +1,4 @@
 """Authorized report preview and editable PPTX export, no business mutations."""
-import hashlib
-import json
 from io import BytesIO
 from threading import BoundedSemaphore
 import warnings
@@ -14,12 +12,13 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.json_digest import json_digest
 from app.hr_monthly_report import require_report, report_data, TEMPLATES, TEMPLATE_DESCRIPTIONS, SECTIONS
 from app.hr_monthly_pptx import build_pptx, TEMPLATE_VERSION
 from app.v2_auth import current_user, V2User
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction
-from app.v2_services import write_audit
+from app.services.audit import write_audit
 from app.v2_watermark import watermark_label
 from app.excel_export_utils import content_disposition
 
@@ -68,7 +67,7 @@ def digest(data):
     # Report data can include date/datetime values from production SQLite rows.
     # Match FastAPI's response encoding before creating the preview/export fingerprint.
     normalized = jsonable_encoder({k: v for k, v in data.items() if k != "generated_at"})
-    return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return json_digest(normalized, compact=True)
 
 
 @router.get("/hr-monthly-reports/options")
@@ -141,7 +140,11 @@ def generate(db, user, config, raw_photos):
 
 
 @router.post("/hr-monthly-reports/export")
-async def export(config: str = Form(...), photos: list[UploadFile] = File(default=[]), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+async def export_route(config: str = Form(...), photos: list[UploadFile] = File(default=[]), db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    return await export(config, photos, db, user)
+
+
+async def export(config: str, photos: list[UploadFile], db: Session, user: V2User):
     require_report(user)
     try:
         options = ReportOptions.model_validate_json(config)

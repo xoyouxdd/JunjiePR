@@ -21,7 +21,7 @@ os.environ['RECOGNITION_TEST_ADMIN_PASSWORD'] = 'rotation-local-admin-2026'
 from app.main import app
 from app.rotation import service as S
 from app.rotation.namespace import FORMAL_TABLES as F
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from local_tools.rotation_clock.extension import install, control
 from local_tools.rotation_clock.demo import seed
 
@@ -88,6 +88,7 @@ def find(data, pid):
 
 def test_normal_entry_and_release_have_no_local_extension():
     assert not any(path.startswith('/__local/') for path in NORMAL_PATHS)
+    assert '/api/rotation/test-clock' not in NORMAL_PATHS
     assert '/__local/' not in (ROOT / 'backend/app/static/rotation-board.html').read_text(encoding='utf-8')
     spec = importlib.util.spec_from_file_location('local_release_check', ROOT / 'scripts/build_release.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
@@ -126,22 +127,6 @@ def test_backdating_cannot_restore_expired_login(manager):
         db.commit()
     assert manager.get('/api/me').status_code == 401
     direct({'action': 'set', 'date': DAY, 'time': '04:00:00'})
-
-
-def test_temporary_grants_expire_in_real_time_even_when_simulated_date_changes(manager, monkeypatch):
-    from app.rotation import adjustment
-    from app.v2_models import Employee
-    from datetime import datetime, timedelta
-    monkeypatch.setattr(adjustment, 'qualified', lambda *args, **kwargs: True)
-    with SessionLocal() as db:
-        employee = db.query(Employee).filter_by(employee_no='GSMTEST01').one()
-        expired = SimpleNamespace(revoked=False, expires_at=datetime.now()-timedelta(minutes=1), employee_id=employee.id)
-        valid = SimpleNamespace(revoked=False, expires_at=datetime.now()+timedelta(minutes=30), employee_id=employee.id)
-        clock(manager, 'set', date='2020-01-01', time='00:00:00')
-        assert not adjustment.live_grant(db, expired)
-        clock(manager, 'set', date='2040-01-01', time='00:00:00')
-        assert adjustment.live_grant(db, valid)
-    clock(manager, 'set', date=DAY, time='04:00:00')
 
 
 def test_apply_seconds_pauses_and_authentication_stays_on_real_time(manager):
@@ -210,7 +195,7 @@ def test_speed_background_tick_personal_and_screen_share_clock(manager, monkeypa
         ok(member.post('/api/login', json={'employee_no': pid, 'password': 'rotation-local-2026'}))
         ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
         assert ok(member.get('/api/rotation-board/me'))['clock']['minute'] == pytest.approx(451.2)
-        assert ok(screen.get('/api/rotation/screen/state'))['clock']['minute'] == pytest.approx(451.2)
+        assert ok(screen.get('/api/rotation-screen/state'))['clock']['minute'] == pytest.approx(451.2)
         clock(manager, 'pause'); elapsed[0] += 100
         S.tick_attraction(aid, formal=True)
         assert board(manager)['clock']['minute'] == pytest.approx(451.2)
@@ -302,7 +287,14 @@ def other_data(db, aid):
 
 def test_restart_is_scoped_restores_initial_and_requires_two_confirmations(manager):
     clock(manager, 'set', date=DAY, time='07:30:12')
-    ready(manager)
+    person = next(p for p in board(manager)['day']['persons'] if p['state'] == 'onpost')
+    act(manager, action='pool', pid=person['pid'], pool='pending')
+    pending = find(board(manager), person['pid'])
+    token = pending['confirmationTokens']['arrive']
+    confirmation = {'action': 'arrive', 'pid': person['pid'], 'confirmation_token': token}
+    assert act(manager, **confirmation)['executed']
+    status = '/api/rotation-board/confirmation'
+    assert ok(manager.get(status, params={'date': DAY, 'token': token}))['confirmed']
     with SessionLocal() as db:
         aid = db.query(F.RotationConfig).one().attraction_id
         if not db.query(F.RotationDay).filter_by(work_date='2026-11-04').first():
@@ -321,6 +313,8 @@ def test_restart_is_scoped_restores_initial_and_requires_two_confirmations(manag
         assert after['confirmationEpoch'] != prior['confirmationEpoch']
         assert not any(p['state'] == 'exception' for p in after['persons'].values())
     assert board(manager)['clock']['paused'] and board(manager)['clock']['speed'] == 1
+    assert not ok(manager.get(status, params={'date': DAY, 'token': token}))['confirmed']
+    assert manager.post('/api/rotation-board/act', json=confirmation).status_code == 409
     assert manager.post('/__local/rotation-clock', json={'action': 'restart', 'restart_token': preview['restart_token'], 'confirm_date': DAY}).status_code == 400
 
 

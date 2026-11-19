@@ -19,7 +19,7 @@ class RosterIdentity(Base):
 
 def account_issues(db, employee):
     from app.services.employee_types import is_due
-    from app.v2_services import base_role_at
+    from app.services.identity import base_role_at
     account=db.query(UserAccount).filter_by(employee_id=employee.id).first()
     issues=[]
     if employee.account_deleted_at: issues.append('已删除留档')
@@ -83,7 +83,7 @@ def _contexts(db,no,day=None):
 def personal_scope(db,user,selected=None):
     choices=contexts(db,user.employee.employee_no)
     home=user.employee.attraction_id
-    if not choices and not getattr(user,'rotation_temporary',False) and home:
+    if not choices and not user.rotation_temporary and home:
         circle=db.get(Attraction,home)
         if circle and circle.active and circle.employee_circle:
             # Home-circle personal access predates roster-specific authorization.

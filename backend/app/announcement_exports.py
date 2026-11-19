@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.units import pixels_to_EMU
 from openpyxl.worksheet.pagebreak import Break
 
-from app.v2_database import FILE_DIR, SessionLocal
+from app.database.connection import FILE_DIR, SessionLocal
 from app.v2_models import StoredFile
 from app.branding import BRAND_EN
 

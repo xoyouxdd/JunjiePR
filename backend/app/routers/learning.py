@@ -16,9 +16,9 @@ from sqlalchemy.orm import Session
 from app import learning as domain
 from app.learning_models import LearningShare as Share, LearningRevision as Revision, LearningReaction as Reaction, LearningAccess as Access, LearningAsset as Asset, LearningDraft as Draft, LearningFeedback as Feedback
 from app.v2_auth import current_user, V2User
-from app.v2_database import get_db, FILE_DIR
+from app.database.connection import get_db, FILE_DIR
 from app.v2_models import Employee
-from app.v2_services import write_audit
+from app.services.audit import write_audit
 
 router = APIRouter(prefix='/learning', tags=['learning'])
 CATEGORIES = ('未分类', '开场准备', '岗位操作', '异常处理', '经验技巧')

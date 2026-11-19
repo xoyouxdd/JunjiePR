@@ -59,7 +59,7 @@ def adopt(db, employee):
         member.adopted_employee_id = employee.id
         member.enabled = False
         db.query(TemporarySession).filter_by(member_id=member.id).delete(synchronize_session=False)
-        from app.v2_services import write_audit
+        from app.services.audit import write_audit
         write_audit(db, employee, '正式账号接管轮岗临时身份', 'employee', employee.id,
                     after={'temporary_member_id':member.id, 'history_retained':True})
 
@@ -180,7 +180,7 @@ def current(db, request):
     if not choices or employee and not any(c['metadata'].get('issues') for c in choices):
         raise HTTPException(401,'当日轮岗授权已结束')
     allowed={('GET','/api/me'),('GET','/api/rotation-board/me'),('POST','/api/rotation-board/me/act'),
-             ('POST','/api/rotation-board/me/entry-preview'),('GET','/api/rotation-board/confirmation')}
+             ('GET','/api/rotation-board/confirmation')}
     if (request.method,request.url.path) not in allowed: raise HTTPException(403,'此账号仅可使用本人轮岗待办')
     circle=db.get(Attraction,choices[0]['id'])
     if not circle or not circle.active or not circle.employee_circle: raise HTTPException(403,'景点圈不可用')

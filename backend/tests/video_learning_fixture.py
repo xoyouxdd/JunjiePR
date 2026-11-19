@@ -8,7 +8,8 @@ os.environ['RECOGNITION_ENVIRONMENT']='test'
 os.environ['RECOGNITION_ENABLE_TEST_ACCOUNTS']='1'
 os.environ['RECOGNITION_TEST_DEFAULT_PASSWORD']='fixture2026'
 os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='fixture-admin2026'
-from app.v2_database import init_db,SessionLocal
+from app.database.bootstrap import init_db
+from app.database.connection import SessionLocal
 from app.v2_models import Employee
 from app.video_models import LearningVideo,VideoAudiencePolicy
 from app.video_worker import enqueue,run_one

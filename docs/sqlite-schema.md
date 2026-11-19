@@ -2,7 +2,7 @@
 
 2026-11-08新增模型通过启动建表注册。`recognition_inbox_items`以认可记录外键为主键保存已读时刻，`recognition_reissues`以原认可外键为主键、替代认可外键唯一。`activities_models.py`注册活动、批次、奖品与照片、竞价、奖项、操作、发放和签收表；`activity_points_models.py`注册认可积点状态、积分流水及历史余额、导出和预览表。`attendance_medals_models.py`注册原账号身份、请假月份与批次、工资代码分类、圈发放、勋章及通知表，原账号身份在启动时补齐留档。全勤勋章规则见 `attendance-medals.md`。
 
-2026-11-06追加 `2026-11-rotation-six-posts` 幂等迁移，仅对标准轮岗配置模板补齐六岗，不截断更长或自定义线路，不重写历史运行日。动态预排通过原轮岗日状态JSON的 `ruleVersion` 区分，已运行旧日沿用原版本。规则见 `rotation-forecast-v2.md`。
+2026-11-06追加 `2026-11-rotation-six-posts` 幂等迁移，仅对标准轮岗配置模板补齐六岗，不截断更长或自定义线路，不重写历史运行日。正式轮岗自 `2026.11.19.4` 起只推进 `ruleVersion: 2`，旧版状态与快照只读。规则见 `rotation-forecast-v2.md`。
 
 2026-11-02新增：`scoring_policies`以id为主键，kind/scope/code/effective_date组合唯一，保存policy_json和version；`recognition_records`、`deduction_records`追加可空scoring_policy_json快照，旧记录保留NULL及原数值。`about_system_settings`为id=1的单行配置，保存maintainers、feedback、revision，旧contributors仅归档保留。启动迁移幂等补列。轮岗五岗位迁移仅扩充标准配置模板，不重写每日班表和历史运行状态。规则见 `scoring-rule-center.md` 与 `about-system-credits.md`。
 
@@ -14,7 +14,7 @@
 - 连接、Base 与会话：`backend/app/database/connection.py`
 - 启动建库与每次启动保障：`backend/app/database/bootstrap.py`、`reference_data.py`、`accounts.py`
 - 一次性补丁与额外索引：`backend/app/database/migrations/`（schema、sick_leave、organization），按 `registry.py` 的有序 callable 执行
-- 月度分值视图：`backend/app/database/score_view.py`；旧 `v2_database.py` 导入入口保留兼容
+- 月度分值视图：`backend/app/database/score_view.py`
 
 原有职责拆分不改变表、列、约束、索引、视图内容或已有迁移 step key；历史迁移函数内部提交及执行器登记提交保持原样，不将其描述为一个整体可回滚事务。2026-10-19新增两张本人荣誉偏好表，由启动建表逻辑幂等创建，不修改旧业务表与月结快照。
 
@@ -97,7 +97,7 @@
 | `audit_logs` | 审计 |
 | `system_alerts` | 系统告警 |
 | `system_job_runs` | 系统任务去重 |
-| `rotation_accounts` / `rotation_account_sessions` | 轮岗专用账号（大屏、轮岗主管、轮岗经理）与轮岗会话，不对应员工 |
+| `rotation_accounts` / `rotation_account_sessions` | 正式休息室大屏账号和设备会话，保留旧账号及会话记录 |
 | `rotation_configs` | 轮岗线、岗位与参数 |
 | `rotation_roster_uploads` / `rotation_roster_entries` | 轮岗名单上传批次与每人每天明细 |
 | `rotation_days` | 每天轮岗状态 |
@@ -106,7 +106,7 @@
 | `rotation_events` | 轮岗操作日志 |
 | `rotation_segments` | 每段在线记录 |
 | `rotation_duties` | 推 7 点、送失物人选 |
-| `rotation_notices` | CM/TR 轮岗待办（测试阶段只在轮岗页显示） |
+| `rotation_notices` | 旧沙盒 CM/TR 轮岗待办 |
 | `v_employee_month_scores` | 月度综合分视图（不是表） |
 
 ---
@@ -1147,7 +1147,7 @@
 
 ## 轮岗
 
-表在 `backend/app/rotation/models.py`，随启动 `create_all` 建立。时间字段 `*_min`、`minute` 为当天零点起的分钟数（浮点）。轮岗目前是独立测试环境，数据全为模拟数据，以工号 `employee_no` 关联名单，不关联员工主档。
+表在 `backend/app/rotation/models.py`，随启动 `create_all` 建立。时间字段 `*_min`、`minute` 为工作日零点起的分钟数（浮点）。正式业务读写 `formal_rotation_*`，原沙盒表保留原数据。`rotation_accounts` 和 `rotation_account_sessions` 是大屏继续使用的身份表。
 
 | 表 | 键与约束 | 索引 |
 |---|---|---|
@@ -1163,7 +1163,7 @@
 | `rotation_duties` | `uq_rotation_duty (attraction_id, work_date, employee_no, kind)`；`kind` 为 push7 / lost | `work_date` |
 | `rotation_notices` | 按 `employee_no` 记录；`status` 为 open / done | `ix_rotation_notice_open (employee_no, status)`、`ix_rotation_notice_day (attraction_id, work_date, status)` |
 
-`rotation_accounts` 由启动时 `ensure_rotation_accounts` 保证三个账号存在，已存在时不改密码。
+启动时 `ensure_rotation_accounts` 仅确保大屏账号存在，已有密码继续有效。旧沙盒主管、经理账号及从测试入口建立的会话记录保留，正式入口拒绝这些旧身份。
 
 ---
 
@@ -1231,7 +1231,7 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 | 改了 | 同步 |
 |---|---|
 | `v2_models.py` 表/字段/约束 | 本文件对应节 |
-| `v2_database.py` 补丁或 `CREATE INDEX` | 本文件索引与迁移节 |
+| `database/migrations/` 补丁或 `CREATE INDEX` | 本文件索引与迁移节 |
 | 月度分值口径 | 视图节 |
 
 测试必须用隔离数据目录，不要指向生产库。
@@ -1241,10 +1241,10 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 2026.10.14.1新增两张表，启动按模型创建；幂等迁移补齐`comment_text`、`comparison_scope_json`、`equal_count`和`rule_version`，保留原行。旧规则标记`strict-lower-v1`，当前规则为`midrank-v2-min10`，不静默覆盖旧结果。关闭月结时与组织快照、审计同事务封存；参与圈重开使全部主管段位失效。旧月份只依据组织快照和计分证据补建。定义见`v2_models.py`的`MonthRankGeneration`与`EmployeeMonthRankSnapshot`，口径见[monthly-self-rank.md](monthly-self-rank.md)。比较人数、低分人数、同分人数和关闭签名只用于内部计算；dashboard不下发段位结果，本人查看接口不返回比较人数或百分位，组员接口不返回任何段位。
 
 
-### 轮岗临时协助与调整会话
+### 原沙盒临时协助与调整会话
 
-- `rotation_assist_grants`：TR员工、授权者及名称、本圈、真实签发及到期时间、撤销状态。授权码从数据目录 `rotation-assist.key` 派生，不明文落库。重新下发撤销该TR此前有效授权。
-- `rotation_adjust_sessions`：实际员工、可选授权ID、登录令牌哈希、真实到期时间。与轮岗专用账号会话独立；TR每次写入核验关联授权。
+- `rotation_assist_grants` 保存旧沙盒的 TR 授权记录。
+- `rotation_adjust_sessions` 保存旧沙盒的调整会话记录。正式员工的现场权限来自当前员工身份。
 
 ## 视频学习圈关联
 
@@ -1257,7 +1257,7 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 
 2026-10-22视频学习改造不新增表或列：`learning_videos.status='deleted'`为删除标记，保留替代版本外键及访问/审计记录；`learning_video_jobs.kind='shared'/'delete'`负责旧共享视频升级及可靠文件清理。`profiles` JSON的每个清晰度追加`brand`处理修订号。观看范围新增`local_all`（本圈所有人）和`all_people`（所有圈所有人），原TR范围仍排除CM。新授权token包含视频版本前缀并与现有会话绑定，旧提示版本作废。设备缓存不存入服务端业务数据库，不新增学习计分或评价口径。
 
-正式轮岗表由 `rotation/namespace.py` 注册，结构沿用对应轮岗表，唯一约束和索引加 `formal_` 前缀。正式名单明细的upload_id引用formal_rotation_roster_uploads；attraction_id和员工外键继续引用真实业务主表。正式与测试使用独立运行缓存、版本与快照，不共享模拟时钟。
+正式轮岗表由 `rotation/namespace.py` 注册，结构沿用对应轮岗表，唯一约束和索引加 `formal_` 前缀。正式名单明细的 `upload_id` 引用 `formal_rotation_roster_uploads`，`attraction_id` 和员工外键继续引用真实业务主表。生产后台仅推进正式表，历史快照不改写。
 
 
 ### 正式轮岗独立人员与班表身份

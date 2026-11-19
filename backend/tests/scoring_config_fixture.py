@@ -4,7 +4,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import uvicorn
 from app.main import app
-from app.v2_database import init_db, SessionLocal
+from app.database.bootstrap import init_db
+from app.database.connection import SessionLocal
 from app.v2_models import UserAccount
 from app.v2_crypto import hash_password
 

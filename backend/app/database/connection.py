@@ -1,10 +1,11 @@
 """SQLite connection, model base and configured paths; importing never creates files."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from app.runtime_environment import data_directory, validate_runtime_paths
 
 
@@ -46,3 +47,24 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def reserve_writer(db: Session) -> None:
+    """Drop any read snapshot (authentication may have opened one) and take SQLite's sole writer."""
+    db.rollback()
+    db.execute(text("BEGIN IMMEDIATE"))
+
+
+@contextmanager
+def write_transaction(db: Session):
+    """Hold the writer for the block and release it as soon as the block fails.
+
+    Rolling back here, not at request teardown, keeps a failed write from
+    holding SQLite's lock while the error response is produced.
+    """
+    reserve_writer(db)
+    try:
+        yield db
+    except Exception:
+        db.rollback()
+        raise

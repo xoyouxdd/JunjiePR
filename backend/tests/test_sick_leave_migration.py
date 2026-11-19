@@ -11,8 +11,8 @@ os.environ["RECOGNITION_V2_DATA_DIR"] = str(TEST_DATA_DIR)
 from sqlalchemy import create_engine, event, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
-from app.v2_database import (  # noqa: E402
-    Base,
+from app.database.connection import Base
+from app.database.migrations import (
     SCHEMA_MIGRATION_STEPS,
     ensure_sick_leave_import_columns,
     ensure_sick_leave_record_indexes,

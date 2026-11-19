@@ -7,28 +7,35 @@ const root=path.resolve(__dirname,'../..'),sleep=ms=>new Promise(r=>setTimeout(r
  server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(__dirname,'rotation_daily_fixture.py'),fs.mkdtempSync(path.join(os.tmpdir(),'rotation-early-')),String(port)],{cwd:path.join(root,'backend'),windowsHide:true,env:{...process.env,ROTATION_EARLY_POST_FIXTURE:'1'}});
  server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);const base='http://127.0.0.1:'+port;
  for(let i=0;;i++){try{if((await fetch(base+'/health')).ok)break;}catch{}assert(i<100&&server.exitCode===null,log);await sleep(300);}
- for(const [name,type,options]of [['edge',chromium,{channel:'msedge'}],['webkit',webkit,{}]]){
+ for(const name of (process.env.ROTATION_EARLY_POST_ENGINES||'edge,webkit').split(',')){
+  const [type,options]=name==='webkit'?[webkit,{}]:[chromium,{channel:'msedge'}];
   browser=await type.launch({...options,headless:true});const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const ok=async response=>{assert(response.ok(),await response.text());return response.json();};
   await ok(await context.request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}}));
-  await ok(await context.request.post(base+'/api/rotation/enter',{data:{account:'7777777'}}));
-  await ok(await context.request.put(base+'/api/rotation/config',{data:{lines:[{id:'A',posts:[{name:'小C'},{name:'普通岗1'},{name:'普通岗2'}]},{id:'B',posts:[{name:'普通岗3'},{name:'快迎'},{name:'普通岗4'}]},...['D2','E'].map(id=>({id,standby:true,posts:Array.from({length:5},(_,i)=>({name:'备用'+i}))}))]}}));
-  const date='2026-10-06',url=base+'/api/rotation/daily/'+date;
+  await ok(await context.request.put(base+'/api/rotation-board/config',{data:{lines:[{id:'A',posts:[{name:'小C'},{name:'普通岗1'},{name:'普通岗2'}]},{id:'B',posts:[{name:'普通岗3'},{name:'快迎'},{name:'普通岗4'}]},...['D2','E'].map(id=>({id,standby:true,posts:Array.from({length:5},(_,i)=>({name:'备用'+i}))}))]}}));
+  const date='2026-10-06',url=base+'/api/rotation-board/daily/'+date;
   const before=await ok(await context.request.get(url));await ok(await context.request.post(url,{data:{action:'draft_generate',revision:before.revision}}));
-  await page.goto(base+'/rotation');await page.locator('[data-tab=draft]').click();
+  await page.goto(base+'/rotation-board');await page.locator('[data-tab=draft]').click();
   await page.locator(`[data-daily-date-button="${date}"]`).click();await page.waitForFunction(date=>daily.data?.date===date&&!daily.loading,date);
   const initial=await ok(await context.request.get(url)),pid=initial.draft.plan.crew['B#0'];assert(pid);assert.equal(initial.draft.persons[pid].start,435);
   assert(initial.draft.plan.seven['A#0']);
-  assert.equal(await page.locator('[data-daily-person="A#0"] .rt-badge.p7').innerText(),'7点');
+  const openingBadge=page.locator('[data-daily-person="A#0"] .rt-badge.p7');
+  await openingBadge.waitFor({timeout:10000}).catch(async error=>{
+    console.error(await page.locator('body').innerText(),errors);
+    throw error;
+  });
+  assert.equal(await openingBadge.innerText(),'7点');
   const liveBadges=await page.evaluate(()=>{
     const post={name:'小C',open:true,seven:1,occ:'early'};
     const line={id:'A',active:true,posts:[post]};
     const person={pid:'early',name:'早班测试',start:420,end:960,state:'onpost',flags:['7点岗']};
-    const context={day:{persons:[person]}};
-    const before=lineCard(line,435,false,context).includes('rt-badge p7');
-    person.flags=[];
-    const after=lineCard(line,436,false,context).includes('rt-badge p7');
-    return [before,after];
+    const saved=RT.data.day;
+    RT.data.day={persons:[person]};
+    try{
+      const before=forecastLineCard(line,435,false).includes('rt-badge p7');
+      person.flags=[];
+      return [before,forecastLineCard(line,436,false).includes('rt-badge p7')];
+    }finally{RT.data.day=saved;}
   });
   assert.deepEqual(liveBadges,[true,false]);
   await page.locator('[data-daily-person="B#0"]').dragTo(page.locator('[data-daily-person="A#0"]'));

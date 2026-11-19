@@ -1,11 +1,11 @@
 // Embedded honor controls. Attendance scores and their pages are independent.
 import { api, json } from './api.js';
-import { esc, monthNow, portalPath } from './format.js';
+import { esc, monthNow, portalPath, shiftMonth } from './format.js';
 import { state } from './state.js';
 import { confirmModal, promptModal } from './dialogs.js';
 import { toast } from './toast.js';
 
-const previousMonth=()=>{const [y,m]=monthNow().split('-').map(Number);return `${m===1?y-1:y}-${String(m===1?12:m-1).padStart(2,'0')}`;};
+const previousMonth=()=>shiftMonth(monthNow(),-1);
 const collectionRequests=new WeakMap();
 // Immutable, shared static assets. No image generation or extra API calls at runtime.
 const MEDAL_ART_ROOT='/static/images/attendance-medals/seasonal-521cf58ca25a';

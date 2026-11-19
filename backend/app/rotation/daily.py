@@ -1,13 +1,13 @@
 """Daily plans and recorded history. Reads never simulate or advance a historical day."""
 import base64
-import calendar
 from copy import deepcopy
 from datetime import date
 import hashlib
 import json
 import zlib
 from uuid import uuid4
-from app.rotation import service as S
+from app.date_utils import month_bounds as calendar_month_bounds
+from app.rotation import replay, service as S
 from app.rotation.namespace import tables_for
 from app.rotation.models import RotationDay, RotationRosterEntry, RotationSnapshot
 
@@ -27,10 +27,14 @@ def capture_snapshot(db,attraction_id,state,settings,minute):
 
 def month_bounds(month):
     try:
-        if len(month)!=7 or month[4]!='-':raise ValueError()
-        year,m=map(int,month.split('-'));date(year,m,1)
-        return f'{month}-01',f'{month}-{calendar.monthrange(year,m)[1]:02d}'
-    except (ValueError,TypeError):raise S.ActionError('月份格式需为 YYYY-MM')
+        first,last=calendar_month_bounds(month)
+    except ValueError:raise S.ActionError('月份格式需为 YYYY-MM')
+    return first.isoformat(),last.isoformat()
+
+
+def read_config(db, attraction_id):
+    model = tables_for(db).RotationConfig
+    return db.query(model).filter_by(attraction_id=attraction_id).first() or model(attraction_id=attraction_id)
 
 
 @S.transactional
@@ -38,26 +42,15 @@ def month_payload(db,attraction_id,month):
     RotationDay = tables_for(db).RotationDay
     RotationRosterEntry = tables_for(db).RotationRosterEntry
     first,last=month_bounds(month)
-    cfg=S.load_config(db,attraction_id);today,_=S.clock_now(cfg)
+    cfg=read_config(db,attraction_id);today,_=S.clock_now(cfg)
     roster={r[0] for r in db.query(RotationRosterEntry.work_date).filter(RotationRosterEntry.attraction_id==attraction_id,RotationRosterEntry.work_date>=first,RotationRosterEntry.work_date<=last).distinct()}
     rows={r.work_date:r for r in db.query(RotationDay).filter(RotationDay.attraction_id==attraction_id,RotationDay.work_date>=first,RotationDay.work_date<=last)}
     return {'month':month,'today':today,'days':[{'date':f'{month}-{n:02d}','has_roster':f'{month}-{n:02d}' in roster,
         'status':rows[f'{month}-{n:02d}'].status if f'{month}-{n:02d}' in rows else None} for n in range(1,int(last[-2:])+1)]}
 
 
-def present(db,cfg,attraction_id,work_date,state,minute,settings=None):
-    # Private state and engine without hooks: historical reads cannot persist changes.
-    state=deepcopy(state);state.setdefault('confirmationEpoch','historical-read-only')
-    from app.rotation.cooperation import PreviewHooks
-    class ReadHooks:
-        def week_minutes(self): return {}
-    eng=S.E.Engine(state,settings or S.settings_of(cfg),PreviewHooks(ReadHooks()))
-    eng._read_projection={}
-    taken=eng.targeted() if state.get('status')=='live' else {}
-    persons=[S.person_view(eng,p,minute,taken) for p in state['persons'].values()]
-    for p in persons:
-        p.pop('confirmationTokens',None);p['canDepart']=False;p['canArrive']=False
-    return {'date':work_date,'status':state['status'],'lines':S.lines_view(eng),'persons':persons,'off':S.off_people_view(db,attraction_id,state),'closeAt':state.get('closeAt'),'rotationEnd':S.E.rotation_end(state),'plan':state.get('plan',{})}
+def present(db, attraction_id, state, minute):
+    return replay.board_view(state, minute, S.off_people_view(db, attraction_id, state))
 
 
 def first_start(state):
@@ -80,15 +73,8 @@ def plan_revision(state):
     return hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def planned_view(db, cfg, attraction_id, work_date, state, settings=None):
-    from app.rotation.manual import Hooks
-    view = deepcopy(state)
-    view.pop('dailyOpening', None)
-    settings = settings or S.settings_of(cfg)
-    eng = S.E.Engine(view, settings, Hooks({}))
-    # Project only a pre-shift board. No writes, clock advance or confirmations.
-    eng.publish(min(S.PREARRANGE_MINUTE, first_start(view) - 1), 'preview')
-    return present(db, cfg, attraction_id, work_date, view, min(S.PREARRANGE_MINUTE, first_start(view) - 1), settings)
+def planned_view(db, attraction_id, state):
+    return present(db, attraction_id, replay.planned_state(state), min(S.PREARRANGE_MINUTE, first_start(state) - 1))
 
 
 def fill_prestart_spares(state):
@@ -108,14 +94,16 @@ def day_payload(db,attraction_id,work_date,at=None):
     RotationSnapshot = tables_for(db).RotationSnapshot
     try:date.fromisoformat(work_date)
     except ValueError:raise S.ActionError('日期格式需为 YYYY-MM-DD')
-    cfg=S.load_config(db,attraction_id);today,now=S.clock_now(cfg)
+    cfg=read_config(db,attraction_id);today,now=S.clock_now(cfg)
     minute=S.action_time(at) if at is not None else None
     row=S.day_row(db,attraction_id,work_date)
     roster=S.roster_summary(db,attraction_id,work_date)
     state=S.day_state(row) if row else None
+    current_rules = bool(state and state.get('ruleVersion') == 2)
+    retired = bool(row and row.status == 'draft' and not current_rules)
     # Templates do not retrofit already-generated plans. Only upgrade editable
     # pre-start states; historical/frozen snapshots and existing assignments stay intact.
-    editable = bool(state and at is None and
+    editable = bool(current_rules and at is None and
         (row.status == 'draft' and before_first_start(state,work_date,today,now)
          or work_date == today and prestart(state,now)))
     if editable:
@@ -123,36 +111,37 @@ def day_payload(db,attraction_id,work_date,at=None):
         if added:
             S.save_day(db,row,state)
             S.DbHooks(db,attraction_id,work_date).log('draft_fill_spares','system',None,None,None,{'added':added})
-    if state and work_date==today and row.status=='live' and not db.info.get('rotation_formal'):
+    if current_rules and at is None and work_date==today and row.status=='live' and not db.info.get('rotation_formal'):
         S.advance(db,cfg,row,state,now)
     query=db.query(RotationSnapshot).filter_by(attraction_id=attraction_id,work_date=work_date)
     snapshots=query.with_entities(RotationSnapshot.id,RotationSnapshot.minute).order_by(RotationSnapshot.minute,RotationSnapshot.id).all()
     latest=(query.filter(RotationSnapshot.minute<=minute) if minute is not None else query).order_by(RotationSnapshot.minute.desc(),RotationSnapshot.id.desc()).first()
     result={'date':work_date,'today':today,'clock':S.clock_payload(cfg),'roster':roster,'revision':row.version if row else 0,
-            'can_edit':bool(row and row.status=='draft' and work_date>=today),
-            'can_generate':bool(roster['available'] and work_date>=today and (not row or row.status=='draft')),
-            'draft':state if row and row.status=='draft' else None,'day':None,
+            'can_edit':bool(at is None and current_rules and row.status=='draft' and work_date>=today),
+            'can_generate':bool(at is None and roster['available'] and work_date>=today and (not row or row.status=='draft')),
+            'draft':state if at is None and row and row.status=='draft' else None,'day':None,
             'times':[{'id':s.id,'minute':s.minute} for s in snapshots], 'as_of':latest.minute if latest else None,'requested_time':at,
-            'legacy_history':bool(row and row.status!='draft' and not snapshots),'roster_changed':False}
+            'legacy_history':bool(row and row.status!='draft' and not snapshots),'roster_changed':False,
+            'requires_current_rules':retired}
     if row and row.status=='draft':
         result['roster_changed'] = S.draft_roster_changed(db, attraction_id, work_date, state)
     if latest and (at is not None or state is None):
         saved=json.loads(zlib.decompress(base64.b64decode(latest.payload)))
-        result['day']=present(db,cfg,attraction_id,work_date,saved['state'],minute if minute is not None else latest.minute,saved['settings'])
+        result['day']=present(db,attraction_id,saved['state'],minute if minute is not None else latest.minute)
     elif state and row.status!='draft' and minute is None and not state.get('dailyOpening') and not state.get('initialDraft'):
-        result['day']=present(db,cfg,attraction_id,work_date,state,float(state.get('lastTick',now)))
+        result['day']=present(db,attraction_id,state,float(state.get('lastTick',now)))
     result['first_start'] = first_start(state) if state else None
     result['plan_revision'] = plan_revision(state) if state else None
     result['frozen'] = False
     result['opening_source'] = None
     if at is None and state:
-        editable_live = work_date == today and prestart(state, now)
+        editable_live = current_rules and work_date == today and prestart(state, now)
         result['can_edit'] = result['can_edit'] or editable_live
-        result['can_generate'] = result['can_generate'] and result['can_edit']
-        result['can_publish'] = row.status == 'draft' and work_date == today and not result['roster_changed']
+        result['can_generate'] = result['can_generate'] and (result['can_edit'] or retired)
+        result['can_publish'] = row.status == 'draft' and work_date == today and not (retired or result['roster_changed'])
         if result['can_edit']:
             result['draft'] = deepcopy(state)
-            result['day'] = planned_view(db, cfg, attraction_id, work_date, state) if row.status == 'draft' else present(db, cfg, attraction_id, work_date, state, now)
+            result['day'] = planned_view(db, attraction_id, state) if row.status == 'draft' else present(db, attraction_id, state, now)
             result['prestart_live'] = editable_live
             if state.get('ruleVersion') == 2:
                 from app.rotation.forecast import opening_push7_candidates
@@ -166,21 +155,21 @@ def day_payload(db,attraction_id,work_date,at=None):
             result['frozen'] = True
             opening = state.get('dailyOpening')
             if opening:
-                result['day'] = present(db, cfg, attraction_id, work_date, opening['state'], opening['minute'], opening['settings'])
+                result['day'] = present(db, attraction_id, opening['state'], opening['minute'])
                 result['as_of'] = opening.get('captured_at', opening['minute']) if opening.get('late_publish') else opening['minute']
                 result['opening_source'] = 'late_publish' if opening.get('late_publish') else 'opening'
             elif row.status=='draft':
-                result['day'] = planned_view(db,cfg,attraction_id,work_date,state)
+                result['day'] = planned_view(db,attraction_id,state)
                 result['opening_source'] = 'unstarted_draft'
             elif state.get('initialDraft'):
-                result['day'] = planned_view(db, cfg, attraction_id, work_date, state['initialDraft'], state.get('initialSettings'))
+                result['day'] = planned_view(db, attraction_id, state['initialDraft'])
                 result['as_of'] = None
                 result['opening_source'] = 'initial_draft'
             else:
                 earliest = query.order_by(RotationSnapshot.minute, RotationSnapshot.id).first()
                 if earliest:
                     saved = json.loads(zlib.decompress(base64.b64decode(earliest.payload)))
-                    result['day'] = present(db, cfg, attraction_id, work_date, saved['state'], earliest.minute, saved['settings'])
+                    result['day'] = present(db, attraction_id, saved['state'], earliest.minute)
                     result['as_of'] = earliest.minute
                     result['opening_source'] = 'earliest_record'
                 else:
@@ -401,7 +390,7 @@ def edit(db,attraction_id,actor,work_date,body):
     if work_date<today:raise S.ActionError('往日班表只读，不能修改')
     row=S.day_row(db,attraction_id,work_date)
     state=S.day_state(row) if row else None
-    live_edit=bool(state and work_date==today and prestart(state,now))
+    live_edit=bool(state and state.get('ruleVersion') == 2 and work_date==today and prestart(state,now))
     revision=body.get('revision')
     valid_live=live_edit and body.get('plan_revision')==plan_revision(state)
     if not valid_live and (type(revision) is not int or revision!=(row.version if row else 0)):raise S.ConfirmationConflict('班表已更新，请刷新后重新调整')
@@ -411,8 +400,12 @@ def edit(db,attraction_id,actor,work_date,body):
         if body.get('force'):raise S.ActionError('每日班表不支持清空运行记录')
         S.do_draft_action(db,attraction_id,actor,{'action':action,'date':work_date})
         planned=S.day_row(db,attraction_id,work_date);state=S.day_state(planned);state['dailyAutoStart']=work_date>today;S.save_day(db,planned,state);return
+    if state and row.status != 'draft':
+        S.require_current_rules(state)
     if not row or (row.status!='draft' and not live_edit):raise S.ActionError('首个班次已开始，每日班表已固定，请到看板处理现场调整')
     state=S.day_state(row)
+    if action != 'draft_discard' and S.retired_draft(state):
+        raise S.ConfirmationConflict('旧版未启用预排仅供查看。请重新生成并核对后启用')
     previous_slots=seven_relief_slots(state)
     previous_open=S.E.open_seven_slots(state['lines']) if state.get('ruleVersion') == 2 and action in (
         'draft_rename_post', 'draft_post') else ()
@@ -458,8 +451,8 @@ def edit(db,attraction_id,actor,work_date,body):
             raise S.ActionError('本线路已有同名岗位')
         old=post['name']
         if old==name:return
-        from app.rotation.workflow import initialize
-        initialize(engine)  # Bind 101 identity before a first prearrangement rename.
+        from app.rotation.forecast import initialize
+        initialize(engine)  # Bind 101 identity before renaming the post.
         post['name']=name
         fill_new_seven_slots(state, previous_open, engine.S, read_push7_history)
         if live_edit:
@@ -474,7 +467,7 @@ def edit(db,attraction_id,actor,work_date,body):
         if not set_prestart_line(state,lid,active,settings=S.settings_of(cfg),read_history=read_push7_history,
                                  now=now if live_edit else None):return
         if live_edit:
-            sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2)
+            sync_prestart(state);S.write_lost_property_duties(db,attraction_id,work_date,state['plan'])
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,lid,None,{'active':active})
         return
@@ -485,7 +478,7 @@ def edit(db,attraction_id,actor,work_date,body):
         validate_plan(state)
         if live_edit:
             sync_prestart(state)
-            S.write_duties(db, attraction_id, work_date, state['plan'], record_push7=state.get('ruleVersion')!=2)
+            S.write_lost_property_duties(db, attraction_id, work_date, state['plan'])
         S.save_day(db, row, state)
         S.DbHooks(db, attraction_id, work_date).log(action, actor, None, line['id'], post['name'],
                                                    {'change': body['change'], 'post': body['post']})
@@ -502,7 +495,7 @@ def edit(db,attraction_id,actor,work_date,body):
             validate_plan(state)
             state['plan']['push7']=[p for p in state['plan']['push7'] if p!=pid]
             if live_edit:
-                sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2)
+                sync_prestart(state);S.write_lost_property_duties(db,attraction_id,work_date,state['plan'])
             S.save_day(db,row,state)
             S.DbHooks(db,attraction_id,work_date).log(action,actor,pid,None,None,{'source':source,'target':target})
             return
@@ -533,7 +526,7 @@ def edit(db,attraction_id,actor,work_date,body):
         assigned=set(state['plan']['crew'].values())|set(state['plan']['seven'].values())
         state['plan']['push7']=[p for p in state['plan']['push7'] if p not in assigned]
         if live_edit:
-            sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2)
+            sync_prestart(state);S.write_lost_property_duties(db,attraction_id,work_date,state['plan'])
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,None,None,{'source':source,'target':target})
         return
@@ -550,7 +543,7 @@ def edit(db,attraction_id,actor,work_date,body):
         normalized=normalize_seven_assignments(state,None if action=='draft_list' and body.get('kind')=='push7' else previous_slots);validate_plan(state)
         if normalized:S.save_day(db,updated,state)
         if live_edit:
-            state['status']='live';sync_prestart(state);S.write_duties(db,attraction_id,work_date,state['plan'],record_push7=state.get('ruleVersion')!=2);S.save_day(db,updated,state)
+            state['status']='live';sync_prestart(state);S.write_lost_property_duties(db,attraction_id,work_date,state['plan']);S.save_day(db,updated,state)
 
 
 def sync_prestart(state):

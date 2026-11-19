@@ -7,7 +7,7 @@ and a temporary root; the CLI never accepts an alternate production root.
 from __future__ import annotations
 
 import argparse
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 import datetime as dt
 import hashlib
 import io
@@ -16,7 +16,6 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
-import sqlite3
 import ssl
 import stat
 import subprocess
@@ -49,6 +48,7 @@ RELEASE_SCRIPTS = {
     "scripts/deployment_runtime.py",
 }
 METADATA_FILES = ("requirements.txt", "release-manifest.json", "RELEASE-NOTES.md")
+SQLITE_BACKUP_SOURCE = "backend/app/sqlite_backup.py"
 
 
 def log(*parts):
@@ -232,8 +232,8 @@ def validate_package(package: Path, commit: str, package_sha: str, root: Path) -
         raise RuntimeError("Duplicate manifest file paths")
     if set(names) != set(declared) | {"release-manifest.json", "RELEASE-NOTES.md"}:
         raise RuntimeError("Package contents differ from manifest allowlist")
-    if (not RELEASE_SCRIPTS.issubset(declared) or "backend/requirements.txt" not in declared
-            or "backend/app/main.py" not in declared):
+    required = RELEASE_SCRIPTS | {"backend/requirements.txt", "backend/app/main.py", SQLITE_BACKUP_SOURCE}
+    if not required.issubset(declared):
         raise RuntimeError("Required release application/scripts are missing")
     executors = {"scripts/server_release.py": (Path(__file__), _EXECUTING_SCRIPT_SHA),
                  "scripts/deployment_runtime.py": (Path(deployment_runtime.__file__),
@@ -275,13 +275,12 @@ def deployment_lock(root: Path):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def backup_database(source: Path, destination: Path):
-    with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=60)) as live:
-        with closing(sqlite3.connect(destination)) as backup:
-            live.backup(backup)
-            if backup.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                raise RuntimeError("Online SQLite backup quick_check failed")
-    log("ONLINE_BACKUP_OK", str(destination), destination.stat().st_size)
+def _load_backup_writer(verified_content):
+    # Backup precedes app replacement, so the currently deployed app might
+    # not have this helper. Use the manifest-verified candidate source bytes.
+    namespace = {"__name__": "release_sqlite_backup"}
+    exec(compile(verified_content[SQLITE_BACKUP_SOURCE], SQLITE_BACKUP_SOURCE, "exec"), namespace)
+    return namespace["create_online_backup"]
 
 
 def task_enabled(task_name):
@@ -328,8 +327,12 @@ def task_enabled(task_name):
 class DeploymentActions:
     """Only boundary effects are injectable; file transactions use real paths."""
 
+    def __init__(self, backup_writer=None):
+        self._backup_writer = backup_writer
+
     def backup_database(self, source, destination):
-        backup_database(source, destination)
+        result = self._backup_writer(source, destination)
+        log("ONLINE_BACKUP_OK", str(destination), result["size_bytes"])
 
     def validate_service_task(self):
         if not task_enabled(TASK):
@@ -406,11 +409,12 @@ def _write_receipt(path: Path, receipt: dict):
 
 def deploy_release(package: Path, commit: str, package_sha: str, *, root=None, actions=None, preflight=False):
     root = approved_path(Path(root) if root is not None else ROOT, Path(root) if root is not None else ROOT)
-    actions = actions or DeploymentActions()
     if preflight:
         return validate_package(package, commit, package_sha, root)["manifest"]
     with deployment_lock(root):
         verified = validate_package(package, commit, package_sha, root)
+        if actions is None:
+            actions = DeploymentActions(_load_backup_writer(verified["content"]))
         return _deploy_verified(root, verified, actions)
 
 

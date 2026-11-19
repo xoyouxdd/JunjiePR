@@ -23,42 +23,44 @@ from app.database.migrations import registry
 
 BACKEND = Path(__file__).resolve().parents[1]
 APP = BACKEND / "app"
-EXPECTED_STEPS = (
-    ("2026-08-void-audit-columns", "ensure_void_audit_columns"),
-    ("2026-08-credential-columns", "ensure_credential_columns"),
-    ("2026-08-attraction-dimensions", "ensure_attraction_dimensions"),
-    ("2026-08-performance-indexes", "ensure_performance_indexes"),
-    ("2026-08-governance-case-indexes", "ensure_governance_case_indexes"),
-    ("2026-08-recognition-same-day-duplicate", "ensure_recognition_same_day_duplicate_columns"),
-    ("2026-08-deduction-statement-upgrade", "ensure_deduction_statement_upgrade_columns"),
-    ("2026-09-recognition-credit-cap-and-poc", "ensure_recognition_credit_cap_and_poc_columns"),
-    ("2026-08-employee-number-history", "ensure_employee_number_history"),
-    ("2026-09-deduction-photo-pdf-materials", "ensure_deduction_photo_pdf_materials"),
-    ("2026-09-collaborative-materials-and-violation-absence", "ensure_collaborative_material_columns"),
-    ("2026-09-account-status-password-timestamp", "ensure_account_status_password_timestamp"),
-    ("2026-09-login-account-archive", "ensure_login_account_archive_columns"),
-    ("2026-09-submission-payload-digest", "ensure_submission_payload_digest"),
-    ("2026-09-second-audit-query-indexes", "ensure_second_audit_query_indexes"),
-    ("2026-09-material-job-claim-generation", "ensure_material_job_claim_generation"),
-    ("2026-09-sick-leave-import", "ensure_sick_leave_import_columns"),
-    ("2026-10-acting-duties", "ensure_acting_duty_columns_and_migrate"),
-    ("2026-10-recognition-shared-evidence", "ensure_recognition_shared_evidence"),
-    ("2026-10-audit-scope-and-appeal-removal", "backfill_audit_scope_and_remove_appeals"),
-    ("2026-10-group-leader-types", "ensure_group_leader_types"),
-    ("2026-10-group-codes", "ensure_group_codes"),
-    ("2026-10-group-codes-resequence", "resequence_all_group_codes"),
-    ("2026-10-month-rank-comments", "ensure_month_rank_comment_column"),
-    ("2026-10-month-rank-rule-version", "ensure_month_rank_rule_columns"),
-    ("2026-09-sick-leave-index-repair", "ensure_sick_leave_record_indexes"),
-    ("2026-10-employee-employment-history", "ensure_employee_employment_history"),
-    ("2026-10-employee-type-internship", "ensure_employee_type_columns"),
-    ("2026-10-learning-library-categories", "ensure_learning_categories"),
-    ("2026-11-about-system-credit-columns", "ensure_about_system_credit_columns"),
-    ("2026-11-rotation-five-posts", "ensure_rotation_five_posts"),
-    ("2026-11-scoring-policy-snapshots", "ensure_scoring_policy_snapshots"),
-    ("2026-11-rotation-six-posts", "ensure_rotation_six_posts"),
-    ("2026-11-rejected-upgrade-claim-release", "ensure_rejected_upgrade_claim_release"),
-)
+# Existing SQLite databases record these keys, and older upgrades run them in
+# order. Keep this historical baseline fixed as new migrations are registered.
+HISTORICAL_STEP_KEYS = """
+2026-08-void-audit-columns
+2026-08-credential-columns
+2026-08-attraction-dimensions
+2026-08-performance-indexes
+2026-08-governance-case-indexes
+2026-08-recognition-same-day-duplicate
+2026-08-deduction-statement-upgrade
+2026-09-recognition-credit-cap-and-poc
+2026-08-employee-number-history
+2026-09-deduction-photo-pdf-materials
+2026-09-collaborative-materials-and-violation-absence
+2026-09-account-status-password-timestamp
+2026-09-login-account-archive
+2026-09-submission-payload-digest
+2026-09-second-audit-query-indexes
+2026-09-material-job-claim-generation
+2026-09-sick-leave-import
+2026-10-acting-duties
+2026-10-recognition-shared-evidence
+2026-10-audit-scope-and-appeal-removal
+2026-10-group-leader-types
+2026-10-group-codes
+2026-10-group-codes-resequence
+2026-10-month-rank-comments
+2026-10-month-rank-rule-version
+2026-09-sick-leave-index-repair
+2026-10-employee-employment-history
+2026-10-employee-type-internship
+2026-10-learning-library-categories
+2026-11-about-system-credit-columns
+2026-11-rotation-five-posts
+2026-11-scoring-policy-snapshots
+2026-11-rotation-six-posts
+2026-11-rejected-upgrade-claim-release
+""".split()
 
 
 def test_employment_history_migration_preserves_legacy_rows_and_is_idempotent():
@@ -105,20 +107,17 @@ def isolated_python(tmp_path: Path, code: str, **settings: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("first_module", ["app.v2_models", "app.rotation.models", "app.v2_database"])
+@pytest.mark.parametrize("first_module", ["app.v2_models", "app.rotation.models", "app.database.bootstrap"])
 def test_fresh_imports_share_base_and_never_create_data_dirs(isolated_dir: Path, first_module: str) -> None:
     isolated_python(isolated_dir, f"""
 import importlib
 from pathlib import Path
 importlib.import_module({first_module!r})
-from app import v2_database, v2_models
+from app import v2_models
 from app.rotation import models
 from app.database import connection
 assert connection.BASE_DIR == Path.cwd()
-assert v2_database.Base is connection.Base
 assert v2_models.Base is models.Base is connection.Base
-assert v2_database.engine is connection.engine
-assert v2_database.SessionLocal is connection.SessionLocal
 assert not connection.DATA_DIR.exists()
 assert not connection.DB_PATH.exists()
 """)
@@ -149,24 +148,28 @@ def test_models_and_live_scope_service_do_not_depend_on_database_facade() -> Non
     assert dependencies <= sys.stdlib_module_names
 
 
-def test_explicit_facade_exports_reference_their_current_owners() -> None:
-    facade = importlib.import_module("app.v2_database")
-    tree = ast.parse((APP / "v2_database.py").read_text(encoding="utf-8"))
-    for node in tree.body:
-        if not isinstance(node, ast.ImportFrom) or node.module == "__future__":
-            continue
-        owner = importlib.import_module(node.module)
-        for alias in node.names:
-            assert alias.name != "*"
-            assert getattr(facade, alias.asname or alias.name) is getattr(owner, alias.name)
+def test_code_imports_owning_modules_not_removed_facades() -> None:
+    removed = {"app.v2_database", "app.v2_services", "app.routers._shared"}
+    root = BACKEND.parent
+    source_dirs = (APP, BACKEND / "tests", BACKEND / "scripts", root / "scripts", root / "local_tools")
+    for source_dir in source_dirs:
+        for path in source_dir.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+            imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+            imports.update(alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names)
+            assert not imports & removed, path
+    for relative in ("v2_database.py", "v2_services.py", "routers/_shared.py"):
+        assert not (APP / relative).exists()
 
 
 def test_stable_migration_keys_order_and_explicit_callables() -> None:
-    actual = tuple((key, runner.__name__) for key, runner in registry.MIGRATION_RUNNERS)
-    assert actual == EXPECTED_STEPS
-    assert tuple(registry.SCHEMA_MIGRATION_STEPS) == EXPECTED_STEPS
-    assert len({key for key, _ in actual}) == len(actual)
-    assert all(callable(runner) for _, runner in registry.MIGRATION_RUNNERS)
+    runners = registry.MIGRATION_RUNNERS
+    keys = [key for key, _ in runners]
+    historical = set(HISTORICAL_STEP_KEYS)
+    assert len(set(keys)) == len(keys)
+    assert [key for key in keys if key in historical] == HISTORICAL_STEP_KEYS
+    assert all(callable(runner) for _, runner in runners)
+    assert list(registry.SCHEMA_MIGRATION_STEPS) == [(key, runner.__name__) for key, runner in runners]
 
 
 def test_migrations_commit_each_completed_step_and_skip_applied_steps(monkeypatch) -> None:
@@ -313,7 +316,9 @@ def test_isolated_bootstrap_is_idempotent_preserves_passwords_and_never_runs_cle
     isolated_python(isolated_dir, """
 from decimal import Decimal
 from sqlalchemy import text
-from app.v2_database import init_db, SessionLocal, SCHEMA_MIGRATION_STEPS
+from app.database.bootstrap import init_db
+from app.database.connection import SessionLocal
+from app.database.migrations import SCHEMA_MIGRATION_STEPS
 from app.v2_models import (
     DeductionType, Employee, Permission, RecognitionScoreRule, Role, RolePermission, UserAccount,
 )

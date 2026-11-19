@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 from datetime import date, timedelta
 from decimal import Decimal
@@ -22,7 +21,8 @@ import fitz  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import FILE_DIR, ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
+from app.database.connection import FILE_DIR, SessionLocal
+from app.database.reference_data import ROLE_PERMISSION_CODES
 from app.v2_crypto import hash_password  # noqa: E402
 from app.v2_models import Attraction, AuditLog, DeductionLevel, DeductionRecord, DeductionType, DeductionUpgradeRequest, Employee, EmployeeRoleAssignment, Role, StoredFile, UserAccount  # noqa: E402
 
@@ -208,20 +208,6 @@ def test_event_snapshot_status_upgrade_and_export_match() -> None:
         assert {workbook.worksheets[1].cell(row, 2).value for row in range(2, workbook.worksheets[1].max_row + 1)} == {employee_no}
         with SessionLocal() as db:
             assert db.query(AuditLog).filter_by(action="导出声明登记统计").count() >= 1
-
-
-def test_ui_keeps_level_text_and_mobile_cards() -> None:
-    root = Path(__file__).resolve().parents[1] / "app" / "static"
-    script = read_frontend_source()
-    css = (root / "css" / "style.css").read_text(encoding="utf-8")
-    assert "声明登记统计" in script
-    assert "${esc(row.level_name)}" in script
-    assert "data-declaration-list-row" in script and "declaration-list-content" in script
-    assert "data-declaration-circle" in script and "data-declaration-level" in script
-    assert 'href="${esc(portalPath(row.document_url))}" download>下载材料</a>' in script
-    for tone in range(6):
-        assert f".tone-{tone}" in css
-    assert ".declaration-filter { grid-template-columns: 1fr; }" in css
 
 
 def test_direct_material_download_uses_event_snapshot_name_and_keeps_authorization() -> None:

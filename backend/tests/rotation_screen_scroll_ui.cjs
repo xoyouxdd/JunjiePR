@@ -1,37 +1,39 @@
-// Reproduce tall workflow content using the real screen shell and styles.
-const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+// Reproduce tall workflow content through the real screen startup and renderer.
+const assert=require('node:assert/strict');
 const {chromium,webkit}=require('./support/browser-runtime.cjs');
-const root=path.resolve(__dirname,'../app/static');
-const shell=fs.readFileSync(path.join(root,'rotation-screen.html'),'utf8').replace(/<link[^>]*>/g,'').replace(/<script[\s\S]*?<\/script>/g,'');
-const css=['style.css','rotation.css'].map(file=>fs.readFileSync(path.join(root,'css',file),'utf8')).join('\n');
-const lines=Array.from({length:12},(_,i)=>`<section class="rt-line"><header class="rt-line-head">线路 ${i+1}</header>${Array.from({length:8},(_,j)=>`<div class="rt-post"><span>岗位 ${j+1}</span><span class="rt-who-name">测试员工</span><span class="rt-mins">10分</span></div>`).join('')}</section>`).join('');
-const pools=Array.from({length:5},(_,i)=>`<section class="rt-sect"><h2>人员区 ${i+1}</h2><div class="rt-chips">${Array.from({length:20},(_,j)=>`<div class="rt-chip"><span class="rt-nm">测试人员 ${j+1}</span><span class="rt-go">等待下一轮安排</span></div>`).join('')}</div></section>`).join('');
-const banners=Array.from({length:4},(_,i)=>`<section class="rt-timeout-banner"><div><strong>A${i+1} · 关联任务待核实</strong><p>等待负责人接手</p></div></section>`).join('');
-const workflow=`<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>轮岗看板</h1></div>${banners}<div class="rt-board"><div class="rt-lines">${lines}</div><div class="rt-pool">${pools}</div></div><p data-scroll-end>底部内容</p></section>`;
-const screenSource=fs.readFileSync(path.join(root,'js/rotation-screen.js'),'utf8');
-(async()=>{for(const [engine,type,options] of [['Edge',chromium,{channel:'msedge'}],['WebKit',webkit,{}]]){
+const {createScreenFixture}=require('./support/rotation-screen-fixture.cjs');
+const date='2026-10-11';
+const persons=[];
+const lines=Array.from({length:12},(_,i)=>({id:`A${i+1}`,group:'A',active:true,posts:Array.from({length:8},(_,j)=>{
+ const pid=`post-${i}-${j}`;
+ persons.push({pid,name:'测试员工',state:'onpost',start:420,end:1080,lineStart:470,flags:[],tags:[]});
+ return {name:`岗位 ${j+1}`,occ:pid,open:true};
+})}));
+for(const state of ['ready','pending','rest','meal','away'])for(let i=0;i<20;i++){
+ persons.push({pid:`${state}-${i}`,name:`测试人员 ${i+1}`,state,start:420,end:1080,readyAt:state==='ready'?480:510,canDepart:state==='ready',flags:[],tags:[],...(state==='ready'?{task:{deadlineAt:i===0?480.5:483}}:{})});
+}
+persons.push({pid:'done',name:'已下班测试',state:'done',start:360,end:480,flags:[],tags:[]});
+persons.push({pid:'oncoming',name:'待到班测试',state:'notyet',start:960,end:1350,flags:[],tags:[]});
+const day={date,status:'live',ruleVersion:2,taskWorkflow:2,rotationEnd:1080,lines,persons};
+(async()=>{for(const engine of (process.env.ROTATION_SCROLL_ENGINES||'edge,webkit').split(',')){
+ const [type,options]={edge:[chromium,{channel:'msedge'}],webkit:[webkit,{}]}[engine];
  const browser=await type.launch({...options,headless:true});try{
  for(const [width,height] of [[390,844],[1024,768],[1180,620],[1920,1080]]){
-  const page=await browser.newPage({viewport:{width,height},hasTouch:true});
-  await page.setContent(shell.replace('</head>','<style>'+css+'</style></head>'));
-  await page.addScriptTag({path:path.join(root,'js/rotation-common.js')});
-  await page.addScriptTag({content:screenSource.slice(0,screenSource.lastIndexOf('(async () => {'))});
-  if(width===1180){
-   await page.setViewportSize({width:620,height:1180});
-  }
-  await page.evaluate(html=>{
-   RT.data={day:{taskWorkflow:true,status:'live'}};
-   window.screenMarkup=html;
-   screenView=()=>window.screenMarkup;
-   RT.render();
-  },workflow);
+  const screen=createScreenFixture({version:1,clock:{date,minute:480,paused:true,mode:'sim'},settings:{},day});
+  const origin=await screen.start();
+  const page=await browser.newPage({viewport:width===1180?{width:620,height:1180}:{width,height},hasTouch:true});
+  try{
+  await page.goto(`${origin}/rotation/screen`);
+  await page.locator('.rt-lines .rt-line').first().waitFor();
   if(width===1180)await page.setViewportSize({width,height});
   assert(await page.locator('body').evaluate(el=>el.classList.contains('rt-screen-flow')));
   const before=await page.evaluate(()=>scrollY);
-  await page.mouse.move(width/2,Math.min(300,height/2));await page.mouse.wheel(0,650);
+  const summary=await page.locator('#rtScreenSummary').boundingBox();
+  await page.mouse.move(summary.x+summary.width/2,summary.y+summary.height/2);
+  await page.mouse.wheel(0,650);
   await page.waitForFunction(previous=>scrollY>previous+100,before,{timeout:3000});
   // A real touch pan on the tablet-sized viewport must scroll too.
-  if(engine==='Edge'&&width===1180){
+  if(engine==='edge'&&width===1180){
    await page.evaluate(()=>scrollTo(0,0));
    const cdp=await page.context().newCDPSession(page);
    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:500,y:410}]});
@@ -47,27 +49,78 @@ const screenSource=fs.readFileSync(path.join(root,'js/rotation-screen.js'),'utf8
   await page.evaluate(()=>scrollTo(0,600));
   const offset=await page.evaluate(()=>scrollY);
   assert(await page.evaluate(()=>{
-   const before=document.querySelector('.rt-timeout-banner');
+   const before=document.querySelector('.rt-lines .rt-line');
    RT.render();
-   return document.querySelector('.rt-timeout-banner')===before;
+   return document.querySelector('.rt-lines .rt-line')===before;
   }),'clock refresh must retain the current touch target');
-  await page.evaluate(()=>{window.screenMarkup=window.screenMarkup.replace('等待负责人接手','正在核实');RT.render();});
+  const refreshed=lines.map((line,i)=>i?line:{...line,posts:line.posts.map((post,j)=>j?post:{...post,name:'已更新岗位'})});
+  screen.updateDay({...day,lines:refreshed});
+  await page.evaluate(()=>RT.load());
+  assert.match(await page.locator('.rt-lines .rt-line').first().innerText(),/已更新岗位/);
   assert(Math.abs(await page.evaluate(()=>scrollY)-offset)<=2,'refresh must retain page position');
-  await page.locator('[data-scroll-end]').scrollIntoViewIfNeeded();
-  const geometry=await page.locator('[data-scroll-end]').boundingBox();assert(geometry.y+geometry.height<=height+1,'bottom must be reachable');
+  const pendingMore=page.locator('details[data-screen-detail="more:pending"]');
+  await pendingMore.locator('summary').click();
+  const other=page.locator('details[data-screen-detail="other"]');
+  const end=other.locator('summary');
+  await end.scrollIntoViewIfNeeded();
+  const geometry=await end.boundingBox();assert(geometry.y+geometry.height<=height+1,'bottom must be reachable');
   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1));
-  if(width>=960){
-   await page.evaluate(()=>{
-    RT.data.day.taskWorkflow=false;
-    window.screenMarkup='<div class="rt-board"><section class="rt-line-area"><div class="rt-lines">旧版固定布局</div></section><div class="rt-pool"></div></div>';
-    RT.render();
-   });
-   assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).overflowY),'hidden','legacy screen layout must remain fixed');
+  assert.equal(await other.evaluate(el=>el.open),false);
+  await end.click();
+  assert(await other.getByText('已下班测试',{exact:true}).isVisible());
+  await end.focus();
+  screen.updateDay({...day,lines:refreshed,persons:[...persons,{pid:'new-timeout',name:'上岗超时测试',state:'exception',start:420,end:1080,flags:[],tags:[],exception:{assignment:{line:'A1'},allowedAt:473,at:476,deadlineAt:476}}]});
+  await page.evaluate(()=>RT.load());
+  await page.locator('[data-f-pool="exception"]').getByText('上岗超时测试',{exact:true}).waitFor();
+  assert.equal(await page.locator('[data-screen-count="exception"]').innerText(),'1');
+  assert.equal(await pendingMore.evaluate(el=>el.open),true,'server refresh must keep the pending list expanded');
+  assert.equal(await other.evaluate(el=>el.open),true,'server refresh must keep other people expanded');
+  assert(await end.evaluate(el=>el===document.activeElement),'server refresh must preserve disclosure focus');
+  assert(await other.getByText('待到班测试',{exact:true}).isVisible());
+  if(width===1920){
+   const jump=page.locator('[data-screen-metric="ready"]');
+   const heading=page.locator('[data-screen-heading="ready"]');
+   await jump.click();
+   assert(await heading.evaluate(el=>el===document.activeElement),'summary shortcut should focus its section');
+   const button=page.locator('[data-f-board="ready-0"]');
+   const card=page.locator('.rt-chip').filter({has:button});
+   await card.getByText(/即将超时 · 剩 30秒/).waitFor();
+   await button.focus();
+   await page.evaluate(()=>{RT.data.clock.minute=480.5;RT.render();});
+   await card.getByText('确认时间已到，正在同步',{exact:true}).waitFor();
+   assert.equal(await card.getByText(/即将超时/).count(),0);
+   assert.equal(await page.locator('[data-screen-count="exception"]').innerText(),'1','the browser clock cannot create a server exception');
+   assert(await button.evaluate(el=>el===document.activeElement),'countdown must preserve the focused action');
+   const changed=persons.map(p=>p.pid==='ready-0'?{...p,name:'更新后的待上岗人员'}:p);
+   screen.updateDay({...day,rotationEnd:1090,lines:refreshed,persons:changed});
+   await page.evaluate(()=>RT.load());
+   await card.getByText('更新后的待上岗人员',{exact:true}).waitFor();
+   assert(await button.evaluate(el=>el===document.activeElement),'server refresh must preserve focus on a remaining action');
+   const expired=changed.map(p=>p.pid==='ready-0'?{...p,state:'exception',canDepart:false,task:null,exception:{at:480.5}}:p);
+   screen.updateDay({...day,lines:refreshed,persons:expired});
+   await page.evaluate(()=>RT.load());
+   await page.locator('[data-f-pool="exception"]').getByText('更新后的待上岗人员',{exact:true}).waitFor();
+   assert.equal(await page.locator('[data-screen-count="exception"]').innerText(),'1');
+   assert.equal(await page.locator('[data-screen-count="ready"]').innerText(),'19');
   }
-  await page.locator('body').evaluate(el=>el.classList.remove('rotation-screen'));
-  await page.locator('#rtApp').evaluate((el,html)=>el.innerHTML=html,workflow);
-  await page.evaluate(()=>scrollTo(0,0));await page.mouse.wheel(0,650);
-  await page.waitForFunction(()=>scrollY>100,{timeout:3000});
-  console.log('PASS',engine,width+'x'+height,'workflow screen scroll, refresh, bottom, legacy and ordinary board');await page.close();
+  if(width===390){
+   const operationRequests=[];
+   page.on('request',request=>{
+    const endpoint=new URL(request.url()).pathname;
+    if(['/api/rotation-screen/act','/api/rotation-screen/confirmation'].includes(endpoint))operationRequests.push(endpoint);
+   });
+   await page.evaluate(date=>sessionStorage.setItem('rotation.pendingConfirmation',JSON.stringify({date,pid:'pending-0',token:'a'.repeat(64)})),date);
+   screen.updateDay({...day,ruleVersion:1,readOnly:true,taskWorkflow:false});
+   await page.reload();
+   await page.getByRole('heading',{name:/轮岗存档/}).waitFor();
+   await page.getByText('旧版记录，仅供查看。',{exact:true}).waitFor();
+   await page.waitForFunction(()=>!sessionStorage.getItem('rotation.pendingConfirmation'));
+   assert.equal(await page.locator('#rtApp button,[draggable=true]').count(),0);
+   assert.match(await page.locator('.rt-lines').innerText(),/测试员工/);
+   assert.match(await page.locator('.rt-pool').innerText(),/测试人员/);
+   assert.deepEqual(operationRequests,[]);
+  }
+  console.log('PASS',engine,width+'x'+height,'formal screen scroll, refresh and archive');
+  }finally{try{await page.close();}finally{await screen.close();}}
  }
 }finally{await browser.close();}}})().catch(e=>{console.error(e);process.exitCode=1;});

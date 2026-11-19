@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.v2_database import Base
+from app.database.connection import Base
 from app.v2_auth import V2User
 from app.v2_models import (
     Attraction, AttendanceMonthlyScore, AttendanceRule, DeductionLevel,
@@ -15,7 +15,7 @@ from app.v2_models import (
 )
 from app.score_queries import employee_month_scores
 from app.routers import statistics
-from app.v2_services import acting_period_notes
+from app.services.identity import acting_period_notes
 
 
 @pytest.fixture

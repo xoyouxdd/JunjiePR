@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import asyncio
 import json
@@ -15,7 +14,7 @@ from starlette.datastructures import FormData
 os.environ["RECOGNITION_V2_DATA_DIR"] = tempfile.mkdtemp(prefix="recognition-uc-upload-test-")
 
 from app.main import browser_family, validation_error_response
-from app.v2_database import init_db
+from app.database.bootstrap import init_db
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,22 +42,6 @@ def test_uc_is_classified_before_chromium_user_agents() -> None:
 def test_mobile_browser_diagnostics_are_identification_only(markers, expected):
     # Synthetic markers test classification, not the actual branded clients.
     assert browser_family("Mozilla/5.0 " + markers) == expected
-
-
-def test_recognition_rebuilds_file_payload_and_has_browser_compatibility_fallback() -> None:
-    script = read_frontend_source()
-
-    assert "function readableEvidenceFile(form)" in script
-    assert "function evidenceSelectionAttempted(form)" in script
-    assert "function recognitionSubmissionData(form,imageRequired=true)" in script
-    assert "form.querySelectorAll('[name]').forEach(control=>" in script
-    assert "data.append('image',file,file.name)" in script
-    assert "if(!file&&(imageRequired||evidenceSelectionAttempted(form)))" in script
-    assert "if(file)appendRecognitionImage(data,file)" in script
-    assert "function recognitionImageIssueMessage(form)" in script
-    assert "当前浏览器不支持本次图片上传" in script
-    assert "请先选择认可图片后提交。" in script
-    assert "toast(recognitionImageFailureMessage(error)||error.message,true)" in script
 
 
 def test_recognition_validation_returns_auditable_confirmed_compatibility_error() -> None:

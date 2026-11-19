@@ -27,6 +27,14 @@ def parse_score_month(value: str) -> str:
     return normalized
 
 
+def month_bounds(month: str) -> tuple[date, date]:
+    """First and last day of a YYYY-MM month; ValueError for anything else."""
+    if not isinstance(month, str) or len(month) != 7 or month[4] != "-":
+        raise ValueError(f"invalid month: {month!r}")
+    start = date.fromisoformat(f"{month}-01")
+    return start, start.replace(day=monthrange(start.year, start.month)[1])
+
+
 def subtract_calendar_months(value: date, months: int) -> date:
     month_index = value.year * 12 + value.month - 1 - months
     year, month_zero = divmod(month_index, 12)

@@ -9,14 +9,22 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, new_session_token, token_hash, verify_password
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Employee, ReleaseAnnouncementRead, UserAccount, UserSession
-from app.v2_services import current_group_for_employee, current_leader_for_employee, direct_member_ids, groups_assigned_to, role_at, write_audit
+from app.services.organization import (
+    current_group_for_employee,
+    current_leader_for_employee,
+    direct_member_ids,
+    groups_assigned_to,
+)
+from app.services.identity import role_at
+from app.services.audit import write_audit
 from app.changelog import RELEASES, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
-from app.routers._shared import client_ip, group_display_metadata_bulk
-from app.rotation.access import can_enter as can_enter_rotation, find_rotation_account, rotation_login
+from app.http_utils import client_ip
+from app.organization_queries import group_display_metadata_bulk
+from app.rotation.access import find_screen_account, rotation_login
 from app.routers.rotation_board import can_enter as can_enter_formal_rotation
 from app.services.avatars import own_avatar
 
@@ -24,7 +32,7 @@ router = APIRouter()
 
 
 def user_payload(db: Session, user: V2User) -> dict:
-    if getattr(user,'rotation_temporary',False):
+    if user.rotation_temporary:
         return {'id':user.id,'name':user.name,'employee_no':user.employee.employee_no,
                 'attraction_name':user.employee.attraction.name,'rotation_entry':True,
                 'rotation_temporary':True,'must_change_password':False,'permissions':[]}
@@ -88,7 +96,7 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
         raise HTTPException(401, "账号或密码/PIN不正确")
     account = accounts[0] if accounts else None
     if not account:
-        rotation_account = find_rotation_account(db, login_name)
+        rotation_account = find_screen_account(db, login_name)
         if rotation_account:
             return rotation_login(db, request, response, rotation_account, password)
         from app.rotation.temporary import TemporaryMember, login as temporary_login

@@ -1,39 +1,33 @@
-// Execute the actual API owner functions without a browser, server or copied implementation.
 const assert = require('node:assert/strict');
-const vm = require('node:vm');
-const {frontendFunctionSource} = require('./frontend_source.js');
+const {loadAppModules} = require('./support/esm-loader.cjs');
 
-function harness() {
+async function harness() {
   const calls = [], controller = new AbortController();
   const timers = new Map();let nextTimer=0;
   let nextResponse;
-  const context = vm.createContext({
-    unauthorizedRedirectHolds:0,
+  const globals = {
     AbortController, setTimeout:(callback,delay)=>{timers.set(++nextTimer,{callback,delay});return nextTimer;},clearTimeout:id=>timers.delete(id),
-    getViewSignal: () => controller.signal,
-    portalPath: value => '/recognition' + value,
-    location: {href: ''},
+    location: {href: '', pathname: '/recognition/'},
     fetch: async (url, options) => {
       calls.push({url, options});
       if (nextResponse instanceof Error) throw nextResponse;
       if (typeof nextResponse === 'function') return nextResponse(options);
       return nextResponse;
     },
+  };
+  const {'api.js': context} = await loadAppModules(['api.js'], globals, {
+    'context.js': {getViewSignal: () => controller.signal},
   });
-  for (const name of ['holdUnauthorizedRedirect', 'validationErrorMessage', 'apiFallbackMessage', 'readApiBody', 'api']) {
-    vm.runInContext(frontendFunctionSource(name), context, {filename: `api.js:${name}`});
-  }
   function reply(status, body) {
     nextResponse = {status, ok: status >= 200 && status < 300, text: async () => typeof body === 'string' ? body : JSON.stringify(body)};
   }
-  return {context, calls, controller, reply, response: value => {nextResponse = value;},expire:()=>[...timers.values()].forEach(timer=>timer.callback()),timers};
+  return {context, location: globals.location, calls, controller, reply, response: value => {nextResponse = value;},expire:()=>[...timers.values()].forEach(timer=>timer.callback()),timers};
 }
 
 (async () => {
-  const h = harness();
+  const h = await harness();
   const proofMessage = '缺勤证明未成功上传，请重新选择文件后提交。';
   const proofDetail = {code: 'SICK_LEAVE_VALIDATION_ERROR', fields: [{field: 'proof', message: proofMessage}, {field: 'unused'}]};
-  assert.equal(h.context.validationErrorMessage(proofDetail), proofMessage);
   h.reply(422, {detail: proofDetail});
   await assert.rejects(h.context.api('/api/sick-leaves', {method: 'POST'}), error => {
     assert.equal(error.message, proofMessage);
@@ -71,34 +65,35 @@ function harness() {
   await assert.rejects(h.context.api('/api/test'), error => error.message === '读取服务器响应失败，请稍后重试。');
   h.reply(401, {});
   await assert.rejects(h.context.api('/api/test'), error => error.message === '登录已失效');
-  assert.equal(h.context.location.href, '/recognition/login');
+  assert.equal(h.location.href, '/recognition/login');
   for(const method of ['GET','POST']){
-    const retained=harness();let sent;
+    const retained=await harness();let sent;
     retained.response(options=>{sent=options;return {status:401,ok:false,text:async()=>'{"detail":"登录已失效"}'};});
-    const previous=retained.context.location.href;
+    const previous=retained.location.href;
     await assert.rejects(retained.context.api('/api/material',{method,redirectOnUnauthorized:false}),error=>error.status===401);
-    assert.equal(retained.context.location.href,previous,'opt-in upload handling must preserve current page');
+    assert.equal(retained.location.href,previous,'opt-in upload handling must preserve current page');
     assert.equal('redirectOnUnauthorized' in sent,false,'UI-only option must not reach fetch');
   }
-  const guarded=harness();guarded.reply(401,{});
+  const guarded=await harness();guarded.reply(401,{});
   const releaseA=guarded.context.holdUnauthorizedRedirect(),releaseB=guarded.context.holdUnauthorizedRedirect();
   await assert.rejects(guarded.context.api('/api/background'),error=>error.status===401);
-  assert.equal(guarded.context.location.href,'');releaseA();releaseA();
-  assert.equal(guarded.context.unauthorizedRedirectHolds,1);
+  assert.equal(guarded.location.href,'');releaseA();releaseA();
+  await assert.rejects(guarded.context.api('/api/background'),error=>error.status===401);
+  assert.equal(guarded.location.href,'','Releasing a hold twice must not end another hold');
   releaseB();await assert.rejects(guarded.context.api('/api/background'),error=>error.status===401);
-  assert.equal(guarded.context.location.href,'/recognition/login');
-  const slow=harness();
+  assert.equal(guarded.location.href,'/recognition/login');
+  const slow=await harness();
   slow.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
   const waiting=slow.context.api('/api/slow');slow.expire();
   await assert.rejects(waiting,error=>error.message.includes('等待超时'));
   assert.equal(slow.timers.size,0,'Timeout cleanup must run after rejection');
-  const cancelled=harness();
+  const cancelled=await harness();
   cancelled.response(options=>new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('aborted'),{name:'AbortError'})))));
   const abandoned=cancelled.context.api('/api/old-page');cancelled.controller.abort();
   await assert.rejects(abandoned,error=>error.name==='AbortError');
   assert.equal(cancelled.timers.size,0,'Navigation cancellation clears the read timer');
   for(const method of ['GET','get']){
-    const custom=harness(),parent=new AbortController();
+    const custom=await harness(),parent=new AbortController();
     let added=0,removed=0;
     const add=parent.signal.addEventListener.bind(parent.signal),remove=parent.signal.removeEventListener.bind(parent.signal);
     parent.signal.addEventListener=(...args)=>{added++;return add(...args);};
@@ -113,11 +108,11 @@ function harness() {
     parent.abort();await assert.rejects(pending,error=>error.name==='AbortError');
     assert.equal(added,1);assert.equal(removed,1);assert.equal(custom.timers.size,0);
   }
-  const already=harness();already.controller.abort();
+  const already=await harness();already.controller.abort();
   already.response(options=>{assert.equal(options.signal.aborted,true);throw Object.assign(new Error('already aborted'),{name:'AbortError'});});
   await assert.rejects(already.context.api('/api/already-aborted'),error=>error.name==='AbortError');
   assert.equal(already.timers.size,0);
-  const writing=harness();let finishWrite;
+  const writing=await harness();let finishWrite;
   writing.response(()=>new Promise(resolve=>{finishWrite=resolve;}));
   const write=writing.context.api('/api/write-survives',{method:'POST'});
   assert.equal(writing.calls[0].options.signal,undefined);assert.equal(writing.timers.size,0);

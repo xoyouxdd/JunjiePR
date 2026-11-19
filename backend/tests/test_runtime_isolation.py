@@ -105,7 +105,7 @@ def test_local_manual_snapshot_restore_preserves_source_and_other_directory(tmp_
 def test_environment_banner_on_login_and_main_only_for_nonproduction(tmp_path, monkeypatch):
     from app.main import render_static_page, BASE_DIR
     monkeypatch.setenv("RECOGNITION_ENVIRONMENT", "test")
-    for name in ("login.html", "index.html", "rotation.html", "rotation-screen.html"):
+    for name in ("login.html", "index.html", "rotation-board.html", "rotation-screen.html"):
         response = render_static_page(BASE_DIR / "app/static" / name)
         assert response.body.count(b'class="environment-banner"') == 1
         assert b'data-runtime-environment="test"' in response.body

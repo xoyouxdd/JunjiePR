@@ -18,14 +18,13 @@ async function main(){try{
     // Reset this isolated simulator for every browser; previous runs may have advanced it.
     const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true});
     assert((await context.request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}})).ok());
-    assert((await context.request.post(base+'/api/rotation/enter',{data:{account:'7777777'}})).ok());
-    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-05',time:'03:30'}})).ok());
-    if(engine!=='edge'){assert((await context.request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-06',force:true}})).ok());const fresh=await context.request.get(base+'/api/rotation/daily/2026-10-06').then(r=>r.json());assert((await context.request.post(base+'/api/rotation/daily/2026-10-06',{data:{action:'draft_generate',revision:fresh.revision}})).ok());}
+    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-05',time:'03:30'}})).ok());
+    if(engine!=='edge'){assert((await context.request.post(base+'/__fixture/rotation-draft',{data:{date:'2026-10-06'}})).ok());const fresh=await context.request.get(base+'/api/rotation-board/daily/2026-10-06').then(r=>r.json());assert((await context.request.post(base+'/api/rotation-board/daily/2026-10-06',{data:{action:'draft_generate',revision:fresh.revision}})).ok());}
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
-    await page.goto(base+'/rotation');await page.locator('[data-tab=draft]').click();
+    await page.goto(base+'/rotation-board');await page.locator('[data-tab=draft]').click();
     await page.locator('[data-daily-date-button="2026-10-06"]').click();
     await page.locator('[data-daily-person="A#0"]').waitFor({timeout:10000}).catch(async e=>{console.error(await page.locator('body').innerText(),errors);throw e;});
-    async function data(){const r=await context.request.get(base+'/api/rotation/daily/2026-10-06');assert(r.ok());return r.json();}
+    async function data(){const r=await context.request.get(base+'/api/rotation-board/daily/2026-10-06');assert(r.ok());return r.json();}
     const dialog=page.getByRole('dialog');
     const firstPost=page.locator('[data-daily-person="A#0"]');
     const firstShiftEnd=firstPost.locator('time[title="下班时间"]');
@@ -140,23 +139,23 @@ async function main(){try{
     }
     if(shots){fs.mkdirSync(shots,{recursive:true});await page.setViewportSize({width:390,height:844});await page.locator('#toast').evaluate(el=>el.classList.remove('show'));await page.screenshot({path:path.join(shots,engine+'-daily-mobile.png'),fullPage:true});await page.locator('.rt-daily').screenshot({path:path.join(shots,engine+'-daily-calendar.png')});await page.setViewportSize({width:1440,height:1000});await page.screenshot({path:path.join(shots,engine+'-daily-desktop.png'),fullPage:true});}
     // A stale editor must not overwrite another operator's saved plan.
-    before=await data();assert((await context.request.post(base+'/api/rotation/daily/2026-10-06',{data:{action:'draft_close',revision:before.revision,close:'20:00'}})).ok());
+    before=await data();assert((await context.request.post(base+'/api/rotation-board/daily/2026-10-06',{data:{action:'draft_close',revision:before.revision,close:'20:00'}})).ok());
     await choose('A#0','B#0');await page.waitForFunction(()=>document.querySelector('#draftClose')?.value==='20:00');
     after=await data();assert.deepEqual(after.draft.plan,before.draft.plan,'stale write changed assignments');
-    const historicalBefore=await context.request.get(base+'/api/rotation/daily/2026-10-04').then(r=>r.json());
+    const historicalBefore=await context.request.get(base+'/api/rotation-board/daily/2026-10-04').then(r=>r.json());
     await page.locator('[data-daily-date]').fill('2026-10-04');await page.locator('[data-daily-date]').dispatchEvent('change');await page.getByRole('heading',{name:'2026-10-04 · 开班安排回顾'}).waitFor();
     await page.getByRole('heading',{name:'2026-10-04 · 开班安排回顾'}).waitFor();assert.equal(await page.locator('[data-daily-person]').count(),0);
     assert.equal(await page.locator('[data-daily-pid]').count(),0);
-    const historicalAfter=await context.request.get(base+'/api/rotation/daily/2026-10-04').then(r=>r.json());
+    const historicalAfter=await context.request.get(base+'/api/rotation-board/daily/2026-10-04').then(r=>r.json());
     assert.equal(historicalBefore.revision,historicalAfter.revision,'history modified live state');
     // Today's enabled board stays editable until the first shift, then freezes all shifts.
-    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'04:00'}})).ok());
-    await context.request.get(base+'/api/rotation/board');
+    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'04:00'}})).ok());
+    await context.request.get(base+'/api/rotation-board/board');
     await page.locator('[data-daily-date]').fill('2026-10-06');await page.locator('[data-daily-date]').dispatchEvent('change');
     await page.locator('[data-daily-person="A#0"]').waitFor();
     before=await data();assert(before.can_edit&&before.prestart_live);
     await choose('A#0','B#0');after=await data();
-    const liveBoard=await context.request.get(base+'/api/rotation/board').then(r=>r.json());
+    const liveBoard=await context.request.get(base+'/api/rotation-board/board').then(r=>r.json());
     assert.deepEqual(after.day.lines,liveBoard.day.lines);
     await page.locator('[data-tab=board]').click();
     await page.locator('[data-f-head="B"]').click();
@@ -164,12 +163,12 @@ async function main(){try{
     const stop=page.getByRole('button',{name:'停用',exact:true});
     await stop.waitFor();
     assert.match(await page.locator('#rtModal').innerText(),/当天的预排人员/);
-    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'07:15'}})).ok());
-    const rejected=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation/act'&&r.request().method()==='POST');
+    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'07:15'}})).ok());
+    const rejected=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation-board/act'&&r.request().method()==='POST');
     await stop.click();
     assert.equal((await rejected).status(),409);
     await page.evaluate(()=>closeModal());
-    const startedBoard=await context.request.get(base+'/api/rotation/board').then(r=>r.json());
+    const startedBoard=await context.request.get(base+'/api/rotation-board/board').then(r=>r.json());
     assert.equal(startedBoard.day.lines.find(l=>l.id==='B').active,true);
     await page.locator('[data-tab=draft]').click();
     await page.evaluate(async()=>{await RT.load();RT.render(true);});
@@ -178,18 +177,18 @@ async function main(){try{
     assert.equal(await page.locator('[data-daily-person]').count(),0);
     assert.equal(await page.locator('.rt-daily-board [draggable=true]').count(),0);
     assert.equal(await page.locator('[data-daily-rename]').count(),0);
-    assert((await context.request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-06',time:'12:30'}})).ok());
-    await context.request.get(base+'/api/rotation/board');
+    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'12:30'}})).ok());
+    await context.request.get(base+'/api/rotation-board/board');
     assert.deepEqual((await data()).day,frozen.day,'opening changed after later shift');
     // Frozen live history ignores later live-board version changes.
     let dailyReads=0;
-    page.on('request',request=>{if(request.method()==='GET'&&new URL(request.url()).pathname==='/api/rotation/daily/2026-10-06')dailyReads++;});
+    page.on('request',request=>{if(request.method()==='GET'&&new URL(request.url()).pathname==='/api/rotation-board/daily/2026-10-06')dailyReads++;});
     const frozenReads=dailyReads;
     await page.evaluate(()=>{RT.data.version++;RT.render(false);});
     await page.waitForFunction(()=>!daily.loading);
     assert.equal(dailyReads,frozenReads);
     // An unpublished draft can still be reviewed and published after the first start.
-    assert((await context.request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-06',force:true}})).ok());
+    assert((await context.request.post(base+'/__fixture/rotation-draft',{data:{date:'2026-10-06'}})).ok());
     await page.locator('[data-daily-reload]').click();
     await page.waitForFunction(()=>daily.data?.can_edit&&daily.data.can_publish&&!daily.data.frozen&&!daily.loading);
     await page.evaluate(async()=>{await RT.load();});
@@ -204,10 +203,12 @@ async function main(){try{
       assert(await page.locator('.rt-daily-board').isVisible());
       assert.equal(await page.getByText('正在读取班表…',{exact:true}).count(),0);
     }
-    // Member and screen identities retain the original initialization restriction.
-    await context.request.post(base+'/api/rotation/enter',{data:{account:'9100000'}});
-    assert.equal((await context.request.get(base+'/api/rotation/daily?month=2026-10')).status(),403);
-    assert.equal((await context.request.post(base+'/api/rotation/daily/2026-10-06',{data:{action:'draft_generate',revision:after.revision}})).status(),403);
+    // A formal board member can read the board, while planning is manager-only.
+    await context.request.post(base+'/api/logout');
+    assert((await context.request.post(base+'/api/login',{data:{employee_no:'CMTEST01',password:'daily-fixture-2026'}})).ok());
+    assert((await context.request.get(base+'/api/rotation-board/board')).ok());
+    assert.equal((await context.request.get(base+'/api/rotation-board/daily?month=2026-10')).status(),403);
+    assert.equal((await context.request.post(base+'/api/rotation-board/daily/2026-10-06',{data:{action:'draft_generate',revision:after.revision}})).status(),403);
     assert.deepEqual(errors,[]);console.log(engine+': daily calendar, future plan, swaps, stale editor, history, automatic opening freeze, unpublished-draft refresh stability, permission and six widths passed');
     await browser.close();browser=null;
   }

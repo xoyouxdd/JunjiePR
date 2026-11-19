@@ -5,10 +5,10 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
+from app.database.connection import write_transaction
 from app.v2_auth import current_user, load_user_identity
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.attendance_medals_models import MedalLeaveMonth, MedalNotice, MedalWageCode
 from app.services import attendance_medals as medals
 from app.employee_numbers import employee_number
@@ -50,15 +50,10 @@ class WageClassification(BaseModel):
 
 
 def locked(db, operation):
-    try:
-        db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
+    with write_transaction(db):
         result = operation()
         db.commit()
         return result
-    except Exception:
-        db.rollback()
-        raise
 
 
 def current_operator(db, user):

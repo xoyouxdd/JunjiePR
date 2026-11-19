@@ -1,5 +1,4 @@
 from __future__ import annotations
-from frontend_source import read_frontend_source
 
 import os
 from pathlib import Path
@@ -16,11 +15,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, UserAccount  # noqa: E402
 
 
-ROOT = Path(__file__).parents[1]
 
 
 def login(client: TestClient, employee_no: str, password: str) -> None:
@@ -88,19 +86,3 @@ def test_password_change_and_reset_are_reflected_without_disclosing_password() -
         cm_after_reset = next(row for row in refreshed.json()["items"] if row["employee_no"] == "CMTEST01")
         assert cm_after_reset["password_status"] == "待本人修改初始/重置密码"
         assert cm_after_reset["password_changed_at"] == ""
-
-
-def test_account_status_panel_is_lazy_collapsed_at_the_bottom_with_circle_filter() -> None:
-    script = read_frontend_source()
-    css = (ROOT / "app" / "static" / "css" / "style.css").read_text(encoding="utf-8")
-
-    assert "api('/api/hr/account-status')" in script
-    assert "账号状态与登录情况" in script
-    assert "不会显示真实密码" in script
-    assert "<details id=\"accountStatusPanel\"" in script
-    assert "按需展开查看，不影响员工管理操作。" in script
-    assert "accountStatusAttraction" in script
-    assert "全部景点圈" in script
-    assert "${accountStatusPanel()}</div>`" in script
-    assert "accountStatusFilter" in script
-    assert ".account-status-panel" in css

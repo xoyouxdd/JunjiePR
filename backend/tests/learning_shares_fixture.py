@@ -8,7 +8,8 @@ os.environ['RECOGNITION_ENABLE_TEST_ACCOUNTS']='1'
 os.environ['RECOGNITION_TEST_DEFAULT_PASSWORD']='fixture2026'
 os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='fixture2026'
 from app.main import app
-from app.v2_database import init_db,SessionLocal,FILE_DIR
+from app.database.bootstrap import init_db
+from app.database.connection import SessionLocal, FILE_DIR
 from app.v2_models import Employee,Attraction
 from app.learning_models import LearningShare, LearningAsset, LearningAccess
 from datetime import datetime,timedelta

@@ -44,11 +44,12 @@ const engines=process.env.APPEARANCE_ENGINES?.split(',')||['chromium','webkit','
    await page.evaluate(()=>{window.skinOriginalForm=document.querySelector('#app form');});
    await page.locator('#appearanceBtn[data-avatar-settings]').click();await page.locator('[data-skin-choice=blue]').waitFor();
    let requests=[];page.on('request',r=>{if(r.url().includes('/api/'))requests.push(r.url());});
-   for(const skin of ['blue','green','ivory','medal','circle']){
+   for(const skin of ['blue','green','ivory','dark','medal','circle']){
     const before=await page.evaluate(()=>({circle:document.body.dataset.circleTheme,status:getComputedStyle(document.body).getPropertyValue('--danger'),html:document.querySelector('#app').innerHTML}));
     const count=requests.length;
     await page.locator(`[data-skin-choice=${skin}]`).click();
     assert.equal(await page.getAttribute('html','data-skin'),skin);
+    if(skin==='dark') assert.equal(await page.locator('html').evaluate(node=>getComputedStyle(node).colorScheme),'dark');
     assert.equal(await page.locator(`[data-skin-choice=${skin}]`).getAttribute('aria-pressed'),'true');
     await sleep(100);assert.equal(requests.length,count,'Switching skin must make zero API requests');
     const after=await page.evaluate(()=>({circle:document.body.dataset.circleTheme,status:getComputedStyle(document.body).getPropertyValue('--danger'),html:document.querySelector('#app').innerHTML}));
@@ -131,7 +132,7 @@ const engines=process.env.APPEARANCE_ENGINES?.split(',')||['chromium','webkit','
    await admin.page.locator('#appearanceBtn[data-avatar-settings]').click();await admin.page.locator('[data-skin-choice=green]').click();await admin.page.keyboard.press('Escape');await admin.page.locator('[data-avatar-dialog]').waitFor({state:'detached'});
    if(engine==='chromium'){await admin.page.screenshot({path:path.join(output,'green-hr-desktop.png'),fullPage:true});await exportPreview(admin.page,'employees.html');}
    await admin.page.locator('#appearanceBtn').click();await admin.page.locator('[data-appearance-logout]').click();await admin.page.waitForURL(base+'/login');assert.equal((await admin.context.request.get(base+'/api/me')).status(),401,'Logout remains available in personal appearance');
-   checks.push({engine,result:'PASS',checks:['5 skins including medal/circle collections','64px single-row phone header','centered desktop identity','complete artwork catalog','real merged scratch drag/reveal/reset','zero switch and scratch API requests','draft/DOM/scroll preserved','identity/severity unchanged','320/390/768/1440px','reload and cross-tab persistence','mobile identity entry','Escape and focus return','storage blocked fallback','HR employee page','logout via personal appearance']});
+   checks.push({engine,result:'PASS',checks:['6 skins including dark and medal/circle collections','64px single-row phone header','centered desktop identity','complete artwork catalog','real merged scratch drag/reveal/reset','zero switch and scratch API requests','draft/DOM/scroll preserved','identity/severity unchanged','320/390/768/1440px','reload and cross-tab persistence','mobile identity entry','Escape and focus return','storage blocked fallback','HR employee page','logout via personal appearance']});
    await browser.close();browser=null;
   }
   assert.deepEqual(errors,[]);

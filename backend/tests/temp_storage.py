@@ -10,9 +10,18 @@ import tempfile
 import traceback
 
 
+def _usable_d_drive() -> bool:
+    # An empty card reader or unformatted volume can own D: and make stat()
+    # raise (WinError 1005) instead of reporting a missing directory.
+    try:
+        return Path("D:/").is_dir()
+    except OSError:
+        return False
+
+
 def _temp_base() -> Path:
     current = Path(tempfile.gettempdir())
-    if os.name != "nt" or not Path("D:/").is_dir():
+    if os.name != "nt" or not _usable_d_drive():
         return current
     if current.drive.casefold() == "d:":
         return current

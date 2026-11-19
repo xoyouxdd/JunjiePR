@@ -14,7 +14,7 @@ from app.idempotency import submission_payload_digest
 from app.routers import recognitions
 from app.v2_crypto import hash_password
 from app.v2_models import RecognitionRecord, SubmissionRequest, UserAccount
-from app.v2_services import current_leader_for_employee
+from app.services.organization import current_leader_for_employee
 
 
 def inbox(client):

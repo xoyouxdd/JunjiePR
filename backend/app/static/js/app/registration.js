@@ -273,7 +273,7 @@ async function bindSelfRecognitionBatch(form,imageField){
             items[index]={...fields,same_day_duplicate_confirmed:true,same_day_duplicate_token:token};
           }
         }
-        lastSubmittedChoice=choices(cards[cards.length-1]);clearSubmissionKey(form);if(!page.isCurrent()){toast('认可已提交');return;}container.innerHTML='';photo.reset();const encouragement=recognitionEncouragement(result.encouragement_options);toast(`已提交 ${result.records.length} 条认可，等待逐条复核${encouragement?'\n'+encouragement:''}`,false,5600,'encouragement');
+        lastSubmittedChoice=choices(cards[cards.length-1]);clearSubmissionKey(form);if(!page.isCurrent()){toast('认可已提交');return;}container.innerHTML='';photo.reset();const encouragement=recognitionEncouragement(result.encouragement_options);toast(`已提交 ${result.records.length} 条认可，等待逐条复核${encouragement?'\n'+encouragement:''}`,false,0,'encouragement');
       }finally{delete form.dataset.batchSubmitting;controls.forEach((x,i)=>{x.disabled=disabled[i];});if(!container.children.length)await append();update();}
     }catch(error){if([400,403,409,413,422].includes(error.status)&&error.detail?.code!=='IDEMPOTENCY_PAYLOAD_CONFLICT')clearSubmissionKey(form,true);toast(recognitionImageFailureMessage(error)||error.message||'提交失败，已保留填写内容',true);}
   };

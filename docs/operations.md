@@ -19,7 +19,7 @@
 处理此类路径故障时：
 
 1. 核对线上根目录的 `data_v2\recognition_v2.db`、`.venv\Scripts\python.exe`、备份目录写入权限，以及每日备份和巡检两个任务。
-2. 单独同步并校验修正后的 `Invoke-SqliteOnlineBackup.ps1`、`Test-SqliteBackupHealth.ps1`、`Test-SqliteBackupRestore.ps1`；应用发布不会自动安装这两个每日任务，也不自动同步全部运维脚本。
+2. 单独同步并校验修正后的 `Invoke-SqliteOnlineBackup.ps1`、`Test-SqliteBackupHealth.ps1`、`Test-SqliteBackupRestore.ps1`。更新备份脚本前，先在其实际所在目录放置同一提交 `backend/app/sqlite_backup.py` 的副本并核对 SHA-256。应用发布不会自动安装这两个每日任务，也不自动同步全部运维脚本。应用回滚时保留备份脚本与副本这一配套关系。
 3. 先运行备份 `-DryRun`，核对来源与保留策略，再执行每日任务。只有任务缺失或参数确需修改时才安装/更新，保留现有触发时间和告警环境变量设置。
 4. 确认备份任务结果为 `0`、新快照与清单均存在、SHA-256 和 `quick_check` 正常，再运行巡检；确认新 `backup-health-status.json` 为 `ok=true` 后刷新页面，并复查下一次定时执行结果。部署时生成的根目录 `backups` 快照与日常专用备份目录分开，不互相代替。
 

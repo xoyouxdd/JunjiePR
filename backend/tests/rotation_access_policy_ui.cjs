@@ -40,11 +40,20 @@ async function main(){try{
     for(const p of [page,screen])await p.waitForFunction(()=>RT.data.day.persons.filter(x=>x.state==='onpost').length===6);
     let current=(await ok(await manager.request.get(base+'/api/rotation-board/board'))).day;
     const pid=current.persons.find(p=>p.state==='onpost').pid;
-    assert.equal((await display.request.post(base+'/api/rotation/screen/act',{data:{action:'pool',pid,pool:'pending'}})).status(),403);
+    assert.equal((await display.request.post(base+'/api/rotation-screen/act',{data:{action:'pool',pid,pool:'pending'}})).status(),403);
     await ok(await tr.request.post(base+'/api/rotation-board/act',{data:{action:'pool',pid,pool:'pending'}}));
     await screen.locator('[data-f-arrive="'+pid+'"]').click();assert.equal(await screen.locator('[name=kind]').inputValue(),'rest');
+    const arrival=screen.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation-screen/act');
     await screen.getByRole('button',{name:'确定',exact:true}).click();
+    const arrivalResponse=await arrival;
+    await ok(arrivalResponse);
     await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='rest',pid);
+    const token=arrivalResponse.request().postDataJSON().confirmation_token;
+    await screen.evaluate(record=>sessionStorage.setItem('rotation.pendingConfirmation',JSON.stringify(record)),{token,date:day,pid});
+    const confirmation=screen.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation-screen/confirmation');
+    await screen.reload();
+    assert.equal((await ok(await confirmation)).confirmed,true);
+    await screen.waitForFunction(()=>!sessionStorage.getItem('rotation.pendingConfirmation'));
     await clock('07:30:00');await screen.locator('[data-f-board="'+pid+'"]').waitFor();
     assert.equal(await screen.locator('[data-f-board="'+pid+'"]').innerText(),'确认去轮岗');
     await screen.locator('[data-f-board="'+pid+'"]').click();await screen.getByRole('button',{name:'确认上岗',exact:true}).click();
@@ -52,15 +61,41 @@ async function main(){try{
     await Promise.race([changed.waitFor(),screen.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='onpost',pid)]);
     if(await changed.isVisible())await screen.getByRole('button',{name:'确认上岗',exact:true}).click();
     await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='onpost',pid);
-    current=(await ok(await display.request.get(base+'/api/rotation/screen/state'))).day;
+    current=(await ok(await display.request.get(base+'/api/rotation-screen/state'))).day;
     for(const action of ['place','pool','shift','rename_post','post_order','sort_time','all_close','entry_return','entry_adjust']){
-      assert.equal((await display.request.post(base+'/api/rotation/screen/act',{data:{action,pid,line:'A',i:0,pool:'rest'}})).status(),403,action);
+      assert.equal((await display.request.post(base+'/api/rotation-screen/act',{data:{action,pid,line:'A',i:0,pool:'rest'}})).status(),403,action);
     }
     assert.equal(await screen.locator('[draggable=true],[data-f-person],[data-f-post],[data-f-add],[data-f-close-all]').count(),0);
     assert((await trainer.locator('[draggable=true]').count())>0);
     await screen.screenshot({path:path.join(report,'screen-confirm-only-'+engine+'.png'),animations:'disabled'});
+    await page.locator('[data-tab=settings]').click();
+    await page.locator('#settingsForm').waitFor();
+    assert.equal(await page.getByRole('heading',{name:'休息室大屏账号'}).count(),0);
+    assert.equal((await manager.request.get(base+'/api/rotation-screen/accounts')).status(),403);
+    const gsm=await browser.newContext(),gsmPage=await gsm.newPage();
+    gsmPage.on('pageerror',e=>errors.push(e.message));
+    try{
+      await ok(await gsm.request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'rotation-local-2026'}}));
+      await gsmPage.goto(base+'/rotation-board');
+      await gsmPage.locator('[data-tab=settings]').click();
+      await gsmPage.getByRole('heading',{name:'休息室大屏账号'}).waitFor();
+      const reset=gsmPage.locator('[data-reset="6666666"]');
+      assert.equal(await gsmPage.locator('[data-reset]').count(),1);
+      await reset.click();
+      const dialog=gsmPage.getByRole('dialog');
+      await dialog.locator('[name=password]').fill('4921');
+      const changed=gsmPage.waitForResponse(r=>new URL(r.url()).pathname==='/api/rotation-screen/accounts/6666666/password');
+      await dialog.getByRole('button',{name:'确定',exact:true}).click();
+      await ok(await changed);
+      assert.equal((await display.request.get(base+'/api/rotation-screen/state')).status(),401);
+      await ok(await display.request.post(base+'/api/login',{data:{employee_no:'6666666',password:'4921'}}));
+      await ok(await display.request.get(base+'/api/rotation-screen/state'));
+    }finally{
+      await ok(await gsm.request.post(base+'/api/rotation-screen/accounts/6666666/password',{data:{new_password:'1243'}}));
+      await gsm.close();
+    }
     assert.deepEqual(errors,[]);await manager.close();await display.close();await tr.close();await browser.close();browser=null;
-    console.log(engine+': 02:59:59 absent,03:00 shared preview without staffing; cross-circle TA_GSM targets Heat Pursuit; local TR operates; screen no management controls and API rejects all except rest/depart; both confirmations sync PASS');
+    console.log(engine+': 03:00 preview, formal role scopes, canonical screen actions and receipt recovery, GSM screen password reset and session invalidation PASS');
   }
 }finally{if(browser)await browser.close();if(server&&server.exitCode===null){server.kill();await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(report,'server.log'),log);}}
 main().catch(e=>{console.error(e);console.error(log.slice(-2500));process.exitCode=1;});

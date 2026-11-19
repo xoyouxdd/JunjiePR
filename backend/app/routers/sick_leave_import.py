@@ -22,10 +22,24 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.v2_auth import V2User, require_permissions
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, Employee, EmployeeLOAPeriod, SickLeaveRecord
-from app.v2_services import recalculate_attendance, role_at, write_audit
-from app.routers._shared import client_ip, ensure_month_open, ensure_scoped_hr_employee, existing_submission, invalidate_data_caches, like_escaped_pattern, normalize_request_key, parse_iso_date, remember_submission, scoped_hr_attraction_ids, sick_leave_payloads, submission_payload_digest
+from app.services.attendance import recalculate_attendance
+from app.services.identity import role_at
+from app.services.audit import write_audit
+from app.http_utils import client_ip
+from app.month_closure import ensure_month_open
+from app.access_policy import ensure_scoped_hr_employee, scoped_hr_attraction_ids
+from app.idempotency import (
+    existing_submission,
+    normalize_request_key,
+    remember_submission,
+    submission_payload_digest,
+)
+from app.data_cache import invalidate_data_caches
+from app.search_utils import like_escaped_pattern
+from app.date_utils import parse_iso_date
+from app.record_payloads import sick_leave_payloads
 from app.routers.sick_leaves import active_sick_leave_overlaps, sick_leave_overlap_detail
 
 

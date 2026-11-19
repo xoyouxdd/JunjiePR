@@ -72,6 +72,7 @@ def package_content(changed=True):
     return {
         "backend/app/main.py": b"new app",
         "backend/requirements.txt": b"package==2\n" if changed else b"package==1\n",
+        release.SQLITE_BACKUP_SOURCE: (SCRIPTS.parent / release.SQLITE_BACKUP_SOURCE).read_bytes(),
         **{"scripts/" + name: (SCRIPTS / name).read_bytes()
            for name in ("server_release.py", "deployment_runtime.py", "Deploy-RecognitionRelease.ps1")},
     }
@@ -236,8 +237,9 @@ def test_preflight_rejects_zip_symlink_and_case_collisions(live):
         release.deploy_release(package, COMMIT, digest, root=live, preflight=True)
 
 
-def test_preflight_rejects_missing_dependency_helper(live):
-    package, digest = build_package(live, modify=lambda files: files.pop("scripts/deployment_runtime.py"))
+@pytest.mark.parametrize("helper", ["scripts/deployment_runtime.py", release.SQLITE_BACKUP_SOURCE])
+def test_preflight_rejects_missing_required_helper(live, helper):
+    package, digest = build_package(live, modify=lambda files: files.pop(helper))
     with pytest.raises(RuntimeError, match="Required release"):
         release.deploy_release(package, COMMIT, digest, root=live, preflight=True)
 
@@ -463,17 +465,22 @@ def test_lock_rejects_concurrent_transaction_and_releases_after_failure(live):
         pass
 
 
-def test_online_backup_reads_existing_database_and_is_queryable(offline_base):
+def test_online_backup_reads_existing_database_using_the_verified_candidate(offline_base, live):
     source, destination = offline_base / "live.db", offline_base / "backup.db"
     with sqlite3.connect(source) as connection:
         connection.execute("CREATE TABLE evidence(value TEXT)")
         connection.execute("INSERT INTO evidence VALUES ('preserved')")
-    release.backup_database(source, destination)
+    package, digest = build_package(live)
+    verified = release.validate_package(package, COMMIT, digest, live)
+    assert not (live / "app/sqlite_backup.py").exists()
+    actions = release.DeploymentActions(release._load_backup_writer(verified["content"]))
+    actions.backup_database(source, destination)
     with sqlite3.connect(destination) as connection:
         assert connection.execute("SELECT value FROM evidence").fetchall() == [("preserved",)]
     with pytest.raises(sqlite3.OperationalError):
-        release.backup_database(offline_base / "missing.db", offline_base / "must-not-create.db")
+        actions.backup_database(offline_base / "missing.db", offline_base / "must-not-create.db")
     assert not (offline_base / "missing.db").exists()
+    assert not list(offline_base.glob("*.partial"))
 
 
 @pytest.mark.parametrize("result", [

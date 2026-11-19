@@ -4,15 +4,16 @@ import json
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import text
 from sqlalchemy.orm import Session
+from app.database.connection import reserve_writer
 from app.v2_auth import V2User, require_permissions, current_user
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import ScoringPolicy, RecognitionType, DeductionType, DeductionLevel, Role
 from app.services import scoring_policies as P
 from app.services.identity import recognition_score_for_role
-from app.routers._shared import parse_iso_date, client_ip
-from app.v2_services import write_audit
+from app.date_utils import parse_iso_date
+from app.http_utils import client_ip
+from app.services.audit import write_audit
 
 router = APIRouter()
 
@@ -85,8 +86,7 @@ def save_config(body: Change, request: Request, db: Session = Depends(get_db), u
     policy_date(body.effective_date,'生效日期')
     if body.kind not in ('recognition','deduction','role','level'):
         raise HTTPException(422,'规则类型无效')
-    db.rollback()
-    db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     if body.revision != P.revision(db):
         raise HTTPException(409,'计分规则已变化，请刷新后重新核对')
     code = write_change(body, request, db, user)
@@ -141,8 +141,7 @@ def save_batch(body: BatchChange, request: Request, db: Session = Depends(get_db
         raise HTTPException(422, '不能重复提交同一规则')
     for item in body.changes:
         policy_date(item.effective_date,'生效日期')
-    db.rollback()
-    db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     if body.revision != P.revision(db):
         raise HTTPException(409, '计分规则已变化，请刷新后重新核对')
     codes = [write_change(item,request,db,user) for item in body.changes]

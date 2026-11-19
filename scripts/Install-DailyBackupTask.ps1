@@ -46,6 +46,8 @@ else {
     }
 }
 if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "Backup script not found: $scriptPath" }
+$backupHelper = Join-Path (Split-Path -Parent $scriptPath) 'sqlite_backup.py'
+if (-not (Test-Path -LiteralPath $backupHelper -PathType Leaf)) { throw "Shared SQLite backup helper not found: $backupHelper" }
 
 $time = [DateTime]::MinValue
 $parsed = [DateTime]::TryParseExact(

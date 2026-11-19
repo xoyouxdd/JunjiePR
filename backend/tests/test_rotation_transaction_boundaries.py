@@ -14,9 +14,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app import v2_models  # Register referenced tables without importing app.main.
-from app.rotation import service as S, test_clock
-from app.rotation.models import RotationConfig, RotationDay, RotationDuty, RotationEvent, RotationNotice, RotationSegment
-from app.v2_database import Base
+from app.rotation import forecast as F, namespace, service as S
+from app.rotation.models import RotationAccount, RotationConfig, RotationDuty, RotationEvent, RotationNotice, RotationSegment
+from app.database.connection import Base
 
 
 DAY = "2026-10-04"
@@ -24,8 +24,19 @@ LINES = [{"id": "A", "posts": [{"name": "入口"}, {"name": "出口"}]},
          {"id": "B", "posts": [{"name": "入口"}, {"name": "出口"}]}]
 
 
+def test_production_ignores_saved_sandbox_simulation_without_rewriting_it(monkeypatch):
+    cfg = RotationConfig(clock_json='{"mode": "sim", "paused": true}')
+    original = cfg.clock_json
+    monkeypatch.setenv("RECOGNITION_ENVIRONMENT", "production")
+    assert S.clock_state(cfg) == {"mode": "real"}
+    assert cfg.clock_json == original
+    monkeypatch.setenv("RECOGNITION_ENVIRONMENT", "test")
+    assert S.clock_state(cfg) == {"mode": "sim", "paused": True}
+
+
 @pytest.fixture
 def rotation(monkeypatch):
+    monkeypatch.setenv("RECOGNITION_ENVIRONMENT", "test")
     # Use inherited project-directory permissions; pytest's private mode-0700
     # basetemp directories are inaccessible to some Windows sandbox identities.
     test_dir = Path(__file__).resolve().parents[2] / ".handover_review" / "rotation-transaction-tests" / uuid4().hex
@@ -41,31 +52,46 @@ def rotation(monkeypatch):
         db.add(attraction)
         db.commit()
         attraction_id = attraction.id
-        cfg = S.load_config(db, attraction_id)
-        cfg.lines_json = S._dumps(LINES)
-        S.set_sim_clock(cfg, DAY, 240, paused=True)
-        db.commit()
-        parsed = {"people": {str(i): {"name": f"员工{i}", "type": "", "mark": ""} for i in range(1, 6)},
-                  "days": {DAY: {str(i): "07:15-16:15" for i in range(1, 6)}}, "hours": {}}
-        S.save_roster(db, attraction_id, parsed, scope="day", file_name="隔离名单.xlsx",
-                      uploader_id=None, uploader_name="测试")
+        configure(db, attraction_id)
     yield SimpleNamespace(factory=factory, attraction_id=attraction_id)
     engine.dispose()
     (test_dir / "rotation.db").unlink()
     test_dir.rmdir()
 
 
-def draft(rotation, rule_version=1):
+def configure(db, attraction_id):
+    cfg = S.load_config(db, attraction_id)
+    cfg.lines_json = S._dumps(LINES)
+    S.set_sim_clock(cfg, DAY, 240, paused=True)
+    db.commit()
+    parsed = {"people": {str(i): {"name": f"员工{i}", "type": "", "mark": ""} for i in range(1, 6)},
+              "days": {DAY: {str(i): "07:15-16:15" for i in range(1, 6)}}, "hours": {}}
+    S.save_roster(db, attraction_id, parsed, scope="day", file_name="隔离名单.xlsx",
+                  uploader_id=None, uploader_name="测试")
+
+
+@pytest.fixture
+def formal_rotation(rotation, monkeypatch):
+    from app.rotation.participation import RosterIdentity
+    from app.rotation.temporary import TemporaryMember
+
+    runtime = S.Runtime()
+    monkeypatch.setattr(namespace, '_runtime', runtime)
+
+    def factory():
+        db = rotation.factory()
+        db.info['rotation_formal'] = True
+        return db
+
+    with factory() as db:
+        Base.metadata.create_all(db.get_bind(), tables=[RosterIdentity.__table__, TemporaryMember.__table__])
+        configure(db, rotation.attraction_id)
+    return SimpleNamespace(factory=factory, attraction_id=rotation.attraction_id, runtime=runtime)
+
+
+def draft(rotation):
     with rotation.factory() as db:
         S.do_draft_action(db, rotation.attraction_id, "test", {"action": "draft_generate", "date": DAY})
-        # These tests retain coverage for persisted v1 days. V2 transaction and
-        # concurrency coverage lives in test_rotation_forecast_api.py.
-        with S.transaction(db):
-            row = S.day_row(db, rotation.attraction_id, DAY)
-            state = S.day_state(row)
-            state['ruleVersion'] = rule_version
-            state.pop('taskWorkflow', None)
-            S.save_day(db, row, state)
 
 
 def live(rotation):
@@ -82,7 +108,7 @@ def snapshot(rotation):
                 db.query(RotationDuty).count(), db.query(RotationNotice).count())
 
 
-def confirmation_setup(rotation, *, outgoing=False):
+def confirmation_setup(rotation, *, target=None):
     live(rotation)
     with rotation.factory() as db, S.transaction(db):
         cfg = S.load_config(db, rotation.attraction_id)
@@ -90,43 +116,48 @@ def confirmation_setup(rotation, *, outgoing=False):
         row = S.day_row(db, rotation.attraction_id, DAY)
         state = S.day_state(row)
         state['lastTick'] = 470
-        for pid, line, index in [('3', 'A', 0), ('2', 'A', 1), ('4', 'B', 0), ('5', 'B', 1)]:
-            p = state['persons'][pid]
-            p.update(state='onpost', line=line, lineStart=435, assign=None, end=1000)
-            state['lines'][0 if line == 'A' else 1]['posts'][index].update(occ=pid, since=435)
-        state['persons']['2']['end'] = 1000 if outgoing else 490
-        if outgoing:
+        for line, people in zip(state['lines'], [('3', '2'), ('4', '5')]):
+            line.update(active=True, sortAt=435)
+            for post, pid in zip(line['posts'], people):
+                state['persons'][pid].update(state='onpost', line=line['id'], lineStart=435, assign=None, end=1000)
+                post.update(open=True, opened=True, occ=pid, since=435)
+        if target == 'off':
+            state['persons']['2']['end'] = 490
+        elif target == 'outgoing':
             state['persons']['2']['absences'] = [{'start': 490, 'end': 550, 'label': 'SSEI', 'done': False}]
-        state['persons']['1'].update(state='ready', line=None, readyAt=460, readySince=460,
-                                    breakStart=445, end=1000,
-                                    assign={'line':'A', 'mode':'chain', 'target':'2',
-                                            'why':'推出圈' if outgoing else '推下班', 'departAt':470})
-        eng,_=S.engine_for(db,cfg,row,state)
-        eng.tick(470)
+        state['persons']['1'].update(state='rest', line=None, readyAt=470, breakKind='rest',
+                                    breakStart=455, end=1000, assign=None)
+        eng, _ = S.engine_for(db, cfg, row, state)
+        F.plan(eng, 470)
         S.save_day(db, row, state)
     with rotation.factory() as db:
         p = S.member_payload(db, rotation.attraction_id, '1')['person']
-    return {'action':'depart', 'pid':'1', 'confirmation_token':p['confirmationTokens']['depart']}
+    return {'action': 'depart', 'pid': '1', 'expected_line': p['task']['line'],
+            'confirmation_token': p['confirmationTokens']['depart']}
 
 
-@pytest.mark.parametrize('outgoing', [False, True])
-def test_confirmation_preserves_target_original_post_and_is_idempotent(rotation, outgoing):
-    body = confirmation_setup(rotation, outgoing=outgoing)
+@pytest.mark.parametrize('target', ['off', 'outgoing'])
+def test_confirmation_preserves_target_original_post_and_is_idempotent(rotation, target):
+    body = confirmation_setup(rotation, target=target)
     with rotation.factory() as db:
+        state = S.day_state(S.day_row(db, rotation.attraction_id, DAY))
+        target_post = state['lines'][0]['posts'][1]
+        assert target_post['occ'] == '2' and target_post['name'] == '出口'
         result = S.do_live_action(db, rotation.attraction_id, 'test', body)
     assert result['result']['post'] == '入口'
-    assert result['result']['assignment']['targetPost'] == '出口'
-    assert result['result']['assignment']['targetName'] == '员工2'
     after = snapshot(rotation)
     with rotation.factory() as db:
         repeat = S.do_live_action(db, rotation.attraction_id, 'screen', body)
     assert repeat['duplicate'] is True and repeat['result'] == result['result']
     assert snapshot(rotation) == after
     with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'fix_remove', 'pid':'1', 'reason':'测试更正'})
+        event = db.query(RotationEvent).filter_by(event_type='depart', employee_no='1').one()
+        moves = json.loads(event.detail_json)['moves']
+        assert moves[-1]['pid'] == '2' and moves[-1]['from'] == target_post['key']
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'pool', 'pid':'1', 'pool':'pending'})
         view = S.member_payload(db, rotation.attraction_id, '1')
         status = S.confirmation_status(db, rotation.attraction_id, DAY, body['confirmation_token'], '1')
-    assert view['confirmations'][0]['assignment']['targetPost'] == '出口'
+    assert view['confirmations'][0] == result['result']
     assert status['confirmed'] is True
 
 
@@ -148,7 +179,8 @@ def test_simultaneous_confirmation_executes_exactly_once(rotation):
         thread.join(5)
         assert not thread.is_alive()
     assert not failures
-    assert len(outputs) == 8 and sum(not out['duplicate'] for out in outputs) == 1
+    assert len(outputs) == 8 and sum(bool(out.get('duplicate')) for out in outputs) == 7
+    assert sum(bool(out.get('executed')) for out in outputs) == 1
     with rotation.factory() as db:
         assert db.query(RotationEvent).filter_by(event_type='depart', employee_no='1').count() == 1
         state = S.day_state(S.day_row(db, rotation.attraction_id, DAY))
@@ -156,18 +188,23 @@ def test_simultaneous_confirmation_executes_exactly_once(rotation):
     assert state['lines'][0]['posts'][1]['occ'] == '3'
 
 
-def test_committed_confirmation_notifies_all_live_subscribers(rotation, monkeypatch):
+def test_committed_confirmation_notifies_all_live_subscribers(formal_rotation, monkeypatch):
     from starlette.requests import Request
     from starlette.responses import Response
     from app.rotation.access import start_session
-    from app.routers import rotation as rotation_router
+    from app.routers import rotation_screen
 
-    monkeypatch.setattr(rotation_router, "SessionLocal", rotation.factory)
+    rotation = formal_rotation
+    monkeypatch.setattr(rotation_screen, "SessionLocal", rotation.factory)
     body = confirmation_setup(rotation)
     response = Response()
     with rotation.factory() as db:
+        device = RotationAccount(login_account='6666666', kind='screen', name='测试大屏',
+                                 attraction_id=rotation.attraction_id, password_hash='unused')
+        db.add(device)
+        db.flush()
         start_session(db, Request({"type": "http", "scheme": "https", "path": "/", "headers": []}),
-                      response, member_employee_no="1")
+                      response, account=device)
         db.commit()
     cookie = response.headers["set-cookie"].split(";", 1)[0]
     async def connected():
@@ -175,7 +212,7 @@ def test_committed_confirmation_notifies_all_live_subscribers(rotation, monkeypa
     async def check():
         cookies = Request({"type": "http", "headers": [(b"cookie", cookie.encode())]}).cookies
         request = SimpleNamespace(cookies=cookies, is_disconnected=connected)
-        streams = [await rotation_router.rotation_stream(request) for _ in range(20)]
+        streams = [await rotation_screen.stream(request) for _ in range(20)]
         iterators = [response.body_iterator for response in streams]
         try:
             initial = await asyncio.gather(*(iterator.__anext__() for iterator in iterators))
@@ -185,7 +222,7 @@ def test_committed_confirmation_notifies_all_live_subscribers(rotation, monkeypa
                     return S.do_live_action(db, rotation.attraction_id, 'test', body)
             await asyncio.to_thread(confirm)
             updates = await asyncio.wait_for(asyncio.gather(*(iterator.__anext__() for iterator in iterators)), timeout=3)
-            assert all(value == f'data: {S.RUNTIME.version}\n\n' for value in updates)
+            assert all(value == f'data: {rotation.runtime.version}\n\n' for value in updates)
             assert updates[0] != initial[0]
         finally:
             await asyncio.gather(*(iterator.aclose() for iterator in iterators))
@@ -195,11 +232,11 @@ def test_committed_confirmation_notifies_all_live_subscribers(rotation, monkeypa
 def test_changed_route_requires_new_confirmation(rotation):
     body = confirmation_setup(rotation)
     with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'post_order', 'line':'A', 'i':0, 'target_i':1, 'swapMode':'with_people'})
-    before = snapshot(rotation)
-    with rotation.factory() as db, pytest.raises(S.ConfirmationConflict):
-        S.do_live_action(db, rotation.attraction_id, 'test', body)
-    assert snapshot(rotation) == before
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action': 'sort_time', 'line': 'B', 'time': '00:00:01'})
+        result = S.do_live_action(db, rotation.attraction_id, 'test', body)
+        assert result['line_changed'] and result['line'] == 'B'
+        assert not S.confirmation_status(db, rotation.attraction_id, DAY, body['confirmation_token'], '1')['confirmed']
+        assert S.do_live_action(db, rotation.attraction_id, 'test', {**body, 'expected_line': 'B'})['executed']
 
 
 def test_confirmation_failure_does_not_leave_success_record(rotation, monkeypatch):
@@ -214,24 +251,10 @@ def test_confirmation_failure_does_not_leave_success_record(rotation, monkeypatc
         assert not S.confirmation_status(db, rotation.attraction_id, DAY, body['confirmation_token'], '1')['confirmed']
 
 
-def test_reset_invalidates_previous_run_confirmation(rotation):
-    body = confirmation_setup(rotation)
-    with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test', body)
-        test_clock.control(db, rotation.attraction_id, {'action':'reset'})
-        S.set_sim_clock(S.load_config(db, rotation.attraction_id), DAY, 470, paused=True)
-        db.commit()
-    with rotation.factory() as db:
-        assert not S.confirmation_status(db, rotation.attraction_id, DAY, body['confirmation_token'], '1')['confirmed']
-        assert S.member_payload(db, rotation.attraction_id, '1')['confirmations'] == []
-        with pytest.raises(S.ConfirmationConflict):
-            S.do_live_action(db, rotation.attraction_id, 'test', body)
-
-
 def test_departure_token_survives_unrelated_line_changes_and_time_ticks(rotation):
     body = confirmation_setup(rotation)
     with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'flag','pid':'4','flag':'送失物','on':True})
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'shift','pid':'4','start':'07:15','end':'19:15'})
         cfg = S.load_config(db, rotation.attraction_id)
         S.set_sim_clock(cfg, DAY, 470.5, paused=True)
         db.commit()
@@ -242,15 +265,15 @@ def test_departure_token_survives_unrelated_line_changes_and_time_ticks(rotation
 def test_room_confirmation_retry_does_not_restart_break(rotation):
     confirmation_setup(rotation)
     with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'fix_remove','pid':'4','reason':'测试回休息'})
+        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'pool','pid':'4','pool':'pending'})
         p = S.member_payload(db, rotation.attraction_id, '4')['person']
         body = {'action':'arrive','pid':'4','confirmation_token':p['confirmationTokens']['arrive']}
         first = S.do_live_action(db, rotation.attraction_id, 'test', body)
+        S.set_sim_clock(S.load_config(db, rotation.attraction_id), DAY, 471, paused=True)
+        db.commit()
         repeat = S.do_live_action(db, rotation.attraction_id, 'screen', body)
         assert repeat['duplicate'] and repeat['result']['readyAt'] == first['result']['readyAt']
-        S.do_live_action(db, rotation.attraction_id, 'test', {'action':'undo','pid':'4'})
-        new = S.member_payload(db, rotation.attraction_id, '4')['person']['confirmationTokens']['arrive']
-        assert new != body['confirmation_token']
+        assert S.member_payload(db, rotation.attraction_id, '4')['person']['readyAt'] == first['result']['readyAt']
 
 
 def fail_commit(db, monkeypatch):
@@ -391,7 +414,7 @@ def test_get_prearrangement_failure_is_atomic(rotation, monkeypatch, reader):
     assert S.RUNTIME.version == version_before
 
 
-def test_get_prearrangement_and_test_reset_have_one_commit(rotation, monkeypatch):
+def test_get_prearrangement_has_one_commit(rotation, monkeypatch):
     with rotation.factory() as db:
         commits = []
         original_commit = db.commit
@@ -403,14 +426,8 @@ def test_get_prearrangement_and_test_reset_have_one_commit(rotation, monkeypatch
         monkeypatch.setattr(db, "commit", commit)
         first = S.board_payload(db, rotation.attraction_id)
         assert len(commits) == 1 and first["day"]["status"] == "live"
-        plan = deepcopy(first["day"]["plan"])
-        S.do_live_action(db, rotation.attraction_id, "test", {"action": "post", "line": "A", "i": 0, "open": False})
-        commits.clear()
-        result = test_clock.control(db, rotation.attraction_id, {"action": "reset"})
-        assert len(commits) == 1 and result["clock"]["minute"] == 240
-        state = json.loads(snapshot(rotation)[0])
-        assert state["plan"] == plan and state["lines"][0]["posts"][0]["open"]
-        assert snapshot(rotation)[1] == 1  # Reset retains just the new publish event.
+        assert json.loads(snapshot(rotation)[0])["ruleVersion"] == 2
+        assert snapshot(rotation)[1] == 1
 
 
 @pytest.mark.parametrize("action", ["draft_discard", "draft_role", "publish"])
@@ -421,21 +438,6 @@ def test_failed_draft_commit_keeps_committed_cache_and_state(rotation, monkeypat
         fail_commit(db, monkeypatch)
         with pytest.raises(RuntimeError, match="injected commit failure"):
             S.do_draft_action(db, rotation.attraction_id, "test", {"action": action, "pid": "1", "role": "excluded"})
-    assert snapshot(rotation) == before
-    assert S.RUNTIME.cache == cache_before and S.RUNTIME.version == version_before
-
-
-@pytest.mark.parametrize("action", ["jump", "reset", "next"])
-def test_failed_test_clock_commit_rolls_back_clock_and_day(rotation, monkeypatch, action):
-    live(rotation)
-    before, cache_before, version_before = snapshot(rotation), deepcopy(S.RUNTIME.cache), S.RUNTIME.version
-    with rotation.factory() as db:
-        clock_before = S.load_config(db, rotation.attraction_id).clock_json
-        fail_commit(db, monkeypatch)
-        with pytest.raises(RuntimeError, match="injected commit failure"):
-            test_clock.control(db, rotation.attraction_id, {"action": action, "minutes": 200})
-    with rotation.factory() as db:
-        assert S.load_config(db, rotation.attraction_id).clock_json == clock_before
     assert snapshot(rotation) == before
     assert S.RUNTIME.cache == cache_before and S.RUNTIME.version == version_before
 
@@ -467,7 +469,7 @@ def test_quiet_ticker_retains_cursor_without_notifying_every_second(rotation):
 
 
 @pytest.mark.parametrize("index", [-1, 2, "no", 1.5, True, None, [], {}])
-@pytest.mark.parametrize("action", ["post", "fix_place", "plan_place"])
+@pytest.mark.parametrize("action", ["post", "plan_place"])
 def test_post_actions_reject_invalid_indices_without_changes(rotation, action, index):
     live(rotation)
     before = snapshot(rotation)
@@ -503,46 +505,38 @@ def test_configuration_rejects_values_that_cannot_build_or_publish(rotation, lin
         assert S.load_config(db, rotation.attraction_id).lines_json == before
 
 
-@pytest.mark.parametrize("body", [
-    {"action": "set", "date": "invalid"}, {"action": "set", "time": "99:99"},
-    {"action": "set", "speed": 500}, {"action": "speed", "speed": "NaN"},
-    {"action": "jump", "minutes": -1}, {"action": "jump", "minutes": "invalid"},
-])
-def test_test_clock_invalid_values_are_domain_errors(rotation, body):
-    with rotation.factory() as db, pytest.raises(S.ActionError):
-        test_clock.control(db, rotation.attraction_id, body)
+def test_configuration_route_publishes_version_only_after_commit(formal_rotation, monkeypatch):
+    from app.routers.rotation_board import save_config
 
-
-def test_configuration_route_publishes_version_only_after_commit(rotation, monkeypatch):
-    from app.routers.rotation import rotation_config_update
-
-    before = S.RUNTIME.version
-    actor = SimpleNamespace(entered_by=None)
+    rotation = formal_rotation
+    before = rotation.runtime.version
+    user = SimpleNamespace(id=None, role_codes={'GSM'}, rotation_temporary=None, employee=SimpleNamespace(attraction=None))
     with rotation.factory() as db:
         original_commit = db.commit
 
         def commit():
-            assert S.RUNTIME.version == before
+            assert rotation.runtime.version == before
             original_commit()
 
         monkeypatch.setattr(db, "commit", commit)
-        assert rotation_config_update({"settings": {"offLead": 21}}, db, actor) == {"ok": True}
-    assert S.RUNTIME.version == before + 1
+        assert save_config({"settings": {"offLead": 21}}, db, user) == {"ok": True}
+    assert rotation.runtime.version == before + 1
     with rotation.factory() as db:
         fail_commit(db, monkeypatch)
         with pytest.raises(RuntimeError, match="injected commit failure"):
-            rotation_config_update({"settings": {"offLead": 22}}, db, actor)
-    assert S.RUNTIME.version == before + 1
+            save_config({"settings": {"offLead": 22}}, db, user)
+    assert rotation.runtime.version == before + 1
     with rotation.factory() as db:
         assert S.settings_of(S.load_config(db, rotation.attraction_id))["offLead"] == 21
 
 
-def test_configuration_route_maps_invalid_line_id_to_400(rotation):
+def test_configuration_route_maps_invalid_line_id_to_400(formal_rotation):
     from fastapi import HTTPException
-    from app.routers.rotation import rotation_config_update
+    from app.routers.rotation_board import save_config
 
-    with rotation.factory() as db, pytest.raises(HTTPException) as error:
-        rotation_config_update({"lines": [{"id": 1, "posts": [{"name": "岗"}]}]}, db, SimpleNamespace(entered_by=None))
+    user = SimpleNamespace(id=None, role_codes={'GSM'}, rotation_temporary=None, employee=SimpleNamespace(attraction=None))
+    with formal_rotation.factory() as db, pytest.raises(HTTPException) as error:
+        save_config({"lines": [{"id": 1, "posts": [{"name": "岗"}]}]}, db, user)
     assert error.value.status_code == 400
 
 
@@ -559,8 +553,8 @@ def test_valid_string_post_index_and_configuration_survive_generation_and_publis
 @pytest.mark.parametrize("action", [[], {}, None, 1, True])
 def test_screen_route_maps_invalid_action_types_to_400(rotation, action):
     from fastapi import HTTPException
-    from app.routers.rotation import rotation_screen_act
+    from app.routers.rotation_screen import act
 
     with rotation.factory() as db, pytest.raises(HTTPException) as error:
-        rotation_screen_act({"action": action}, db, SimpleNamespace())
+        act({"action": action}, db, SimpleNamespace())
     assert error.value.status_code == 400

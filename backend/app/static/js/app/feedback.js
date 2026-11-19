@@ -6,7 +6,7 @@ import { toast } from './toast.js';
 
 function recognitionEncouragement(options){const rows=Array.isArray(options)?options.filter(row=>row&&row.template_id&&row.message):[];if(!rows.length)return '';const key=`recognition-v2:encouragement-seen:${state.me?.employee_no||'anonymous'}`;let seen=[];try{seen=JSON.parse(localStorage.getItem(key)||'[]')}catch(_){seen=[]}const selected=rows.find(row=>!seen.includes(row.template_id))||rows[0];try{localStorage.setItem(key,JSON.stringify([...seen.filter(id=>id!==selected.template_id),selected.template_id].slice(-24)))}catch(_){ }return selected.message;}
 
-function showRecognitionEncouragement(options){const message=recognitionEncouragement(options);if(message)toast(`已提交，等待主管复核。\n${message}`,false,5600,'encouragement');else toast('加分已提交');}
+function showRecognitionEncouragement(options){const message=recognitionEncouragement(options);if(message)toast(`已提交，等待主管复核。\n${message}`,false,0,'encouragement');else toast('加分已提交');}
 
 function performanceFeedbackData(kind,record={}){
   const recognition=kind==='recognition',active=recognition?record.status==='confirmed':record.status==='active';

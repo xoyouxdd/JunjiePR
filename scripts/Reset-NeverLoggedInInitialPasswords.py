@@ -21,9 +21,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.v2_crypto import default_initial_password, hash_password
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, UserAccount, UserSession
-from app.v2_services import role_at, write_audit
+from app.services.identity import role_at
+from app.services.audit import write_audit
 
 
 TARGET_ROLE_CODES = {

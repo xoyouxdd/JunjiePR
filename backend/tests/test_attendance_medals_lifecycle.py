@@ -10,7 +10,7 @@ os.environ['RECOGNITION_TEST_ADMIN_PASSWORD'] = 'isolated-admin-only'
 
 from fastapi.testclient import TestClient
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, UserAccount, AttendanceMedal, MedalAccountIdentity, MonthClosure
 from app.services import attendance_medals as medals
 from app.services.employment import employment_history

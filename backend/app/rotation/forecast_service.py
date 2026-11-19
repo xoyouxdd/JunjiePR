@@ -73,9 +73,7 @@ def advance(db, cfg, row, state, target):
     eng, hooks = S.engine_for(db, cfg, row, state)
     previous = min(float(state.get('lastTick', target)), target)
     t = previous
-    changed = bool(getattr(eng, '_workflow_initialized', False))
-    if D.prestart(state, target):
-        changed = bool(D.fill_prestart_spares(state)) or changed
+    changed = bool(D.prestart(state, target) and D.fill_prestart_spares(state))
     while True:
         hooks.now = t
         batch_before = H.snapshot(eng.d) if next(F.due_batches(eng, t), None) is not None else None
@@ -302,10 +300,10 @@ def add_person(db, eng, body, now, actor, identity=None):
 
 
 def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
-    from app.rotation import service as S, workflow as W, history as H
+    from app.rotation import service as S, history as H
     act = body['action']
     pid = body.get('pid')
-    if getattr(actor, 'kind', None) == 'screen' and act not in S.SCREEN_ALLOWED_ACTIONS:
+    if getattr(actor, 'kind', None) == 'screen' and act not in S.SCREEN_ACTIONS:
         raise ActionError('休息室大屏只可确认去休息或去轮岗')
     if getattr(actor, 'kind', None) == 'member':
         if act not in {'arrive', 'depart', 'batch_check_in'} or actor.member_employee_no != pid:
@@ -514,9 +512,19 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
     elif act == 'post_hold':
         eng.act_post_hold(body['line'], body['i'], pid, S.action_boolean(body, 'on'), str(body.get('reason') or ''), now, actor)
     elif act == 'hold101':
-        W.toggle_101(eng, S.action_boolean(body, 'on'), now, actor)
+        on = S.action_boolean(body, 'on')
+        posts = [post for line in eng.d['lines'] for post in line['posts'] if post.get('hold101Role')]
+        for post in posts:
+            if on:
+                post['hold101'] = {'pid': post.get('occ'), 'since': now, 'reason': '101定岗',
+                                   'by': getattr(actor, 'name', str(actor))}
+            else:
+                post.pop('hold101', None)
+        eng.d['hold101Active'] = on
+        eng.h.log('hold101' if on else 'resume101', actor, None, None, None,
+                  {'recent': [], 'posts': [post['key'] for post in posts]})
     elif act == 'rename_post':
-        L, _, post = W.locate(eng, body.get('post_key'))
+        L, _, post = F.locate_post(eng, body.get('post_key'))
         if not post:
             raise S.ConfirmationConflict('岗位已变化，请刷新后重新改名')
         if 'expected_name' in body and body['expected_name'] != post['name']:

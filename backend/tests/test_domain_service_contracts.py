@@ -15,10 +15,10 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
-from app import v2_services
+from app import upload_storage
 from app.role_constants import SUPERVISOR_SCORING_START_MONTH
 from app.services import attachments, attendance, audit, identity, organization, role_lifecycle
-from app.v2_database import Base
+from app.database.connection import Base
 from app.v2_models import (
     Attraction, AttendanceMonthlyScore, AttendanceRule, AuditLog, Employee,
     EmployeeActingDuty, EmployeeLOAPeriod, EmployeeRoleAssignment,
@@ -307,20 +307,16 @@ def test_attachment_flush_failure_removes_file_and_path_guard_stays_inside_direc
     assert outside.read_bytes() == b"keep"
 
 
-def test_compatibility_attachment_boundary_honors_legacy_file_dir(db, storage_dir, monkeypatch):
-    # The explicit wrapper is the existing injection boundary; the new service
+def test_upload_storage_honors_configured_file_dir(db, storage_dir, monkeypatch):
+    # upload_storage binds the configured directory; the attachment service
     # receives its storage directory as a parameter and never reads this module.
-    monkeypatch.setattr(v2_services, "FILE_DIR", storage_dir)
-    record = asyncio.run(v2_services.save_upload(
+    monkeypatch.setattr(upload_storage, "FILE_DIR", storage_dir)
+    record = asyncio.run(upload_storage.save_upload(
         db, UploadFile(BytesIO(b"content"), filename="proof.pdf"), 1, allowed_extensions={".pdf"},
     ))
     assert (storage_dir / record.storage_key).read_bytes() == b"content"
-    v2_services.remove_upload_file(record)
+    upload_storage.remove_upload_file(record)
     assert not list(storage_dir.iterdir())
-    assert v2_services.base_role_at is identity.base_role_at
-    assert v2_services.recalculate_attendance is attendance.recalculate_attendance
-    assert v2_services.full_month_loa is attendance.full_month_loa
-    assert v2_services.write_audit is audit.write_audit
 
 
 def test_role_expiry_preserves_base_supervisor_and_formal_group_leadership(db):

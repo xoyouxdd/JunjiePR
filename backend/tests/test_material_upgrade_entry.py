@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from test_deduction_material_concurrency import app, login, make_pdf
 from app import deduction_materials
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import DeductionRecord, DeductionUpgradeRequest, Employee, EmployeeRoleAssignment, MonthClosure, DeductionMaterialJob, Role, StoredFile, UserAccount
 
 

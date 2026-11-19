@@ -1,8 +1,5 @@
 const assert = require('node:assert/strict');
-const path = require('node:path');
-const vm = require('node:vm');
-
-const {frontendSources, staticRoot} = require('./frontend_source.js');
+const {loadAppModules} = require('./support/esm-loader.cjs');
 
 function deferred() {
   let resolve, reject;
@@ -16,25 +13,44 @@ const resetResult = {employee_name: 'HR甲', temporary_password: '4321', message
 async function harness(tab = 'circleHrAccounts') {
   const calls = [], notices = [], elements = new Map();
   const button = {dataset: {circleHrReset: '7', circleHrName: 'HR甲'}};
+  const reviewButton = {dataset: {review: '9', action: 'reject'}};
+  const withdrawButton = {dataset: {entryWithdraw: '9'}, hasAttribute: () => false};
+  function addElements(markup) {
+    for (const id of markup.matchAll(/id="([^"]+)"/g)) {
+      elements.set(id[1], {
+        set innerHTML(value) { this.markup = value; addElements(value); },
+        get innerHTML() { return this.markup || ''; },
+        isConnected: true,
+        addEventListener() {},
+      });
+    }
+  }
   const app = {
     _html: '',
     get innerHTML() { return this._html; },
     set innerHTML(value) {
       this._html = value;
+      for (const element of elements.values()) element.isConnected = false;
       elements.clear();
-      for (const id of value.matchAll(/id="([^"]+)"/g)) elements.set(id[1], {innerHTML: '', isConnected: true});
+      addElements(value);
     },
     contains(node) { return node?.isConnected === true; },
     querySelectorAll(selector) {
       if (selector === '[data-circle-hr-reset]' && this._html.includes('circleHrResetResult')) return [button];
+      if (selector === '[data-review]' && this._html.includes('data-review="9"')) return [reviewButton];
+      if (selector === '[data-review="9"]' && this._html.includes('data-review="9"')) return [reviewButton];
       return [];
     }
   };
   const context = {
-    AbortController, URLSearchParams, FormData, console, setTimeout, clearTimeout,
+    AbortController, URLSearchParams, FormData: class extends FormData {constructor() {super();}}, console, setTimeout, clearTimeout,
     location: {pathname: '/', search: ''},
     window: {matchMedia: () => ({matches: false, addEventListener() {}, removeEventListener() {}})},
-    document: {getElementById: id => id === 'app' ? app : id === 'tabs' ? {innerHTML: ''} : elements.get(id), querySelectorAll: () => []},
+    document: {
+      getElementById: id => id === 'app' ? app : id === 'tabs' ? {innerHTML: ''} : elements.get(id),
+      querySelector: () => null,
+      querySelectorAll: selector => selector === '[data-entry-withdraw]' && elements.get('entryResults')?.innerHTML.includes('data-entry-withdraw="9"') ? [withdrawButton] : [],
+    },
     confirmModal: async () => true, promptModal: async () => '原因',
     toast: (...args) => notices.push(args),
     fetch(url, options) {
@@ -44,46 +60,22 @@ async function harness(tab = 'circleHrAccounts') {
       return completion.promise;
     }
   };
-  const realm = vm.createContext(context), sources = frontendSources(), modules = new Map();
-  const moduleRoot = path.join(staticRoot, 'js/app');
-  const mocked = new Set(['dialogs.js', 'files.js', 'navigation.js', 'toast.js']);
-  function load(filename) {
-    if (modules.has(filename)) return modules.get(filename);
-    assert(sources.has(filename), `Fixture module must be reachable from index: ${filename}`);
-    let source = sources.get(filename), module;
-    if (mocked.has(path.basename(filename))) {
-      // Only browser UI boundaries are mocked. Transport, lifecycle and all tested
-      // handlers use the same imported bindings as the shipped modules.
-      const list = /export\s*{([^}]+)}/.exec(source);
-      assert(list, `Missing named exports in ${filename}`);
-      const names = list[1].split(',').map(name => name.trim());
-      module = new vm.SyntheticModule(names, function() {
-        for (const name of names) {
-          const fn = ['confirmModal', 'promptModal', 'toast'].includes(name) ? (...args) => context[name](...args) : () => {};
-          this.setExport(name, fn);
-        }
-      }, {context: realm, identifier: filename});
-    } else {
-      // Expose the two private binders solely to reuse their existing isolated
-      // action scenarios. No runtime statement or function body is replaced.
-      if (path.basename(filename) === 'reviews.js') source += '\nexport {bindReviewActions};\n';
-      if (path.basename(filename) === 'entries.js') source += '\nexport {bindEntryActions};\n';
-      module = new vm.SourceTextModule(source, {context: realm, identifier: filename});
-    }
-    modules.set(filename, module);
-    return module;
-  }
-  const names = ['context', 'state', 'accounts', 'hr', 'hr-employees', 'reviews', 'entries', 'deduction-materials'];
-  const entry = new vm.SourceTextModule(names.map((name, index) => `import * as owner${index} from './${name}.js'; export {owner${index}};`).join('\n'), {context: realm, identifier: path.join(moduleRoot, 'fixture.js')});
-  await entry.link((specifier, importing) => load(path.resolve(path.dirname(importing.identifier), specifier.split(/[?#]/, 1)[0])));
-  await entry.evaluate();
-  for (let index = 0; index < names.length; index++) Object.assign(context, entry.namespace[`owner${index}`]);
+  const noop = () => {};
+  const mocks = {
+    'dialogs.js': {confirmModal: (...args) => context.confirmModal(...args), promptModal: (...args) => context.promptModal(...args), bindDialogLayer: noop, formModal: noop, showSaveWarnings: noop, selectModal: noop},
+    'files.js': {attachmentControl: noop, bindFilePreviews: noop, imagePreviewButton: noop},
+    'navigation.js': {gotoTab: noop, menuItems: noop, refreshActionBadge: noop, renderTabs: noop},
+    'recognition-grid.js': {mountRecognitionGrid: noop},
+    'toast.js': {toast: context.toast},
+  };
+  const names = ['context.js', 'state.js', 'accounts.js', 'hr.js', 'hr-employees.js', 'reviews.js', 'entries.js'];
+  Object.assign(context, ...Object.values(await loadAppModules(names, context, mocks)));
   Object.assign(context.state, {tab, me: {role_code: 'SYSTEM_ADMIN', permissions: []}, options: {}});
   context.configureViews({
     circleHrAccounts: context.renderCircleHrAccounts, logs: context.renderLogs,
     hrEmployees: context.renderHrEmployees, circleTransfers: context.renderCircleTransfers,
     review: context.renderFrontlineReview, supervisorReview: context.renderSupervisorReview,
-    home: () => {}, entries: () => {},
+    home: () => {}, entries: context.renderEntries,
   });
   const reply = (call, value, status = 200) => call.completion.resolve({status, ok: status >= 200 && status < 300, text: async () => JSON.stringify(value)});
   const navigate = async nextTab => {
@@ -93,7 +85,7 @@ async function harness(tab = 'circleHrAccounts') {
     return {pending, call: calls.at(-1)};
   };
   const requestContext = () => context.captureViewContext();
-  return {context, app, calls, notices, button, reply, navigate, requestContext};
+  return {context, app, calls, notices, button, reviewButton, withdrawButton, reply, navigate, requestContext};
 }
 
 async function initialHr(h) {
@@ -204,11 +196,11 @@ async function refreshResultRemainsPageBound() {
 
 async function oldReviewRetainsQueueAndCannotRepaint() {
   const h = await harness('review'), note = deferred();
-  const review = {dataset: {review: '9', action: 'reject'}};
-  h.app.querySelectorAll = selector => selector === '[data-review]' ? [review] : [];
+  const queue = h.context.renderFrontlineReview();
+  h.reply(h.calls[0], {items: [{id: 9, status: 'pending'}]});
+  await queue;
   h.context.promptModal = () => note.promise;
-  h.context.bindReviewActions();
-  const mutation = review.onclick();
+  const mutation = h.reviewButton.onclick();
   const supervisor = await h.navigate('supervisorReview');
   const logs = await h.navigate('logs');
   const id = h.requestContext();
@@ -228,17 +220,18 @@ async function oldReviewRetainsQueueAndCannotRepaint() {
 
 async function oldEntryRefreshCannotClaimNewRequest() {
   const h = await harness('entries');
-  const button = {dataset: {entryWithdraw: '9'}, hasAttribute: () => false};
-  h.context.document.querySelectorAll = selector => selector === '[data-entry-withdraw]' ? [button] : [];
-  let reloads = 0;
-  h.context.bindEntryActions(() => { reloads++; h.context.beginViewRequest(); });
-  const mutation = button.onclick();
+  const entries = h.context.renderEntries();
+  h.reply(h.calls[0], {items: [{id: 9, status: 'pending', record_type: 'recognition', available_actions: ['withdraw']}], page: 1, page_size: 100, total: 1});
+  await entries;
+  const mutation = h.withdrawButton.onclick();
   await tick();
-  const post = h.calls[0];
+  const post = h.calls[1];
+  assert.equal(post.url, '/api/recognitions/9');
+  assert.equal(post.options.method, 'DELETE');
   const logs = await h.navigate('logs'), id = h.requestContext();
   h.reply(post, {});
   await mutation;
-  assert.equal(reloads, 0);
+  assert.equal(h.calls.length, 3, 'An old withdrawal must not reload the former entries page');
   assert(id.isCurrent(), 'Old completion must leave the current page request valid');
   h.reply(logs.call, []);
   await logs.pending;

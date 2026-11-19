@@ -1,4 +1,6 @@
-# 轮岗显示逻辑统一（仅本地）
+# 轮岗显示逻辑统一（历史记录）
+
+本文记录旧任务引擎的联动验证。现行实现见[轮岗看板](rotation.md)和[动态预排](rotation-forecast-v2.md)。
 
 本次修复覆盖大屏、正式看板、手机待办、旧个人直达页及记录时间显示。不改轮岗引擎、派发窗口、餐休长度、步骤凭证、角色权限、数据库结构或历史记录，不推送、不部署。
 
@@ -19,7 +21,7 @@
 - 新增rotation_display_consistency_ui.cjs，Edge/WebKit/Firefox均通过：餐休剩余3/2/1分钟、不可提前出发、暂停/前序等待/恢复、旧个人页超时入口、连续在岗100分钟对照、历史时间标记、跨日与秒数、撤销回执、320/390/800/1920宽度。已加入run_all.py浏览器测试集合。
 - rotation_workflow_ui.cjs三浏览器真实隔离接口联动通过，新增旧个人地址的实际加载与确认后同步断言；既有确认、恢复、餐休选择、大屏超时确认和角色权限检查通过。
 - rotation_timeout_cases_ui.cjs三浏览器通过，覆盖主管核实已执行/未执行、接手、预览、通知确认及恢复。
-- rotation_break_window_ui.cjs、rotation_waiting_notice_ui.cjs在Edge/WebKit通过，保留三分钟窗口和大屏等待提示隐藏。
+- 三分钟派发窗口及大屏等待提示的独立浏览器用例已并入 `rotation_display_consistency_ui.cjs`，与显示一致性检查共用真实脚本及浏览器夹具。
 - rotation_confirmation.cjs、rotation_confirmation_ui.cjs及修改JS语法、git diff检查通过。
 
 验证使用隔离SQLite与本地测试服务，不连接生产系统。未做正式发布全量验证、真实终端实测或线上状态验证。修改前已有的餐休窗口、等待匹配提示调整及其他未提交文件保留。

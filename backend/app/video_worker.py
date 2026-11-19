@@ -4,16 +4,13 @@ import json
 import logging
 import os
 import re
-import threading
-from sqlalchemy import text
 
-from app.v2_database import SessionLocal
+from app.background_worker import BackgroundWorker
+from app.database.connection import reserve_writer
+from app.database.connection import SessionLocal
 from app.video_models import LearningVideo, VideoJob, VideoPlayback, VideoUpload
 from app import video_media as media
 
-_stop = threading.Event()
-_guard = threading.Lock()
-_thread = None
 
 
 def enqueue(db, video_id, key, kind, payload=None):
@@ -70,7 +67,7 @@ def run_one(stop=None):
                 video.status = "failed"; video.error = row.error
         values={k:getattr(video,k) for k in ('duration','profiles','cover_second','status','error')}
         job_status,job_error=row.status,row.error
-        db.rollback();db.execute(text('BEGIN IMMEDIATE'))
+        reserve_writer(db)
         db.refresh(video);db.refresh(row)
         if video.status=='deleted' and row.kind!='delete':
             row.status='cancelled';row.error='视频已删除'
@@ -123,37 +120,33 @@ def cleanup():
                     temporary.unlink()
 
 
+def _run(stop):
+    ticks = 0
+    while not stop.is_set():
+        try:
+            busy = run_one(stop)
+            ticks += 1
+            if ticks % 120 == 1:
+                cleanup()
+        except Exception:
+            logging.getLogger(__name__).exception("Video queue failure")
+            busy = False
+        stop.wait(.5 if busy else 3)
+
+
+def _requeue_interrupted_jobs():
+    # The app uses one process/worker. Recover jobs interrupted by the
+    # previous application instance immediately, not two hours later.
+    with SessionLocal() as db:
+        db.query(VideoJob).filter_by(status='processing').update({'status':'queued'})
+        db.commit()
+
+
+_worker = BackgroundWorker("video-learning-queue", _run, join_timeout=4)
+stop_worker = _worker.stop
+
+
 def start_worker():
-    global _thread
     if os.getenv("RECOGNITION_VIDEO_WORKER", "1") == "0":
         return
-    with _guard:
-        if _thread and _thread.is_alive():
-            return
-        _stop.clear()
-        # The app uses one process/worker. Recover jobs interrupted by the
-        # previous application instance immediately, not two hours later.
-        with SessionLocal() as db:
-            db.query(VideoJob).filter_by(status='processing').update({'status':'queued'})
-            db.commit()
-        def work():
-            ticks = 0
-            while not _stop.is_set():
-                try:
-                    busy = run_one(_stop)
-                    ticks += 1
-                    if ticks % 120 == 1:
-                        cleanup()
-                except Exception:
-                    logging.getLogger(__name__).exception("Video queue failure")
-                    busy = False
-                _stop.wait(.5 if busy else 3)
-        _thread = threading.Thread(target=work, daemon=True, name="video-learning-queue")
-        _thread.start()
-
-
-def stop_worker():
-    with _guard:
-        _stop.set()
-        if _thread:
-            _thread.join(timeout=4)
+    _worker.start(prepare=_requeue_interrupted_jobs)
