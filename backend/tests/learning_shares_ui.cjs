@@ -69,12 +69,19 @@ try{
     assert.equal(await page.locator('[data-learning-edit]').count(),0);
     assert.equal(await page.locator('[data-learning-withdraw]').count(),0);
     const attachment=page.locator('[data-learning-asset]');
-    await attachment.evaluate(button=>button.scrollIntoView({block:'center'}));
-    const previousOffset=await attachment.evaluate(button=>button.getBoundingClientRect().top);
+    await attachment.evaluate(button=>{
+      button.scrollIntoView({block:'center'});
+      button.addEventListener('click',()=>{
+        button.dataset.testOpenOffset=String(button.getBoundingClientRect().top);
+      },{capture:true,once:true});
+    });
     assert.equal(await attachment.getAttribute('aria-expanded'),'false');
     assert(await page.getByRole('button',{name:'‹ 返回列表',exact:true}).evaluate(button=>button.offsetWidth<button.parentElement.clientWidth));
     assert(await page.locator('.learning-detail-body .learning-reading-content').evaluate(body=>body.offsetHeight<180));
     await attachment.click();
+    const savedOffset=await attachment.getAttribute('data-test-open-offset');
+    assert(savedOffset!==null);
+    const previousOffset=Number(savedOffset);
     await page.locator('[data-pdf-rendered=true]').waitFor();
     const reader=attachment.locator('..').locator('.learning-inline-reader');
     assert.equal(await attachment.getAttribute('aria-expanded'),'true');
