@@ -25,6 +25,43 @@ async function renderCircleTransfers(){
 
 function previousScoreMonth(){const value=new Date();value.setDate(1);value.setMonth(value.getMonth()-1);return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}`;}
 
+const monthCloseRecordTypes={
+  recognition_review:'签卡复核',
+  deduction_material:'声明材料',
+};
+
+function monthCloseChecklistRow(row,allowedTabs){
+  const blocked=Number(row.count)>0;
+  let action='已完成';
+  if(blocked){
+    if(row.target&&allowedTabs.has(row.target)){
+      action=`<button type="button" class="secondary" data-month-target="${esc(row.target)}">去处理</button>`;
+    }else if(row.record && Object.hasOwn(monthCloseRecordTypes,row.code)){
+      action=`<small>${esc(row.record.employee_name)} · ${esc(row.record.employee_no)}</small>
+        <button type="button" class="secondary" data-month-record-type="${esc(row.code)}" data-work-record="${Number(row.record.id)}" aria-label="查看${esc(row.record.employee_name)}的${esc(monthCloseRecordTypes[row.code])}记录">查看记录</button>`;
+    }else{
+      action=`<small>${esc(row.responsible||'请联系对应业务负责人处理')}</small>
+        <button type="button" class="secondary" data-month-details="${esc(row.code)}">查看明细</button>`;
+    }
+  }
+  return `<li class="${blocked?'notice danger':'notice'}"><strong>${esc(row.name)}</strong><span>${Number(row.count)} 项</span> ${action}</li>`;
+}
+
+function monthCloseRecordHtml(type,row){
+  const materialStatus={
+    pending_material:'待补材料',
+    material_processing:'材料生成中，仍计入待办',
+    material_failed:'材料生成失败，仍计入待办',
+  };
+  const label=type==='deduction_material'?materialStatus[row.status]:'待复核';
+  return `<article class="work-card">
+    <div class="work-card-head"><strong>${esc(row.employee_name)} · ${esc(row.employee_no)}</strong><span class="badge warn">${esc(label||'待处理')}</span></div>
+    <p>${esc(row.occurred_on)} · ${esc(row.summary)}</p>
+    <p>负责人：${esc(row.responsible||'请联系业务负责人')}</p>
+    <p class="field-hint">处理沿用原权限与流程。</p>
+  </article>`;
+}
+
 async function renderMonthClose(){
   const request=beginViewRequest();
   const circles=(state.options.employee_circles||state.options.attractions||[]).filter(row=>row.employee_circle!==false);
@@ -34,13 +71,133 @@ async function renderMonthClose(){
   if(!available.length){app.innerHTML='<section class="panel"><h2>月结</h2><p class="error">当前账号没有可月结的景点圈。</p></section>';return;}
   app.innerHTML=`<div class="section-gap"><section class="panel"><h2>月结</h2><p>可关闭上月及更早月份，支持历史补结；当月和未来月份不能月结。关闭前须完成所选范围内所有待办与待跟进事项；最高管理员关闭全部景点圈时，待办检查覆盖所有圈。如确需更正，可填写原因后临时开放，所有操作均会写入审计。</p><form id="monthCloseForm" class="hr-filter"><label>结算月份<input name="month" type="month" value="${previousScoreMonth()}" required></label><label>景点圈<select name="attraction_id" ${isCircleHr?'disabled':''}>${state.me.role_code==='SYSTEM_ADMIN'?'<option value="">全部景点圈</option>':''}${opt(available)}</select></label><div class="actions form-sticky-actions"><button type="submit" class="primary">查询月结状态</button></div></form></section><section class="panel" id="monthCloseResult"><div class="empty">请选择月份并查询状态</div></section></div>`;
   const form=document.getElementById('monthCloseForm'),result=document.getElementById('monthCloseResult');
+  const filterOwner=`${state.me.employee_no}:${state.me.role_code}`;
+  const saved=state.monthCloseFilters;
+  if(saved?.owner===filterOwner){
+    form.elements.month.value=saved.month;
+    if(!isCircleHr&&[...form.elements.attraction_id.options].some(option=>option.value===saved.circle)){
+      form.elements.attraction_id.value=saved.circle;
+    }
+  }
   let sequence=0,submitting=false;
   const invalidate=()=>{++sequence;result.innerHTML='<div class="empty">筛选条件已变化，请重新查询月结状态</div>';};
-  form.addEventListener('input',invalidate);form.addEventListener('change',invalidate);
-  const show=async()=>{if(!request.isCurrent())return;const requestId=++sequence;result.innerHTML='<div class="empty">正在查询月结状态…</div>';const month=form.elements.month.value,rawAttraction=isCircleHr?String(ownId):form.elements.attraction_id.value,attractionId=rawAttraction===''||rawAttraction==null?null:Number(rawAttraction);if(!/^\d{4}-\d{2}$/.test(month)){result.innerHTML='<div class="empty">请选择结算月份并重新查询</div>';toast('请选择结算月份',true);return;}const data=await api(attractionId==null?`/api/month-closes/${month}`:`/api/month-closes/${month}?attraction_id=${attractionId}`).catch(error=>{if(request.isCurrent()&&requestId===sequence){result.innerHTML='<div class="error">查询失败，请重试</div>';toast(error.message,true);}return null;});if(!data||!request.isCurrent()||requestId!==sequence)return;const reopenTarget=Object.prototype.hasOwnProperty.call(data,'reopen_target_attraction_id')?data.reopen_target_attraction_id:attractionId;const reopenScope=data.effective_scope||data.attraction_name;const globalReopen=data.is_closed&&reopenTarget===null;const checklist=(data.checklist||[]);const blocking=checklist.filter(row=>Number(row.count)>0);const allowedTabs=new Set(menuItems().map(([id])=>id));const checklistRows=checklist.map(row=>{const blocked=Number(row.count)>0,targetAvailable=row.target&&allowedTabs.has(row.target);return `<li class="${blocked?'notice danger':'notice'}"><strong>${esc(row.name)}</strong><span>${Number(row.count)} 项</span>${blocked?(targetAvailable?` <button type="button" class="secondary" data-month-target="${esc(row.target)}">去处理</button>`:` <small>${esc(row.responsible||'请联系对应业务负责人处理')}</small> <button type="button" class="secondary" data-month-details="${esc(row.code)}">查看明细</button>`):' 已完成'}</li>`;}).join('')||'<li>暂无待核对项目</li>';const status=data.is_closed?`<span class="badge danger">已月结</span> ${esc(data.closed_by_name||'')} · ${esc(data.closed_at||'')}`:'<span class="badge ok">未月结</span>';result.innerHTML=`<h2>${esc(data.attraction_name)} · ${esc(data.month)} 月结</h2><p>${status}</p>${data.is_closed?`<p>关闭原因：${esc(data.close_reason||'未填写')}</p><p>实际生效范围：<strong>${esc(reopenScope)}</strong></p>${data.reopen_block_reason?`<p class="notice">${esc(data.reopen_block_reason)}</p>`:''}`:`<p>以下项目全部为 0 后才可关闭月结。</p>`}${!data.is_closed&&data.close_block_reason?`<p class="notice">${esc(data.close_block_reason)}</p>`:''}<h3>月结检查清单</h3><ul class="month-close-checklist">${checklistRows}</ul><div data-month-detail-host></div><div class="actions">${!data.is_closed&&data.can_close?'<button type="button" class="primary" data-month-close>确认关闭月结</button>':''}${data.is_closed&&data.can_reopen?`<button type="button" class="warn" data-month-reopen>${globalReopen?'临时开放全部景点圈月结':'临时开放月结'}</button>`:''}</div>`;let detailSequence=0;result.querySelectorAll('[data-month-details]').forEach(button=>button.onclick=()=>{
-  const host=result.querySelector('[data-month-detail-host]'),code=button.dataset.monthDetails;
-  const loadDetails=async(pageNumber=1)=>{const serial=++detailSequence;try{const qs=new URLSearchParams({page:String(pageNumber)});if(attractionId!==null)qs.set('attraction_id',String(attractionId));const detail=await api(`/api/month-closes/${month}/blockers/${encodeURIComponent(code)}?${qs}`);if(!request.isCurrent()||requestId!==sequence||serial!==detailSequence||!host.isConnected)return;host.innerHTML=`<h3>${esc(button.closest('li').querySelector('strong').textContent)}明细</h3>${workItemDetailsHtml(detail)}`;host.querySelector('[data-work-prev]').onclick=()=>loadDetails(detail.page-1);host.querySelector('[data-work-next]').onclick=()=>loadDetails(detail.page+1);}catch(error){toast(error.message,true)}};void loadDetails();});result.querySelectorAll('[data-month-target]').forEach(button=>button.onclick=()=>{state.tab=button.dataset.monthTarget;renderTabs();render();});const reasonPrompt=async(title,action)=>{if(submitting||!request.isCurrent()||requestId!==sequence)return;submitting=true;try{const reason=await promptModal(`${title}原因`,action==='reopen'?`本次开放范围：${esc(reopenScope)}。${globalReopen?'这会解除全部景点圈的全局月结限制；仍有单圈月结的，需另行按圈开放。':''}将写入审计。`:'将写入审计。','请填写原因','确认');if(reason===null)return;if(!request.isCurrent()||requestId!==sequence)return;if(!reason.trim()){toast('原因必填',true);return;}try{await api(`/api/month-closes/${month}/${action}`,json('POST',{attraction_id:action==='reopen'?reopenTarget:attractionId,reason:reason.trim()}));toast(action==='close'?'月结已关闭':'月结已临时开放');request.refresh(show);}catch(error){const items=error?.detail?.items||[];toast(items.length?`${error.message}：${items.map(row=>`${row.name}${row.count}项`).join('；')}`:error.message,true);}}finally{submitting=false;}};result.querySelector('[data-month-close]')?.addEventListener('click',()=>reasonPrompt('确认关闭月结','close'));result.querySelector('[data-month-reopen]')?.addEventListener('click',()=>reasonPrompt(globalReopen?'临时开放全部景点圈月结':'临时开放月结','reopen'));};
-  form.onsubmit=async event=>{event.preventDefault();try{await show();}catch(error){if(request.isCurrent()){result.innerHTML='<div class="error">查询失败，请重试</div>';toast(error.message,true);}}};
+  form.addEventListener('input',invalidate);
+  form.addEventListener('change',invalidate);
+
+  const show=async({returning=false}={})=>{
+    if(!request.isCurrent())return;
+    const requestId=++sequence;
+    const current=()=>request.isCurrent()&&requestId===sequence;
+    result.innerHTML='<div class="empty">正在查询月结状态…</div>';
+    const month=form.elements.month.value;
+    const circle=isCircleHr?String(ownId):form.elements.attraction_id.value;
+    const attractionId=circle===''?null:Number(circle);
+    if(!/^\d{4}-\d{2}$/.test(month)){
+      result.innerHTML='<div class="empty">请选择结算月份并重新查询</div>';
+      toast('请选择结算月份',true);
+      return;
+    }
+    const scopeParams=new URLSearchParams();
+    if(attractionId!==null)scopeParams.set('attraction_id',String(attractionId));
+    const monthPath=`/api/month-closes/${month}`;
+    const monthHeading=data=>`${esc(data.attraction_name)} · ${esc(data.month)} 月结`;
+    const data=await api(scopeParams.size?`${monthPath}?${scopeParams}`:monthPath,{cache:'no-store'}).catch(error=>{
+      if(current()){
+        result.innerHTML='<div class="error">查询失败，请重试</div>';
+        toast(error.message,true);
+      }
+      return null;
+    });
+    if(!data||!current())return;
+    state.monthCloseFilters={owner:filterOwner,month,circle};
+
+    const reopenTarget=Object.hasOwn(data,'reopen_target_attraction_id')?data.reopen_target_attraction_id:attractionId;
+    const reopenScope=data.effective_scope||data.attraction_name;
+    const globalReopen=data.is_closed&&reopenTarget===null;
+    const checklist=data.checklist||[];
+    const remaining=checklist.reduce((sum,row)=>sum+Number(row.count),0);
+    const allowedTabs=new Set(menuItems().map(([id])=>id));
+    const checklistRows=checklist.map(row=>monthCloseChecklistRow(row,allowedTabs)).join('')||'<li>暂无待核对项目</li>';
+    const status=data.is_closed?`<span class="badge danger">已月结</span> ${esc(data.closed_by_name||'')} · ${esc(data.closed_at||'')}`:'<span class="badge ok">未月结</span>';
+    result.innerHTML=`<h2 tabindex="-1">${monthHeading(data)}</h2><p>${status}</p>${data.is_closed?`<p>关闭原因：${esc(data.close_reason||'未填写')}</p><p>实际生效范围：<strong>${esc(reopenScope)}</strong></p>${data.reopen_block_reason?`<p class="notice">${esc(data.reopen_block_reason)}</p>`:''}`:`<p>以下项目全部为 0 后才可关闭月结。</p>`}${!data.is_closed&&data.close_block_reason?`<p class="notice">${esc(data.close_block_reason)}</p>`:''}<h3>月结检查清单</h3><p class="field-hint" role="status">${returning?'已刷新 · ':''}剩余 ${remaining} 项</p><ul class="month-close-checklist">${checklistRows}</ul><div data-month-detail-host></div><div class="actions">${!data.is_closed&&data.can_close?'<button type="button" class="primary" data-month-close>确认关闭月结</button>':''}${data.is_closed&&data.can_reopen?`<button type="button" class="warn" data-month-reopen>${globalReopen?'临时开放全部景点圈月结':'临时开放月结'}</button>`:''}</div>`;
+    if(returning)result.querySelector('h2').focus();
+
+    let detailSequence=0;
+    const fetchDetails=(type,params)=>{
+      const query=new URLSearchParams(scopeParams);
+      for(const [key,value] of Object.entries(params))query.set(key,String(value));
+      return api(`${monthPath}/blockers/${encodeURIComponent(type)}?${query}`,{cache:'no-store'});
+    };
+    const openRecord=async(type,recordId)=>{
+      const serial=++detailSequence;
+      result.innerHTML=`<h2>${monthHeading(data)}</h2><div class="actions"><button type="button" class="secondary" data-month-return>返回月结清单</button></div><h3>${esc(monthCloseRecordTypes[type])}</h3><div data-month-record-body class="section-gap" aria-live="polite"><p class="empty">正在查询记录…</p></div>`;
+      const back=result.querySelector('[data-month-return]');
+      back.onclick=()=>show({returning:true});
+      back.focus();
+      const host=result.querySelector('[data-month-record-body]');
+      try{
+        const detail=await fetchDetails(type,{record_id:recordId});
+        if(!current()||serial!==detailSequence||!host.isConnected)return;
+        const record=detail.items[0];
+        host.innerHTML=record?monthCloseRecordHtml(type,record):'<p class="empty">这条记录已不在待办中，返回清单可查看最新结果。</p>';
+      }catch(error){
+        if(current()&&serial===detailSequence&&host.isConnected)host.innerHTML=`<p class="error">${esc(error.message)}</p>`;
+      }
+    };
+    result.querySelectorAll('[data-month-record-type]').forEach(button=>{
+      button.onclick=()=>openRecord(button.dataset.monthRecordType,button.dataset.workRecord);
+    });
+    result.querySelectorAll('[data-month-details]').forEach(button=>button.onclick=()=>{
+      const host=result.querySelector('[data-month-detail-host]');
+      const type=button.dataset.monthDetails;
+      const title=button.closest('li').querySelector('strong').textContent;
+      const loadDetails=async(page=1)=>{
+        const serial=++detailSequence;
+        try{
+          const detail=await fetchDetails(type,{page});
+          if(!current()||serial!==detailSequence||!host.isConnected)return;
+          const viewRecords=Object.hasOwn(monthCloseRecordTypes,type);
+          host.innerHTML=`<h3>${esc(title)}明细</h3>${workItemDetailsHtml(detail,{viewRecords})}`;
+          host.querySelector('[data-work-prev]').onclick=()=>loadDetails(detail.page-1);
+          host.querySelector('[data-work-next]').onclick=()=>loadDetails(detail.page+1);
+          host.querySelectorAll('[data-work-record]').forEach(recordButton=>{
+            recordButton.onclick=()=>openRecord(type,recordButton.dataset.workRecord);
+          });
+        }catch(error){if(current()&&serial===detailSequence)toast(error.message,true);}
+      };
+      void loadDetails();
+    });
+    result.querySelectorAll('[data-month-target]').forEach(button=>button.onclick=()=>{
+      state.tab=button.dataset.monthTarget;
+      renderTabs();
+      render();
+    });
+
+    const reasonPrompt=async(title,action)=>{
+      if(submitting||!current())return;
+      submitting=true;
+      try{
+        const reason=await promptModal(`${title}原因`,action==='reopen'?`本次开放范围：${esc(reopenScope)}。${globalReopen?'这会解除全部景点圈的全局月结限制；仍有单圈月结的，需另行按圈开放。':''}将写入审计。`:'将写入审计。','请填写原因','确认');
+        if(reason===null||!current())return;
+        if(!reason.trim()){toast('原因必填',true);return;}
+        try{
+          await api(`${monthPath}/${action}`,json('POST',{attraction_id:action==='reopen'?reopenTarget:attractionId,reason:reason.trim()}));
+          toast(action==='close'?'月结已关闭':'月结已临时开放');
+          request.refresh(show);
+        }catch(error){
+          const items=error?.detail?.items||[];
+          toast(items.length?`${error.message}：${items.map(row=>`${row.name}${row.count}项`).join('；')}`:error.message,true);
+        }
+      }finally{submitting=false;}
+    };
+    result.querySelector('[data-month-close]')?.addEventListener('click',()=>reasonPrompt('确认关闭月结','close'));
+    result.querySelector('[data-month-reopen]')?.addEventListener('click',()=>reasonPrompt(globalReopen?'临时开放全部景点圈月结':'临时开放月结','reopen'));
+  };
+  form.onsubmit=async event=>{
+    event.preventDefault();
+    try{await show();}
+    catch(error){if(request.isCurrent()){result.innerHTML='<div class="error">查询失败，请重试</div>';toast(error.message,true);}}
+  };
   await show();
 }
 

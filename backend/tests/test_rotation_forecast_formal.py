@@ -1,4 +1,5 @@
 """Authenticated formal V2 routes, screen restrictions and personal receipts."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -87,6 +88,28 @@ def test_cm_confirms_own_forecast_and_receipt_is_exactly_once(today):
         assert cm.post('/api/rotation-board/act', json={'action': 'pool', 'pid': '9710010', 'pool': 'rest'}).status_code == 403
         board = ok(tr.get('/api/rotation-board/board'))['day']
         assert board['ruleVersion'] == 2 and board['lines'][0]['posts'][0]['occ'] == '9710000'
+
+
+def test_personal_todo_reads_previous_commit_while_writer_holds_rotation_lock(today):
+    day = date.today().isoformat()
+    with TestClient(app) as cm, ThreadPoolExecutor(max_workers=1) as pool:
+        login(cm, '9710000')
+        before = ok(cm.get('/api/rotation-board/me'))['person']
+        with SessionLocal() as db:
+            db.info['rotation_formal'] = True
+            with S.transaction(db):
+                row = S.day_row(db, today, day)
+                state = S.day_state(row)
+                p = state['persons']['9710000']
+                p.update(state='pending', assign=None, readyAt=None)
+                S.save_day(db, row, state)
+                db.flush()
+                during = ok(pool.submit(cm.get, '/api/rotation-board/me').result(timeout=5))['person']
+                assert during['state'] == before['state']
+                assert during['task'] == before['task']
+                assert not during['canArrive']
+        after = ok(cm.get('/api/rotation-board/me'))['person']
+        assert after['state'] == 'pending' and after['canArrive'] and after['task'] is None
 
 
 def test_screen_cannot_drag_or_modify_shift_or_sort_time(today):
@@ -253,6 +276,7 @@ def test_batch_sign_in_is_shared_by_screen_and_personal_todo(today):
     with TestClient(app) as cm, TestClient(app) as screen:
         login(cm, '9710000')
         ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
+        S.tick_attraction(today, formal=True)
         mine = ok(cm.get('/api/rotation-board/me'))['person']
         assert any(item['type'] == 'rotation_step' for item in ok(cm.get('/api/action-center'))['items'])
         view = ok(screen.get('/api/rotation/screen/state'))['day']

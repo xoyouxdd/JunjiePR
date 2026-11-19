@@ -598,8 +598,9 @@ class Engine:
 
     def start_opening_rest(self, p, now):
         start = p['start']
+        minutes = 15 if self.d.get('ruleVersion') == 2 and start == 435 else self.S['breakMin']
         p.update(state='rest', breakKind='rest', breakStart=start, arriveAnchor=start,
-                 readyAt=start + self.S['breakMin'], readySince=None, assign=None)
+                 readyAt=start + minutes, readySince=None, assign=None)
         if now >= p['readyAt']:
             p.update(state='ready', readySince=p['readyAt'])
         self.h.log('initial_rest', 'system', p['pid'], None, None, {'start': start, 'until': p['readyAt']})

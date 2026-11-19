@@ -33,6 +33,13 @@
 .export-task-list{position:fixed;bottom:76px;right:22px;width:min(440px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:min(65vh,600px);overflow:auto;box-shadow:0 8px 36px #10203324;padding:18px;background:#fff;border:1px solid #dbe4ef;border-radius:16px;color:#17314d}
 .export-task-list header{display:flex;justify-content:space-between;align-items:center}.export-task-list article{display:flex;align-items:center;gap:12px;padding:14px 0;border-top:1px solid #e8edf3}.export-task-list article>div{flex:1;min-width:0}.export-task-list article strong,.export-task-list article span{display:block}.export-task-list article span{font-size:13px;color:#65758b;margin-top:5px}.export-task-list .download-link{white-space:nowrap;min-height:44px;display:flex;align-items:center}.export-task-list .error{font-size:13px;overflow-wrap:anywhere}
 .export-task-list header>strong{flex:1;min-width:0}.export-task-list header>button{width:auto;flex:none;white-space:nowrap;min-height:44px}
+.export-retry-scope{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:10px 0}
+.export-retry-scope>div{min-width:0;padding:7px 8px;border-radius:6px;background:var(--surface-soft)}
+.export-retry-scope dt{font-size:12px;color:var(--muted)}
+.export-retry-scope dd{margin:3px 0 0;font-weight:600;overflow-wrap:anywhere}
+.export-retry-actions{display:flex;justify-content:flex-end}
+.export-retry-actions button{min-height:44px}
+.export-retry-actions button[aria-disabled="true"]{opacity:.65;cursor:wait}
 @media(max-width:1000px){.workbench-columns{grid-template-columns:minmax(0,1fr)}.workbench-shortcuts>div:not([data-workbench-exports]){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:18px}}
 @media(max-width:760px){.workbench-heading h2{font-size:25px}.workbench-heading{gap:10px;padding:4px 0}.workbench-updated{display:none}.workbench-columns{gap:14px}#app .action-center-page .action-card{gap:12px;padding:16px 0}#app .action-center-page .action-card.is-priority{padding:16px}#app .action-center-page .action-card-side{flex-direction:row;align-items:center;justify-content:space-between;width:100%}#app .action-center-page .action-card{flex-wrap:wrap}.export-task-tray{right:12px;bottom:calc(86px + env(safe-area-inset-bottom))}.review-focused .work-card{padding:16px}.workbench-shortcut{font-size:14px}.review-focused .review-actions>button{flex:1}}
 @media(prefers-reduced-motion:no-preference){.workbench-shortcut,.export-task-toggle,.review-actions button{transition:background-color .18s,color .18s}.workbench-shortcut:active,.review-actions button:active{transform:translateY(1px)}}

@@ -123,7 +123,7 @@ def day_payload(db,attraction_id,work_date,at=None):
         if added:
             S.save_day(db,row,state)
             S.DbHooks(db,attraction_id,work_date).log('draft_fill_spares','system',None,None,None,{'added':added})
-    if state and work_date==today and row.status=='live':
+    if state and work_date==today and row.status=='live' and not db.info.get('rotation_formal'):
         S.advance(db,cfg,row,state,now)
     query=db.query(RotationSnapshot).filter_by(attraction_id=attraction_id,work_date=work_date)
     snapshots=query.with_entities(RotationSnapshot.id,RotationSnapshot.minute).order_by(RotationSnapshot.minute,RotationSnapshot.id).all()

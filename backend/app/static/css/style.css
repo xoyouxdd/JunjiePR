@@ -1288,6 +1288,11 @@ details.form-more > summary {
 .changelog-items { margin: 8px 0 0; padding-left: 18px; }
 .changelog-items p { margin: 4px 0 8px; color: var(--muted); line-height: 1.5; }
 .work-card-list { display: grid; gap: 10px; }
+.month-close-checklist { display: grid; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.month-close-checklist > li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; }
+.month-close-checklist > li:not(.danger) { background: var(--surface-soft); border-color: var(--line); color: var(--text-label); }
+.month-close-checklist small { min-width: 0; overflow-wrap: anywhere; }
+.month-close-checklist button { margin-inline-start: auto; }
 .work-card {
   border: 1px solid var(--line);
   border-radius: 10px;

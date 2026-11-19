@@ -110,10 +110,10 @@ def test_targeted_prefix_push_updates_head_only_when_target_is_last(kind, index)
 
 
 @pytest.mark.parametrize('index,expected,sort_time', [
-    (1, ['new0', 'A0', 'A2'], 435),
-    (2, ['new0', 'A0', 'A1'], 600),
+    (1, ['A0', 'new0', 'A2'], 435),
+    (2, ['A0', 'A1', 'new0'], 600),
 ])
-def test_push7_chains_to_actual_worker_and_updates_sort_time_only_at_tail(index, expected, sort_time):
+def test_push7_replaces_actual_post_and_updates_sort_time_only_at_tail(index, expected, sort_time):
     e = fixture()
     target = e.P[f'A{index}']
     target.update(start=420, flags=['7点岗', '送失物'])
@@ -238,6 +238,23 @@ def test_each_added_post_preserves_header_even_after_higher_priority_work(sick):
     assert all(occupants(e))
 
 
+def test_single_opening_counts_one_push_across_closed_post():
+    e = fixture((5,))
+    line = e.line('A')
+    line['posts'][1].update(open=False, occ=None)
+    line['posts'][3].update(openRequest=True, occ=None)
+    for pid in ('A1', 'A3'):
+        e.P[pid].update(state='other', line=None, manualPaused=True)
+    F.plan(e, 600)
+    preview = F.task_view(e, e.P['new0'], 600)
+    assert preview['pushes'] == 1
+    assert preview['instruction'] == '顺推加在「A2」后'
+    assert preview['opening']['key'] == 'A3'
+    result = F.execute(e, 'new0', 600, 'test', 'A', expected_opening=preview['openingRoute'])
+    assert result['executed'] and result['task']['pushes'] == 1
+    assert occupants(e) == ['new0', None, 'A0', 'A2', 'A4']
+
+
 def test_relief_moves_the_pending_addition_if_it_relocates_its_vacancy():
     e = fixture((3,))
     line = e.line('A')
@@ -306,13 +323,13 @@ def test_manual_push7_exchange_clears_badges_but_is_not_counted_as_a_chain():
     assert 'new0' not in F.push7_history(e)
 
 
-def test_manual_recovery_from_head_chains_to_the_original_middle_target_once():
+def test_manual_recovery_from_head_replaces_the_original_middle_target_once():
     e = fixture()
     e.P['A1'].update(start=420, flags=['7点岗'])
     e.P['new0'].update(state='exception', exception={'at': 603, 'assignment': {
         'kind': 'push7', 'line': 'A', 'target': 'A1'}})
     F.manual_place(e, 'new0', 'A', 0, 'push', 604, 'manager', update_sort_time=True)
-    assert occupants(e) == ['new0', 'A0', 'A2']
+    assert occupants(e) == ['A0', 'new0', 'A2']
     assert e.P['A1']['state'] == 'pending'
     assert e.line('A')['sortAt'] == 435
     assert F.push7_history(e)['new0'] == (1, e.d['date'], 604)
@@ -346,7 +363,7 @@ def test_push7_updates_same_line_route_before_any_execution():
     assert occupants(e) == ['A0', 'A2', 'A1', 'A3']
     assert F.push7_history(e) == {}
     assert F.execute(e, 'new0', 600, 'test', 'A', result['task']['push7Route'])['executed']
-    assert occupants(e) == ['new0', 'A0', 'A2', 'A3']
+    assert occupants(e) == ['A0', 'A2', 'new0', 'A3']
 
 
 def test_push7_timeout_gives_next_ready_candidate_the_route_without_recording_a_completion():

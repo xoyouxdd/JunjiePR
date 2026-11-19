@@ -131,11 +131,8 @@ def whoami(user: V2User = Depends(staff)):
 def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     if not set(user.role_codes)&ROLES:raise HTTPException(403,'此身份只可使用本人轮岗待办')
     aid = board_attraction_id(db,user)
-    # No pending writes here: release the authorization/read snapshot before
-    # the ticker opens its separate short transaction and acquires its lock.
     db.rollback()
-    S.tick_attraction(aid, formal=True)
-    data = call(S.board_payload, db, aid)
+    data = call(S.board_payload, db, aid, committed_only=True)
     data.update(capabilities=capabilities(user),identity=identity(user))
     if not capabilities(user)['can_manage']:
         for key in ('roster','rosterDates','days','draft'): data.pop(key, None)
@@ -148,21 +145,21 @@ def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
 @router.get('/me')
 def me(attraction_id: int | None = None, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     from app.rotation.participation import personal_scope
-    aid,choices=personal_scope(db,user,attraction_id)
+    member_no = user.employee.employee_no
+    member_identity = identity(user)
+    member_capabilities = capabilities(user)
     db.rollback()
-    S.tick_attraction(aid, formal=True)
-    with S.transaction(db):
-        data=call(S.member_payload, db, aid, user.employee.employee_no)
-        data.update(capabilities=capabilities(user),identity=identity(user))
-        data.update(attraction_id=aid,rotation_circles=choices)
-        data['identity']['attraction_name']=next(c['name'] for c in choices if c['id']==aid)
-        data.pop('week_minutes',None)
-        data.pop('today',None)
-        if data.get('line'):
-            row=S.day_row(db,aid,data['clock']['date'])
-            state=S.day_state(row)
-            eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
-            data['line']=next((line for line in S.lines_view(eng) if line['id']==data['line']['id']),None)
+    # SQLite's legacy driver does not begin a transaction on SELECT. Pin a
+    # committed read snapshot so a batch cannot split the state and notices.
+    db.connection().exec_driver_sql("BEGIN")
+    try:
+        aid, choices = personal_scope(db, user, attraction_id)
+        data = call(S.committed_member_payload, db, aid, member_no)
+    finally:
+        db.rollback()
+    member_identity['attraction_name'] = next(c['name'] for c in choices if c['id'] == aid)
+    data.update(capabilities=member_capabilities, identity=member_identity,
+                attraction_id=aid, rotation_circles=choices)
     return data
 
 
@@ -307,7 +304,6 @@ def entry_preview(payload: dict, db: Session = Depends(formal_db), user: V2User 
     if selected is not None and (not isinstance(selected,int) or isinstance(selected,bool)):raise HTTPException(400,'轮岗景点圈无效')
     aid,_=personal_scope(db,user,selected)
     db.rollback()
-    S.tick_attraction(aid, formal=True)
     with S.transaction(db):
         cfg=S.load_config(db,aid)
         day,now=S.clock_now(cfg)

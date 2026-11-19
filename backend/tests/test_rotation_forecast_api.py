@@ -266,7 +266,7 @@ def test_undo_of_later_same_second_confirmation_preserves_earlier_morning_receip
     assert act(current, first)['executed']
     with current.factory() as db:
         prior_segments = {row.id for row in db.query(RotationSegment).filter_by(
-            work_date=DAY, employee_no='1', end_min=600)}
+            work_date=DAY, employee_no='2', end_min=600)}
         assert prior_segments
     second = depart_body(current, '6')
     assert act(current, second)['executed']
@@ -277,7 +277,7 @@ def test_undo_of_later_same_second_confirmation_preserves_earlier_morning_receip
         assert state['confirmations'][second['confirmation_token']]['status'] == 'reversed'
         assert state['persons']['2']['push7Completion']['owner'] == '5'
         assert {row.id for row in db.query(RotationSegment).filter_by(
-            work_date=DAY, employee_no='1', end_min=600)} == prior_segments
+            work_date=DAY, employee_no='2', end_min=600)} == prior_segments
 
 
 def test_timed_out_manual_chain_retry_and_undo_then_redo_count_once(current):

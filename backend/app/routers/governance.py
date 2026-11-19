@@ -520,12 +520,13 @@ def month_close_status(
 ):
     month = parse_score_month(month)
     ensure_month_close_scope(db, user, attraction_id)
-    return month_closure_payload(db, month, attraction_id, user)
+    return month_closure_payload(db, month, attraction_id, user, include_record_links=True)
 
 
 @router.get("/month-closes/{month}/blockers/{item_type}")
 def month_close_blockers(month: str, item_type: str, attraction_id: int | None = None,
                          page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=100),
+                         record_id: int | None = Query(None, ge=1, le=2**63 - 1),
                          db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     month = parse_score_month(month)
     ensure_month_close_scope(db, user, attraction_id)
@@ -534,6 +535,8 @@ def month_close_blockers(month: str, item_type: str, attraction_id: int | None =
         raise HTTPException(404, "该月结项目暂无明细")
     query = queries[item_type]
     model = query.column_descriptions[0]["entity"]
+    if record_id is not None:
+        query = query.filter(model.id == record_id)
     total = query.count()
     rows = query.order_by(model.id).offset((page - 1) * page_size).limit(page_size).all()
     items = []

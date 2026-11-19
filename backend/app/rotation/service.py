@@ -124,7 +124,7 @@ def _dumps(value) -> str:
 
 # ---------------------------------------------------------------- 配置与时钟
 
-def load_config(db: Session, attraction_id: int) -> RotationConfig:
+def load_config(db: Session, attraction_id: int, *, read_only: bool = False) -> RotationConfig:
     RotationConfig = tables_for(db).RotationConfig
     cfg = db.query(RotationConfig).filter(RotationConfig.attraction_id == attraction_id).first()
     if not cfg:
@@ -138,9 +138,10 @@ def load_config(db: Session, attraction_id: int) -> RotationConfig:
             settings_json=baseline.settings_json if baseline else _dumps({}),
             clock_json=_dumps({"mode": "real"}),
         )
-        db.add(cfg)
-        db.flush()
-    elif cfg not in db.dirty:
+        if not read_only:
+            db.add(cfg)
+            db.flush()
+    elif not read_only and cfg not in db.dirty:
         # Dependencies or a caller may have loaded this row before taking the lock.
         db.refresh(cfg)
     return cfg
@@ -499,11 +500,11 @@ def day_row(db: Session, attraction_id: int, day: str) -> RotationDay | None:
     return row
 
 
-def day_state(row: RotationDay) -> dict:
+def day_state(row: RotationDay, *, use_cache: bool = True) -> dict:
     """Return a private copy; engines must never mutate the committed cache."""
     RUNTIME = runtime_for_row(row)
     key = (row.attraction_id, row.work_date)
-    cached = RUNTIME.cache.get(key)
+    cached = RUNTIME.cache.get(key) if use_cache else None
     if cached and cached[0] == row.version:
         state = deepcopy(cached[1])
     else:
@@ -620,7 +621,11 @@ def tick_attraction(attraction_id: int, *, formal=False) -> None:
             ensure_prearranged_day(db, cfg, attraction_id, day, minute)
             row = day_row(db, attraction_id, day)
             if row and row.status == "live":
-                advance(db, cfg, row, day_state(row), minute)
+                state = day_state(row)
+                needs_epoch = "confirmationEpoch" not in state
+                advance(db, cfg, row, state, minute)
+                if needs_epoch and "confirmationEpoch" not in state:
+                    save_day(db, row, state)
 
 
 _ticker_started = False
@@ -1013,7 +1018,8 @@ def opening_status(eng: E.Engine, line: dict, index: int) -> str | None:
     return 'matching'
 
 
-def lines_view(eng: E.Engine) -> list[dict]:
+def lines_view(eng: E.Engine, *, line_id: str | None = None, now: float | None = None) -> list[dict]:
+    from app.rotation.forecast import missed_check_in
     def display_occ(line,index,post):
         if post.get('occ'):return post['occ']
         key=f"{line['id']}#{index}"
@@ -1022,6 +1028,9 @@ def lines_view(eng: E.Engine) -> list[dict]:
         if worker and str(round(worker['start'] * 60)) in eng.d.get('completedShiftBatches', {}):
             return None
         return pid if line.get('active') and worker.get('state') == 'notyet' else None
+    def missed(pid):
+        return bool(now is not None and eng.d.get('ruleVersion') == 2 and pid in eng.P
+                    and missed_check_in(eng.P[pid], now))
     return [{
         "id": L["id"], "group": L.get("group"), "active": L.get("active"), "standby": L.get("standby"),
         "sortAt": L.get('sortAt', 0),
@@ -1031,19 +1040,20 @@ def lines_view(eng: E.Engine) -> list[dict]:
         "posts": [{"name": x["name"], "open": x.get("open"), "occ": display_occ(L,i,x),
                    "key":x.get('key'),"occName": eng.P.get(display_occ(L,i,x), {}).get("name"), "since": x.get("since"), "hold": x.get("hold") or x.get('hold101'),
                    "prearranged":eng.P.get(display_occ(L,i,x),{}).get('state')=='notyet',
+                   "missedCheckIn":missed(display_occ(L,i,x)),
                    "hold101":bool(x.get('hold101')),"hold101Role":x.get('hold101Role'),
                    "manualHold":x.get('hold'),
                    "continuousStart":eng.P.get(display_occ(L,i,x),{}).get('continuousStart'),
                    "openingStatus":opening_status(eng,L,i),
                    "openAt": x.get("openAt"), "openExpired": bool(x.get('openExpired')),
                    "closeAt": x.get("closeAt"), "closeMode": x.get("closeMode"), "opened": x.get("opened"), "seven": x.get("seven")} for i,x in enumerate(L["posts"])],
-    } for L in eng.d["lines"]]
+    } for L in eng.d["lines"] if line_id is None or L["id"] == line_id]
 
 
-def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) -> dict:
+def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *, committed_only: bool = False) -> dict:
     from app.rotation.manual import fingerprint
     state = day_state(row)
-    if "confirmationEpoch" not in state:
+    if not committed_only and "confirmationEpoch" not in state:
         save_day(db, row, state, notify=False)
     projection = _read_projection_cache(db, cfg, row, now)
     if 'live' in projection:
@@ -1061,7 +1071,7 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float) ->
         "timeoutCases":C.view(eng) if state['status'] == 'live' else [],
         "timeoutWaitingMatch":[{'line':d['line'],'mode':d['template']['mode']} for d in state.get('timeoutDemands',[])
                                if state['status'] == 'live' and not d.get('owner')],
-        "lines": lines_view(eng),
+        "lines": lines_view(eng, now=now),
         "persons": [person_view(eng, p, now, taken) for p in state["persons"].values()],
         "off": off_people_view(db, row.attraction_id, state),
         "alerts": eng.alerts(now) if state["status"] == "live" else [],
@@ -1107,13 +1117,14 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
 
 
 @transactional
-def board_payload(db: Session, attraction_id: int) -> dict:
+def board_payload(db: Session, attraction_id: int, *, committed_only: bool = False) -> dict:
     RotationDay = tables_for(db).RotationDay
     RotationRosterEntry = tables_for(db).RotationRosterEntry
     RUNTIME = runtime_for(db)
-    cfg = load_config(db, attraction_id)
+    cfg = load_config(db, attraction_id, read_only=committed_only)
     day, minute = clock_now(cfg)
-    ensure_prearranged_day(db, cfg, attraction_id, day, minute)
+    if not committed_only:
+        ensure_prearranged_day(db, cfg, attraction_id, day, minute)
     row = day_row(db, attraction_id, day)
     out = {
         "clock": clock_payload(cfg),
@@ -1128,7 +1139,7 @@ def board_payload(db: Session, attraction_id: int) -> dict:
         "draft": None,
     }
     if row and row.status in ("live", "ended"):
-        out["day"] = live_view(db, cfg, row, minute)
+        out["day"] = live_view(db, cfg, row, minute, committed_only=committed_only)
     elif row and row.status == "draft":
         out["draft"] = day_state(row)
         out["roster_changed"] = draft_roster_changed(db, attraction_id, day, out["draft"])
@@ -1136,16 +1147,17 @@ def board_payload(db: Session, attraction_id: int) -> dict:
 
 
 @transactional
-def screen_payload(db: Session, attraction_id: int) -> dict:
+def screen_payload(db: Session, attraction_id: int, *, committed_only: bool = False) -> dict:
     RUNTIME = runtime_for(db)
-    cfg = load_config(db, attraction_id)
+    cfg = load_config(db, attraction_id, read_only=committed_only)
     day, minute = clock_now(cfg)
-    ensure_prearranged_day(db, cfg, attraction_id, day, minute)
+    if not committed_only:
+        ensure_prearranged_day(db, cfg, attraction_id, day, minute)
     row = day_row(db, attraction_id, day)
     out = {"clock": clock_payload(cfg), "version": RUNTIME.version, "syncEpoch": RUNTIME.sync_epoch, "day": None,
            "settings": {"departEarly": settings_of(cfg)["departEarly"]}}
     if row and row.status in ("live", "ended"):
-        view = live_view(db, cfg, row, minute)
+        view = live_view(db, cfg, row, minute, committed_only=committed_only)
         view.pop("alerts", None)
         view.pop("plan", None)
         view.pop("draftAlerts", None)
@@ -1155,13 +1167,27 @@ def screen_payload(db: Session, attraction_id: int) -> dict:
 
 @transactional
 def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
+    return _member_payload(db, attraction_id, employee_no, committed_only=False)
+
+
+def committed_member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
+    """Project the mobile view from the caller's SQLite read snapshot."""
+    return _member_payload(db, attraction_id, employee_no, committed_only=True)
+
+
+def _member_payload(db: Session, attraction_id: int, employee_no: str, *, committed_only: bool) -> dict:
     RotationNotice = tables_for(db).RotationNotice
     RotationSegment = tables_for(db).RotationSegment
     RUNTIME = runtime_for(db)
-    cfg = load_config(db, attraction_id)
-    day, minute = clock_now(cfg)
-    ensure_prearranged_day(db, cfg, attraction_id, day, minute)
-    row = day_row(db, attraction_id, day)
+    cfg = load_config(db, attraction_id, read_only=committed_only)
+    clock = clock_payload(cfg)
+    day, minute = clock["date"], clock["minute"]
+    if committed_only:
+        RotationDay = tables_for(db).RotationDay
+        row = db.query(RotationDay).filter_by(attraction_id=attraction_id, work_date=day).first()
+    else:
+        ensure_prearranged_day(db, cfg, attraction_id, day, minute)
+        row = day_row(db, attraction_id, day)
     notices = (
         db.query(RotationNotice)
         .filter(RotationNotice.attraction_id == attraction_id, RotationNotice.employee_no == employee_no, RotationNotice.work_date == day)
@@ -1169,9 +1195,8 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
         .limit(30)
         .all()
     )
-    week = week_minutes(db, attraction_id, day).get(employee_no, {})
     out = {
-        "clock": clock_payload(cfg),
+        "clock": clock,
         "version": RUNTIME.version,
         "syncEpoch": RUNTIME.sync_epoch,
         "employee_no": employee_no,
@@ -1179,16 +1204,17 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
         "person": None,
         "line": None,
         "confirmations": [],
-        "week_minutes": week,
         "notices": [{
             "id": n.id, "kind": n.kind, "title": n.title, "body": n.body, "status": n.status,
             "updated_at": n.updated_at.strftime("%H:%M:%S") if n.updated_at else None,
         } for n in notices],
     }
+    if not committed_only:
+        out["week_minutes"] = week_minutes(db, attraction_id, day).get(employee_no, {})
     if not row or row.status not in ("live", "ended"):
         return out
-    state = day_state(row)
-    if "confirmationEpoch" not in state:
+    state = day_state(row, use_cache=not committed_only)
+    if not committed_only and "confirmationEpoch" not in state:
         save_day(db, row, state, notify=False)
     p = state["persons"].get(employee_no)
     if not p:
@@ -1209,12 +1235,14 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
                 view.update(zip(('kind', 'title', 'body'), current))
             current_notices.append(view)
         out['notices'] = current_notices
-    eng._read_projection = _read_projection_cache(db, cfg, row, minute)
+    eng._read_projection = {} if committed_only else _read_projection_cache(db, cfg, row, minute)
     out["person"] = person_view(eng, p, minute, eng.targeted() if state["status"] == "live" else {})
     out["confirmations"] = [r for r in reversed(list(state.get("confirmations", {}).values()))
                             if r["pid"] == employee_no][:20]
     lid = p.get("line") or (p.get("assign") or {}).get("line")
-    if lid:
+    if lid and (committed_only or state.get('ruleVersion') == 2):
+        out["line"] = next(iter(lines_view(eng, line_id=lid, now=minute)), None)
+    elif lid:
         L = eng.line(lid)
         out["line"] = {
             "id": L["id"],
@@ -1222,6 +1250,8 @@ def member_payload(db: Session, attraction_id: int, employee_no: str) -> dict:
                        "occName": state["persons"][x["occ"]]["name"] if x.get("occ") in state["persons"] else None,
                        "since": x.get("since"), "hold": x.get("hold")} for x in L["posts"]],
         }
+    if committed_only:
+        return out
     segs = (
         db.query(RotationSegment)
         .filter(RotationSegment.attraction_id == attraction_id, RotationSegment.work_date == day, RotationSegment.employee_no == employee_no)

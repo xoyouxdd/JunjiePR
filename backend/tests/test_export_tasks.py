@@ -58,6 +58,63 @@ def test_original_validation_error_and_credential_input_cleanup():
         row=wait(c,job['id']);assert row['status']=='failed'
         assert not (tasks.Path(tasks._jobs[job['id']].directory.name)/'request').exists()
         assert c.get('/api/export-tasks/'+job['id']+'/file').status_code==409
+        assert c.post('/api/export-tasks/'+job['id']+'/retry').status_code==409
+
+
+def test_statistics_retry_reuses_filters_with_one_job_and_one_audit(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from openpyxl import load_workbook
+    from app.routers import statistics
+    from app.v2_models import AuditLog
+
+    save = statistics.save_export_workbook
+    calls = []
+
+    def interrupted_once(workbook, output):
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError('synthetic interruption before export audit')
+        return save(workbook, output)
+
+    monkeypatch.setattr(statistics, 'save_export_workbook', interrupted_once)
+    month = date.today().strftime('%Y-%m')
+    with SessionLocal() as db:
+        circle = db.query(Employee).filter_by(employee_no='9730000').one().attraction_id
+        audits_before = db.query(AuditLog).filter_by(action='导出统计数据').count()
+
+    with TestClient(app) as gsm, TestClient(app) as cm:
+        ok(login(gsm, '9730040'))
+        ok(login(cm, '9730000'))
+        first = create(gsm, f'/api/statistics/export?month={month}&attraction_id={circle}&keyword=9730000&title=CM')
+        failed = wait(gsm, first['id'])
+        assert failed['status'] == 'failed'
+        assert failed['retry_filters'] == {'month': month, 'attraction_name': '热力追踪', 'keyword': '9730000'}
+        assert failed['retry_task_id'] is None
+        retry_url = '/api/export-tasks/' + first['id'] + '/retry'
+        assert cm.post(retry_url).status_code == 404
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: gsm.post(retry_url, params={'target': '/api/statistics/export?keyword=9730001'}), range(2)))
+        assert [response.status_code for response in responses] == [202, 202]
+        second_id, duplicate_id = (response.json()['id'] for response in responses)
+        assert second_id == duplicate_id != first['id']
+        assert wait(gsm, first['id'])['retry_task_id'] == second_id
+        completed = wait(gsm, second_id)
+        assert completed['status'] == 'completed'
+        assert len(calls) == 2
+
+        response = gsm.get(completed['download_url'])
+        assert response.status_code == 200
+        book = load_workbook(BytesIO(response.content), read_only=True, data_only=True)
+        try:
+            info = {row[0]: row[1] for row in book['导出说明'].values if len(row) > 1}
+            assert (info['统计月份'], info['景点圈'], info['员工搜索'], info['Title']) == (month, '热力追踪', '9730000', 'CM')
+            rows = list(book['月度综合分明细'].values)
+            assert [row[0] for row in rows[1:]] == ['9730000']
+        finally:
+            book.close()
+        with SessionLocal() as db:
+            assert db.query(AuditLog).filter_by(action='导出统计数据').count() == audits_before + 1
 
 
 @pytest.mark.parametrize('target',[

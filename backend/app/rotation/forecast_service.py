@@ -78,7 +78,7 @@ def advance(db, cfg, row, state, target):
         changed = bool(D.fill_prestart_spares(state)) or changed
     while True:
         hooks.now = t
-        batch_before = H.snapshot(eng.d) if F.due_batch(eng, t) else None
+        batch_before = H.snapshot(eng.d) if next(F.due_batches(eng, t), None) is not None else None
         if batch_before is not None:
             batch_before['existingSegmentIds'] = H.existing_segment_ids(db, eng, t)
         step_changed = F.tick(eng, t, advance_batches=True, execute_batch=apply_batch)
@@ -92,9 +92,11 @@ def advance(db, cfg, row, state, target):
         boundaries = [target, rotation_end(state)]
         for p in eng.P.values():
             boundaries.extend([p['start'], p['end'] - 30, p['end'] - 25, p['end']])
-            if F.batch_member(eng, p):
+            if F.attendance_candidate(p):
                 boundaries.extend([p['start'] - F.BATCH_CHECK_IN_MINUTES,
                                    p['start'] - F.BATCH_LEAD_MINUTES])
+            if F.morning_rest(p) and F.checked_in(p):
+                boundaries.append(F.MORNING_REST_END - F.BATCH_LEAD_MINUTES)
             if p.get('readyAt') is not None:
                 boundaries.extend([p['readyAt'], p.get('timeoutAt', p['readyAt'] + 3)])
                 if p['state'] == 'meal':
@@ -129,23 +131,38 @@ def batch_result_view(result):
             title += f" · {result['pushes']}推"
         return {**result, 'heading': title, 'instruction': '、'.join(result.get('special', []))}
     handoff = result['handoff']
-    if not handoff:
-        return {**result, 'heading': title, 'instruction': ''}
-    outcome = handoff['outcome']
-    who = f"通知原{handoff['post']}的{handoff['name']}"
-    if outcome == 'post':
-        steps = handoff['steps']
-        if steps > 0:
-            title += f' · {steps}推'
-        instruction = f"{who}去{handoff['destination']}"
-    elif outcome == 'done':
-        title += ' · 推下班'
-        instruction = f'{who}下班'
-    elif outcome in ('sick', 'away'):
-        instruction = f"{who}{'下岗休病假' if outcome == 'sick' else '出圈'}"
-    else:
-        instruction = f'{who}下岗，回休息室'
-    return {**result, 'heading': title, 'instruction': instruction}
+    if handoff:
+        outcome = handoff['outcome']
+        if outcome == 'post' and handoff['steps'] > 0:
+            title += f" · {handoff['steps']}推"
+        elif outcome == 'done':
+            title += ' · 推下班'
+
+    chain = result.get('handoffChain') or ([handoff] if handoff else [])
+    openings = result.get('openingPosts', [])
+    destinations = {step.get('destinationKey') for step in chain} | {result.get('postKey')}
+    own_openings = [opening for opening in openings if opening['key'] in destinations]
+    instruction = F.handoff_instruction(chain, {opening['key'] for opening in own_openings})
+    if not chain and own_openings:
+        direct = f"本人去加{own_openings[0]['name']}"
+        instruction = {'instruction': direct, 'instructionParts': [{'text': direct, 'emphasis': True}]}
+    stored_shift_end_posts = result.get('shiftEndPosts')
+    shift_end_posts = [] if stored_shift_end_posts is None else stored_shift_end_posts
+    if stored_shift_end_posts is None:
+        for step in chain:
+            if step['outcome'] == 'done':
+                if step.get('postKey'):
+                    shift_end_posts.append(step['postKey'])
+                else:
+                    # Earlier batches only stored the direct handoff.
+                    shift_end_posts.extend(p['key'] for p in result.get('beforePosts', [])
+                                           if p['name'] == step['post'] and p['occName'] == step['name'])
+    special_tasks = []
+    for key, label in (('push7', '推7点'), ('sick', '推病假'), ('away', '推出圈')):
+        if any(key in (step.get('kind'), step['outcome']) for step in chain):
+            special_tasks.append(label)
+    return {**result, **instruction, 'heading': title, 'ownOpeningPosts': own_openings,
+            'shiftEndPosts': shift_end_posts, 'specialTasks': special_tasks}
 
 
 def notices(eng, now):
@@ -156,13 +173,17 @@ def notices(eng, now):
         state = p['state']
         a = p.get('assign')
         if F.can_check_in(eng, p, now) and not F.checked_in(p):
-            out[(p['pid'], 'step')] = ('batch_check_in', '请确认已到', '班前三分钟截止签到，签到后由系统统一排岗。')
+            out[(p['pid'], 'step')] = ('batch_check_in', '请确认已到', '请在班前三分钟截止前签到。')
         if p.get('batchResult'):
             result = batch_result_view(p['batchResult'])
             text = '。'.join(filter(None, (result['heading'], result['instruction']))) if result.get('line') else '本批岗位已排满，自动休息15分钟。'
-            out[(p['pid'], 'batch')] = ('batch_result', '批量上岗结果', text)
+            title = '07:30 上岗安排' if result.get('reportAt') else '批量上岗结果'
+            out[(p['pid'], 'batch')] = ('batch_result', title, text)
         if state in F.WAITING_TO_REST:
             out[(p['pid'], 'step')] = ('arrive', '请选择休息或吃饭', '确认后开始餐休并显示预计线路。')
+        elif F.morning_rest(p) and now < F.MORNING_REST_END:
+            text = '系统将在 07:27 安排岗位。' if F.checked_in(p) else '休息至 07:30 后请本人确认上岗。'
+            out[(p['pid'], 'step')] = ('rest', '07:30 上岗', text)
         elif state in {'rest', 'meal', 'ready'} and a:
             ready = now >= max(F.readiness(p), a.get('notBefore', 0))
             out[(p['pid'], 'step')] = ('depart' if ready else 'rest',
@@ -241,7 +262,9 @@ def person_view(eng, p, now):
             'previewAssign': deepcopy(preview), 'upcomingShift': upcoming,
             'awaitingShiftEntry': eng.d['status'] == 'live' and F.awaiting_shift_entry(p),
             'canBatchCheckIn': check_in,
-            'batchCheckedIn': upcoming and F.checked_in(p), 'arrivalOutcome': None,
+            'batchCheckedIn': F.checked_in(p), 'arrivalOutcome': None,
+            'missedCheckIn': eng.d['status'] == 'live' and F.missed_check_in(p, now),
+            'morningRest': F.morning_rest(p) and now < F.MORNING_REST_END,
             'preparing': preparing,
             'continuousMinutes': max(0, now - p['continuousStart']) if p.get('continuousStart') is not None and L else 0,
             'mealEligible': eng.meal_eligible(p), 'mealOptions': eng.meal_options(p, now),
@@ -296,7 +319,7 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
     before['existingSegmentIds'] = H.existing_segment_ids(db, eng, now)
     result = {'ok': True, 'executed': True}
     if act == 'batch_check_in':
-        if not F.can_check_in(eng, p, now):
+        if not F.can_check_in(eng, p, now) or F.checked_in(p):
             raise ActionError('当前不在本班次签到时间内')
         p['batchCheckedInFor'] = p['start']
         eng.h.log('batch_check_in', actor, pid, None, None, {'start': p['start']})
@@ -304,7 +327,8 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         if body.get('group_confirm'):
             raise ActionError('多人预排必须逐人确认上岗')
         result = F.execute(eng, pid, now, actor, body.get('expected_line'),
-                           body.get('expected_push7', F.UNSPECIFIED_ROUTE), expected_kind=body.get('expected_kind'))
+                           body.get('expected_push7', F.UNSPECIFIED_ROUTE), expected_kind=body.get('expected_kind'),
+                           expected_opening=body.get('expected_opening', F.UNSPECIFIED_ROUTE))
         if result.get('line_changed'):
             S.save_day(db, row, eng.d)
             return result
@@ -539,6 +563,11 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
                    'source': getattr(actor, 'kind', 'manager'), 'readyAt': p.get('readyAt'),
                    'sequence': p.get('confirmationSequence', 0),
                    'line': L['id'] if L else None, 'post': L['posts'][i]['name'] if L else None}
+        task = result.pop('task', None)
+        if task:
+            receipt['task'] = {key: task[key] for key in (
+                'status', 'line', 'entryPost', 'kind', 'reason', 'pushes', 'instruction', 'instructionParts',
+                'opening', 'shiftEndPosts', 'beforePosts', 'afterPosts')}
         eng.d.setdefault('confirmations', {})[token] = receipt
         result['result'] = receipt
     eng.d['lastTick'] = now

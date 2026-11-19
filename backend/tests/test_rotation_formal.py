@@ -104,7 +104,8 @@ def seed_today(rule_version=1):
                 state['lines'][0]['posts'][i].update(occ=no,since=minute-30)
             p=state['persons']['9710000'];p['assign']={'line':'A1','mode':'push','departAt':minute-1}
             S.save_day(db,row,state)
-        return aid
+    S.tick_attraction(aid, formal=True)
+    return aid
 
 
 def test_personal_confirmation_updates_shared_formal_board_without_touching_sandbox():
@@ -179,6 +180,7 @@ def seed_cohort(three=False, mixed=False):
                 state['persons']['9710010']['visited'] = ['B1']
                 state['persons']['9710010']['start'] -= 30
             S.save_day(db,row,state)
+    S.tick_attraction(aid, formal=True)
     return aid
 
 
@@ -196,6 +198,7 @@ def seed_departure_hint():
             state['persons']['9710030'].update(end=now+32, continuousStart=now-90)
             S.set_sim_clock(S.load_config(db, aid), work_date, now, paused=True)
             S.save_day(db, row, state)
+    S.tick_attraction(aid, formal=True)
     return aid, now
 
 
@@ -212,6 +215,7 @@ def test_departure_hint_crosses_30_minutes_without_changing_the_issued_task(monk
             first = before['person']
             assert '回休息室' in first['departureRoutes'][-1]['to']
             clock['minute'] = now + 2
+            S.tick_attraction(aid, formal=True)
             board = ok(screen.get('/api/rotation/screen/state'))
             assert board['version'] > before['version']
             current = next(p for p in board['day']['persons'] if p['pid'] == first['pid'])
@@ -634,6 +638,7 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
         live_line['line_context']['planRevision']=board['prestartPlanRevision']
         clock['minute']=435
         assert manager.post('/api/rotation-board/act',json=live_line).status_code==409
+        S.tick_attraction(aid, formal=True)
         frozen=ok(manager.get(path))
         assert frozen['frozen'] and frozen['opening_source']=='opening' and not frozen['can_edit']
         assert frozen['day']['lines']==after['day']['lines']
@@ -713,7 +718,8 @@ def seed_assignment_window(remaining=2):
 
 
 def test_formal_issued_task_is_locked_but_closed_line_refreshes_destination():
-    seed_assignment_window()
+    aid = seed_assignment_window()
+    S.tick_attraction(aid, formal=True)
     with TestClient(app) as operator,TestClient(app) as cm:
         login(operator,'9710020');login(cm,'9710000')
         own=ok(cm.get('/api/rotation-board/me'))['person']
@@ -823,6 +829,7 @@ def test_shift_end_marker_refreshes_board_and_screen_without_a_new_task(monkeypa
         before, target, _ = snapshot(operator, '/api/rotation-board/board')
         assert target['preparing'] is None
         clock['minute'] = now + 1
+        S.tick_attraction(aid, formal=True)
         for client, endpoint in [(operator, '/api/rotation-board/board'), (screen, '/api/rotation/screen/state')]:
             version, target, people = snapshot(client, endpoint)
             assert version > before
@@ -856,6 +863,7 @@ def test_arrival_hint_refreshes_both_boards_at_actual_30_minute_boundary(monkeyp
         versions = []
         for minute, expected in [(now, None), (now+2, 'done')]:
             clock['minute'] = minute
+            S.tick_attraction(aid, formal=True)
             for client, endpoint in readers:
                 data = ok(client.get(endpoint))
                 versions.append(data['version'])
@@ -1013,6 +1021,7 @@ def test_restore_scheduled_closure_after_it_executed_restores_occupant_state(mon
         p=ok(operator.post('/api/rotation-board/adjust/preview',json=body))
         ok(operator.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':p['expected_snapshot']}))
         time['now']=close+.1
+        S.tick_attraction(aid, formal=True)
         board=ok(operator.get('/api/rotation-board/board'))['day']
         assert not board['lines'][0]['posts'][0]['open']
         assert next(p for p in board['persons'] if p['pid']=='9710020')['state']=='walkback'
@@ -1073,6 +1082,7 @@ def test_shift_end_reaches_formal_board_lounge_screen_and_personal_todo(monkeypa
         assert ok(manager.get(board_path))['day']['rotationEnd'] == 13 * 60
         assert ok(screen.get(screen_path))['day']['status'] == 'live'
         clock['minute'] = 13 * 60
+        S.tick_attraction(aid, formal=True)
         assert ok(screen.get(screen_path))['day']['status'] == 'ended'
         assert ok(manager.get(board_path))['day']['status'] == 'ended'
         personal = ok(member.get('/api/rotation-board/me'))['person']

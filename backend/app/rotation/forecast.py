@@ -18,8 +18,10 @@ SHIFT_PREVIEW_MINUTES = 20
 MEAL_TO_REST_MINUTES = 20
 BATCH_CHECK_IN_MINUTES = 15
 BATCH_LEAD_MINUTES = 3
-BATCH_MIN_PEOPLE = 16
-OPENING_SHIFT_SECONDS = {7 * 3600, (7 * 60 + 15) * 60}
+SEVEN_SHIFT = 420
+RELIEF_SHIFT = 435
+MORNING_REST_END = 450
+EARLY_PENDING_SHIFTS = {300, 315}
 PRIORITY = {'sick': 0, 'push7': 1, 'off': 2, 'opening': 3, 'vacancy': 3, 'out': 4, 'push': 5}
 POOLS = {'pending', 'rest', 'meal', 'away', 'other'}
 WAITING_TO_REST = {'pending', 'walkback', 'op'}
@@ -118,23 +120,38 @@ def set_sort_time(line, value, base=None):
         line['sortBase'] = base
 
 
-def batch_shift(eng, start_second):
-    return start_second not in OPENING_SHIFT_SECONDS and shift_counts(eng)[start_second] >= BATCH_MIN_PEOPLE
+def batch_shift(start):
+    return start not in EARLY_PENDING_SHIFTS and start not in (SEVEN_SHIFT, RELIEF_SHIFT)
 
 
-def batch_member(eng, p):
+def batch_member(p):
     return (p['state'] == 'notyet' and p['role'] == 'rotation' and not p.get('manualPaused')
-            and not p.get('initialPool') and batch_shift(eng, round(p['start'] * 60)))
+            and not p.get('initialPool') and batch_shift(p['start']))
+
+
+def attendance_candidate(p):
+    return (p['state'] in ('notyet', 'onpost') and p['role'] in ('rotation', 'op')
+            and not p.get('manualPaused') and p.get('initialPool') not in ('sick', 'away'))
 
 
 def can_check_in(eng, p, now):
-    return (eng.d['status'] == 'live' and str(round(p['start'] * 60)) not in eng.d.get('completedShiftBatches', {})
-            and batch_member(eng, p)
+    return (eng.d['status'] == 'live' and attendance_candidate(p)
             and p['start'] - BATCH_CHECK_IN_MINUTES <= now < p['start'] - BATCH_LEAD_MINUTES)
 
 
 def checked_in(p):
     return p.get('batchCheckedInFor') == p['start']
+
+
+def missed_check_in(p, now):
+    return (p['start'] == SEVEN_SHIFT and attendance_candidate(p) and not checked_in(p)
+            and not p.get('sevenReplaced')
+            and now >= SEVEN_SHIFT - BATCH_LEAD_MINUTES)
+
+
+def morning_rest(p):
+    return (p['start'] == RELIEF_SHIFT and p['role'] == 'rotation' and p['state'] in ('rest', 'ready')
+            and p.get('breakStart') == RELIEF_SHIFT and p.get('readyAt') == MORNING_REST_END)
 
 
 def scheduled_opening(post):
@@ -242,6 +259,10 @@ def route(eng, assignment, at, entry=None):
         stop = next((i for i in ix if line['posts'][i].get('occ') == target), None)
         if stop is None:
             raise ActionError('接替目标已变化，请重新查看预排')
+        if kind == 'push7':
+            key = line['posts'][stop]['key']
+            return [{'pid': assignment['owner'], 'from': None, 'to': key},
+                    {'pid': target, 'from': key, 'to': None, 'outcome': 'rest'}]
         ix = [i for i in ix if i <= stop]
         # A high-priority relief must remove its actual target, even when the
         # prefix contains a vacancy. Compact the prefix; never report a relief
@@ -278,14 +299,14 @@ def settle_openings(line, moves, source_key=None):
     filled_keys = arrivals - departures
     filled = [post for post in line['posts'] if post.get('openRequest') and post['key'] in filled_keys]
     if not filled:
-        return False
+        return []
     vacated = departures - arrivals
     for post in filled:
         post['openRequest'] = False
     gaps = [post for post in line['posts'] if post['key'] in vacated and not post.get('openRequest')]
     for post in gaps[:len(filled)]:
         post['openRequest'] = True
-    return True
+    return [post['key'] for post in filled]
 
 
 def candidate_order(p):
@@ -305,7 +326,7 @@ def awaiting_shift_entry(p):
     return p['state'] == 'ready' and p.get('directShiftEntry') == p['start']
 
 
-def opening_push7_candidates(eng, *, planned=False, now=435):
+def opening_push7_candidates(eng, *, planned=False, now=RELIEF_SHIFT, booked=None):
     """Choose unseated 07:15 staff for targets expected to need relief."""
     from app.rotation import daily as D
     from app.rotation.engine import _m
@@ -325,10 +346,12 @@ def opening_push7_candidates(eng, *, planned=False, now=435):
         return {}
     plan = eng.d['plan']
     seated = set(plan['seven'].values()) | set(plan['crew'].values())
-    candidates = {p['pid']: p for p in eng.P.values()
-                  if p['start'] == 435 and p['role'] == 'rotation' and p.get('state', 'notyet') == 'notyet'
+    people = eng.P.values() if booked is None else booked
+    candidates = {p['pid']: p for p in people
+                  if p['start'] == RELIEF_SHIFT and p['role'] == 'rotation'
+                  and (p['state'] == 'notyet' if booked is None else morning_rest(p) and checked_in(p))
                   and not p.get('initialPool') and not p.get('manualPaused') and p['pid'] not in seated
-                  and eng.can_board(p, max(435, now), max(435, now))}
+                  and eng.can_board(p, max(RELIEF_SHIFT, now), max(RELIEF_SHIFT, now))}
     if not candidates:
         return {}
     bindings = {pid: target for pid, target in plan.get('push7Targets', {}).items()
@@ -353,7 +376,9 @@ def shift_previews(eng, now):
     previews, expected_ready = {}, {}
     for p in upcoming:
         pid, start = p['pid'], p['start']
-        if (start <= 435 or batch_shift(eng, round(start * 60))) and p.get('initialPool') != 'rest' and pid in seats:
+        if start in EARLY_PENDING_SHIFTS:
+            continue
+        if p.get('initialPool') != 'rest' and pid in seats:
             line, i, post = eng.plan_post(seats[pid])
             if i in indexes(line, start) and occupant(eng, post, start) in (None, pid):
                 previews[pid] = {'line': line['id'], 'entryPost': post['name'], 'why': '开班预排'}
@@ -501,15 +526,68 @@ def plan(eng, now, *, only_pid=None, preview_shift=False, batch_person=None, pro
     return any(before[pid] != p.get('assign') for pid, p in eng.P.items())
 
 
-def post_comparison(eng, line):
-    return [{'key': x['key'], 'name': x['name'], 'occ': x.get('occ'),
-             'occName': eng.P.get(x.get('occ'), {}).get('name'), 'open': x.get('open'),
-             'hold': bool(x.get('hold') or x.get('hold101'))} for x in line['posts']]
+def post_comparison(eng, line, now):
+    posts = []
+    for post in line['posts']:
+        person = eng.P.get(post.get('occ'))
+        posts.append({'key': post['key'], 'name': post['name'], 'occ': post.get('occ'),
+                      'occName': person.get('name') if person else None, 'open': post.get('open'),
+                      'hold': bool(post.get('hold') or post.get('hold101')),
+                      'seven': bool(person and seven_target(person, opening_crew=True)),
+                      'missedCheckIn': bool(person and missed_check_in(person, now))})
+    return posts
+
+
+def exit_outcome(eng, p, move, at):
+    outcome = move.get('outcome', 'rest')
+    if outcome == 'rest' and not p.get('manualRestored') and finishes_on_exit(eng, p, at):
+        return 'done'
+    return outcome
+
+
+def route_signature(route_detail):
+    return hashlib.sha256(json.dumps(route_detail, sort_keys=True).encode()).hexdigest()
+
+
+def task_handoff(eng, line, before, after, moves, at, kind):
+    by_key = {post['key']: i for i, post in enumerate(before)}
+    handoffs = []
+    pushes = 0
+    for move in moves[1:]:
+        person = eng.P[move['pid']]
+        source = by_key[move['from']]
+        step = {'postKey': move['from'], 'post': before[source]['name'], 'name': person['name']}
+        if move['to']:
+            destination = by_key[move['to']]
+            step.update(outcome='post', destination=after[destination]['name'])
+            if move['from'] == moves[0]['to']:
+                # A single entry advances the original occupant by one participating post.
+                pushes = 1
+        else:
+            step['outcome'] = exit_outcome(eng, person, move, at)
+            if kind == 'push7':
+                step['kind'] = kind
+        handoffs.append(step)
+    instruction = handoff_instruction(handoffs)
+    opening = None
+    previous = None
+    for i in indexes(line, at):
+        post = line['posts'][i]
+        if post['key'] == moves[-1]['to'] and post.get('openRequest') and not occupant(eng, post, at):
+            opening = {'key': post['key'], 'name': post['name'], 'afterPost': previous}
+            after[i]['open'] = True
+            placement = f'顺推加在「{previous}」后' if previous else f"直接到「{post['name']}」加岗"
+            instruction = {'instruction': placement, 'instructionParts': [{'text': placement, 'emphasis': True}]}
+            break
+        previous = post['name']
+    return {'pushes': pushes, **instruction, 'opening': opening,
+            'shiftEndPosts': [step['postKey'] for step in handoffs if step['outcome'] == 'done'],
+            'openingRoute': route_signature([moves, opening, pushes, instruction['instruction']]) if opening else None}
 
 
 def task_view(eng, p, now):
     a = p.get('assign')
-    if not a:
+    if not a or 'kind' not in a:
         return None
     from app.rotation import workflow as W
     at = max(now, readiness(p), a.get('notBefore', 0))
@@ -518,24 +596,27 @@ def task_view(eng, p, now):
     except ActionError:
         return None
     line = eng.line(a['line'])
-    before = post_comparison(eng, line)
+    before = post_comparison(eng, line, now)
     after = deepcopy(before)
     for move in moves:
         for post in after:
             if post['key'] == move['from']:
-                post.update(occ=None, occName=None)
+                post.update(occ=None, occName=None, seven=False, missedCheckIn=False)
     for move in moves:
         for post in after:
             if post['key'] == move['to']:
-                post.update(occ=move['pid'], occName=eng.P[move['pid']]['name'])
+                person = eng.P[move['pid']]
+                post.update(occ=move['pid'], occName=person['name'],
+                            seven=seven_target(person, opening_crew=True),
+                            missedCheckIn=missed_check_in(person, now))
     fake = {'moves': moves, 'status': 'forecast', 'template': a}
     return {'id': p['pid'], 'revision': p.get('confirmationSequence', 0), 'batch': str(math.floor(readiness(p))),
             'batchSize': a.get('batchSize', 1), 'line': a['line'], 'entryPost': next(x['name'] for x in before if x['key'] == moves[0]['to']),
             'sortAt': float(line.get('sortAt', 0)), 'participatingPosts': len(indexes(line, at)), 'reason': a['why'],
             'allowedAt': a.get('allowedAt', readiness(p)), 'deadlineAt': deadline(eng, p, now, a.get('notBefore', 0)), 'status': 'forecast',
             'kind': a['kind'], 'mode': a['mode'], 'routes': W.route_view(eng, fake), 'beforePosts': before, 'afterPosts': after,
-            'push7Route': hashlib.sha256(json.dumps(moves, sort_keys=True).encode()).hexdigest()
-            if a['kind'] == 'push7' else None,
+            'push7Route': route_signature(moves) if a['kind'] == 'push7' else None,
+            **task_handoff(eng, line, before, after, moves, at, a['kind']),
             'transferredFromName': None}
 
 
@@ -642,9 +723,7 @@ def execute_moves(eng, p, assignment, moves, now, actor, manual=False, source_ke
             post['occ'] = None
         if not move['to']:
             W.finish_continuous(q, stamp)
-            outcome = move.get('outcome', 'rest')
-            if outcome == 'rest' and not q.get('manualRestored') and finishes_on_exit(eng, q, now):
-                outcome = 'done'
+            outcome = exit_outcome(eng, q, move, now)
             away = {'reason': '出圈', 'until': None} if outcome == 'away' else None
             if outcome == 'away' and q.get('requestedExit') != 'out':
                 absence = eng.next_absence(q, now)
@@ -701,7 +780,8 @@ def confirmation_plan(eng, pid, now):
             eng.P[key]['assign'] = assignment
 
 
-def execute(eng, pid, now, actor, expected_line, expected_push7=UNSPECIFIED_ROUTE, *, expected_kind=None):
+def execute(eng, pid, now, actor, expected_line, expected_push7=UNSPECIFIED_ROUTE, *,
+            expected_kind=None, expected_opening=UNSPECIFIED_ROUTE):
     p = eng.person(pid)
     if p.get('exception') or p['state'] == 'exception':
         raise ActionError('已超时，请由大屏、主管、TR或经理拖拽安排')
@@ -715,7 +795,8 @@ def execute(eng, pid, now, actor, expected_line, expected_push7=UNSPECIFIED_ROUT
     if now + EPS < a.get('notBefore', 0):
         raise ActionError('尚未到计划加岗时间')
     route_changed = expected_push7 is not UNSPECIFIED_ROUTE and expected_push7 != task['push7Route']
-    opening_changed = expected_kind not in (None, a['kind']) and 'opening' in (expected_kind, a['kind'])
+    opening_changed = (expected_kind not in (None, a['kind']) and 'opening' in (expected_kind, a['kind'])
+                       or expected_opening is not UNSPECIFIED_ROUTE and expected_opening != task['openingRoute'])
     if expected_line != a['line'] or route_changed or opening_changed:
         waiting = []
         if predicted_line == expected_line and expected_line != a['line']:
@@ -730,7 +811,8 @@ def execute(eng, pid, now, actor, expected_line, expected_push7=UNSPECIFIED_ROUT
     execute_moves(eng, p, a, moves, now, actor)
     finish_deferred_closures(eng, now)
     plan(eng, now)
-    return {'ok': True, 'line_changed': False, 'executed': True}
+    task.update(status='executed', afterPosts=post_comparison(eng, eng.line(a['line']), now))
+    return {'ok': True, 'line_changed': False, 'executed': True, 'task': task}
 
 
 def expire_closed_line_opening(line, post, now):
@@ -783,56 +865,122 @@ def release_reserved_seat(eng, p, *plans):
                 post.update(occ=None, since=None)
 
 
-def due_batch(eng, now):
+def due_batches(eng, now):
+    completed = eng.d.get('completedShiftBatches', {})
+    if abs(now - RELIEF_SHIFT) <= EPS and str(RELIEF_SHIFT * 60) not in completed:
+        morning = [p for p in eng.P.values() if p['start'] == RELIEF_SHIFT and checked_in(p)
+                   and not p.get('manualPaused') and (
+                       p['state'] == 'notyet' and p['role'] == 'rotation' or morning_rest(p))]
+        if morning:
+            yield RELIEF_SHIFT, morning
+
     start_second = round((now + BATCH_LEAD_MINUTES) * 60)
     start = start_second / 60
-    if (abs(start - now - BATCH_LEAD_MINUTES) > EPS or not batch_shift(eng, start_second)
-            or str(start_second) in eng.d.get('completedShiftBatches', {})):
-        return []
-    return [p for p in eng.P.values() if abs(p['start'] - start) <= EPS and batch_member(eng, p)]
+    if abs(start - now - BATCH_LEAD_MINUTES) > EPS or not batch_shift(start) or str(start_second) in completed:
+        return
+    booked = [p for p in eng.P.values() if abs(p['start'] - start) <= EPS and batch_member(p)]
+    if booked or start == MORNING_REST_END and any(morning_rest(p) and checked_in(p) for p in eng.P.values()):
+        yield start, booked
 
 
 def run_due_batch(eng, now, execute_batch):
-    booked = due_batch(eng, now)
-    if booked:
-        start = booked[0]['start']
+    for start, booked in due_batches(eng, now):
         eng.d.setdefault('completedShiftBatches', {})[str(round(start * 60))] = now
         execute_batch(eng, now, start, booked)
 
 
-def batch_handoff(eng, before_posts, after_posts, post_key):
-    index = next(i for i, post in enumerate(before_posts) if post['key'] == post_key)
-    original = before_posts[index]
-    if not original['occ']:
-        return None
-    handoff = {'post': original['name'], 'name': original['occName']}
-    for destination, post in enumerate(after_posts):
-        if post['occ'] == original['occ']:
-            return {**handoff, 'outcome': 'post', 'destination': post['name'],
-                    'steps': destination - index}
-    return {**handoff, 'outcome': eng.P[original['occ']]['state']}
+def batch_handoffs(eng, before_posts, after_posts, post_key, participating, push7_targets):
+    """Follow the original staff from the incoming employee's final post."""
+    before_by_key = {post['key']: (i, post) for i, post in enumerate(before_posts)}
+    after_by_worker = {post['occ']: (i, post) for i, post in enumerate(after_posts) if post['occ']}
+    handoffs = []
+    visited = set()
+    while post_key in before_by_key and post_key not in visited:
+        visited.add(post_key)
+        index, original = before_by_key[post_key]
+        if not original['occ']:
+            break
+        handoff = {'postKey': post_key, 'post': original['name'], 'name': original['occName']}
+        final_post = after_by_worker.get(original['occ'])
+        if final_post is None:
+            if original['occ'] in push7_targets:
+                handoff['kind'] = 'push7'
+            handoffs.append({**handoff, 'outcome': eng.P[original['occ']]['state']})
+            break
+        destination, post = final_post
+        handoffs.append({**handoff, 'outcome': 'post', 'destination': post['name'],
+                         'destinationKey': post['key'],
+                         'steps': sum(p['key'] in participating for p in before_posts[index + 1:destination + 1])})
+        post_key = post['key']
+    return handoffs
+
+
+def handoff_instruction(chain, opening_keys=()):
+    parts = []
+    previous = None
+    for step in chain:
+        notify = (f"{previous['name']}到岗后通知"
+                  if previous and previous.get('destination') == step['post'] else '通知')
+        outcome = step['outcome']
+        opening = step.get('destinationKey') in opening_keys
+        seven = step.get('kind') == 'push7'
+        emphasis = opening or seven or outcome in ('done', 'sick', 'away')
+        if outcome == 'post':
+            action = f"{'去加' if opening else '去'}{step['destination']}"
+        elif outcome in ('done', 'sick', 'away'):
+            action = {'done': '下班', 'sick': '下岗休病假', 'away': '出圈'}[outcome]
+        else:
+            action = '（7点班）下岗，回休息室' if seven else '下岗，回休息室'
+        prefix = ('。' if previous else '') + f"{notify}原{step['post']}的"
+        if emphasis:
+            parts.append({'text': prefix})
+            parts.append({'text': step['name'] + action, 'emphasis': True})
+        else:
+            parts.append({'text': prefix + step['name'] + action})
+        previous = step
+    return {'instruction': ''.join(part['text'] for part in parts), 'instructionParts': parts}
 
 
 def run_batch(eng, now, start, booked):
-    resting = [p for p in eng.P.values() if p['state'] in ('rest', 'ready', 'meal')
-               and not awaiting_shift_entry(p)
-               and now <= readiness(p) <= start and eligible(eng, p, readiness(p))
-               and not any(not a.get('done') and now < a['end'] and a['start'] <= readiness(p)
-                           for a in p.get('absences', []))]
-    arriving = [p for p in booked if checked_in(p) and start < p['end'] and eng.can_board(p, start, now)
-                and not any(a['start'] <= start < a['end'] for a in p.get('absences', []))]
-    people = sorted(resting, key=candidate_order) + sorted(arriving, key=lambda p: (p['forecastOrder'], p['pid']))
-    seat_plans = [{pid: key for key, pid in eng.d['plan'][kind].items()} for kind in ('crew', 'seven')]
-    for p in booked:
-        release_reserved_seat(eng, p, *seat_plans)
+    relief = start == RELIEF_SHIFT
+    if relief:
+        relief_targets = opening_push7_candidates(eng, now=now, booked=booked)
+        people = [eng.P[pid] for pid in relief_targets]
+    else:
+        resting = [p for p in eng.P.values() if p['state'] in ('rest', 'ready', 'meal')
+                   and not awaiting_shift_entry(p)
+                   and (booked or morning_rest(p))
+                   and (not morning_rest(p) or start == MORNING_REST_END and checked_in(p))
+                   and now <= readiness(p) <= start and eligible(eng, p, readiness(p))
+                   and not any(not a.get('done') and now < a['end'] and a['start'] <= readiness(p)
+                               for a in p.get('absences', []))]
+        arriving = [p for p in booked if checked_in(p) and start < p['end'] and eng.can_board(p, start, now)
+                    and not any(a['start'] <= start < a['end'] for a in p.get('absences', []))]
+        people = sorted(resting, key=candidate_order) + sorted(arriving, key=lambda p: (p['forecastOrder'], p['pid']))
+        seat_plans = [{pid: key for key, pid in eng.d['plan'][kind].items()} for kind in ('crew', 'seven')]
+        for p in booked:
+            release_reserved_seat(eng, p, *seat_plans)
     if not people:
         return
-    before = {line['id']: post_comparison(eng, line) for line in eng.d['lines']}
+    before = {line['id']: post_comparison(eng, line, now) for line in eng.d['lines']}
+    participating = {line['id']: {line['posts'][i]['key'] for i in indexes(line, now)}
+                     for line in eng.d['lines']}
+    filled_openings = {lid: set() for lid in before}
+    push7_targets = set()
+    morning_reporting = {p['pid'] for p in people if not relief and morning_rest(p)}
     placed = {}
     for p in people:
-        base = p['start'] if p['state'] == 'notyet' else readiness(p)
-        plan(eng, now, batch_person=p, protected=placed)
-        assignment = p.get('assign')
+        if relief:
+            target = relief_targets[p['pid']]
+            line, index = eng.find_post(target)
+            if line is None or index not in indexes(line, now):
+                continue
+            base = now
+            assignment = {'owner': p['pid'], 'line': line['id'], 'kind': 'push7', 'target': target}
+        else:
+            base = p['start'] if p['state'] == 'notyet' else readiness(p)
+            plan(eng, now, batch_person=p, protected=placed)
+            assignment = p.get('assign')
         p.pop('batchResult', None)
         if not assignment:
             pool(eng, p['pid'], 'rest', now, 'system', remaining=15, automatic=True)
@@ -842,13 +990,27 @@ def run_batch(eng, now, start, booked):
             p['batchResult'] = {'start': start, 'restUntil': p['readyAt']}
             continue
         moves = route(eng, assignment, now)
-        execute_moves(eng, p, assignment, moves, now, 'system', base=base)
         line_id = assignment['line']
+        filled_openings[line_id].update(execute_moves(eng, p, assignment, moves, now, 'system', base=base))
+        if assignment['kind'] == 'push7':
+            push7_targets.add(assignment['target'])
         placed[p['pid']] = line_id
         p['batchOnPost'] = start
         finish_deferred_closures(eng, now)
 
-    after = {lid: post_comparison(eng, eng.line(lid)) for lid in set(placed.values())}
+    after = {lid: post_comparison(eng, eng.line(lid), now) for lid in set(placed.values())}
+    opening_posts = {
+        lid: [{'key': post['key'], 'name': post['name']} for post in posts
+              if post['key'] in filled_openings[lid] and post['open'] and post['occ']]
+        for lid, posts in after.items()
+    }
+    shift_end_posts = {}
+    for lid, posts in after.items():
+        final_workers = {post['occ'] for post in posts}
+        shift_end_posts[lid] = [
+            post['key'] for post in before[lid]
+            if post['occ'] and post['occ'] not in final_workers and eng.P[post['occ']]['state'] == 'done'
+        ]
     for pid, lid in placed.items():
         p = eng.P[pid]
         line, i = eng.find_post(pid)
@@ -859,9 +1021,16 @@ def run_batch(eng, now, start, booked):
                 p['manualRestored'] = False
                 p['batchResult'] = {'start': start, 'restUntil': p['readyAt']}
             continue
-        p['batchResult'] = {'start': start, 'line': lid, 'post': line['posts'][i]['name'],
-                            'handoff': batch_handoff(eng, before[lid], after[lid], line['posts'][i]['key']),
+        post = line['posts'][i]
+        handoffs = batch_handoffs(eng, before[lid], after[lid], post['key'], participating[lid], push7_targets)
+        first = {key: value for key, value in handoffs[0].items()
+                 if key not in ('postKey', 'destinationKey', 'kind')} if handoffs else None
+        p['batchResult'] = {'start': start, 'line': lid, 'post': post['name'], 'postKey': post['key'],
+                            'handoff': first, 'handoffChain': handoffs,
+                            'shiftEndPosts': shift_end_posts[lid], 'openingPosts': opening_posts[lid],
                             'beforePosts': before[lid], 'afterPosts': after[lid]}
+        if pid in morning_reporting:
+            p['batchResult']['reportAt'] = MORNING_REST_END
 
 
 def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
@@ -875,11 +1044,10 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
     before = json.dumps(eng.d, sort_keys=True, ensure_ascii=False)
     if not eng.d.get('dailyOpening') and eng.P:
         first = min(p['start'] for p in eng.P.values())
-        freeze_at = first - BATCH_LEAD_MINUTES if batch_shift(eng, round(first * 60)) else first
+        freeze_at = first - BATCH_LEAD_MINUTES if batch_shift(first) else first
         eng._freeze_daily_opening(now, freeze_at=freeze_at)
     seats = {pid: key for key, pid in eng.d['plan']['crew'].items()}
     seven = {pid: key for key, pid in eng.d['plan']['seven'].items()}
-    arriving_relief = []
     for line in eng.d['lines']:
         for i, post in enumerate(line['posts']):
             expire_closed_line_opening(line, post, now)
@@ -891,8 +1059,7 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
                 if not post.get('hold') and not post.get('hold101'):
                     schedule_closure(eng, line, i, now)
     people = list(eng.P.values())
-    opening_relief = None
-    if now >= 435 and any(p['start'] == 435 and p['state'] == 'notyet' for p in people):
+    if now >= RELIEF_SHIFT and any(p['start'] == RELIEF_SHIFT and p['state'] == 'notyet' for p in people):
         people.sort(key=lambda p: p['start'])
     for p in people:
         # A pre-shift placement only overrides the clock until the shift starts.
@@ -909,27 +1076,20 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
                 else:
                     pool(eng, p['pid'], initial, now, 'system', remaining=15 if initial == 'rest' else None)
                 continue
-            start_second = round(p['start'] * 60)
-            if batch_member(eng, p) or (start_second not in OPENING_SHIFT_SECONDS and p['role'] == 'rotation'
-                                        and str(start_second) in eng.d.get('completedShiftBatches', {})):
+            if p['start'] in EARLY_PENDING_SHIFTS and p['role'] in ('rotation', 'op'):
                 release_reserved_seat(eng, p, seats, seven)
-                p.update(state='rest', readyAt=p['start'], breakKind='rest')
+                p.update(state='pending', readyAt=None)
                 continue
-            if p['start'] > 435 and p['role'] == 'rotation' and not eng.d.get('closed'):
+            if batch_member(p) and not eng.d.get('closed'):
                 release_reserved_seat(eng, p, seats, seven)
                 p.update(state='ready', readyAt=p['start'], readySince=p['start'],
                          breakKind='rest', directShiftEntry=p['start'])
                 p.pop('timeoutAt', None)
             else:
-                if p['start'] == 435 and opening_relief is None:
-                    opening_relief = opening_push7_candidates(eng, now=now)
-                eng._shift_start(p, now, seats, seven, opening_relief if p['start'] == 435 else None)
+                eng._shift_start(p, now, seats, seven, {} if p['start'] == RELIEF_SHIFT else None)
             if p['state'] == 'ready' and not awaiting_shift_entry(p):
-                push7 = opening_relief if p['start'] == 435 else eng.d['plan']['push7']
-                if p['pid'] not in push7:
+                if p['start'] == RELIEF_SHIFT or p['pid'] not in eng.d['plan']['push7']:
                     p.update(state='pending', readyAt=None)
-                elif p['start'] == 435:
-                    arriving_relief.append(p['pid'])
             if p['state'] == 'onpost':
                 L, i = eng.find_post(p['pid'])
                 opening = L['posts'][i].pop('openRequest', False)
@@ -962,13 +1122,6 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch):
     if advance_batches:
         run_due_batch(eng, now, execute_batch)
     plan(eng, now)
-    unused_relief = [eng.P[pid] for pid in arriving_relief if eng.P[pid]['state'] == 'ready'
-                     and (eng.P[pid].get('assign') or {}).get('kind') not in ('push7', 'sick')]
-    for p in unused_relief:
-        p['flags'] = [flag for flag in p.get('flags', []) if flag != '推7点']
-        eng.start_opening_rest(p, now)
-    if unused_relief:
-        plan(eng, now)
     available = any(indexes(L, now) for L in eng.d['lines'])
     paused_at = eng.d.get('forecastPausedAt')
     if not available and paused_at is None:

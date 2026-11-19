@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 
+from app.excel_export_utils import STATISTICS_WORKBOOK_INTERRUPTED
 from app.v2_auth import current_user, V2User
 from app.v2_database import get_db, EXPORT_DIR, SessionLocal
 
@@ -35,6 +36,7 @@ TTL = 1800
 MAX_BODY = 32 * 1024 * 1024
 MAX_OUTPUT = 80 * 1024 * 1024
 MAX_CACHE = 256 * 1024 * 1024
+STATISTICS_EXPORT_PATH = "/api/statistics/export"
 
 
 @dataclass
@@ -52,19 +54,24 @@ class Job:
     elapsed: float = 0
     finished: float = 0
     headers: dict = field(default_factory=dict)
+    retry_filters: dict[str, str] | None = None
+    retry_task_id: str | None = None
 
     def payload(self):
-        return {"id": self.id, "label": self.label, "status": self.status,
-                "error": self.error, "bytes": self.size,
-                "elapsed_seconds": round(self.elapsed, 2),
+        data = {"id": self.id, "label": self.label, "status": self.status,
+                "error": self.error, "bytes": self.size, "elapsed_seconds": round(self.elapsed, 2),
                 "download_url": f"/api/export-tasks/{self.id}/file" if self.status == "completed" else None}
+        if self.status == "failed" and self.retry_filters is not None:
+            data["retry_filters"] = self.retry_filters
+            data["retry_task_id"] = self.retry_task_id
+        return data
 
 
 def target_kind(target):
     parts = urlsplit(target)
     if parts.scheme or parts.netloc or parts.fragment or not target.startswith("/api/"):
         raise HTTPException(400, "无效导出入口")
-    labels = {"/api/statistics/export": "景点数据 Excel",
+    labels = {STATISTICS_EXPORT_PATH: "景点数据 Excel",
               "/api/pr-rankings/export": "PR排名 Excel",
               "/api/declaration-statistics/export": "声明统计 Excel",
               "/api/hr-monthly-reports/export": "月报 PPTX"}
@@ -82,7 +89,7 @@ def scope_key(db, user, target):
     if getattr(user, "rotation_temporary", False):
         raise HTTPException(403, "轮岗专用账号不可导出")
     path = parts.path
-    if path == "/api/statistics/export" and "DATA_EXPORT" not in user.permissions:
+    if path == STATISTICS_EXPORT_PATH and "DATA_EXPORT" not in user.permissions:
         raise HTTPException(403, "没有导出权限")
     if path == "/api/pr-rankings/export":
         if user.role.code not in {"GSM", "AM", "OM", "HR_CIRCLE"}:
@@ -188,8 +195,12 @@ def run_job(job, application, original_scope, headers, method):
             if status != 200:
                 try:
                     detail = json.loads(error_body).get("detail")
-                except (ValueError, UnicodeError):
+                except (ValueError, AttributeError):
                     detail = None
+                if (status == 503 and parts.path == STATISTICS_EXPORT_PATH and isinstance(detail, dict)
+                        and detail.get("code") == STATISTICS_WORKBOOK_INTERRUPTED):
+                    job.retry_filters = detail["filters"]
+                    detail = detail["message"]
                 raise ValueError(detail if isinstance(detail, str) else "导出未完成，请回原页面核对权限、筛选或预览后重试")
             content_type = response_headers.get("content-type", "").split(";")[0]
             if content_type not in {"application/pdf", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.openxmlformats-officedocument.presentationml.presentation"}:
@@ -232,6 +243,40 @@ def run_job(job, application, original_scope, headers, method):
                 size -= old.size
 
 
+def reserve_task(user_id, target, label, scope):
+    """Reserve a queue slot while the caller holds the task lock."""
+    active = [j for j in _jobs.values() if j.status in {"receiving", "queued", "running"}]
+    if len(active) >= 4 or sum(j.owner == user_id for j in active) >= 2:
+        raise HTTPException(429, "导出队列已满，请等待当前任务完成后再试")
+    if len(_jobs) >= 80:
+        raise HTTPException(429, "导出缓存暂满，请稍后再试")
+    directory = EXPORT_DIR / "background-tasks"
+    directory.mkdir(parents=True, exist_ok=True)
+    # Only our two named scratch files in resolved, direct child folders.
+    active_dirs = {Path(j.directory.name) for j in _jobs.values()}
+    for child in directory.iterdir():
+        if child in active_dirs or child.is_symlink() or not child.is_dir() or child.resolve().parent != directory.resolve():
+            continue
+        if re.fullmatch(r"task-[a-z0-9_]+", child.name) and time() - child.stat().st_mtime > TTL:
+            for name in ("request", "result"):
+                (child / name).unlink(missing_ok=True)
+            try:
+                child.rmdir()
+            except OSError:
+                pass
+    job = Job(uuid4().hex, user_id, target, label, scope, tempfile.TemporaryDirectory(prefix="task-", dir=directory))
+    _jobs[job.id] = job
+    return job
+
+
+def enqueue_task(job, request, method, size):
+    headers = [(k, v) for k, v in request.scope["headers"] if k.lower() in {b"cookie", b"host", b"origin", b"content-type", b"user-agent"}]
+    headers.append((b"content-length", str(size).encode()))
+    original = {k: request.scope[k] for k in ("scheme", "server", "client", "http_version") if k in request.scope}
+    job.status = "queued"
+    _pool.submit(run_job, job, request.app, original, headers, method)
+
+
 @router.post("/export-tasks", status_code=202)
 async def create_task(request: Request, target: str, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     parts, label = target_kind(target)
@@ -239,28 +284,7 @@ async def create_task(request: Request, target: str, db: Session = Depends(get_d
     method = "POST" if parts.path == "/api/hr-monthly-reports/export" else "GET"
     with _lock:
         expire()
-        active = [j for j in _jobs.values() if j.status in {"receiving", "queued", "running"}]
-        if len(active) >= 4 or sum(j.owner == user.id for j in active) >= 2:
-            raise HTTPException(429, "导出队列已满，请等待当前任务完成后再试")
-        if len(_jobs) >= 80:
-            raise HTTPException(429, "导出缓存暂满，请稍后再试")
-        directory = EXPORT_DIR / "background-tasks"
-        directory.mkdir(parents=True, exist_ok=True)
-        # Only our two named scratch files in resolved, direct child folders.
-        # A crash cannot leave unbounded orphaned exports on disk indefinitely.
-        active_dirs = {Path(j.directory.name) for j in _jobs.values()}
-        for child in directory.iterdir():
-            if child in active_dirs or child.is_symlink() or not child.is_dir() or child.resolve().parent != directory.resolve():
-                continue
-            if re.fullmatch(r"task-[a-z0-9_]+", child.name) and time() - child.stat().st_mtime > TTL:
-                for name in ("request", "result"):
-                    (child / name).unlink(missing_ok=True)
-                try:
-                    child.rmdir()
-                except OSError:
-                    pass
-        job = Job(uuid4().hex, user.id, target, label, scope, tempfile.TemporaryDirectory(prefix="task-", dir=directory))
-        _jobs[job.id] = job
+        job = reserve_task(user.id, target, label, scope)
     try:
         size = 0
         with open(Path(job.directory.name) / "request", "wb") as output:
@@ -269,17 +293,42 @@ async def create_task(request: Request, target: str, db: Session = Depends(get_d
                 if size > (MAX_BODY if method == "POST" else 0):
                     raise HTTPException(413, "导出素材过大，照片总计不得超过30MB")
                 output.write(chunk)
-        headers = [(k, v) for k, v in request.scope["headers"] if k.lower() in {b"cookie", b"host", b"origin", b"content-type", b"user-agent"}]
-        headers.append((b"content-length", str(size).encode()))
-        original = {k: request.scope[k] for k in ("scheme", "server", "client", "http_version") if k in request.scope}
-        job.status = "queued"
-        _pool.submit(run_job, job, request.app, original, headers, method)
+        enqueue_task(job, request, method, size)
         return job.payload()
     except BaseException:
         with _lock:
             _jobs.pop(job.id, None)
             job.directory.cleanup()
         raise
+
+
+@router.post("/export-tasks/{key}/retry", status_code=202)
+def retry_task(key: str, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+    source = owned(key, user)
+    scope = scope_key(db, user, source.target)
+    if scope != source.scope:
+        raise HTTPException(403, "账号权限或可见范围已变化，请重新导出")
+    with _lock:
+        expire()
+        if _jobs.get(key) is not source:
+            raise HTTPException(404, "导出任务已过期，请回原页面重新导出")
+        if source.status != "failed" or source.retry_filters is None:
+            raise HTTPException(409, "此任务无法按原条件重试，请查看任务状态")
+        if source.retry_task_id is not None:
+            existing = _jobs.get(source.retry_task_id)
+            if existing is None:
+                raise HTTPException(409, "已提交的重试任务已失效，请回原页面重新导出")
+            return existing.payload()
+        job = reserve_task(user.id, source.target, source.label, scope)
+        try:
+            (Path(job.directory.name) / "request").touch()
+            enqueue_task(job, request, "GET", 0)
+        except BaseException:
+            _jobs.pop(job.id, None)
+            job.directory.cleanup()
+            raise
+        source.retry_task_id = job.id
+        return job.payload()
 
 
 @router.get("/export-tasks")

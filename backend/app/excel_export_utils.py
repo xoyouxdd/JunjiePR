@@ -9,6 +9,8 @@ from urllib.parse import quote
 
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
+STATISTICS_WORKBOOK_INTERRUPTED = "STATISTICS_WORKBOOK_INTERRUPTED"
+
 TITLE_FILL = PatternFill("solid", fgColor="1F4E78")
 TITLE_FONT = Font(name="Microsoft YaHei", bold=True, size=16, color="FFFFFF")
 LABEL_FILL = PatternFill("solid", fgColor="F3F7FB")

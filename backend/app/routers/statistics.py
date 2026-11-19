@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date
 from decimal import Decimal
@@ -10,7 +11,7 @@ from time import monotonic
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -22,7 +23,7 @@ from app.month_rank_policy import monthly_ranks_enabled
 from app.role_constants import SCORED_BASE_CODES
 from app.data_cache import PR_RANKING_CACHE_SECONDS, STATISTICS_CACHE_SECONDS, _pr_ranking_cache_lock, _pr_ranking_response_cache, _statistics_cache_lock, _statistics_response_cache
 from app.excel_export import append_supervisor_score_sheets, build_pr_rankings_workbook, build_statistics_workbook
-from app.excel_export_utils import content_disposition
+from app.excel_export_utils import STATISTICS_WORKBOOK_INTERRUPTED, content_disposition
 from app.excel_presentation import finalize_statistics_workbook, save_export_workbook
 from app.score_queries import employee_month_scores
 from app.v2_auth import V2User, current_user, require_permissions
@@ -511,24 +512,41 @@ def statistics_export_preview(
 @router.get("/statistics/export")
 def export_statistics(month: str, attraction_id: int | None = None, keyword: str | None = None, title: str | None = None, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DATA_EXPORT")), issuer_keyword: str = "", issuer_population: str = "frontline"):
     data = statistics_payload(db, month, attraction_id, keyword, title, user, include_records=True, issuer_keyword=issuer_keyword, issuer_population=issuer_population)
-    wb, attraction_label, title_label = build_statistics_workbook(
-        db,
-        data,
-        month=month,
-        attraction_id=attraction_id,
-        keyword=keyword,
-        exporter_no=user.employee.employee_no,
-        exporter_name=user.name,
-        exporter_role_name=user.role.name,
-        exporter_role_code=user.role.code,
-    )
-    if _statistics_export_has_supervisor_sheets(data["title"], keyword):
-        supervisor_data = statistics_payload(db, month, attraction_id, None, "SUPERVISOR", user, include_records=True)
-        append_supervisor_score_sheets(wb, db, supervisor_data, month)
-    finalize_statistics_workbook(wb)
-    watermark_workbook(wb, user.employee.employee_no)
     output = BytesIO()
-    save_export_workbook(wb, output)
+    try:
+        wb, attraction_label, title_label = build_statistics_workbook(
+            db,
+            data,
+            month=month,
+            attraction_id=attraction_id,
+            keyword=keyword,
+            exporter_no=user.employee.employee_no,
+            exporter_name=user.name,
+            exporter_role_name=user.role.name,
+            exporter_role_code=user.role.code,
+        )
+        if _statistics_export_has_supervisor_sheets(data["title"], keyword):
+            supervisor_data = statistics_payload(db, month, attraction_id, None, "SUPERVISOR", user, include_records=True)
+            append_supervisor_score_sheets(wb, db, supervisor_data, month)
+        finalize_statistics_workbook(wb)
+        watermark_workbook(wb, user.employee.employee_no)
+        save_export_workbook(wb, output)
+    except (HTTPException, SQLAlchemyError):
+        raise
+    except Exception as exc:
+        # Only failures before the export audit commits can be retried from the task.
+        logging.getLogger(__name__).exception("Statistics workbook generation interrupted")
+        effective_circle = data["filters"]["attraction_id"]
+        attraction = db.get(Attraction, effective_circle) if effective_circle else None
+        raise HTTPException(503, detail={
+            "code": STATISTICS_WORKBOOK_INTERRUPTED,
+            "message": "报告制作中断，可以重试。",
+            "filters": {
+                "month": month,
+                "attraction_name": attraction.name if attraction else "全部可见景点圈",
+                "keyword": (keyword or "").strip(),
+            },
+        }) from exc
     output.seek(0)
     write_audit(db, user.employee, "导出统计数据", "statistics_export", month, after={"attraction_id": attraction_id, "title": data["title"], "keyword": keyword or "", "employee_count": len(data["scores"]), "issuer_keyword": issuer_keyword, "issuer_population": issuer_population})
     db.commit()

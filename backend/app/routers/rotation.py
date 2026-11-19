@@ -210,8 +210,7 @@ def rotation_board(db: Session = Depends(get_db), actor: RotationActor = Depends
 def rotation_screen_state(db: Session = Depends(get_db), actor: RotationActor = Depends(require_screen)):
     aid=rotation_attraction_id(db)
     db.rollback()
-    service.tick_attraction(aid,formal=True)
-    payload = service.screen_payload(db, aid)
+    payload = service.screen_payload(db, aid, committed_only=True)
     payload['formal']=True
     return payload
 

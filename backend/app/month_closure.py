@@ -152,23 +152,31 @@ def month_close_work_queries(db: Session, month: str, attraction_id: int | None)
             "circle_transfer": transfer_query}
 
 
-def month_close_checklist(db: Session, month: str, attraction_id: int | None) -> list[dict]:
+def month_close_checklist(db: Session, month: str, attraction_id: int | None, *, include_record_links: bool = False) -> list[dict]:
     queries = month_close_work_queries(db, month, attraction_id)
     pending_recognitions = queries["recognition_review"].count()
     unresolved_materials = queries["deduction_material"].count()
     upgrade_requests = queries["deduction_upgrade"].count()
     follow_ups = queries["deduction_follow_up"].count()
     pending_transfers = queries["circle_transfer"].count()
-    return [
+    checklist = [
         {"code": "recognition_review", "name": "待复核签卡", "count": pending_recognitions, "target": None, "responsible": "请联系对应主管完成复核"},
         {"code": "deduction_material", "name": "待补/生成失败材料", "count": unresolved_materials, "target": None, "responsible": "请联系登记人或主管补充材料"},
         {"code": "deduction_upgrade", "name": "待升级工单", "count": upgrade_requests, "target": None, "responsible": "请联系有审核权限的GSM处理"},
         {"code": "deduction_follow_up", "name": "重复违规待跟进", "count": follow_ups, "target": None, "responsible": "请联系对应主管完成跟进"},
         {"code": "circle_transfer", "name": "待确认跨圈调动", "count": pending_transfers, "target": "circleTransfers", "responsible": "由目标景点圈HR确认"},
     ]
+    if include_record_links:
+        for item in checklist:
+            if item["code"] not in ("recognition_review", "deduction_material") or item["count"] != 1:
+                continue
+            record = queries[item["code"]].first()
+            if record:
+                item["record"] = {"id": record.id, "employee_name": record.employee_name, "employee_no": record.employee_no}
+    return checklist
 
 
-def month_closure_payload(db: Session, month: str, attraction_id: int | None, user: V2User) -> dict:
+def month_closure_payload(db: Session, month: str, attraction_id: int | None, user: V2User, *, include_record_links: bool = False) -> dict:
     global_row = db.query(MonthClosure).filter_by(
         closure_month=month, attraction_id=None, status="closed"
     ).first()
@@ -202,5 +210,5 @@ def month_closure_payload(db: Session, month: str, attraction_id: int | None, us
         "can_reopen": bool(effective and (user.role.code == "SYSTEM_ADMIN" or (effective.attraction_id is not None and user.role.code == "HR_CIRCLE" and attraction_id is not None and attraction_id in scoped_hr_attraction_ids(db, user)))),
         "reopen_block_reason": "本月受全部景点圈月结限制，请联系最高管理员填写原因后临时开放；景点圈HR不能开放全局月结。" if global_row and user.role.code != "SYSTEM_ADMIN" else "",
         "reopen_target_attraction_id": effective.attraction_id if effective else attraction_id,
-        "checklist": month_close_checklist(db, month, attraction_id),
+        "checklist": month_close_checklist(db, month, attraction_id, include_record_links=include_record_links),
     }
