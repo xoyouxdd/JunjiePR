@@ -18,9 +18,9 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, EmployeeActingDuty, GroupLeaderAssignment, Role, WorkGroup  # noqa: E402
-from app.v2_services import current_leader_for_employee, groups_led_by  # noqa: E402
+from app.services.organization import current_leader_for_employee, groups_led_by
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:

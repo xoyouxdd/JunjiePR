@@ -27,7 +27,9 @@ from app.security import (  # noqa: E402
 )
 from app.version import APP_VERSION, STATIC_CACHE_VERSION  # noqa: E402
 from app.v2_crypto import hash_password, verify_password  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal, disable_test_accounts, ensure_highest_admin_account  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
+from app.database.connection import SessionLocal
+from app.database.accounts import disable_test_accounts, ensure_highest_admin_account
 from app.v2_models import Employee, UserAccount, UserSession  # noqa: E402
 from frontend_source import STATIC_ROOT, frontend_sources  # noqa: E402
 

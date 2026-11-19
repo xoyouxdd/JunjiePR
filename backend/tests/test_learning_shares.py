@@ -14,7 +14,7 @@ os.environ['RECOGNITION_TEST_DEFAULT_PASSWORD']='1234'
 os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='HR123'
 from fastapi.testclient import TestClient
 from app.main import app
-from app.v2_database import SessionLocal, FILE_DIR
+from app.database.connection import SessionLocal, FILE_DIR
 from app.v2_models import Attraction, Employee, Role, EmployeeActingDuty, EmployeeRoleAssignment, GroupMembership
 from app.learning_models import LearningShare, LearningRevision, LearningAccess, LearningReaction, LearningAsset, LearningDraft, LearningFeedback
 

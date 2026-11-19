@@ -34,7 +34,7 @@ from app.rotation.models import (
 )
 from app.rotation.roster import classify, fmt, hm
 from app.rotation.namespace import tables_for, runtime_for, runtime_for_row
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 
 
 logger = logging.getLogger(__name__)

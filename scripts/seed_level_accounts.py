@@ -13,7 +13,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.v2_crypto import hash_password  # noqa: E402
-from app.v2_database import SessionLocal, init_db  # noqa: E402
+from app.database.connection import SessionLocal
+from app.database.bootstrap import init_db
 from app.v2_models import (  # noqa: E402
     Attraction,
     Employee,

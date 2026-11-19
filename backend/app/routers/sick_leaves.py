@@ -10,31 +10,36 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, require_permissions
 from app.deduction_policy import checked_upgrade_reviewer
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import DeductionLevel, DeductionUpgradeRequest, DeductionRecord, DeductionType, Employee, SickLeaveRecord, StoredFile
-from app.v2_services import current_group_for_employee, ensure_month_attendance, recalculate_attendance, remove_upload_file, save_upload, write_audit
+from app.services.organization import current_group_for_employee
+from app.services.attendance import ensure_month_attendance, recalculate_attendance
+from app.upload_storage import remove_upload_file, save_upload
+from app.services.audit import write_audit
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
-from app.routers._shared import (
-    client_ip,
-    deduction_payload,
+from app.http_utils import client_ip
+from app.record_payloads import deduction_payload, sick_leave_payloads
+from app.deduction_policy import (
     ensure_deduction_type_allowed,
-    ensure_enabled_frontline_target,
-    ensure_month_open,
-    ensure_operational_target_scope,
-    ensure_scoped_hr_employee,
-    existing_submission,
-    invalidate_data_caches,
-    normalize_request_key,
-    parse_iso_date,
-    pending_material_conflict,
-    raise_pending_material_conflict,
-    remember_submission,
-    sick_leave_payloads,
     statement_upgrade_candidate,
     statement_upgrade_reviewer_options,
-    submission_payload_digest,
+)
+from app.access_policy import (
+    ensure_enabled_frontline_target,
+    ensure_operational_target_scope,
+    ensure_scoped_hr_employee,
     void_operator_snapshot,
 )
+from app.month_closure import ensure_month_open
+from app.idempotency import (
+    existing_submission,
+    normalize_request_key,
+    remember_submission,
+    submission_payload_digest,
+)
+from app.data_cache import invalidate_data_caches
+from app.date_utils import parse_iso_date
+from app.material_policy import pending_material_conflict, raise_pending_material_conflict
 
 router = APIRouter()
 

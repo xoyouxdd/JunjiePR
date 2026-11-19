@@ -30,7 +30,7 @@ def test_visual_theme_css_and_login_marker_are_present():
     assert 'enterkeyhint="go"' in login
     assert 'data-password-toggle' in login
     assert '.login-panel input:focus' in css
-    assert 'box-shadow: 0 0 0 3px rgba(18,103,216,.15)' in css
+    assert '--shadow-focus: 0 0 0 3px rgba(18,103,216,.15)' in css and 'box-shadow: var(--shadow-focus)' in css
     assert '.login-panel .primary:active' in css
     assert '.login-panel label:focus-within' in css
     assert '#loginMsg.message.error' in css

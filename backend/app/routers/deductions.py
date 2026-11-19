@@ -1,5 +1,6 @@
 """Deduction entry, upgrade and target endpoints."""
 from __future__ import annotations
+from app.database.connection import reserve_writer
 from app.services import scoring_policies as scoring_config
 from app.services.upgrade_recovery import reviewer_available, can_recover, can_recover_legacy, upgrade_waits_for_reviewer, upgrade_work_status_name
 
@@ -16,42 +17,46 @@ from app.deduction_policy import (
     ACTING_GSM_DEDUCTION_SCOPE, SUPERVISOR_DEDUCTION_SCOPE, can_review_statement_upgrade, checked_upgrade_reviewer,
 )
 from app.role_constants import FRONTLINE_CODES
-from app.v2_database import FILE_DIR, get_db
+from app.database.connection import FILE_DIR, get_db
 from app.v2_models import Attraction, DeductionLevel, DeductionFollowUp, DeductionMaterialJob, DeductionUpgradeNoticeDismissal, DeductionUpgradeRequest, DeductionUpgradeTransfer, DeductionRecord, DeductionType, Employee, Role, StoredFile, UserAccount
-from app.v2_services import LEADER_CODES, current_group_for_employee, duty_code_at, remove_upload_file, scoring_category, write_audit
+from app.role_constants import LEADER_CODES
+from app.services.organization import current_group_for_employee
+from app.services.identity import duty_code_at, scoring_category
+from app.upload_storage import remove_upload_file
+from app.services.audit import write_audit
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
-from app.routers._shared import (
-    add_calendar_months,
+from app.date_utils import add_calendar_months, parse_iso_date, subtract_calendar_months
+from app.deduction_policy import (
     DEDUCTION_LEVEL_ORDER,
-    MATERIAL_COLLABORATOR_CODES,
     REPEAT_CONTROLLED_DEDUCTION_CODES,
-    client_ip,
-    deduction_follow_up_payload,
-    deduction_payload,
     direct_only_deduction_user,
     ensure_deduction_type_allowed,
-    ensure_enabled_frontline_target,
-    ensure_enabled_scored_target,
-    ensure_month_open,
-    ensure_operational_target_scope,
-    ensure_supervisor_target_allowed,
-    ensure_scoped_hr_employee,
-    existing_submission,
-    invalidate_data_caches,
-    normalize_request_key,
-    parse_iso_date,
-    pending_material_conflict,
-    raise_pending_material_conflict,
-    remember_submission,
-    scoped_hr_attraction_ids,
-    search_employee_targets,
     statement_upgrade_candidate,
     statement_upgrade_reviewer_options,
     upgrade_type_codes,
-    submission_payload_digest,
-    subtract_calendar_months,
+)
+from app.access_policy import (
+    MATERIAL_COLLABORATOR_CODES,
+    ensure_enabled_frontline_target,
+    ensure_enabled_scored_target,
+    ensure_operational_target_scope,
+    ensure_supervisor_target_allowed,
+    ensure_scoped_hr_employee,
+    scoped_hr_attraction_ids,
     void_operator_snapshot,
 )
+from app.http_utils import client_ip
+from app.record_payloads import deduction_follow_up_payload, deduction_payload
+from app.month_closure import ensure_month_open
+from app.idempotency import (
+    existing_submission,
+    normalize_request_key,
+    remember_submission,
+    submission_payload_digest,
+)
+from app.data_cache import invalidate_data_caches
+from app.material_policy import pending_material_conflict, raise_pending_material_conflict
+from app.organization_queries import search_employee_targets
 
 router = APIRouter()
 
@@ -274,8 +279,8 @@ async def create_deduction(
             "employee_id": int(employee_id),
             "deduction_type_id": int(deduction_type_id),
             "deduction_level_id": int(deduction_level_id),
-            "occurred_on": str(occurred_on or "").strip(),
-            "description": str(description or "").strip(),
+            "occurred_on": occurred_on.strip(),
+            "description": description.strip(),
             "repeat_confirmed": bool(repeat_confirmed),
         }
     )
@@ -593,8 +598,7 @@ async def create_deduction_upgrade(
 
 def lock_upgrade_write(db: Session, user: V2User) -> V2User:
     actor_id, account_id = user.id, user.account.id
-    db.rollback()
-    db.execute(text("BEGIN IMMEDIATE"))
+    reserve_writer(db)
     return reload_upgrade_operator(db, actor_id, account_id)
 
 

@@ -18,9 +18,10 @@ from app.rotation.models import RotationAccount, RotationAccountSession
 from app.security import request_is_https
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, new_session_token, token_hash, verify_password
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, Employee
-from app.v2_services import managed_attraction_ids, write_audit
+from app.services.organization import managed_attraction_ids
+from app.services.audit import write_audit
 
 
 # 目前只在热力追踪使用。

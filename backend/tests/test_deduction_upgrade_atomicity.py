@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.routers import deductions
 from app.v2_auth import V2User
-from app.v2_database import Base
+from app.database.connection import Base
 from app.v2_models import (
     Attraction,
     AuditLog,

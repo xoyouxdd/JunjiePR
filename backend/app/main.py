@@ -14,19 +14,22 @@ from fastapi.staticfiles import StaticFiles
 
 from app.routers import v2
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
-from app.v2_database import BASE_DIR, init_db
+from app.database.connection import BASE_DIR
+from app.database.bootstrap import init_db
 from app.v2_models import Employee, UserAccount, UserSession
 from app.v2_crypto import token_hash
-from app.v2_services import process_role_expirations, write_audit
+from app.services.role_lifecycle import process_role_expirations
+from app.services.audit import write_audit
 from app.deduction_materials import start_deduction_material_worker
 from app.rotation.service import start_rotation_ticker
 from app.announcement_worker import start_worker as start_announcement_worker, stop_worker as stop_announcement_worker
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.video_worker import start_worker as start_video_worker, stop_worker as stop_video_worker
 from app.security import SECURITY_HEADERS, request_is_https, request_origin_root
 from app.runtime_environment import environment_kind, environment_label, validate_runtime_paths
 from app.recognition_timing import RecognitionTimingMiddleware
 from app.request_timing import RequestTimingMiddleware
+from app.static_compression import StaticTextGZipMiddleware
 from app.http_utils import client_ip
 
 # Starlette 0.47+ streams file parts to a spooled temp file. The 1MB
@@ -37,6 +40,7 @@ from app.http_utils import client_ip
 app = FastAPI(title="FZ团队工作台", version=APP_VERSION)
 app.add_middleware(RecognitionTimingMiddleware)
 app.add_middleware(RequestTimingMiddleware)
+app.add_middleware(StaticTextGZipMiddleware)
 
 _STATIC_PAGE_CACHE: dict[str, tuple[float, bytes]] = {}
 

@@ -23,7 +23,7 @@ os.environ["RECOGNITION_BACKUP_HEALTH_STATUS_FILE"] = str(HEALTH_FILE)
 
 from app.main import app  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_models import AuditLog, Employee, SystemJobRun, UserAccount  # noqa: E402
 from app import backup_management  # noqa: E402
 

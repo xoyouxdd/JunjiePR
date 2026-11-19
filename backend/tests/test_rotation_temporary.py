@@ -14,7 +14,7 @@ os.environ['RECOGNITION_ENABLE_TEST_ACCOUNTS']='1'
 os.environ['RECOGNITION_TEST_DEFAULT_PASSWORD']='rotation-temp-fixture'
 os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='rotation-temp-admin'
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee,UserAccount,Attraction,Role,EmployeeRoleAssignment
 from app.v2_crypto import hash_password
 from app.rotation import service as S

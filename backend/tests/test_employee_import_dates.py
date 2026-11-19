@@ -16,7 +16,7 @@ os.environ['RECOGNITION_TEST_ADMIN_PASSWORD'] = 'import-dates-admin'
 
 from app.services.employee_import_dates import normalize_import_date
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, EmployeeRoleAssignment
 
 

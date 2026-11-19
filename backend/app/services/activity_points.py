@@ -1,7 +1,8 @@
 """Recognition-point reconciliation. Caller owns transaction and serialization."""
 from collections import Counter
-from hashlib import sha256
 import json
+
+from app.json_digest import json_digest
 
 from app.activity_points_models import ActivityPointsEntry, RecognitionPointsState
 from app.database.reference_data import EMPLOYEE_CIRCLES, LEGACY_CIRCLE_BY_VENUE
@@ -30,7 +31,7 @@ def recognition_circle(db, row):
 
 
 def digest(value):
-    return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+    return json_digest(value, default=str)
 
 
 def source_key(row):

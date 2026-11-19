@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -24,12 +25,13 @@ from app import announcement_responsibilities as responsibilities
 from app import announcements as domain
 from app import announcement_training as training
 from app.v2_auth import V2User, current_user
-from app.v2_database import FILE_DIR, get_db
+from app.database.connection import FILE_DIR, get_db
 from app.v2_models import (Announcement, AnnouncementAsset, AnnouncementDelivery, AnnouncementFavorite,
     AnnouncementGrant, AnnouncementHandover, AnnouncementResponsibility, AnnouncementResponsibilityHandover, AnnouncementNotification, AnnouncementProject,
     AnnouncementProjectMember, AnnouncementVersion, Employee, StoredFile, UserAccount)
-from app.v2_services import remove_upload_file, save_upload, write_audit
-from app.routers._shared import client_ip
+from app.upload_storage import remove_upload_file, save_upload
+from app.services.audit import write_audit
+from app.http_utils import client_ip
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
 Tier = Literal["frontline", "lead", "gsm", "am", "hr"]
@@ -620,7 +622,7 @@ def receipt(id: int, payload: ReceiptInput, request: Request, db: Session = Depe
                     path = FILE_DIR / key
                     path.write_bytes(content)
                     file = StoredFile(storage_key=key, original_filename="公告签名.png", extension=".png", mime_type="image/png",
-                                      file_size=len(content), sha256=domain.hashlib.sha256(content).hexdigest(), uploaded_by=user.id, status="active")
+                                      file_size=len(content), sha256=hashlib.sha256(content).hexdigest(), uploaded_by=user.id, status="active")
                     db.add(file)
                     db.flush()
                     delivery.signature_file_id = file.id

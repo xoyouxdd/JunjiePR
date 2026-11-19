@@ -17,9 +17,9 @@ from sqlalchemy.orm import Session
 
 from app.operations_health import BACKUP_HEALTH_STATUS_PATH
 from app.runtime_environment import validate_runtime_paths
-from app.v2_database import DB_PATH, SessionLocal
+from app.database.connection import DB_PATH, SessionLocal
 from app.v2_models import AuditLog, Employee, SystemJobRun
-from app.v2_services import write_audit
+from app.services.audit import write_audit
 
 
 JOB_TYPE = "manual_sqlite_backup"

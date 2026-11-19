@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
+from app.date_utils import month_bounds
 from app.role_constants import FRONTLINE_CODES, SCORE_UNIT, SUPERVISOR_SCORING_START_MONTH
 from app.score_policy import loa_month_exclusion
 from app.services.identity import base_role_at, base_roles_at, employee_active_on
@@ -36,11 +37,6 @@ HALF_DAY_DEDUCTION = Decimal("0.25")
 def month_end(month: str) -> str:
     year, month_number = map(int, month.split("-"))
     return f"{year:04d}-{month_number:02d}-{monthrange(year, month_number)[1]:02d}"
-
-
-def month_bounds(month: str) -> tuple[date, date]:
-    start = date.fromisoformat(f"{month}-01")
-    return start, start.replace(day=monthrange(start.year, start.month)[1])
 
 
 def loa_periods_for_month(db: Session, employee_id: int, month: str) -> list[EmployeeLOAPeriod]:

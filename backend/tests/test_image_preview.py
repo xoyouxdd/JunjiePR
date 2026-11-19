@@ -19,7 +19,7 @@ import fitz  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import FILE_DIR, SessionLocal  # noqa: E402
+from app.database.connection import FILE_DIR, SessionLocal
 from app.v2_models import Attraction, AuditLog, Employee, RecognitionAttachment, RecognitionRecord, RecognitionType, StoredFile  # noqa: E402
 from app.v2_preview_cache import watermarked_preview_cache  # noqa: E402
 

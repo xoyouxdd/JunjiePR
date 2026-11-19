@@ -21,7 +21,7 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "isolated-admin-only"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_models import AuditLog, Employee, GroupLeaderAssignment, GroupMembership, MonthClosure, RecognitionRecord, RecognitionType, UserAccount, WorkGroup  # noqa: E402
 
 

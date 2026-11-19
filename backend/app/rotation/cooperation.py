@@ -1,8 +1,7 @@
 """Same-line, same-time cohort plans. Projections never mutate the live board or hooks."""
 from copy import deepcopy
-import hashlib
-import json
 
+from app.json_digest import json_digest
 from app.rotation import engine as E
 
 
@@ -27,7 +26,7 @@ def clone(eng):
 
 
 def digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return json_digest(value)
 
 
 def first_entry(p):

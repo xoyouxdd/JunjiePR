@@ -10,7 +10,7 @@ import pytest
 
 from test_announcements import client, login, ok, form, publish, receipt, signature, new_employee
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import (Employee, EmployeeRoleAssignment, Role, AnnouncementTrainingCode as Code,
     AnnouncementTrainingReceipt as Evidence, AnnouncementTrainingAttempt as Attempt, AnnouncementVersion, UserAccount,
     AnnouncementDelivery)

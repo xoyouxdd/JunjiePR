@@ -19,7 +19,7 @@ class RosterIdentity(Base):
 
 def account_issues(db, employee):
     from app.services.employee_types import is_due
-    from app.v2_services import base_role_at
+    from app.services.identity import base_role_at
     account=db.query(UserAccount).filter_by(employee_id=employee.id).first()
     issues=[]
     if employee.account_deleted_at: issues.append('已删除留档')

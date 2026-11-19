@@ -16,13 +16,13 @@ from sqlalchemy.orm import sessionmaker
 
 from app.routers import employees as routes
 from app.v2_auth import V2User
-from app.v2_database import Base
+from app.database.connection import Base
 from app.v2_models import (
     AttendanceMonthlyScore, AttendanceRule, Attraction, AuditLog, Employee,
     EmployeeActingDuty, EmployeeLOAPeriod, EmployeeMonthOrganizationSnapshot,
     EmployeeRoleAssignment, MonthClosure, Role, UserAccount, WorkGroup,
 )
-from app.v2_services import recalculate_attendance
+from app.services.attendance import recalculate_attendance
 
 
 TODAY = date(2026, 10, 9)

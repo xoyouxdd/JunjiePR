@@ -99,9 +99,13 @@ function forecastArrive(p){
   const reserve=p.mealOptions?.reserveText?`<p class="field-hint">${esc(p.mealOptions.reserveText)}。基础用餐条件及强制饭点沿用现有规则。</p>`:'';
   formBox(`${p.name} · 确认餐休`,'<label>本次安排<select name="kind">'+choices+'</select></label>'+reserve,async values=>{
     const repeat=values.kind==='meal'&&p.ate;
-    if(repeat&&!window.confirm('此人已进过吃饭区，是否继续？'))return false;
-    try{await forecastSend({action:'arrive',pid:p.pid,confirmation_token:p.confirmationTokens.arrive,meal_choice:values.kind,repeat_meal:repeat});return true;}
-    catch(error){toast(error.message,true);return false;}
+    const send=()=>forecastRun({action:'arrive',pid:p.pid,confirmation_token:p.confirmationTokens.arrive,meal_choice:values.kind,repeat_meal:repeat});
+    if(!repeat)return send();
+    // The confirm step replaces this form; keep watching for changed meal conditions.
+    const tracker=activeRotationConfirmation;
+    confirmRepeatMeal(send);
+    activeRotationConfirmation=tracker;
+    return false;
   });
   activeRotationConfirmation={pid:p.pid,date,token:p.confirmationTokens.arrive,tokenAction:'arrive',refresh:current=>{
     if(JSON.stringify(current.mealOptions)!==mealSignature){closeModal();toast('餐休条件已更新，请重新确认');}
@@ -170,10 +174,12 @@ function forecastBindHeaderOption(select,affected){
   };
   select.addEventListener('change',update);update();
 }
+// Rotation modals are single-slot: the confirm replaces the current form, so callers get false.
+function confirmRepeatMeal(send){confirmBox('再次进入吃饭区','此人已进过吃饭区，是否继续？','继续',send,{warn:true});return false;}
 async function forecastPoolMove(p,pool){
   const repeat=pool==='meal'&&p.ate&&!['rest','ready'].includes(p.state);
-  if(repeat&&!window.confirm('此人已进过吃饭区，是否继续？'))return false;
-  return forecastRun({action:'pool',pid:p.pid,pool,repeat_meal:repeat,person_context:{state:p.state,readyAt:p.readyAt??null,sequence:p.confirmationSequence??0,line:p.state==='onpost'?p.line:null,postIndex:p.postIndex??null}});
+  const send=()=>forecastRun({action:'pool',pid:p.pid,pool,repeat_meal:repeat,person_context:{state:p.state,readyAt:p.readyAt??null,sequence:p.confirmationSequence??0,line:p.state==='onpost'?p.line:null,postIndex:p.postIndex??null}});
+  return repeat?confirmRepeatMeal(send):send();
 }
 function forecastPlace(pid,line,i){
   const p=personOf(pid),L=RT.data.day.lines.find(x=>x.id===line),post=L?.posts[i];if(!p||!post)return;

@@ -6,10 +6,16 @@ from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, AuditLog, CircleTransferRequest, RecognitionRecord, RecognitionScoreRule, Role, StoredFile, SystemAlert
-from app.v2_services import RECOGNIZER_CODES, process_role_expirations, write_audit
-from app.routers._shared import backup_health_payload, client_ip, month_closure_payload, parse_iso_date, scoped_hr_attraction_ids, visible_system_alerts
+from app.role_constants import RECOGNIZER_CODES
+from app.services.role_lifecycle import process_role_expirations
+from app.services.audit import write_audit
+from app.operations_health import backup_health_payload
+from app.http_utils import client_ip
+from app.month_closure import month_closure_payload
+from app.date_utils import parse_iso_date
+from app.access_policy import scoped_hr_attraction_ids, visible_system_alerts
 
 router = APIRouter()
 

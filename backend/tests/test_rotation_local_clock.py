@@ -21,7 +21,7 @@ os.environ['RECOGNITION_TEST_ADMIN_PASSWORD'] = 'rotation-local-admin-2026'
 from app.main import app
 from app.rotation import service as S
 from app.rotation.namespace import FORMAL_TABLES as F
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from local_tools.rotation_clock.extension import install, control
 from local_tools.rotation_clock.demo import seed
 

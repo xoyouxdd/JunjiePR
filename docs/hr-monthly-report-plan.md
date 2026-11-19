@@ -48,14 +48,14 @@
 | 新增 `backend/app/hr_monthly_pptx.py` | 从确认后的原生模板填充文字、表格、图表及内嵌工作簿，自动分页 |
 | 新增 `backend/app/routers/hr_monthly_reports.py` | 独立查看、素材上传、预览、导出端点，逐次校验角色与数据范围 |
 | `backend/app/routers/v2.py` | 注册独立路由 |
-| `backend/app/v2_database.py` | 专项月报权限，仅赋给确认的四类角色 |
+| `backend/app/database/reference_data.py` | 专项月报权限，仅赋给确认的四类角色 |
 | `backend/app/static/js/app.js` | 月份与范围、章节、候选确认、素材及下载 |
 | `backend/app/static/css/style.css` | 沿用现有页面视觉与手机布局 |
 | 新增 `backend/app/report_templates/hr_monthly/` | 原生PPTX、模板配置、原创图片与素材来源 |
 | 新增 `backend/tests/test_hr_monthly_reports.py` | 权限、历史归属、LOA、状态及预览导出一致性 |
 | `backend/tests/test_hr_monthly_reports.py`（同一模块） | 原生对象、分页、中文、图片比例、无素材跳页 |
 | `scripts/build_release.py`、依赖清单 | 将模板和实际所需生成依赖纳入包，不能依赖开发电脑的Codex运行时 |
-| `backend/app/changelog.py`及说明文档 | 接入完成后才声明功能可用；发布公告选择保持原规则 |
+| `backend/app/changelog.json`及说明文档 | 接入完成后才声明功能可用；发布公告选择保持原规则 |
 
 实际新增`hr_monthly_report.py`、`hr_monthly_pptx.py`、`routers/hr_monthly_reports.py`、三套PPTX和`tests/test_hr_monthly_reports.py`；修改路由汇总、权限种子、页面JS/CSS、更新记录和文档索引。现有发布规则已覆盖模板，无额外运行时依赖。
 

@@ -26,7 +26,7 @@ from app.excel_export_utils import content_disposition
 from app.excel_presentation import finalize_statistics_workbook, save_export_workbook
 from app.score_queries import employee_month_scores
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, AuditLog, Employee, EmployeeAvatarPreference, EmployeeAvatarWardrobe, EmployeeHonorMemory, EmployeeHonorStyle, EmployeeMonthRankSnapshot
 from app.services.avatars import avatar_catalog, own_avatar
 from app.v2_watermark import watermark_workbook

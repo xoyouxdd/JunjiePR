@@ -16,9 +16,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.v2_auth import V2User, require_roles
-from app.v2_database import FILE_DIR, get_db
+from app.database.connection import FILE_DIR, get_db
 from app.v2_models import AnnouncementMedia, StoredFile
-from app.v2_services import remove_upload_file, save_image_upload, write_audit
+from app.upload_storage import remove_upload_file, save_image_upload
+from app.services.audit import write_audit
 from app.announcement_posters import PosterError, render_poster, template_options
 from app.announcements import require_publisher
 

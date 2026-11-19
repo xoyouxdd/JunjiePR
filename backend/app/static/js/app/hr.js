@@ -4,7 +4,7 @@ import { api, json } from './api.js';
 import { beginViewRequest, render } from './context.js';
 import { confirmModal, formModal, promptModal, showSaveWarnings } from './dialogs.js';
 import { bindEmployeeSearches, circleTransferEmployeePicker, requireEmployeeSelection } from './employee-picker.js';
-import { esc, fmt, today } from './format.js';
+import { esc, fmt, monthNow, shiftMonth, today } from './format.js';
 import { hrGroupShortName, hrTag } from './hr-employees.js';
 import { gotoTab, menuItems, renderTabs } from './navigation.js';
 import { opt, workItemDetailsHtml } from './records.js';
@@ -23,7 +23,7 @@ async function renderCircleTransfers(){
   app.querySelectorAll('[data-transfer-cancel]').forEach(button=>button.onclick=async()=>{if(!await confirmModal('撤回调动申请','<p>确认撤回这条跨圈调动申请？</p>','确认撤回'))return;try{await api('/api/hr/circle-transfers/'+button.dataset.transferCancel+'/cancel',{method:'POST'});toast('申请已撤回');request.refresh(renderCircleTransfers)}catch(error){toast(error.message,true)}});
 }
 
-function previousScoreMonth(){const value=new Date();value.setDate(1);value.setMonth(value.getMonth()-1);return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}`;}
+function previousScoreMonth(){return shiftMonth(monthNow(),-1);}
 
 async function renderMonthClose(){
   const request=beginViewRequest();

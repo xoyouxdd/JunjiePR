@@ -1,31 +1,35 @@
 """Login account, password and account-name endpoints."""
 from __future__ import annotations
+from app.database.connection import write_transaction
 from app.employee_numbers import employee_number
 
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import or_, text
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, require_permissions
 from app.v2_crypto import account_reset_password, hash_password
-from app.v2_database import CIRCLE_HR_ACCOUNTS, get_db
+from app.database.accounts import CIRCLE_HR_ACCOUNTS
+from app.database.connection import get_db
 from app.v2_models import Attraction, Employee, Role, UserAccount, UserSession
-from app.v2_services import managed_attraction_ids, role_at, roles_at, write_audit
+from app.services.organization import managed_attraction_ids
+from app.services.identity import role_at, roles_at
+from app.services.audit import write_audit
 from app.services.employee_commands import EmployeeEditContext
 from app.services.employee_status import archive_employee_profile
 from app.services.employment import retain_deleted_employment
 from app.services.identity import base_role_at
 from app.month_closure import ensure_month_open
-from app.routers._shared import (
+from app.access_policy import (
     CIRCLE_HR_MANAGED_ROLE_CODES,
     REGULAR_ACCOUNT_ROLE_CODES,
     SCOPED_HR_ROLE_CODE,
-    client_ip,
     ensure_scoped_hr_employee,
-    invalidate_data_caches,
-    like_escaped_pattern,
-    login_account_archive_state,
 )
+from app.http_utils import client_ip
+from app.data_cache import invalidate_data_caches
+from app.search_utils import like_escaped_pattern
+from app.organization_queries import login_account_archive_state
 
 router = APIRouter()
 
@@ -367,13 +371,8 @@ def archive_employee_login_account(
     user: V2User = Depends(require_permissions("HR_MANAGE")),
 ):
     """Archive the employee and remove credentials atomically; retain history."""
-    try:
-        db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
+    with write_transaction(db):
         return _archive_employee(employee_id, request, payload, db, user)
-    except Exception:
-        db.rollback()
-        raise
 
 
 def _archive_employee(employee_id: int, request: Request, payload: dict | None, db: Session, user: V2User):

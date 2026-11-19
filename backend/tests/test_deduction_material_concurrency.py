@@ -23,7 +23,8 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
+from app.database.connection import SessionLocal
 from app.v2_models import DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, StoredFile  # noqa: E402
 
 # Test the retained legacy route under a test-only grant, not a production role change.
@@ -58,7 +59,7 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
 ) -> None:
     from app import deduction_materials
     from app.deduction_policy import deduction_counts_for_score
-    from app.v2_database import FILE_DIR
+    from app.database.connection import FILE_DIR
 
     process_next_deduction_material_job = deduction_materials.process_next_deduction_material_job
     routes = importlib.import_module("app.routers.deductions")

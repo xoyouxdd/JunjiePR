@@ -85,7 +85,7 @@ def test_photo_material_creates_one_pending_record_then_activates_after_pdf_gene
 def test_overpage_pdf_is_rejected_without_orphan_source_files() -> None:
     import fitz
 
-    from app.v2_database import FILE_DIR
+    from app.database.connection import FILE_DIR
 
     document = fitz.open()
     for _ in range(7):

@@ -37,7 +37,7 @@ from app.routers import (
     learning,
 )
 
-from app.routers._shared import is_previewable_image, preview_kind  # noqa: F401  (re-exported)
+from app.file_types import is_previewable_image, preview_kind
 
 
 router = APIRouter(prefix="/api", tags=["v2"])

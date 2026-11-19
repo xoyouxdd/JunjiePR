@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.rotation import service, test_clock
 from app.rotation.access import RotationActor, require_controller, rotation_attraction_id
-from app.v2_database import get_db
+from app.database.connection import get_db
 
 
 router = APIRouter(prefix="/rotation", tags=["rotation"])

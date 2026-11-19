@@ -19,7 +19,7 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_crypto import hash_password  # noqa: E402
 from app.v2_models import Employee, RecognitionRecord, UserAccount  # noqa: E402
 

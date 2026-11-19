@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from app import v2_models  # Register referenced tables without importing app.main.
 from app.rotation import service as S, test_clock
 from app.rotation.models import RotationConfig, RotationDay, RotationDuty, RotationEvent, RotationNotice, RotationSegment
-from app.v2_database import Base
+from app.database.connection import Base
 
 
 DAY = "2026-10-04"

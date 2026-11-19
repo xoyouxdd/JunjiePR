@@ -14,7 +14,7 @@
 - 连接、Base 与会话：`backend/app/database/connection.py`
 - 启动建库与每次启动保障：`backend/app/database/bootstrap.py`、`reference_data.py`、`accounts.py`
 - 一次性补丁与额外索引：`backend/app/database/migrations/`（schema、sick_leave、organization），按 `registry.py` 的有序 callable 执行
-- 月度分值视图：`backend/app/database/score_view.py`；旧 `v2_database.py` 导入入口保留兼容
+- 月度分值视图：`backend/app/database/score_view.py`
 
 原有职责拆分不改变表、列、约束、索引、视图内容或已有迁移 step key；历史迁移函数内部提交及执行器登记提交保持原样，不将其描述为一个整体可回滚事务。2026-10-19新增两张本人荣誉偏好表，由启动建表逻辑幂等创建，不修改旧业务表与月结快照。
 
@@ -1231,7 +1231,7 @@ deduction_upgrade_requests 连接 first/second/result 三条 deduction_records
 | 改了 | 同步 |
 |---|---|
 | `v2_models.py` 表/字段/约束 | 本文件对应节 |
-| `v2_database.py` 补丁或 `CREATE INDEX` | 本文件索引与迁移节 |
+| `database/migrations/` 补丁或 `CREATE INDEX` | 本文件索引与迁移节 |
 | 月度分值口径 | 视图节 |
 
 测试必须用隔离数据目录，不要指向生产库。

@@ -9,12 +9,13 @@ import threading
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import text, or_, and_
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
 
+from app.database.connection import reserve_writer
 from app.v2_auth import current_user, V2User
 from app.v2_crypto import token_hash
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, Employee
 from app.video_models import LearningVideo, VideoCircle, VideoAudiencePolicy, VideoJob, VideoUpload, VideoPlayback, VideoProgress
 from app.services.video_access import (scope_ids, upload_scope_ids, can_upload, can_manage, require_manage, require_upload_targets, video_targets, senior,
@@ -368,7 +369,7 @@ def retry(video_id: int, request: Request, db: Session = Depends(get_db), user: 
 
 @router.post("/videos/{video_id}/cover")
 def choose_cover(video_id: int, body: Cover, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    db.rollback(); db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     row = video_or_404(db, video_id); require_manage(db, user, row)
     if row.status != "ready" or body.second >= row.duration or not body.title.strip():
         raise HTTPException(409, "只能在发布前选择视频范围内的封面画面")
@@ -384,7 +385,7 @@ def choose_cover(video_id: int, body: Cover, request: Request, db: Session = Dep
 
 @router.patch("/videos/{video_id}")
 def edit_metadata(video_id: int, body: Config, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    db.rollback(); db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     row = video_or_404(db, video_id); require_manage(db, user, row)
     if row.status != 'ready' or body.replaces_id != row.replaces_id or not body.title:
         raise HTTPException(409, "请在待发布状态编辑内容；所属景点与原版本关联不能更改")
@@ -399,7 +400,7 @@ def edit_metadata(video_id: int, body: Config, request: Request, db: Session = D
 
 @router.patch('/videos/{video_id}/audience')
 def change_audience(video_id: int, body: AudienceChange, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    db.rollback(); db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     row = video_or_404(db,video_id)
     if not can_edit_audience(db,user,row):
         raise HTTPException(403,'仅发布者或系统管理员可调整观看范围')
@@ -447,8 +448,7 @@ def cover_file(video_id: int, db: Session = Depends(get_db), user: V2User = Depe
 def publish(video_id: int, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     # Serialize read/validate/write so competing replacements cannot both
     # publish against the same original version.
-    db.rollback()
-    db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     row = video_or_404(db, video_id); require_manage(db, user, row)
     reason=publish_block_reason(db,user,row)
     if reason:
@@ -476,7 +476,7 @@ def publish(video_id: int, request: Request, db: Session = Depends(get_db), user
 
 @router.post("/videos/{video_id}/withdraw")
 def withdraw(video_id: int, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    db.rollback(); db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     row = video_or_404(db, video_id); require_manage(db, user, row)
     if row.status not in ('ready', 'published'):
         raise HTTPException(409, "当前状态不能撤下")
@@ -571,7 +571,7 @@ def cache_worker():
 
 @router.delete('/videos/{video_id}')
 def delete_video(video_id:int,request:Request,db:Session=Depends(get_db),user:V2User=Depends(current_user)):
-    db.rollback();db.execute(text('BEGIN IMMEDIATE'))
+    reserve_writer(db)
     row=video_or_404(db,video_id)
     if row.owner_id!=user.id and not administrator(user):raise HTTPException(403,'仅发布者或系统管理员可删除')
     if row.status!='withdrawn':raise HTTPException(409,'请先撤下视频再删除')

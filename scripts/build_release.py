@@ -43,7 +43,7 @@ def package_name(version: str, day: str | None = None) -> str:
 
 
 def read_latest_changelog_version() -> str:
-    text = (BACKEND_ROOT / "app" / "changelog.py").read_text(encoding="utf-8")
+    text = (BACKEND_ROOT / "app" / "changelog.json").read_text(encoding="utf-8")
     match = re.search(r'"version"\s*:\s*"([^"]+)"', text)
     if not match:
         raise RuntimeError("latest changelog version missing")

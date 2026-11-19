@@ -19,7 +19,7 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from fastapi.testclient import TestClient
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_crypto import hash_password
 from app.services.identity import base_role_at, role_at, recognition_score_for_role, TEMPORARY_RECOGNIZER_LABEL
 from app.v2_models import (Employee, EmployeeRoleAssignment, EmployeeActingDuty, GroupMembership,

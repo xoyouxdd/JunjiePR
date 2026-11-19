@@ -5,16 +5,17 @@ from datetime import date, datetime, timedelta
 from io import BytesIO
 import json
 from uuid import uuid4
+from app.database.connection import reserve_writer, write_transaction
 from app.employee_numbers import employee_number, employee_number_aliases
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlalchemy import or_, text
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
 from app.v2_crypto import default_initial_password, hash_password
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.services.management_scopes import synchronize_gsm_management_scope
 from app.v2_models import Attraction, Employee, EmployeeNumberHistory, EmployeeLOAPeriod, EmployeeRoleAssignment, Role, UserAccount, UserSession
 from app.role_constants import FRONTLINE_CODES, LEADER_CODES
@@ -26,21 +27,20 @@ from app.services.employment import restart_employment
 from app.v2_watermark import watermark_workbook
 from app.excel_export import build_employee_import_template
 from app.services import loa_commands
-from app.routers._shared import (
+from app.access_policy import (
     CIRCLE_HR_MANAGED_ROLE_CODES,
     EMPLOYEE_TARGET_PERMISSIONS,
     SCOPED_HR_ROLE_CODE,
-    client_ip,
-    employee_payloads,
-    ensure_month_open,
     ensure_scoped_hr_attraction,
     ensure_scoped_hr_employee,
-    invalidate_data_caches,
-    like_escaped_pattern,
-    parse_iso_date,
     scoped_hr_attraction_ids,
-    search_employee_targets,
 )
+from app.http_utils import client_ip
+from app.organization_queries import employee_payloads, search_employee_targets
+from app.month_closure import ensure_month_open
+from app.data_cache import invalidate_data_caches
+from app.search_utils import like_escaped_pattern
+from app.date_utils import parse_iso_date
 
 router = APIRouter()
 
@@ -250,8 +250,7 @@ def create_loa_period(payload: dict, request: Request, db: Session = Depends(get
     try:
         # Authentication may have opened a read transaction.  Reserve the
         # SQLite writer before reading the employee or testing date conflicts.
-        db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
+        reserve_writer(db)
         return _create_loa_period(payload, request, db, user)
     except Exception:
         db.rollback()
@@ -303,13 +302,8 @@ def _create_loa_period(payload: dict, request: Request, db: Session, user: V2Use
 
 @router.delete("/loa-periods/{period_id}")
 def cancel_loa_period(period_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("LOA_REGISTER"))):
-    try:
-        db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
+    with write_transaction(db):
         return _cancel_loa_period(period_id, payload, request, db, user)
-    except Exception:
-        db.rollback()
-        raise
 
 
 def _cancel_loa_period(period_id: int, payload: dict, request: Request, db: Session, user: V2User):
@@ -376,8 +370,7 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), p
         raise HTTPException(400, "导入文件不能为空且不能超过5MB")
     try:
         if not preview:
-            db.rollback()
-            db.execute(text('BEGIN IMMEDIATE'))
+            reserve_writer(db)
         allowed = scoped_hr_attraction_ids(db, user)
         roles = {r.code:r for r in db.query(Role).all()}
         allowed_roles = set(roles) if "SYSTEM_ADMIN" in user.permissions else CIRCLE_HR_MANAGED_ROLE_CODES
@@ -438,8 +431,7 @@ async def import_employees(request: Request, workbook: UploadFile = File(...), p
 @router.post("/hr/employees")
 def create_employee(payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
     try:
-        db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
+        reserve_writer(db)
         return _create_employee(payload, request, db, user)
     except IntegrityError as exc:
         db.rollback()
@@ -701,8 +693,7 @@ def change_employee_number(
 @router.put("/hr/employees/{employee_id}")
 def update_employee(employee_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("HR_MANAGE"))):
     try:
-        db.rollback()
-        db.execute(text("BEGIN IMMEDIATE"))
+        reserve_writer(db)
         result = _update_employee(employee_id, payload, request, db, user)
     except Exception:
         # LOA and the surrounding employee/account/group changes are one unit.

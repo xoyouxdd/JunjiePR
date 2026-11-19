@@ -1,7 +1,6 @@
 """Monthly attendance honors. No scoring writes, external calls or automatic awards."""
 from __future__ import annotations
 
-import calendar
 import hashlib
 import json
 import re
@@ -14,6 +13,8 @@ from app.attendance_medals_models import (AttendanceMedal, MedalAccountIdentity,
     MedalLeaveBatch, MedalLeaveMonth, MedalNotice, MedalWageCode)
 from app.services.employment import employment_history
 from app.services.audit import write_audit
+from app.date_utils import month_bounds as calendar_month_bounds
+from app.json_digest import canonical_json, json_digest
 from app.employee_numbers import employee_number, employee_number_aliases
 from app.month_closure import closed_month_scope_filter, month_closure_scope
 from app.v2_models import (Attraction, AuditLog, CircleTransferRequest, DeductionRecord, DeductionType,
@@ -130,11 +131,11 @@ def classify_code(db, user, code, kind, revision, reason):
 
 
 def dump(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return canonical_json(value, default=str)
 
 
 def digest(value):
-    return hashlib.sha256(dump(value).encode()).hexdigest()
+    return json_digest(value, default=str)
 
 
 def leave_key(row):
@@ -150,12 +151,12 @@ def month_bounds(month):
     if not re.fullmatch(r"[0-9]{4}-[0-9]{2}", str(month)):
         raise HTTPException(400, "请选择有效月份")
     try:
-        first = date.fromisoformat(month + "-01")
+        first, last = calendar_month_bounds(month)
     except ValueError as exc:
         raise HTTPException(400, "请选择有效月份") from exc
     if month < TEST_START:
         raise HTTPException(400, "全勤勋章从2026年11月开放管理端试用，2027年1月正式累计")
-    return first.isoformat(), f"{month}-{calendar.monthrange(first.year, first.month)[1]:02}"
+    return first.isoformat(), last.isoformat()
 
 
 def is_admin(user):

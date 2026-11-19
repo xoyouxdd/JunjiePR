@@ -19,7 +19,7 @@ from app.main import app  # noqa: E402
 from app.rotation.access import ACCOUNT_COOKIE, can_enter  # noqa: E402
 from app.rotation.models import RotationAccount, RotationRosterEntry, RotationRosterUpload  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_models import Attraction, AuditLog, Employee, EmployeeRoleAssignment, Role, UserAccount  # noqa: E402
 
 

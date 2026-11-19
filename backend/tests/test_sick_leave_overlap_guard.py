@@ -19,7 +19,7 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
 
 # These retained API tests explicitly grant the retired permission only in this process.
 ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")

@@ -33,12 +33,13 @@ from app.rotation.access import (
 from app.rotation import service
 from app.rotation.models import RotationAccount, RotationAccountSession, RotationRosterEntry
 from app.rotation.roster import parse_any
-from app.routers._shared import client_ip, parse_iso_date
+from app.http_utils import client_ip
+from app.date_utils import parse_iso_date
 from app.security import request_is_https
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, token_hash
-from app.v2_database import SessionLocal, get_db
-from app.v2_services import write_audit
+from app.database.connection import SessionLocal, get_db
+from app.services.audit import write_audit
 
 
 router = APIRouter(prefix="/rotation", tags=["rotation"])

@@ -26,7 +26,7 @@ from app.main import app
 from app.branding import BRAND_EN
 from app.announcement_exports import pdf, spreadsheet, report_groups, signature_previews, expected_statement
 from app.announcement_export_data import prepare_export_data
-from app.v2_database import SessionLocal, FILE_DIR
+from app.database.connection import SessionLocal, FILE_DIR
 from app.v2_models import Employee, GroupLeaderAssignment, StoredFile, UserAccount, WorkGroup
 
 OUTPUT = Path(__file__).resolve().parents[2] / "output" / "announcement-export-20261018"

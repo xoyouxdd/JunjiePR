@@ -1,7 +1,7 @@
 """Fictional signing cards for follow-up regression and local preview."""
 from datetime import datetime, timedelta
 
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, GroupLeaderAssignment, RecognitionRecord, RecognitionType, WorkGroup
 
 

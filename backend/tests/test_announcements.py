@@ -23,7 +23,7 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app
-from app.v2_database import SessionLocal, FILE_DIR
+from app.database.connection import SessionLocal, FILE_DIR
 from app.v2_models import (Announcement, AnnouncementVersion, AnnouncementDelivery, AnnouncementNotification,
     AnnouncementTrainingConfig, AnnouncementTrainer, AnnouncementTrainingCode, AnnouncementTrainingReceipt, AnnouncementTrainingAttempt,
     AnnouncementHandover, AnnouncementResponsibility, AnnouncementResponsibilityHandover, AnnouncementFavorite, AnnouncementGrant, AnnouncementProjectMember,

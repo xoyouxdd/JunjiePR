@@ -15,7 +15,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import and_, or_, update
 import fitz
 
-from app.v2_database import FILE_DIR, SessionLocal
+from app.database.connection import FILE_DIR, SessionLocal
 from app.deduction_policy import statement_upgrade_reviewer
 from app.v2_models import AuditLog, DeductionFollowUp, DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, StoredFile
 

@@ -2,7 +2,6 @@
 import os
 import tempfile
 import threading
-from types import SimpleNamespace
 
 import pytest
 
@@ -12,9 +11,11 @@ from app import announcement_worker as worker
 
 @pytest.fixture
 def isolated_worker(monkeypatch):
-    monkeypatch.setattr(worker, "_thread", None)
-    monkeypatch.setattr(worker, "_stop", threading.Event())
-    monkeypatch.setattr(worker, "_guard", threading.Lock())
+    state = worker._worker
+    monkeypatch.setattr(state, "_thread", None)
+    monkeypatch.setattr(state, "_stop", threading.Event())
+    monkeypatch.setattr(state, "_guard", threading.Lock())
+    monkeypatch.setattr(state, "_users", 0)
 
 
 def test_stop_waits_for_start_before_setting_event_and_joining(isolated_worker, monkeypatch):
@@ -37,10 +38,10 @@ def test_stop_waits_for_start_before_setting_event_and_joining(isolated_worker, 
 
         def join(self, timeout):
             assert self.started, "Cannot join an unpublished, unstarted worker"
-            assert worker._stop.is_set() and timeout == 3
+            assert worker._worker._stop.is_set() and timeout == 3
             joined.set()
 
-    monkeypatch.setattr(worker, "threading", SimpleNamespace(Thread=PausedThread))
+    monkeypatch.setattr(worker._worker, "_thread_factory", PausedThread)
 
     def start():
         try:
@@ -60,11 +61,11 @@ def test_stop_waits_for_start_before_setting_event_and_joining(isolated_worker, 
     starter.start()
     try:
         assert entered.wait(3)
-        assert worker._thread is None  # No half-started thread is observable.
+        assert worker._worker._thread is None  # No half-started thread is observable.
         stopper.start()
         assert stopping.wait(3)
         assert not joined.wait(0.05)
-        assert not worker._stop.is_set()  # Startup cannot clear a concurrent stop.
+        assert not worker._worker._stop.is_set()  # Startup cannot clear a concurrent stop.
     finally:
         release.set()
         starter.join(3)
@@ -83,25 +84,25 @@ def test_duplicate_start_stop_and_restart(isolated_worker, monkeypatch):
             instances.append(self)
 
         def start(self):
-            assert not worker._stop.is_set()
+            assert not worker._worker._stop.is_set()
             self.alive = True
 
         def is_alive(self):
             return self.alive
 
         def join(self, timeout):
-            assert worker._stop.is_set() and timeout == 3
+            assert worker._worker._stop.is_set() and timeout == 3
             self.alive = False
 
-    monkeypatch.setattr(worker, "threading", SimpleNamespace(Thread=FakeThread))
+    monkeypatch.setattr(worker._worker, "_thread_factory", FakeThread)
     worker.stop_worker()
     worker.start_worker()
     worker.start_worker()
-    assert len(instances) == 1 and worker._thread is instances[0]
+    assert len(instances) == 1 and worker._worker._thread is instances[0]
     worker.stop_worker()
     worker.stop_worker()
     worker.start_worker()
-    assert len(instances) == 2 and worker._thread is instances[1]
+    assert len(instances) == 2 and worker._worker._thread is instances[1]
     worker.stop_worker()
 
 
@@ -116,9 +117,9 @@ def test_failed_start_does_not_publish_unjoinable_thread(isolated_worker, monkey
         def join(self, timeout):
             pytest.fail("Failed startup must never publish a join target")
 
-    monkeypatch.setattr(worker, "threading", SimpleNamespace(Thread=FailedThread))
+    monkeypatch.setattr(worker._worker, "_thread_factory", FailedThread)
     with pytest.raises(RuntimeError, match="injected start failure"):
         worker.start_worker()
-    assert worker._thread is None
+    assert worker._worker._thread is None
     worker.stop_worker()
-    assert worker._stop.is_set()
+    assert worker._worker._stop.is_set()

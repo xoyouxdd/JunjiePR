@@ -17,7 +17,7 @@ with exclusive_data(path):
     from local_tools.rotation_clock.extension import install
     from local_tools.rotation_clock.demo import seed
     install(app);seed(path)
-    from app.v2_database import SessionLocal
+    from app.database.connection import SessionLocal
     from app.v2_models import Attraction,Employee,Role,EmployeeRoleAssignment,UserAccount
     from app.v2_crypto import hash_password
     from app.rotation import service as S

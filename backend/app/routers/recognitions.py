@@ -1,5 +1,6 @@
 """Recognition entry and review endpoints."""
 from __future__ import annotations
+from app.database.connection import reserve_writer
 from app.employee_numbers import employee_number
 
 from datetime import date, datetime
@@ -12,7 +13,8 @@ from sqlalchemy import func, or_, select, update, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_database import FILE_DIR, LEGACY_CIRCLE_BY_VENUE, get_db
+from app.database.connection import FILE_DIR, get_db
+from app.database.reference_data import LEGACY_CIRCLE_BY_VENUE
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionInboxItem, RecognitionMonthlyQuota, RecognitionReissue, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
 from app.services import scoring_policies as scoring_config
 from app.recognition_encouragement import encouragement_options
@@ -23,37 +25,62 @@ from app.services.attendance import loa_excludes_month
 from app.services.identity import TEMPORARY_RECOGNIZER_LABEL, temporary_recognizer_ids
 from app.services.activity_points import sync_recognition as sync_activity_points
 from app.services.monthly_ranks import sealed_self_score
-from app.v2_services import ACTING_TA_GSM_RECOGNIZER_CODES, FRONTLINE_CODES, LEADER_CODES, RECOGNIZER_CODES, SENIOR_RECOGNIZER_CODES, base_role_at, scoring_category, current_leader_for_employee, direct_member_ids, duty_code_at, employed_on, recognition_score_for_role, recognizer_role_for_date, recognizer_options, role_at, save_image_upload, write_audit
-from app.routers._shared import (
+from app.role_constants import (
+    ACTING_TA_GSM_RECOGNIZER_CODES,
+    FRONTLINE_CODES,
+    LEADER_CODES,
+    RECOGNIZER_CODES,
+    SENIOR_RECOGNIZER_CODES,
+)
+from app.services.identity import (
+    base_role_at,
+    scoring_category,
+    duty_code_at,
+    employed_on,
+    recognition_score_for_role,
+    recognizer_role_for_date,
+    recognizer_options,
+    role_at,
+)
+from app.services.organization import current_leader_for_employee, direct_member_ids
+from app.upload_storage import save_image_upload
+from app.services.audit import write_audit
+from app.record_payloads import (
     ATTENDANCE_FILTER_STATUSES,
-    DEDICATED_RECOGNITION_TYPE_CODES,
     DEDUCTION_FILTER_STATUSES,
+    RECOGNITION_FILTER_STATUSES,
+    deduction_follow_up_payload,
+    deduction_payload,
+    recognition_payload,
+    sick_leave_payloads,
+)
+from app.recognition_policy import (
+    DEDICATED_RECOGNITION_TYPE_CODES,
     MONTHLY_CATEGORY_CAP_CODES,
     MONTHLY_CATEGORY_CAP_EFFECTIVE_DATE,
     MONTHLY_CATEGORY_CAP_LIMIT,
-    RECOGNITION_FILTER_STATUSES,
-    SCOPED_HR_ROLE_CODE,
     SPECIAL_RECOGNITION_TYPES,
-    client_ip,
-    deduction_follow_up_payload,
-    deduction_payload,
+)
+from app.access_policy import (
+    SCOPED_HR_ROLE_CODE,
     ensure_enabled_frontline_target,
     ensure_enabled_scored_target,
-    ensure_month_open,
     ensure_supervisor_target_allowed,
     ensure_scoped_hr_attraction,
     ensure_scoped_hr_employee,
-    existing_submission,
-    invalidate_data_caches,
-    like_escaped_pattern,
-    normalize_request_key,
-    parse_iso_date,
-    recognition_payload,
-    remember_submission,
-    sick_leave_payloads,
-    submission_payload_digest,
     void_operator_snapshot,
 )
+from app.http_utils import client_ip
+from app.month_closure import ensure_month_open
+from app.idempotency import (
+    existing_submission,
+    normalize_request_key,
+    remember_submission,
+    submission_payload_digest,
+)
+from app.data_cache import invalidate_data_caches
+from app.search_utils import like_escaped_pattern
+from app.date_utils import parse_iso_date
 
 router = APIRouter()
 
@@ -724,10 +751,10 @@ def create_poc_recognition(
     payload_digest = submission_payload_digest(
         {
             "employee_id": int(employee_id),
-            "recognition_date": str(recognition_date or "").strip(),
-            "points": str(points or "").strip(),
-            "poc_period_type": str(poc_period_type or "").strip(),
-            "poc_reason": str(poc_reason or "").strip(),
+            "recognition_date": recognition_date.strip(),
+            "points": points.strip(),
+            "poc_period_type": poc_period_type.strip(),
+            "poc_reason": poc_reason.strip(),
             **({"reissue_of_id": reissue_of_id} if reissue_of_id is not None else {}),
         }
     )
@@ -744,7 +771,7 @@ def create_poc_recognition(
         raise HTTPException(400, "POC分值必须为1至5分")
     if poc_period_type not in {"month", "quarter"}:
         raise HTTPException(400, "请选择月度或季度认可周期")
-    reason = str(poc_reason or "").strip()
+    reason = poc_reason.strip()
     if not reason or len(reason) > 100:
         raise HTTPException(400, "特别贡献原因必填且不能超过100字")
     target, target_role = ensure_enabled_poc_target(db, int(employee_id))
@@ -807,8 +834,7 @@ def withdraw_recognition(
     record_id: int, request: Request, reason: str | None = Body(None, embed=True, max_length=200),
     db: Session = Depends(get_db), user: V2User = Depends(current_user),
 ):
-    db.rollback()
-    db.execute(text("BEGIN IMMEDIATE"))
+    reserve_writer(db)
     row = db.get(RecognitionRecord, record_id)
     if not row:
         raise HTTPException(404, "签卡记录不存在")
@@ -948,8 +974,7 @@ def supervisor_reviews(
 
 @router.post("/supervisor-reviews/{record_id}")
 def review_supervisor_recognition(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(current_user)):
-    db.rollback()
-    db.execute(text("BEGIN IMMEDIATE"))
+    reserve_writer(db)
     row = supervisor_review_query(db, user).filter(RecognitionRecord.id == record_id).first()
     if not row:
         raise HTTPException(404, "主管签卡不存在或不在复核范围内")
@@ -958,8 +983,7 @@ def review_supervisor_recognition(record_id: int, payload: dict, request: Reques
 
 @router.post("/reviews/{record_id}")
 def review_recognition(record_id: int, payload: dict, request: Request, db: Session = Depends(get_db), user: V2User = Depends(require_permissions("REVIEW_DIRECT"))):
-    db.rollback()
-    db.execute(text("BEGIN IMMEDIATE"))
+    reserve_writer(db)
     row = db.get(RecognitionRecord, record_id)
     if not row or row.employee_id not in direct_member_ids(db, user.id):
         raise HTTPException(404, "直属组员签卡不存在")

@@ -19,10 +19,10 @@ from app.services.declaration_statistics import (
     MATERIAL_LABELS, STATUS_LABELS, UPGRADE_LABELS, checked_month, declaration_payload,
 )
 from app.v2_auth import V2User, current_user, require_permissions
-from app.v2_database import get_db
-from app.v2_services import write_audit
+from app.database.connection import get_db
+from app.services.audit import write_audit
 from app.v2_watermark import watermark_workbook
-from app.routers._shared import client_ip
+from app.http_utils import client_ip
 
 router = APIRouter()
 

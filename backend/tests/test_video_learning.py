@@ -16,7 +16,7 @@ os.environ['RECOGNITION_VIDEO_WORKER'] = '0'
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, EmployeeActingDuty, AuditLog, Attraction, UserAccount, AnnouncementGrant
 from app.video_models import LearningVideo, VideoCircle, VideoAudiencePolicy, VideoPlayback, VideoJob, VideoProgress
 from app import video_media as media

@@ -2,7 +2,7 @@
 from datetime import datetime,timedelta
 from fastapi.testclient import TestClient
 from test_rotation_flow import app,login,enter,ok,clock,roster_file,LINES,DAY
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.rotation.models import RotationAssistGrant,RotationAdjustSession
 from app.rotation.adjustment import qualified,grant_code
 from app.v2_models import Employee, UserAccount, Role, EmployeeRoleAssignment

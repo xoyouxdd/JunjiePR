@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_supervisor_performance import app, SessionLocal
-from app.v2_database import FILE_DIR
+from app.database.connection import FILE_DIR
 from app.v2_models import RecognitionRecord
 from fastapi.responses import Response
 from PIL import Image

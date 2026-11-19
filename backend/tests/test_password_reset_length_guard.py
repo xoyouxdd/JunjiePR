@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.security import password_policy_error  # noqa: E402
 from app.v2_crypto import account_reset_password, hash_password, verify_password  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, EmployeeRoleAssignment, Role, UserAccount  # noqa: E402
 
 

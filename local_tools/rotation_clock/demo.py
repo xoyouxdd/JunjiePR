@@ -9,7 +9,8 @@ def seed(path):
     require_local()
     if (path / '.demo-ready').exists():
         return
-    from app.v2_database import init_db, SessionLocal
+    from app.database.bootstrap import init_db
+    from app.database.connection import SessionLocal
     from app.v2_models import Attraction, Employee, Role, EmployeeRoleAssignment, UserAccount
     from app.v2_crypto import hash_password
     from app.rotation import service as S

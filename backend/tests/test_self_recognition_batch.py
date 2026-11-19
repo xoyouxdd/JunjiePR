@@ -15,7 +15,7 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from PIL import Image
 from fastapi.testclient import TestClient
 from app.main import app
-from app.v2_database import SessionLocal, FILE_DIR
+from app.database.connection import SessionLocal, FILE_DIR
 from app.v2_models import RecognitionRecord, RecognitionAttachment, StoredFile
 
 
@@ -262,7 +262,7 @@ def test_later_link_reviewer_can_view_shared_photo():
 def test_legacy_attachment_migration_preserves_rows_and_is_repeatable():
     from sqlalchemy import create_engine, text
     from sqlalchemy.orm import Session
-    from app.v2_database import ensure_recognition_shared_evidence
+    from app.database.migrations import ensure_recognition_shared_evidence
     engine = create_engine("sqlite:///:memory:")
     with Session(engine) as db:
         db.execute(text("CREATE TABLE recognition_records (id INTEGER PRIMARY KEY)"))

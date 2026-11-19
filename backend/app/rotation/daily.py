@@ -1,12 +1,12 @@
 """Daily plans and recorded history. Reads never simulate or advance a historical day."""
 import base64
-import calendar
 from copy import deepcopy
 from datetime import date
 import hashlib
 import json
 import zlib
 from uuid import uuid4
+from app.date_utils import month_bounds as calendar_month_bounds
 from app.rotation import service as S
 from app.rotation.namespace import tables_for
 from app.rotation.models import RotationDay, RotationRosterEntry, RotationSnapshot
@@ -27,10 +27,9 @@ def capture_snapshot(db,attraction_id,state,settings,minute):
 
 def month_bounds(month):
     try:
-        if len(month)!=7 or month[4]!='-':raise ValueError()
-        year,m=map(int,month.split('-'));date(year,m,1)
-        return f'{month}-01',f'{month}-{calendar.monthrange(year,m)[1]:02d}'
-    except (ValueError,TypeError):raise S.ActionError('月份格式需为 YYYY-MM')
+        first,last=calendar_month_bounds(month)
+    except ValueError:raise S.ActionError('月份格式需为 YYYY-MM')
+    return first.isoformat(),last.isoformat()
 
 
 @S.transactional

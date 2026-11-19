@@ -10,7 +10,7 @@ clock_patch=pytest.MonkeyPatch();install_rotation_test_clock(clock_patch)
 setup=seed.__wrapped__(formal_daytime_runtime=clock_patch)
 next(setup)
 seed_today()
-from app.v2_database import SessionLocal, engine
+from app.database.connection import SessionLocal, engine
 from app.rotation import service as S
 
 @app.post('/__fixture/assignment-window')
@@ -56,7 +56,7 @@ def departure_hint():
 
 @app.post('/__fixture/timeout')
 def timeout_transfer(payload: dict | None = None):
-    from app.v2_database import SessionLocal
+    from app.database.connection import SessionLocal
     from app.rotation import service as S, workflow as W
     from datetime import date
     aid=seed_cohort()
@@ -80,7 +80,7 @@ def timeout_transfer(payload: dict | None = None):
 
 @app.post('/__fixture/room')
 def room(payload: dict):
-    from app.v2_database import SessionLocal
+    from app.database.connection import SessionLocal
     from app.rotation import service as S
     from datetime import date
     with SessionLocal() as db:
@@ -109,7 +109,7 @@ def cohort(payload: dict | None = None):
         return {'ok':True}
     aid=seed_cohort(three=bool(payload and payload.get('three')), mixed=bool(payload and payload.get('mixed')))
     if payload and payload.get('hold101'):
-        from app.v2_database import SessionLocal
+        from app.database.connection import SessionLocal
         from app.rotation import service as S
         from datetime import date
         with SessionLocal() as db:
@@ -121,7 +121,7 @@ def cohort(payload: dict | None = None):
     return {'ok':True}
 @app.post('/__fixture/display')
 def display():
-    from app.v2_database import SessionLocal
+    from app.database.connection import SessionLocal
     from app.rotation import service as S, workflow as W
     from datetime import date
     from copy import deepcopy

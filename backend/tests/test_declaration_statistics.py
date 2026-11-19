@@ -22,7 +22,8 @@ import fitz  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import FILE_DIR, ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
+from app.database.connection import FILE_DIR, SessionLocal
+from app.database.reference_data import ROLE_PERMISSION_CODES
 from app.v2_crypto import hash_password  # noqa: E402
 from app.v2_models import Attraction, AuditLog, DeductionLevel, DeductionRecord, DeductionType, DeductionUpgradeRequest, Employee, EmployeeRoleAssignment, Role, StoredFile, UserAccount  # noqa: E402
 

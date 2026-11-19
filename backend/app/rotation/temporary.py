@@ -59,7 +59,7 @@ def adopt(db, employee):
         member.adopted_employee_id = employee.id
         member.enabled = False
         db.query(TemporarySession).filter_by(member_id=member.id).delete(synchronize_session=False)
-        from app.v2_services import write_audit
+        from app.services.audit import write_audit
         write_audit(db, employee, '正式账号接管轮岗临时身份', 'employee', employee.id,
                     after={'temporary_member_id':member.id, 'history_retained':True})
 

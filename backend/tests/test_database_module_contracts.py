@@ -105,20 +105,17 @@ def isolated_python(tmp_path: Path, code: str, **settings: str) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("first_module", ["app.v2_models", "app.rotation.models", "app.v2_database"])
+@pytest.mark.parametrize("first_module", ["app.v2_models", "app.rotation.models", "app.database.bootstrap"])
 def test_fresh_imports_share_base_and_never_create_data_dirs(isolated_dir: Path, first_module: str) -> None:
     isolated_python(isolated_dir, f"""
 import importlib
 from pathlib import Path
 importlib.import_module({first_module!r})
-from app import v2_database, v2_models
+from app import v2_models
 from app.rotation import models
 from app.database import connection
 assert connection.BASE_DIR == Path.cwd()
-assert v2_database.Base is connection.Base
 assert v2_models.Base is models.Base is connection.Base
-assert v2_database.engine is connection.engine
-assert v2_database.SessionLocal is connection.SessionLocal
 assert not connection.DATA_DIR.exists()
 assert not connection.DB_PATH.exists()
 """)
@@ -149,16 +146,14 @@ def test_models_and_live_scope_service_do_not_depend_on_database_facade() -> Non
     assert dependencies <= sys.stdlib_module_names
 
 
-def test_explicit_facade_exports_reference_their_current_owners() -> None:
-    facade = importlib.import_module("app.v2_database")
-    tree = ast.parse((APP / "v2_database.py").read_text(encoding="utf-8"))
-    for node in tree.body:
-        if not isinstance(node, ast.ImportFrom) or node.module == "__future__":
-            continue
-        owner = importlib.import_module(node.module)
-        for alias in node.names:
-            assert alias.name != "*"
-            assert getattr(facade, alias.asname or alias.name) is getattr(owner, alias.name)
+def test_code_imports_owning_modules_not_removed_facades() -> None:
+    removed = {"app.v2_database", "app.v2_services", "app.routers._shared"}
+    for path in [*APP.rglob("*.py"), *(APP.parent / "tests").rglob("*.py"), *(APP.parents[1] / "local_tools").rglob("*.py")]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imports = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module}
+        assert not imports & removed, path
+    for relative in ("v2_database.py", "v2_services.py", "routers/_shared.py"):
+        assert not (APP / relative).exists()
 
 
 def test_stable_migration_keys_order_and_explicit_callables() -> None:
@@ -313,7 +308,9 @@ def test_isolated_bootstrap_is_idempotent_preserves_passwords_and_never_runs_cle
     isolated_python(isolated_dir, """
 from decimal import Decimal
 from sqlalchemy import text
-from app.v2_database import init_db, SessionLocal, SCHEMA_MIGRATION_STEPS
+from app.database.bootstrap import init_db
+from app.database.connection import SessionLocal
+from app.database.migrations import SCHEMA_MIGRATION_STEPS
 from app.v2_models import (
     DeductionType, Employee, Permission, RecognitionScoreRule, Role, RolePermission, UserAccount,
 )

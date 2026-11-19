@@ -14,7 +14,7 @@ os.environ['RECOGNITION_ENABLE_TEST_ACCOUNTS']='1'
 os.environ['RECOGNITION_TEST_DEFAULT_PASSWORD']='formal-fixture-2026'
 os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='formal-admin-2026'
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, Role, Attraction, UserAccount, EmployeeRoleAssignment
 from app.v2_crypto import hash_password
 from app.rotation import service as S

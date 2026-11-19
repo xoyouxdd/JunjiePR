@@ -15,7 +15,7 @@
 | 你改了 | 同步改 |
 |---|---|
 | 入口、目录职责、技术栈 | `docs/architecture.md` |
-| `v2_models.py` / `v2_database.py` 表、字段、键、索引 | `docs/sqlite-schema.md` |
+| `v2_models.py` / `database/migrations/` 表、字段、键、索引 | `docs/sqlite-schema.md` |
 | 怎么跑测试、数据目录、环境变量 | `docs/getting-started.md` |
 | `build_release.py` 排除规则或包名 | `docs/release.md` |
 | `scripts/` 脚本 | `scripts/README.md`，必要时改 `docs/operations.md` 一览表 |
@@ -23,8 +23,8 @@
 | 前端样式、配色或弹窗 | 复用 `style.css` 的 `:root` 变量与 `confirmModal`，约定见 `docs/architecture.md` |
 | 密码/打包/仓库边界约定 | `docs/security.md` |
 | 公告权限、签收、版本、补收或交接 | `docs/announcements.md`，制图/上传同步 `docs/announcement-image-generation.md` |
-| 用户能看见的功能 | `backend/app/changelog.py`（见 [changelog.md](changelog.md)） |
-| `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.py` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |
+| 用户能看见的功能 | `backend/app/changelog.json`（见 [changelog.md](changelog.md)） |
+| `APP_VERSION` | `version.py`（`年.月.日.当天第几版`）+ `changelog.json` 最新一条；`STATIC_CACHE_VERSION` 与 `APP_VERSION` 相同 |
 | 本地依赖或测试命令 | 统一使用 `backend/.venv`，见 `docs/getting-started.md`；不要默认使用系统 Python |
 
 主前端新增模块时，在 `static/index.html` 的 import map 添加带 `__STATIC_CACHE_VERSION__` 的 URL，并按职责显式导入；新增页面在组合入口注册，不能反向导入入口或复制原大脚本。测试源码读取通过 `tests/frontend_source.py` / `.js` 沿实际入口依赖查找所属模块，行为回归直接执行实际模块。

@@ -28,7 +28,7 @@ from app.excel_export_utils import (
     write_merged_title,
 )
 from app.v2_models import Attraction, Employee, EmployeeNumberHistory, Role
-from app.v2_services import base_roles_at
+from app.services.identity import base_roles_at
 from app.services.employment import employment_history
 from app.excel_presentation import add_personnel_groups, append_export_context, finalize_statistics_workbook, present_detail
 

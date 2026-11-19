@@ -5,12 +5,12 @@ from sqlalchemy.orm import Session
 from app.rotation import adjustment as auth, manual, service
 from app.rotation.access import require_manager, require_actor, rotation_attraction_id, session_actor
 from app.rotation.models import RotationAssistGrant, RotationAdjustSession
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_auth import current_user
 from app.v2_models import Employee
 from app.v2_crypto import token_hash
 from app.security import request_is_https
-from app.v2_services import write_audit
+from app.services.audit import write_audit
 
 router=APIRouter(prefix='/adjust')
 

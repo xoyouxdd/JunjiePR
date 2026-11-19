@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 
 from app.v2_auth import current_user, V2User
-from app.v2_database import get_db, EXPORT_DIR, SessionLocal
+from app.database.connection import get_db, EXPORT_DIR, SessionLocal
 
 router = APIRouter()
 _lock = Lock()

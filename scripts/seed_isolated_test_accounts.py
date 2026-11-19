@@ -41,7 +41,8 @@ def main() -> dict:
     with initializing.open("x", encoding="utf-8") as stream:
         stream.write("isolated fixture initialization in progress")
 
-    from app.v2_database import SessionLocal, init_db
+    from app.database.connection import SessionLocal
+    from app.database.bootstrap import init_db
     from app.v2_models import (Attraction, Employee, EmployeeActingDuty,
                                EmployeeRoleAssignment, Role, UserAccount)
     from app.v2_crypto import hash_password

@@ -5,11 +5,11 @@ from sqlalchemy import update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
-from app.routers._shared import client_ip
+from app.http_utils import client_ip
 from app.v2_auth import V2User, current_user
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import AboutSystemSettings
-from app.v2_services import write_audit
+from app.services.audit import write_audit
 
 router = APIRouter()
 DEFAULT_MAINTAINERS = "赵君杰、张森"

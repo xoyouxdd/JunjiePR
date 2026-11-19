@@ -48,7 +48,7 @@ def ensure_group_leader_types(db) -> None:
     """Label current group leaders: a base 主管 or above is the formal leader
     (原组长); anyone else running a group (an acting TA主管) is its acting leader."""
     from app.v2_models import GroupLeaderAssignment
-    from app.v2_services import formal_leader_eligible
+    from app.services.organization import formal_leader_eligible
 
     existing = {row[1] for row in db.execute(text("PRAGMA table_info(group_leader_assignments)"))}
     if "leader_type" not in existing:
@@ -65,7 +65,7 @@ def ensure_group_leader_types(db) -> None:
 def legacy_group_display_name(db, group, today: str) -> str:
     """The name HR saw before fixed group names: '<leader>工作组' after the
     leader (主管 first, else whoever runs it), or the stored name."""
-    from app.v2_services import active_group_leader, group_leader_of_type
+    from app.services.organization import active_group_leader, group_leader_of_type
 
     leader = group_leader_of_type(db, group.id, "formal", today) or active_group_leader(db, group.id, today)
     return f"{leader.leader.name}工作组" if leader else group.name
@@ -84,7 +84,15 @@ def ensure_group_codes(db) -> None:
     or a 主管 whose base identity is not 主管, becomes an HR alert.
     """
     from app.v2_models import Attraction, GroupLeaderAssignment, WorkGroup
-    from app.v2_services import base_role_at, create_alert, group_code_for_index, group_code_index, group_display_name, next_group_code, write_audit
+    from app.services.identity import base_role_at
+    from app.services.role_lifecycle import create_alert
+    from app.services.organization import (
+        group_code_for_index,
+        group_code_index,
+        group_display_name,
+        next_group_code,
+    )
+    from app.services.audit import write_audit
 
     existing = {row[1] for row in db.execute(text("PRAGMA table_info(work_groups)"))}
     if "code" not in existing:
@@ -144,7 +152,7 @@ def ensure_group_codes(db) -> None:
 def resequence_all_group_codes(db) -> None:
     """Re-letter every circle's open groups from A without gaps (one-off)."""
     from app.v2_models import WorkGroup
-    from app.v2_services import resequence_group_codes
+    from app.services.organization import resequence_group_codes
 
     for (attraction_id,) in db.query(WorkGroup.attraction_id).distinct().all():
         resequence_group_codes(db, attraction_id, None, "2026-10 小组从A开始重新排列字母")
@@ -168,7 +176,7 @@ def migrate_legacy_duty_assignments(db) -> list[dict]:
         Role,
         WorkGroup,
     )
-    from app.v2_services import create_alert
+    from app.services.role_lifecycle import create_alert
 
     roles = {role.code: role for role in db.query(Role).all()}
     duty_role_ids = {roles[code].id: code for code in ACTING_DUTY_BASE_CODES if code in roles}

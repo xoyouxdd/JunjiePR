@@ -8,7 +8,9 @@ from pathlib import Path
 TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="recognition-schema-contract-"))
 os.environ["RECOGNITION_V2_DATA_DIR"] = str(TEST_DATA_DIR)
 
-from app.v2_database import SessionLocal, ensure_second_audit_query_indexes, init_db  # noqa: E402
+from app.database.connection import SessionLocal
+from app.database.migrations import ensure_second_audit_query_indexes
+from app.database.bootstrap import init_db
 from sqlalchemy import text  # noqa: E402
 
 

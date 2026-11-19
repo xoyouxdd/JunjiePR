@@ -20,7 +20,8 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from app.main import app  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
 from app.v2_models import AuditLog, Employee, EmployeeRoleAssignment, MonthClosure, Role, UserAccount, UserSession  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
+from app.database.connection import SessionLocal
 
 # The old sick-leave flow remains regression-tested only with a test-only grant.
 ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")

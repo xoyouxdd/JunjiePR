@@ -15,7 +15,7 @@ from starlette.datastructures import FormData
 os.environ["RECOGNITION_V2_DATA_DIR"] = tempfile.mkdtemp(prefix="recognition-uc-upload-test-")
 
 from app.main import browser_family, validation_error_response
-from app.v2_database import init_db
+from app.database.bootstrap import init_db
 
 
 ROOT = Path(__file__).resolve().parents[1]

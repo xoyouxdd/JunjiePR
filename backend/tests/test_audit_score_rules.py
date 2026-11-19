@@ -13,7 +13,8 @@ os.environ["RECOGNITION_ENABLE_TEST_ACCOUNTS"] = "1"
 os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
-from app.v2_database import DB_PATH, init_db  # noqa: E402
+from app.database.connection import DB_PATH
+from app.database.bootstrap import init_db
 
 init_db()
 

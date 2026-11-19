@@ -20,9 +20,9 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.score_queries import employee_month_scores  # noqa: E402
-from app.v2_database import SessionLocal  # noqa: E402
+from app.database.connection import SessionLocal
 from app.v2_models import UserAccount  # noqa: E402
-from app.routers._shared import upgrade_type_codes  # noqa: E402
+from app.deduction_policy import upgrade_type_codes
 from sqlalchemy import text  # noqa: E402
 
 

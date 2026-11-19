@@ -26,7 +26,9 @@ from app.deduction_materials import (  # noqa: E402
     process_next_deduction_material_job,
     worker_tick,
 )
-from app.v2_database import FILE_DIR, SessionLocal, ensure_material_job_claim_generation, init_db  # noqa: E402
+from app.database.connection import FILE_DIR, SessionLocal
+from app.database.migrations import ensure_material_job_claim_generation
+from app.database.bootstrap import init_db
 from app.v2_models import AuditLog, DeductionLevel, DeductionMaterialJob, DeductionRecord, DeductionType, Employee, StoredFile  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402

@@ -15,7 +15,7 @@ os.environ['RECOGNITION_TEST_DEFAULT_PASSWORD']='type-fixture-only'
 os.environ['RECOGNITION_TEST_ADMIN_PASSWORD']='type-admin-only'
 
 from app.main import app
-from app.v2_database import SessionLocal
+from app.database.connection import SessionLocal
 from app.v2_models import Employee, UserAccount, AuditLog, UserSession, EmployeeRoleAssignment, Attraction
 from app.services import employee_types as T
 from app.v2_crypto import verify_password, hash_password

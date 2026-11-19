@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_material_upgrade_entry import app,login,make_pdf,TestClient,SessionLocal,deduction_materials,ensure_second_gsm,SECOND_GSM
-from app.v2_database import FILE_DIR
+from app.database.connection import FILE_DIR
 from app.month_closure import month_close_work_queries
 from app.v2_models import DeductionRecord,DeductionUpgradeNoticeDismissal,DeductionUpgradeRequest,DeductionUpgradeTransfer,UserAccount,AuditLog,MonthClosure,DeductionMaterialJob
 from app.v2_models import EmployeeActingDuty, Permission, Role, RolePermission, StoredFile

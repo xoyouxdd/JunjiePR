@@ -8,10 +8,10 @@
 
 品牌完整名称为「FZ团队工作台」，手机顶部、`apple-mobile-web-app-title` 与 manifest 的 `short_name` 使用「FZ工作台」；浏览器标题、manifest 的 `name`、登录页及公告 PDF 署名使用完整名称。登录页与主页面复用已有 FZ Logo，首页业务布局与 PR 计分名称保持原样。内部标识 JunjiePR、接口、存储和历史记录不随展示名称变更。
 
-- 接口：FastAPI + SQLAlchemy。路由按业务域分在 `backend/app/routers/` 下（`auth`、`accounts`、`employees`、`organization`、`hr_admin`、`deductions`、`recognitions`、`sick_leaves`、`sick_leave_import`、`statistics`、`governance`、`files`、`rotation`、`announcements`、`announcement_media`）。统计路由负责参数、权限、缓存及响应，查询和明细装配交给应用服务；`v2.py` 只挂载各域。`_shared.py` 保留显式兼容导出，公共实现由各职责模块拥有
+- 接口：FastAPI + SQLAlchemy。路由按业务域分在 `backend/app/routers/` 下（`auth`、`accounts`、`employees`、`organization`、`hr_admin`、`deductions`、`recognitions`、`sick_leaves`、`sick_leave_import`、`statistics`、`governance`、`files`、`rotation`、`announcements`、`announcement_media`）。统计路由负责参数、权限、缓存及响应，查询和明细装配交给应用服务；`v2.py` 只挂载各域。公共实现由各职责模块拥有，路由直接从所属模块导入（原 `_shared.py` 兼容门面已删除）
 - 数据：SQLite（默认 `backend/data_v2/`）+ 独立附件目录；表、键、索引见 [sqlite-schema.md](sqlite-schema.md)
-- 数据库职责：`database/connection.py` 唯一持有路径、Base、engine 和 SessionLocal；模型直接依赖该基础层。`database/bootstrap.py` 串行执行建表、一次性迁移及每次启动保障；种子、账号保障、分值视图与历史迁移各有所属模块。`v2_database.py` 保留显式兼容导出
-- 页面：`backend/app/static/` 原生 HTML/JS/CSS，由 `backend/app/main.py` 直接提供。配色集中在 `style.css` 的 `:root` 变量，语义色成对命名（如 `--btn-secondary-bg` / `--btn-secondary-text`、`--readonly-bg` / `--readonly-text`）；状态色只从 danger / warn / ok / info 四组变量里取（各组有 `-text`、`-bg`、`-border` 等档位）。新增样式优先复用变量，不要再写硬编码色值。确认弹窗统一用 `confirmModal` / `noticeModal`，不用浏览器原生 `confirm` / `alert`；弹层关闭走 `bindDialogLayer`，由它负责 `.is-leaving` 退场动画。断点只用三档：≤760px 为手机（底部栏为待办加 `MOBILE_PRIMARY_TABS` 按角色指定的常用入口，其余进「更多」；「更多」顶部显示完整身份、底部为退出登录，顶部栏只显示系统简称和「姓名 · 景点圈」），761–1199px 为带短标签的图标栏，≥1200px 为完整的左侧分组导航（待办置顶，更新记录/密码在底部）。内容区最宽 1440px；761–1279px 下多列筛选表单自动换行
+- 数据库职责：`database/connection.py` 唯一持有路径、Base、engine 和 SessionLocal；模型直接依赖该基础层。`database/bootstrap.py` 串行执行建表、一次性迁移及每次启动保障；种子、账号保障、分值视图与历史迁移各有所属模块（原 `v2_database.py` 兼容门面已删除）。写事务用 `connection.py` 的 `reserve_writer(db)`（先回滚只读快照再 `BEGIN IMMEDIATE`）或 `with write_transaction(db):`（失败立即回滚、尽早释放 SQLite 写锁）
+- 页面：`backend/app/static/` 原生 HTML/JS/CSS，由 `backend/app/main.py` 直接提供。配色集中在 `style.css` 的 `:root` 变量，语义色成对命名（如 `--btn-secondary-bg` / `--btn-secondary-text`、`--readonly-bg` / `--readonly-text`）；状态色只从 danger / warn / ok / info 四组变量里取（各组有 `-text`、`-bg`、`-border` 等档位）。圆角（`--radius-*`）、字号（`--fs-*`）、动效时长（`--motion-fast` / `--motion-base`）和常用阴影（`--shadow-*`）同样在 `:root` 定义。新增样式优先复用变量，不要再写硬编码色值。确认弹窗统一用 `confirmModal` / `noticeModal`，不用浏览器原生 `confirm` / `alert`；弹层关闭走 `bindDialogLayer`，由它负责 `.is-leaving` 退场动画。断点只用三档：≤760px 为手机（底部栏为待办加 `MOBILE_PRIMARY_TABS` 按角色指定的常用入口，其余进「更多」；「更多」顶部显示完整身份、底部为退出登录，顶部栏只显示系统简称和「姓名 · 景点圈」），761–1199px 为带短标签的图标栏，≥1200px 为完整的左侧分组导航（待办置顶，更新记录/密码在底部）。内容区最宽 1440px；761–1279px 下多列筛选表单自动换行
 - Excel 写表：`backend/app/excel_export.py`（路由只负责取数、水印、审计、返回）
 - 月度分数读查询：`backend/app/score_queries.py`（先限定月份和员工范围，再聚合；旧视图保留兼容）。`score_policy.py` 提供自然月 LOA 排除谓词，月度汇总、综合排名及代理期间得分共用；类别次数与未封顶认可排行仍保留原始业务记录
 - LOA 写业务：`backend/app/services/loa_commands.py` 统一登记、结束、撤销、区间重叠及受影响月份重算；专用入口与 HR 员工编辑共用，权限、审计和事务提交由路由负责
@@ -19,7 +19,7 @@
 - 轮岗（测试）：`backend/app/rotation/` 为独立模块（规则引擎、运行服务、名单解析、专用账号），后台线程每秒推进，页面 `/rotation`、`/rotation/screen` 独立于主应用外壳；见 [rotation.md](rotation.md)
 - 身份：本职身份与代理职务分开存储。`services/identity.py` 的 `role_at` 返回当天实际使用的职务，`base_role_at` 返回本职；计分、组员关系、全勤和排名人群按本职，权限取两者并集。规则见 [identity-and-supervisor.md](identity-and-supervisor.md)
 
-业务基础服务按职责分为 `identity`（日期身份与认可人）、`organization`（小组与管理范围）、`attendance`（全勤与 LOA 月份）、`attachments`（文件存储）、`audit`（审计）和 `role_lifecycle`（到期编排）。单人和批量全勤共用纯计分函数，批量路径仍先查齐数据再插入缺失月份。`v2_services.py` 保留显式兼容导出及附件 `FILE_DIR` 注入包装，新服务直接依赖所属模块，不反向依赖兼容门面。
+业务基础服务按职责分为 `identity`（日期身份与认可人）、`organization`（小组与管理范围）、`attendance`（全勤与 LOA 月份）、`attachments`（文件存储）、`audit`（审计）和 `role_lifecycle`（到期编排）。单人和批量全勤共用纯计分函数，批量路径仍先查齐数据再插入缺失月份。附件写入按配置目录的包装在 `upload_storage.py`（测试可替换其 `FILE_DIR`），原 `v2_services.py` 兼容门面已删除；服务直接依赖所属模块，不反向依赖兼容门面。
 
 GSM/TA GSM 管理范围同步在 `services/management_scopes.py`，由人员变更、职务到期和启动编排复用；一次性旧考勤清理在 `maintenance/legacy_attendance.py`，只由显式维护入口调用，不进入启动链。迁移注册表以有序 callable 为唯一执行源，保留原 24 个 step key、顺序及历史提交行为。
 
@@ -33,7 +33,9 @@ GSM/TA GSM 管理范围同步在 `services/management_scopes.py`，由人员变�
 
 员工编辑由 `services/employee_commands.py` 协调，人员状态与账号、身份代理、小组关系分别由 `employee_status.py`、`employee_identity_commands.py`、`employee_groups.py` 处理。共同上下文传递日期、月结门禁、审计和警告，服务不提交；路由统一权限、BEGIN IMMEDIATE、总审计、提交及异常回滚。
 
-版本来源：`backend/app/version.py`（`年.月.日.当天第几版`，以文件为准）。用户在导航「更新记录」看到的内容来自 `backend/app/changelog.py`，按角色过滤。
+版本来源：`backend/app/version.py`（`年.月.日.当天第几版`，以文件为准）。用户在导航「更新记录」看到的内容来自 `backend/app/changelog.json`（`changelog.py` 负责读取和按角色过滤）。
+
+静态文本资源（`/static` 下的 css/js/html/json/svg）由 `static_compression.py` 按需 gzip；视频、附件和事件流不压缩。后台定时任务（活动结算、公告补收、视频队列、实习到期）共用 `background_worker.py` 的启停与竞态保护。
 
 月结允许关闭上月及更早月份，保留历史补结；当月和未来月份禁止关闭。`month_close_period_policy` 以服务端日历月份统一状态接口和关闭接口；未结束月份返回不可关闭状态，直接请求关闭返回400且不写封存或审计。月份查询和既有封存的受控重开不受此关闭限制影响，继续沿用原角色、景点圈范围、原因必填和待办检查。
 

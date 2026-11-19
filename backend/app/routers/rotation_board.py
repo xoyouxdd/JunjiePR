@@ -1,4 +1,5 @@
 """Formal rotation: authenticated employee identity, scoped data, real clock only."""
+from app.database.connection import reserve_writer
 from app.employee_numbers import employee_number
 import asyncio
 from collections import Counter
@@ -12,7 +13,7 @@ from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
-from app.v2_database import SessionLocal, get_db
+from app.database.connection import SessionLocal, get_db
 from app.v2_models import Employee
 from app.rotation import service as S
 from app.rotation import daily as D
@@ -178,9 +179,8 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
     with runtime_for(db).lock:
         try:
             if getattr(user,'rotation_temporary',False):
-                from sqlalchemy import text
                 from app.rotation.temporary import current
-                db.rollback();db.execute(text('BEGIN IMMEDIATE'))
+                reserve_writer(db)
                 user=current(db,request)
             selected=payload.get('attraction_id')
             if selected is not None and (not isinstance(selected,int) or isinstance(selected,bool)):
@@ -490,12 +490,10 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
     db.rollback()
     passwords={p['employee_no']:hash_password(p['employee_no'][-4:]) for p in preliminary['new']}
     with runtime_for(db).lock:
-        from sqlalchemy import text
         from sqlalchemy.exc import IntegrityError
         try:
             # A writer reservation serializes roster provisioning against HR registration.
-            db.rollback()
-            db.execute(text('BEGIN IMMEDIATE'))
+            reserve_writer(db)
             batch=preflight(db,parsed,aid,scope,date or None,skip)
             if preliminary['digest']!=batch['digest']:
                 raise HTTPException(409,'班表或人员身份已变化，请重新预检')

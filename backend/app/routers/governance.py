@@ -8,7 +8,7 @@ from sqlalchemy import tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Attraction, CircleTransferRequest, DeductionFollowUp, DeductionRecord, Employee, EmployeeMonthOrganizationSnapshot, GovernanceCase, GroupMembership, MonthClosure, RecognitionRecord
 from app.backup_management import backup_todo_dismissed, claim_manual_backup, health_fingerprint, manual_backup_status, run_manual_backup
 from app.score_queries import month_score_employee_ids
@@ -16,21 +16,29 @@ from app.month_closure import month_close_period_policy, month_close_work_querie
 from app.services.identity import roles_at
 from app.services.monthly_ranks import capture_month_ranks, prepare_rank_attendance
 from app.services.review_followup import PendingReview, REVIEW_REMINDER_AGE, pending_reviews_for_management, shared_review_label
-from app.v2_services import FRONTLINE_CODES, GSM_CODES, LEADER_CODES, current_group_for_employee, current_leader_for_employee, group_leader_label, group_leader_names, managed_attraction_ids, acting_duty_summary, base_role_at, month_end, role_at, scoring_category, write_audit
-from app.routers._shared import (
-    MATERIAL_COLLABORATOR_CODES,
+from app.role_constants import FRONTLINE_CODES, GSM_CODES, LEADER_CODES
+from app.services.organization import (
+    current_group_for_employee,
+    current_leader_for_employee,
+    group_leader_label,
+    group_leader_names,
+    managed_attraction_ids,
+)
+from app.services.identity import acting_duty_summary, base_role_at, role_at, scoring_category
+from app.services.attendance import month_end
+from app.services.audit import write_audit
+from app.access_policy import MATERIAL_COLLABORATOR_CODES, scoped_hr_attraction_ids, visible_system_alerts
+from app.month_closure import (
     MONTH_CLOSE_EFFECTIVE_DATE,
     MONTH_CLOSE_ROLE_CODES,
-    backup_health_payload,
-    client_ip,
-    invalidate_data_caches,
     month_close_checklist,
     month_closure_payload,
     month_closure_scope,
-    parse_score_month,
-    scoped_hr_attraction_ids,
-    visible_system_alerts,
 )
+from app.operations_health import backup_health_payload
+from app.http_utils import client_ip
+from app.data_cache import invalidate_data_caches
+from app.date_utils import parse_score_month
 
 router = APIRouter()
 

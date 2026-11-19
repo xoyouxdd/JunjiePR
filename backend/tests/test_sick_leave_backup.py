@@ -23,7 +23,8 @@ from app.main import app  # noqa: E402
 from app.routers import sick_leave_import  # noqa: E402
 from app.score_queries import employee_month_scores  # noqa: E402
 from app.v2_crypto import hash_password  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
+from app.database.connection import SessionLocal
 from app.v2_models import Attraction, AttendanceMonthlyScore, AuditLog, Employee, EmployeeLOAPeriod, EmployeeRoleAssignment, MonthClosure, Role, SickLeaveRecord, StoredFile, UserAccount  # noqa: E402
 
 

@@ -9,13 +9,21 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, new_session_token, token_hash, verify_password
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Employee, ReleaseAnnouncementRead, UserAccount, UserSession
-from app.v2_services import current_group_for_employee, current_leader_for_employee, direct_member_ids, groups_assigned_to, role_at, write_audit
+from app.services.organization import (
+    current_group_for_employee,
+    current_leader_for_employee,
+    direct_member_ids,
+    groups_assigned_to,
+)
+from app.services.identity import role_at
+from app.services.audit import write_audit
 from app.changelog import RELEASES, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
-from app.routers._shared import client_ip, group_display_metadata_bulk
+from app.http_utils import client_ip
+from app.organization_queries import group_display_metadata_bulk
 from app.rotation.access import can_enter as can_enter_rotation, find_rotation_account, rotation_login
 from app.routers.rotation_board import can_enter as can_enter_formal_rotation
 from app.services.avatars import own_avatar

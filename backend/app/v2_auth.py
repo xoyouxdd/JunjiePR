@@ -9,9 +9,10 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.v2_crypto import token_hash
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import Employee, Role, UserAccount, UserSession
-from app.v2_services import base_role_at, duties_at, process_role_expirations, role_permissions
+from app.services.identity import base_role_at, duties_at, role_permissions
+from app.services.role_lifecycle import process_role_expirations
 
 
 ROLE_EXPIRATION_CHECK_INTERVAL_SECONDS = 300

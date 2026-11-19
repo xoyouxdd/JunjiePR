@@ -9,7 +9,7 @@ from openpyxl import load_workbook
 from sqlalchemy import text
 from test_upgrade_minimum_and_recovery import app,login,TestClient,setup_flow,SessionLocal,deduction_materials
 from app.v2_models import DeductionRecord,DeductionUpgradeRequest,DeductionUpgradeTransfer,StoredFile,AuditLog,EmployeeLOAPeriod
-from app.v2_database import FILE_DIR
+from app.database.connection import FILE_DIR
 from app.deduction_policy import deduction_counts_for_score
 from app.score_queries import employee_month_scores
 

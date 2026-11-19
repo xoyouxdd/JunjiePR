@@ -21,7 +21,10 @@ os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal, ensure_gsm_management_scopes, ensure_highest_admin_account  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
+from app.database.connection import SessionLocal
+from app.services.management_scopes import ensure_gsm_management_scopes
+from app.database.accounts import ensure_highest_admin_account
 from app.v2_models import (  # noqa: E402
     AttendanceMonthlyScore,
     Attraction,
@@ -1322,7 +1325,7 @@ def test_v2234_imported_recognizers_are_available_from_policy_start() -> None:
     assert ".image-preview-dialog" in stylesheet
     assert ".image-preview-stage img[hidden]" in stylesheet
     assert 'id="recognitionDate"' in script
-    assert "RECOGNIZER_ELIGIBILITY_START" in (Path(__file__).parents[1] / "app" / "v2_services.py").read_text(encoding="utf-8")
+    assert "RECOGNIZER_ELIGIBILITY_START" in (Path(__file__).parents[1] / "app" / "role_constants.py").read_text(encoding="utf-8")
     assert "recognizer_role_for_date" in "\n".join(_p.read_text(encoding="utf-8") for _p in sorted((Path(__file__).parents[1] / "app" / "routers").glob("*.py")))
 
 

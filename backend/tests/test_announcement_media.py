@@ -16,7 +16,7 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
-from app.v2_database import SessionLocal, FILE_DIR  # noqa: E402
+from app.database.connection import SessionLocal, FILE_DIR
 from app.v2_models import AnnouncementMedia, StoredFile  # noqa: E402
 from app.announcement_posters import ILLUSTRATED_TEMPLATES, TEMPLATE_DIR, render_poster  # noqa: E402
 

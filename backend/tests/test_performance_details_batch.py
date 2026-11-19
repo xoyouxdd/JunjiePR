@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
-from app.v2_database import Base
+from app.database.connection import Base
 from app.v2_models import (
     Attraction, AttendanceMonthlyScore, AttendanceRule, DeductionLevel,
     DeductionRecord, DeductionType, Employee, EmployeeLOAPeriod,

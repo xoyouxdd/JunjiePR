@@ -21,7 +21,8 @@ import xlrd  # noqa: E402
 from app.main import app  # noqa: E402
 from app.routers import sick_leave_import  # noqa: E402
 from app.routers.sick_leave_import import _read_workbook, _reconcile, _system_number  # noqa: E402
-from app.v2_database import ROLE_PERMISSION_CODES, SessionLocal  # noqa: E402
+from app.database.reference_data import ROLE_PERMISSION_CODES
+from app.database.connection import SessionLocal
 from app.v2_models import AttendanceMonthlyScore, Employee, SickLeaveRecord  # noqa: E402
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 import difflib
-import hashlib
 import json
 
 from fastapi import Depends, HTTPException
@@ -12,13 +11,15 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from app import announcement_responsibilities as responsibilities
+from app.json_digest import canonical_json, json_digest
 from app.v2_auth import V2User, current_user
-from app.v2_database import get_db
+from app.database.connection import get_db
 from app.v2_models import (Announcement, AnnouncementAsset, AnnouncementDelivery,
     AnnouncementFavorite, AnnouncementGrant, AnnouncementHandover, AnnouncementMedia,
     AnnouncementNotification, AnnouncementProject, AnnouncementProjectMember,
     AnnouncementVersion, Attraction, Employee, EmployeeLOAPeriod, GroupLeaderAssignment, GroupMembership, StoredFile, UserAccount, WorkGroup)
-from app.v2_services import base_roles_at, direct_member_ids, duties_at_bulk, role_at
+from app.services.identity import base_roles_at, duties_at_bulk, role_at
+from app.services.organization import direct_member_ids
 
 CATEGORIES = ["安全 & 合规", "演出 & 5S", "排班 & 效率", "礼仪 & MM", "HR & 活动", "培训"]
 TIERS = {"frontline": "CM / TR", "lead": "TA LEAD / LEAD", "gsm": "TA GSM / GSM", "am": "AM", "hr": "HR"}
@@ -31,11 +32,11 @@ def unpack(value):
 
 
 def packed(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return canonical_json(value, compact=True)
 
 
 def digest(value):
-    return hashlib.sha256(packed(value).encode()).hexdigest()
+    return json_digest(value, compact=True)
 
 
 def admin(user):

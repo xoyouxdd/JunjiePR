@@ -6,8 +6,10 @@ function isNativePickerControl(node){const type=String(node?.type||'').toLowerCa
 
 function dialogFocusables(root){return [...root.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter(node=>!node.hidden&&!node.closest('[hidden]')&&node.getAttribute('aria-hidden')!=='true');}
 
-// Lets a layer play its .is-leaving animation before it disappears; the timeout matches the CSS exit duration.
-function leaveLayer(node,done){if(prefersReducedMotion()||!node.isConnected){done();return;}node.classList.add('is-leaving');setTimeout(()=>{node.classList.remove('is-leaving');done();},160);}
+// Longest CSS animation on the node and its direct children, in ms ("0.14s, 160ms" lists included).
+function exitAnimationMs(node){const read=element=>{const style=getComputedStyle(element);const times=value=>value.split(',').map(part=>part.trim().endsWith('ms')?parseFloat(part):parseFloat(part)*1000);const durations=times(style.animationDuration),delays=times(style.animationDelay);return Math.max(0,...durations.map((duration,index)=>(duration||0)+(delays[index%delays.length]||0)));};return Math.max(read(node),...[...node.children].map(read));}
+// Lets a layer play its .is-leaving animation before it disappears; the wait follows the CSS exit duration.
+function leaveLayer(node,done){if(prefersReducedMotion()||!node.isConnected){done();return;}node.classList.add('is-leaving');setTimeout(()=>{node.classList.remove('is-leaving');done();},exitAnimationMs(node));}
 
 function bindDialogLayer(overlay,{root,initialFocus,onClose,allowClose,remove=true,inertRoots}={}){
   const dialog=root||overlay.querySelector('[role="dialog"]')||overlay;
