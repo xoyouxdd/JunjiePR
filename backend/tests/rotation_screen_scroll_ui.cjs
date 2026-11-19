@@ -10,9 +10,11 @@ const lines=Array.from({length:12},(_,i)=>({id:`A${i+1}`,group:'A',active:true,p
  return {name:`岗位 ${j+1}`,occ:pid,open:true};
 })}));
 for(const state of ['ready','pending','rest','meal','away'])for(let i=0;i<20;i++){
- persons.push({pid:`${state}-${i}`,name:`测试人员 ${i+1}`,state,start:420,end:1080,readyAt:state==='ready'?480:510,flags:[],tags:[]});
+ persons.push({pid:`${state}-${i}`,name:`测试人员 ${i+1}`,state,start:420,end:1080,readyAt:state==='ready'?480:510,canDepart:state==='ready',flags:[],tags:[],...(state==='ready'?{task:{deadlineAt:i===0?480.5:483}}:{})});
 }
-const day={date,status:'live',ruleVersion:2,taskWorkflow:2,lines,persons};
+persons.push({pid:'done',name:'已下班测试',state:'done',start:360,end:480,flags:[],tags:[]});
+persons.push({pid:'oncoming',name:'待到班测试',state:'notyet',start:960,end:1350,flags:[],tags:[]});
+const day={date,status:'live',ruleVersion:2,taskWorkflow:2,rotationEnd:1080,lines,persons};
 (async()=>{for(const engine of (process.env.ROTATION_SCROLL_ENGINES||'edge,webkit').split(',')){
  const [type,options]={edge:[chromium,{channel:'msedge'}],webkit:[webkit,{}]}[engine];
  const browser=await type.launch({...options,headless:true});try{
@@ -26,7 +28,9 @@ const day={date,status:'live',ruleVersion:2,taskWorkflow:2,lines,persons};
   if(width===1180)await page.setViewportSize({width,height});
   assert(await page.locator('body').evaluate(el=>el.classList.contains('rt-screen-flow')));
   const before=await page.evaluate(()=>scrollY);
-  await page.mouse.move(width/2,Math.min(300,height/2));await page.mouse.wheel(0,650);
+  const summary=await page.locator('#rtScreenSummary').boundingBox();
+  await page.mouse.move(summary.x+summary.width/2,summary.y+summary.height/2);
+  await page.mouse.wheel(0,650);
   await page.waitForFunction(previous=>scrollY>previous+100,before,{timeout:3000});
   // A real touch pan on the tablet-sized viewport must scroll too.
   if(engine==='edge'&&width===1180){
@@ -54,10 +58,51 @@ const day={date,status:'live',ruleVersion:2,taskWorkflow:2,lines,persons};
   await page.evaluate(()=>RT.load());
   assert.match(await page.locator('.rt-lines .rt-line').first().innerText(),/已更新岗位/);
   assert(Math.abs(await page.evaluate(()=>scrollY)-offset)<=2,'refresh must retain page position');
-  const end=page.locator('.rt-pool .rt-sect h2').last();
+  const pendingMore=page.locator('details[data-screen-detail="more:pending"]');
+  await pendingMore.locator('summary').click();
+  const other=page.locator('details[data-screen-detail="other"]');
+  const end=other.locator('summary');
   await end.scrollIntoViewIfNeeded();
   const geometry=await end.boundingBox();assert(geometry.y+geometry.height<=height+1,'bottom must be reachable');
   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1));
+  assert.equal(await other.evaluate(el=>el.open),false);
+  await end.click();
+  assert(await other.getByText('已下班测试',{exact:true}).isVisible());
+  await end.focus();
+  screen.updateDay({...day,lines:refreshed,persons:[...persons,{pid:'new-timeout',name:'上岗超时测试',state:'exception',start:420,end:1080,flags:[],tags:[],exception:{assignment:{line:'A1'},allowedAt:473,at:476,deadlineAt:476}}]});
+  await page.evaluate(()=>RT.load());
+  await page.locator('[data-f-pool="exception"]').getByText('上岗超时测试',{exact:true}).waitFor();
+  assert.equal(await page.locator('[data-screen-count="exception"]').innerText(),'1');
+  assert.equal(await pendingMore.evaluate(el=>el.open),true,'server refresh must keep the pending list expanded');
+  assert.equal(await other.evaluate(el=>el.open),true,'server refresh must keep other people expanded');
+  assert(await end.evaluate(el=>el===document.activeElement),'server refresh must preserve disclosure focus');
+  assert(await other.getByText('待到班测试',{exact:true}).isVisible());
+  if(width===1920){
+   const jump=page.locator('[data-screen-metric="ready"]');
+   const heading=page.locator('[data-screen-heading="ready"]');
+   await jump.click();
+   assert(await heading.evaluate(el=>el===document.activeElement),'summary shortcut should focus its section');
+   const button=page.locator('[data-f-board="ready-0"]');
+   const card=page.locator('.rt-chip').filter({has:button});
+   await card.getByText(/即将超时 · 剩 30秒/).waitFor();
+   await button.focus();
+   await page.evaluate(()=>{RT.data.clock.minute=480.5;RT.render();});
+   await card.getByText('确认时间已到，正在同步',{exact:true}).waitFor();
+   assert.equal(await card.getByText(/即将超时/).count(),0);
+   assert.equal(await page.locator('[data-screen-count="exception"]').innerText(),'1','the browser clock cannot create a server exception');
+   assert(await button.evaluate(el=>el===document.activeElement),'countdown must preserve the focused action');
+   const changed=persons.map(p=>p.pid==='ready-0'?{...p,name:'更新后的待上岗人员'}:p);
+   screen.updateDay({...day,rotationEnd:1090,lines:refreshed,persons:changed});
+   await page.evaluate(()=>RT.load());
+   await card.getByText('更新后的待上岗人员',{exact:true}).waitFor();
+   assert(await button.evaluate(el=>el===document.activeElement),'server refresh must preserve focus on a remaining action');
+   const expired=changed.map(p=>p.pid==='ready-0'?{...p,state:'exception',canDepart:false,task:null,exception:{at:480.5}}:p);
+   screen.updateDay({...day,lines:refreshed,persons:expired});
+   await page.evaluate(()=>RT.load());
+   await page.locator('[data-f-pool="exception"]').getByText('更新后的待上岗人员',{exact:true}).waitFor();
+   assert.equal(await page.locator('[data-screen-count="exception"]').innerText(),'1');
+   assert.equal(await page.locator('[data-screen-count="ready"]').innerText(),'19');
+  }
   if(width===390){
    const operationRequests=[];
    page.on('request',request=>{
