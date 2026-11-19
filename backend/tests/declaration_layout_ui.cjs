@@ -44,7 +44,9 @@ async function checkFilterAlignment(page,width) {
   } else {
     assert(c.keyword.y>=c.status.bottom&&c.submit.y>=c.keyword.bottom,width+' stacked fields or actions overlap');
     assert(same(c.status.x,c.keyword.x)&&same(c.status.right,c.keyword.right),width+' stacked fields have inconsistent widths');
-    assert(c.submit.height>=48&&c.reset.height>=48&&c.submit.right<=c.reset.x,width+' query and reset need separate touch targets: '+JSON.stringify({query:c.submit,reset:c.reset}));
+    // Rect subtraction can lose a fraction of a pixel at fractional page coordinates.
+    const hasTouchHeight=box=>Math.round(box.height*1024)>=48*1024;
+    assert(hasTouchHeight(c.submit)&&hasTouchHeight(c.reset)&&c.submit.right<=c.reset.x,width+' query and reset need separate touch targets: '+JSON.stringify({query:c.submit,reset:c.reset}));
     assert(c.declarationExport.y>=Math.max(c.submit.bottom,c.reset.bottom),width+' export must sit below query and reset');
   }
 }

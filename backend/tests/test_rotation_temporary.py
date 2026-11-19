@@ -30,6 +30,14 @@ def login(c,no='9730020',password='rotation-temp-fixture'):
 
 @pytest.fixture(scope='module',autouse=True)
 def setup():
+    from rotation_test_clock import install_rotation_test_clock
+
+    with pytest.MonkeyPatch.context() as patch:
+        install_rotation_test_clock(patch)
+        yield from seed_accounts()
+
+
+def seed_accounts():
     with TestClient(app):
         with SessionLocal() as db:
             for no,code,circle in [('9730020','SUPERVISOR','热力追踪'),('9730040','GSM','热力追踪'),

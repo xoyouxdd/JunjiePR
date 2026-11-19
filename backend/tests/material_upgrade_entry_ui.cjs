@@ -90,10 +90,13 @@ await page.evaluate(()=>newSupervisorEntry());
 await page.getByText('更多选项',{exact:true}).click();
 await page.locator('#deductionForm textarea').fill('主管普通声明');
 await page.locator('[data-material-pdf-input]').setInputFiles({name:'supervisor.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4 test')});
-page.once('dialog',dialog=>dialog.accept());
-const ordinaryPost=page.waitForRequest(req=>req.method()==='POST'&&new URL(req.url()).pathname==='/api/deductions');
 await page.locator('#deductionSubmit').click();
-const ordinary=await ordinaryPost;
+const confirmation=page.getByRole('dialog').filter({hasText:/PDF/});
+await confirmation.waitFor();
+const [ordinary]=await Promise.all([
+  page.waitForRequest(req=>req.method()==='POST'&&new URL(req.url()).pathname==='/api/deductions'),
+  confirmation.locator('[data-modal-confirm]').click(),
+]);
 assert.equal(supervisorPreviews,0);
 assert.match(ordinary.postData(),/name="employee_id"\r\n\r\n6/);
 assert.match(ordinary.postData(),/filename="supervisor\.pdf"/);
