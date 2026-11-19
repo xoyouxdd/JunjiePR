@@ -31,10 +31,12 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
       await page.locator('[data-rotation-task=depart]').click();await page.locator('[data-modal-confirm]').click();
       await page.waitForFunction(()=>document.querySelector('[data-formal-rotation-todo]')?.textContent.includes('最近安排生效'));
       assert.match(await page.locator('[data-formal-rotation-todo]').innerText(),/已确认上岗安排.*前往/s);
-      await page.locator('.rt-confirm-line summary').click();
-      assert.equal(await page.locator('[data-formal-rotation-todo] .rt-post').count(),2);
+      const comparison=page.locator('[data-formal-rotation-todo] .rt-task-comparison');
+      const finalPosts=comparison.locator('.rt-task-columns > div').last().locator('.rt-task-slot');
+      assert.equal(await finalPosts.count(),2);
+      const {person}=await context.request.get(base+'/api/rotation-board/me').then(r=>r.json());
+      assert.equal(await finalPosts.getByText(person.name,{exact:true}).count(),1);
       await page.waitForFunction(()=>document.querySelector('.workbench-heading strong')?.textContent==='0');
-      assert(!(await page.locator('[data-formal-rotation-todo] .rt-post.me .rt-who-name').innerText()).includes('空岗'));
       await board.waitForFunction(()=>['heading','onpost'].includes(RT.data.day.persons.find(p=>p.pid==='9710000').state),{timeout:15000});
       await watcher.close();
     }
