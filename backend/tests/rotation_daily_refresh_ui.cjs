@@ -15,17 +15,16 @@ let server,browser,log='';
   browser=await(engine==='webkit'?webkit:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
   const context=await browser.newContext({viewport:{width:390,height:844},hasTouch:true});
   assert((await context.request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}})).ok());
-  assert((await context.request.post(base+'/api/rotation/enter',{data:{account:'7777777'}})).ok());
   const page=await context.newPage(),errors=[],requests=[];
   page.on('pageerror',e=>errors.push(e.message));
-  page.on('request',r=>{const p=new URL(r.url()).pathname;if(p.startsWith('/api/rotation/'))requests.push([r.method(),p]);});
-  await page.goto(base+'/rotation');await page.locator('[data-tab=draft]').click();
+  page.on('request',r=>{const p=new URL(r.url()).pathname;if(p.startsWith('/api/rotation-board/'))requests.push([r.method(),p]);});
+  await page.goto(base+'/rotation-board');await page.locator('[data-tab=draft]').click();
   await page.locator('[data-daily-date-button="2026-10-06"]').click();
   await page.waitForFunction(()=>daily.data?.date==='2026-10-06'&&!daily.loading);
   await page.evaluate(()=>{const load=RT.load;window.swapBoardLoads=0;RT.load=function(...args){if(new Error().stack.includes('dailySend'))window.swapBoardLoads++;return load(...args);};});
-  const data=()=>context.request.get(base+'/api/rotation/daily/2026-10-06').then(r=>r.json());
+  const data=()=>context.request.get(base+'/api/rotation-board/daily/2026-10-06').then(r=>r.json());
   let postGate,getGate,faultPost=false,faultRead=false,releasePost,releaseGet;
-  await page.route('**/api/rotation/daily/2026-10-06',async route=>{
+  await page.route('**/api/rotation-board/daily/2026-10-06',async route=>{
    if(route.request().method()==='POST'){
     if(postGate)await postGate;
     if(faultPost)return route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({detail:'测试保存失败'})});
@@ -78,10 +77,10 @@ let server,browser,log='';
    const probe=await page.evaluate(()=>{swapProbe.active=false;return {bad:swapProbe.bad,y:scrollY,expected:swapProbe.y};});
    if(probe.bad.length)console.error('scroll failure',probe,await page.evaluate(()=>({error:daily.error,loading:daily.loading,busy:daily.busy,status:document.querySelector('[data-daily-status]')?.outerHTML,errorNode:document.querySelector('[data-daily-error]')?.outerHTML})));
    assert.deepEqual(probe.bad,[]);assert.equal(probe.y,probe.expected);
-   const writes=requests.slice(checkpoint).filter(([m,p])=>m==='POST'&&p==='/api/rotation/daily/2026-10-06');
-   const reads=requests.slice(checkpoint).filter(([m,p])=>m==='GET'&&p==='/api/rotation/daily/2026-10-06');
+   const writes=requests.slice(checkpoint).filter(([m,p])=>m==='POST'&&p==='/api/rotation-board/daily/2026-10-06');
+   const reads=requests.slice(checkpoint).filter(([m,p])=>m==='GET'&&p==='/api/rotation-board/daily/2026-10-06');
    assert.equal(writes.length,1);assert.equal(reads.length,1);
-   assert.equal(requests.slice(checkpoint).filter(([m,p])=>m==='GET'&&p==='/api/rotation/daily').length,0,'swap must not fetch the month calendar');
+   assert.equal(requests.slice(checkpoint).filter(([m,p])=>m==='GET'&&p==='/api/rotation-board/daily').length,0,'swap must not fetch the month calendar');
    assert.equal(await page.evaluate(()=>swapBoardLoads),0,'swap must not wait for another board load; SSE/polling remains independent');
    postGate=getGate=null;faultPost=faultRead=false;
   }
@@ -97,7 +96,7 @@ let server,browser,log='';
   }
   let before=await data();await swap('person',{postFailure:true});assert.deepEqual((await data()).draft.plan,before.draft.plan);
   // A competing operator updates the revision; recovery fetches only this day.
-  assert((await context.request.post(base+'/api/rotation/daily/2026-10-06',{data:{action:'draft_close',revision:before.revision,close:'20:00'}})).ok());
+  assert((await context.request.post(base+'/api/rotation-board/daily/2026-10-06',{data:{action:'draft_close',revision:before.revision,close:'20:00'}})).ok());
   await swap('person');assert.deepEqual((await data()).draft.plan,before.draft.plan);
   assert.equal(await page.locator('#draftClose').inputValue(),'20:00');
   // Save succeeds but reconciliation fails: preserve the old board and block edits.

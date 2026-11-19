@@ -1,11 +1,4 @@
-"""轮岗的身份与权限（测试阶段）。
-
-轮岗目前是独立的测试环境，数据全部为模拟数据，不影响任何真实员工：
-- PR 员工账号只决定能否打开「轮岗（测试）」入口：热力追踪范围内的 TR、LEAD、TA LEAD 和正式 GSM；
-- 进入后选择模拟账号操作：大屏（只能点到达和出发）、轮岗主管、轮岗经理，或名单中某个 CM/TR 的工号；
-- 休息室大屏设备不登录员工账号，在登录页直接用大屏账号和密码登录。
-专用账号不对应员工，只能访问轮岗接口。
-"""
+"""Formal rotation identities and rest-room screen device sessions."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,11 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.rotation.models import RotationAccount, RotationAccountSession
 from app.security import request_is_https
-from app.v2_auth import V2User, current_user
 from app.v2_crypto import hash_password, new_session_token, token_hash, verify_password
 from app.database.connection import get_db
 from app.v2_models import Attraction, Employee
-from app.services.organization import managed_attraction_ids
 from app.services.audit import write_audit
 
 
@@ -36,21 +27,10 @@ ACCOUNT_PASSWORD_MIN = 4
 ACCOUNT_PASSWORD_MAX = 64
 
 SCREEN_PAGE_PATH = "/rotation/screen"
-BOARD_PAGE_PATH = "/rotation"
-
 KIND_SCREEN = "screen"
-KIND_SUPERVISOR = "supervisor"
-KIND_MANAGER = "manager"
-KIND_MEMBER = "member"
-MANAGE_KINDS = {KIND_SUPERVISOR, KIND_MANAGER}
-KIND_LABELS = {KIND_SCREEN: "休息室大屏", KIND_SUPERVISOR: "轮岗主管", KIND_MANAGER: "轮岗经理", KIND_MEMBER: "CM/TR"}
-
-# 启动时保证存在；已存在时不改密码。初始密码可由轮岗主管在设置里重置。
-DEFAULT_ACCOUNTS = (
-    ("6666666", KIND_SCREEN, "1243"),
-    ("7777777", KIND_SUPERVISOR, "7777"),
-    ("8888888", KIND_MANAGER, "8888"),
-)
+SCREEN_LABEL = "休息室大屏"
+DEFAULT_SCREEN_ACCOUNT = "6666666"
+DEFAULT_SCREEN_PASSWORD = "1243"
 
 
 def rotation_attraction_id(db: Session) -> int:
@@ -60,37 +40,21 @@ def rotation_attraction_id(db: Session) -> int:
     return row[0]
 
 
-def can_enter(db: Session, user: V2User) -> bool:
-    """「轮岗（测试）」入口：TR、LEAD、TA LEAD 和正式 GSM，限定热力追踪范围。"""
-    attraction_id = rotation_attraction_id(db)
-    if user.base_role.code == "TR" or user.base_role.code == "SUPERVISOR" and not user.has_role("TA_GSM") or user.has_role("TA_SUPERVISOR"):
-        return user.employee.attraction_id == attraction_id
-    if user.base_role.code == "GSM":
-        return user.employee.attraction_id == attraction_id or attraction_id in managed_attraction_ids(db, user.id)
-    return False
-
-
 @dataclass
 class RotationActor:
-    """当前轮岗会话的身份。kind 为 screen / supervisor / manager / member。"""
+    """正式轮岗操作人，可以是员工或大屏设备。"""
 
     kind: str
     name: str
     account: RotationAccount | None = None
     member_employee_no: str | None = None
     entered_by: Employee | None = None
-    adjustment: bool = False
     temporary: bool = False
-    expires_at: datetime | None = None
-    can_authorize: bool = True
-    adjustment_session_id: int | None = None
     formal: bool = False
 
     @property
     def actor_id(self) -> int | None:
         if self.formal and self.entered_by:
-            return self.entered_by.id
-        if self.adjustment and self.entered_by:
             return self.entered_by.id
         return self.account.id if self.account else None
 
@@ -101,24 +65,21 @@ def ensure_rotation_accounts(db: Session) -> None:
     attraction = db.query(Attraction).filter(Attraction.name == ROTATION_ATTRACTION_NAME).first()
     if not attraction:
         return
-    for login_account, kind, password in DEFAULT_ACCOUNTS:
-        if db.query(RotationAccount).filter(RotationAccount.login_account == login_account).first():
-            continue
-        db.add(
-            RotationAccount(
-                login_account=login_account,
-                kind=kind,
-                name=f"{ROTATION_ATTRACTION_NAME}{KIND_LABELS[kind]}",
-                attraction_id=attraction.id,
-                password_hash=hash_password(password),
-                enabled=True,
-            )
-        )
+    if db.query(RotationAccount.id).filter_by(login_account=DEFAULT_SCREEN_ACCOUNT).first():
+        return
+    db.add(RotationAccount(
+        login_account=DEFAULT_SCREEN_ACCOUNT,
+        kind=KIND_SCREEN,
+        name=f"{ROTATION_ATTRACTION_NAME}{SCREEN_LABEL}",
+        attraction_id=attraction.id,
+        password_hash=hash_password(DEFAULT_SCREEN_PASSWORD),
+        enabled=True,
+    ))
     db.commit()
 
 
-def find_rotation_account(db: Session, login_name: str) -> RotationAccount | None:
-    return db.query(RotationAccount).filter(RotationAccount.login_account == login_name).first()
+def find_screen_account(db: Session, login_name: str) -> RotationAccount | None:
+    return db.query(RotationAccount).filter_by(login_account=login_name, kind=KIND_SCREEN).first()
 
 
 def _session_row(request: Request, db: Session) -> RotationAccountSession | None:
@@ -135,30 +96,11 @@ def _session_row(request: Request, db: Session) -> RotationAccountSession | None
     return session
 
 
-def session_actor(request: Request, db: Session) -> RotationActor | None:
-    """当前浏览器的轮岗身份；没有或已失效时返回 None。"""
-    session = _session_row(request, db)
-    if not session:
-        return None
-    entered_by = db.get(Employee, session.entered_by_id) if session.entered_by_id else None
-    if session.member_employee_no:
-        return RotationActor(KIND_MEMBER, session.member_employee_no, member_employee_no=session.member_employee_no, entered_by=entered_by)
-    account = db.get(RotationAccount, session.account_id) if session.account_id else None
-    if not account or not account.enabled:
-        return None
-    screen=account.kind==KIND_SCREEN
-    if screen:db.info['rotation_formal']=True
-    return RotationActor(account.kind, account.name, account=account, entered_by=entered_by,formal=screen)
-
-
 def start_session(
     db: Session,
     request: Request,
     response: Response,
-    *,
-    account: RotationAccount | None = None,
-    member_employee_no: str | None = None,
-    entered_by: Employee | None = None,
+    account: RotationAccount,
 ) -> None:
     """替换当前浏览器的轮岗会话。"""
     old_token = request.cookies.get(ACCOUNT_COOKIE)
@@ -167,9 +109,7 @@ def start_session(
     raw_token = new_session_token()
     db.add(
         RotationAccountSession(
-            account_id=account.id if account else None,
-            member_employee_no=member_employee_no,
-            entered_by_id=entered_by.id if entered_by else None,
+            account_id=account.id,
             token_hash=token_hash(raw_token),
             expires_at=datetime.now() + timedelta(days=ACCOUNT_SESSION_DAYS),
         )
@@ -182,10 +122,6 @@ def start_session(
         secure=request_is_https(request),
         max_age=ACCOUNT_SESSION_DAYS * 24 * 3600,
     )
-
-
-def landing_path(kind: str) -> str:
-    return SCREEN_PAGE_PATH if kind == KIND_SCREEN else BOARD_PAGE_PATH
 
 
 def rotation_login(db: Session, request: Request, response: Response, account: RotationAccount, password: str) -> dict:
@@ -204,20 +140,18 @@ def rotation_login(db: Session, request: Request, response: Response, account: R
     account.failed_attempts = 0
     account.locked_until = None
     account.last_login_at = datetime.now()
-    if account.kind==KIND_SCREEN:
-        # A device login must not inherit a previous operator's browser grants.
-        from app.v2_models import UserSession
-        from app.rotation.models import RotationAdjustSession
-        from app.rotation.adjustment import COOKIE as ADJUST_COOKIE
-        from app.rotation.temporary import TemporarySession, COOKIE as TEMP_COOKIE
-        for cookie,model in [('rc_v2_session',UserSession),(ADJUST_COOKIE,RotationAdjustSession),(TEMP_COOKIE,TemporarySession)]:
-            raw=request.cookies.get(cookie)
-            if raw:db.query(model).filter_by(token_hash=token_hash(raw)).delete(synchronize_session=False)
-            response.delete_cookie(cookie,secure=request_is_https(request),httponly=True,samesite='lax')
+    # A display must not inherit the previous user's employee or temporary login.
+    from app.v2_models import UserSession
+    from app.rotation.temporary import TemporarySession, COOKIE as TEMP_COOKIE
+    for cookie, model in [('rc_v2_session', UserSession), (TEMP_COOKIE, TemporarySession)]:
+        raw = request.cookies.get(cookie)
+        if raw:
+            db.query(model).filter_by(token_hash=token_hash(raw)).delete(synchronize_session=False)
+        response.delete_cookie(cookie, secure=request_is_https(request), httponly=True, samesite='lax')
     start_session(db, request, response, account=account)
-    write_audit(db, None, f"{KIND_LABELS[account.kind]}账号登录", "rotation_account", account.id, after={"account": account.login_account}, ip_address=request.client.host if request.client else None)
+    write_audit(db, None, f"{SCREEN_LABEL}账号登录", "rotation_account", account.id, after={"account": account.login_account}, ip_address=request.client.host if request.client else None)
     db.commit()
-    return {"ok": True, "role": KIND_LABELS[account.kind], "redirect": landing_path(account.kind)}
+    return {"ok": True, "role": SCREEN_LABEL, "redirect": SCREEN_PAGE_PATH}
 
 
 def validate_account_password(password: str) -> str:
@@ -227,49 +161,16 @@ def validate_account_password(password: str) -> str:
     return value
 
 
-# ---------------------------------------------------------------- 依赖
-
-def require_entry(db: Session = Depends(get_db), user: V2User = Depends(current_user)) -> V2User:
-    if not can_enter(db, user):
-        raise HTTPException(403, "没有轮岗测试入口权限")
-    return user
-
-
-def require_actor(request: Request, db: Session = Depends(get_db)) -> RotationActor:
-    from app.rotation.adjustment import COOKIE, staff_actor
-    if request.cookies.get(COOKIE):
-        actor = staff_actor(request, db)
-        if not actor:
-            raise HTTPException(401, "调整登录已失效，请退出调整或重新登录")
-        return actor
-    actor = session_actor(request, db)
-    if not actor:
-        raise HTTPException(401, "请先选择轮岗模拟账号")
-    return actor
-
-
-def require_screen(request: Request, db: Session = Depends(get_db)) -> RotationActor:
-    actor = session_actor(request, db)
-    if not actor:
+def require_screen_device(request: Request, db: Session = Depends(get_db)) -> RotationActor:
+    session = _session_row(request, db)
+    if not session:
         raise HTTPException(401, "请先登录休息室大屏")
-    if actor.kind != KIND_SCREEN:
+    if session.entered_by_id is not None or session.member_employee_no:
+        raise HTTPException(403, "请使用休息室大屏账号登录")
+    account = db.get(RotationAccount, session.account_id) if session.account_id else None
+    if not account or not account.enabled:
+        raise HTTPException(401, "请先登录休息室大屏")
+    if account.kind != KIND_SCREEN:
         raise HTTPException(403, "只有休息室大屏可以操作")
-    return actor
-
-
-def require_manager(actor: RotationActor = Depends(require_actor)) -> RotationActor:
-    if actor.kind not in MANAGE_KINDS:
-        raise HTTPException(403, "只有轮岗主管或经理可以操作")
-    return actor
-
-
-def require_member(actor: RotationActor = Depends(require_actor)) -> RotationActor:
-    if actor.kind != KIND_MEMBER:
-        raise HTTPException(403, "请先选择要模拟的 CM/TR 工号")
-    return actor
-
-
-def require_controller(actor: RotationActor = Depends(require_manager)) -> RotationActor:
-    if actor.adjustment:
-        raise HTTPException(403, "现场调整不能修改凭据、导入名单、初始化或清空测试数据")
-    return actor
+    db.info["rotation_formal"] = True
+    return RotationActor(KIND_SCREEN, account.name, account=account, formal=True)

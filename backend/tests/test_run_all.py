@@ -10,8 +10,8 @@ import run_all
 
 def test_recent_playwright_fixtures_are_in_browser_suite():
     names = {path.name for path, kind in run_all.collect_tests("browser")}
-    assert {"rotation_assignment_window_ui.cjs", "month_close_scope_ui.cjs"} <= names
-    assert not ({"rotation_assignment_window_ui.cjs", "month_close_scope_ui.cjs"}
+    assert {"rotation_access_policy_ui.cjs", "month_close_scope_ui.cjs"} <= names
+    assert not ({"rotation_access_policy_ui.cjs", "month_close_scope_ui.cjs"}
                 & {path.name for path, kind in run_all.collect_tests("node")})
 
 

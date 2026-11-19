@@ -7,30 +7,28 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../../app/static');
 const cssAndScripts = new Map([['.css', 'text/css'], ['.js', 'text/javascript']]);
 
-function createScreenFixture(snapshot, {demo = false, adjust} = {}) {
+function createScreenFixture(snapshot, {demo = false} = {}) {
   let html = fs.readFileSync(path.join(root, 'rotation-screen.html'), 'utf8');
-  if (adjust) html = html.replace('</body>', '<script src="../static/js/rotation-adjust.js"></script></body>');
   if (demo) html = html.replace('热力追踪 · 休息室', '布局演示 · 模拟数据').replace('</body>', '<script src="/demo.js"></script></body>');
 
-  const writes = [];
   let state = snapshot;
   function reply(response, type, value, status = 200) {
     response.writeHead(status, {'Content-Type':type + '; charset=utf-8'});
     response.end(value);
   }
   const json = (response, value, status) => reply(response, 'application/json', JSON.stringify(value), status);
-  const server = http.createServer(async (request, response) => {
+  const server = http.createServer((request, response) => {
     const {pathname} = new URL(request.url, 'http://fixture');
     if (request.method === 'GET') {
       if (pathname === '/rotation/screen' || (demo && pathname === '/')) return reply(response, 'text/html', html);
-      if (pathname === '/api/rotation/screen/state') return json(response, state);
-      if (pathname === '/api/rotation/stream') {
+      if (pathname === '/api/rotation-screen/state') return json(response, state);
+      if (pathname === '/api/rotation-screen/stream') {
         response.writeHead(200, {'Content-Type':'text/event-stream'});
         return response.write(': fixture stream\n\n');
       }
       if (demo && pathname === '/demo.js') return reply(response, 'text/javascript', `
-        document.getElementById('rtApp').addEventListener('click', event => {
-          if (!event.target.closest('[data-act],[data-group-depart],[data-wf-action]')) return;
+        window.addEventListener('click', event => {
+          if (!event.target.closest('[data-f-arrive],[data-f-board],[data-f-check-in]')) return;
           event.stopImmediatePropagation();
           toast('布局演示，仅展示排版；实际操作请进入轮岗测试。');
         }, true);
@@ -40,21 +38,10 @@ function createScreenFixture(snapshot, {demo = false, adjust} = {}) {
         if (fs.existsSync(file)) return reply(response, cssAndScripts.get(path.extname(file)), fs.readFileSync(file));
       }
     }
-    if (adjust && pathname.startsWith('/api/rotation/adjust/')) {
-      let body = {};
-      if (request.method === 'POST') {
-        let input = '';
-        for await (const chunk of request) input += chunk;
-        body = JSON.parse(input || '{}');
-        writes.push({url:pathname, body});
-      }
-      return json(response, adjust(pathname, body));
-    }
     return json(response, {detail:'Unexpected fixture request'}, 404);
   });
 
   return {
-    writes,
     updateDay(day) { state = {...state, version:state.version + 1, day}; },
     async start(port = 0) {
       await new Promise((resolve, reject) => {

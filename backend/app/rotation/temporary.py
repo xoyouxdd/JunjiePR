@@ -180,7 +180,7 @@ def current(db, request):
     if not choices or employee and not any(c['metadata'].get('issues') for c in choices):
         raise HTTPException(401,'当日轮岗授权已结束')
     allowed={('GET','/api/me'),('GET','/api/rotation-board/me'),('POST','/api/rotation-board/me/act'),
-             ('POST','/api/rotation-board/me/entry-preview'),('GET','/api/rotation-board/confirmation')}
+             ('GET','/api/rotation-board/confirmation')}
     if (request.method,request.url.path) not in allowed: raise HTTPException(403,'此账号仅可使用本人轮岗待办')
     circle=db.get(Attraction,choices[0]['id'])
     if not circle or not circle.active or not circle.employee_circle: raise HTTPException(403,'景点圈不可用')

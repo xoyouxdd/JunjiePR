@@ -1,4 +1,5 @@
 'use strict';
+const {resetAndPublish}=require('./support/rotation-daily-fixture.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process');const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'rotation-overdue-'));
@@ -11,21 +12,19 @@ async function main(){try{
   server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
   const base='http://127.0.0.1:'+port;let ready=false;
   for(let i=0;i<120;i++){try{if((await fetch(base+'/health')).ok){ready=true;break;}}catch{}if(server.exitCode!==null)break;await sleep(250);}assert(ready,log);
-  for(const engine of ['edge','webkit','firefox']){
+  for(const engine of (process.env.ROTATION_OVERDUE_ENGINES||'edge,webkit,firefox').split(',')){
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
     const context=await browser.newContext({viewport:{width:1280,height:900}}),request=context.request;
     await ok(await request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}}));
-    await ok(await request.post(base+'/api/rotation/enter',{data:{account:'7777777'}}));
-    const clock=async data=>ok(await request.post(base+'/api/rotation/test-clock',{data}));
+    const clock=async data=>ok(await request.post(base+'/__fixture/rotation-clock',{data}));
     await clock({action:'set',date:'2026-10-04',time:'07:15'});
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-04',force:true}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'publish',date:'2026-10-04'}}));
-    const board=async()=>(await ok(await request.get(base+'/api/rotation/board'))).day;
-    const post=async data=>ok(await request.post(base+'/api/rotation/act',{data}));
+    await resetAndPublish(request,base,'2026-10-04',ok);
+    const board=async()=>(await ok(await request.get(base+'/api/rotation-board/board'))).day;
+    const post=async data=>ok(await request.post(base+'/api/rotation-board/act',{data}));
     let day=await board();const ids=day.persons.filter(p=>p.state==='onpost').slice(0,3).map(p=>p.pid);assert.equal(ids.length,3);
     const rest=async(pid,remaining=0)=>{await post({action:'pool',pid,pool:'rest'});await post({action:'break_time',pid,remaining});};
     await rest(ids[0]);await clock({action:'jump',minutes:1+10/60});await rest(ids[1]);await clock({action:'jump',minutes:1+34/60});await rest(ids[2],11);
-    const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/rotation');
+    const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/rotation-board');
     const elapsed=pid=>page.locator('[data-f-person="'+pid+'"]').locator('..').locator('.rt-forecast-overdue');
     await elapsed(ids[0]).waitFor();assert.equal(await elapsed(ids[0]).innerText(),'超时2分44秒');assert.equal(await elapsed(ids[1]).innerText(),'超时1分34秒');
     assert.equal(await elapsed(ids[2]).count(),0);

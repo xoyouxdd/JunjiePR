@@ -10,26 +10,29 @@ function context({realScheduling=false}={}) {
   const element = () => ({textContent:'', className:'', innerHTML:'', addEventListener(){},
     querySelectorAll(){return [];}, classList:{toggle(){},add(){},remove(){}}, setAttribute(){}});
   const storage = new Map();
-  const ctx = vm.createContext({location:{pathname:'/rotation'}, Date, console,
+  const ctx = vm.createContext({location:{pathname:'/rotation-board',search:'?personal=1'}, Date, console, URLSearchParams,
     localStorage:{getItem(){return null;}},
     sessionStorage:{setItem(k,v){storage.set(k,v);},getItem(k){return storage.get(k);},removeItem(k){storage.delete(k);}},
     AbortController, encodeURIComponent, setTimeout:()=>0, clearTimeout(){},
     // Leave the page's real whoami bootstrap waiting. Each probe installs its own transport.
     fetch:()=>new Promise(()=>{}),
     document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},
-      addEventListener(){},body:{classList:{contains(){return false;}}}},
+      addEventListener(){},body:{hasAttribute(name){return name==='data-formal-rotation';},classList:{contains(){return false;}}}},
     window:{addEventListener(){}}, messages:[], run:null,
   });
   vm.runInContext(fs.readFileSync(path.join(root,'rotation-common.js'),'utf8'),ctx);
+  vm.runInContext(fs.readFileSync(path.join(root,'rotation-workflow.js'),'utf8'),ctx);
   vm.runInContext(fs.readFileSync(path.join(root,'rotation.js'),'utf8'),ctx);
   vm.runInContext(`
+    const productionRtApi=rtApi;
     toast=(message,bad)=>messages.push({message,bad});
     closeModal=()=>{RT.modalOpen=false;};
     ${realScheduling?'':'scheduleLoad=()=>{};'}
     confirmBox=(title,message,label,fn)=>{run=fn; RT.modalOpen=true;};
     RT.sync='live'; RT.lastSyncedAt=Date.now();
     RT.data={version:2, clock:{date:'2026-10-11',minute:495,paused:true}, settings:{departEarly:0},
-      person:{pid:'1',name:'员工1',state:'ready',readyAt:480,flags:[],tags:[],start:435,end:1000,
+      person:{pid:'1',name:'员工1',state:'ready',readyAt:480,flags:[],tags:[],start:435,end:1000,canDepart:true,
+        task:{status:'assigned',line:'A',allowedAt:495,deadlineAt:498,beforePosts:[],afterPosts:[],routes:[]},
         confirmationTokens:{depart:'a'.repeat(64)},
         assign:{line:'A',entryPost:'入口',mode:'chain',why:'推下班',targetName:'员工2',targetLine:'A',targetPost:'出口',departAt:495}},
       notices:[{status:'open',kind:'depart',title:'现在去轮岗'}], confirmations:[],week_minutes:{}};
@@ -55,7 +58,7 @@ async function main() {
     const c=context();
     vm.runInContext(`rtApi=async()=>({duplicate:false,result:{line:'A',post:'入口'}});
       RT.load=async()=>{throw new Error('view unavailable');};
-      confirmRotation(RT.data.person,'depart','/api/rotation/me/act');`,c);
+      confirmRotation(RT.data.person,'depart','/api/rotation-board/me/act');`,c);
     assert.equal(await c.run(),true);
     assert.equal(vm.runInContext('RT.pendingConfirmation',c),null);
     assert.ok(c.messages.some(x=>x.message.includes('确认成功')));
@@ -63,21 +66,22 @@ async function main() {
   {
     const c=context();
     vm.runInContext(`writes=0; rtApi=async()=>{writes++;const e=new Error('timeout');e.uncertain=true;throw e;};
-      confirmRotation(RT.data.person,'depart','/api/rotation/me/act');`,c);
+      confirmRotation(RT.data.person,'depart','/api/rotation-board/me/act');`,c);
     assert.equal(await c.run(),false);
     assert.equal(vm.runInContext('confirmationBlocked()',c),true);
     const saved=vm.runInContext('RT.pendingConfirmation.token',c);
     assert.equal(saved,'a'.repeat(64));
-    vm.runInContext(`reads=[]; rtApi=async path=>{reads.push(path);return {confirmed:true,result:{}};};`,c);
+    vm.runInContext(`reads=[]; rtApi=productionRtApi;
+      fetch=async path=>{reads.push(path);return {ok:true,json:async()=>({confirmed:true,result:{}})};};`,c);
     await vm.runInContext('checkPendingConfirmation()',c);
     assert.equal(c.writes,1,'Result verification must not repeat the mutation');
-    assert.match(c.reads[0],/\/confirmation\?token=/);
+    assert.match(c.reads[0],/^\/api\/rotation-board\/confirmation\?token=/);
     assert.equal(vm.runInContext('RT.pendingConfirmation',c),null);
   }
   {
     const c=context();
     vm.runInContext(`rtApi=async()=>{const e=new Error('安排已更新');e.status=409;throw e;};
-      confirmRotation(RT.data.person,'depart','/api/rotation/me/act');`,c);
+      confirmRotation(RT.data.person,'depart','/api/rotation-board/me/act');`,c);
     await c.run();
     assert.equal(vm.runInContext('RT.pendingConfirmation',c),null);
     assert.equal(vm.runInContext('RT.modalOpen',c),false);
@@ -142,7 +146,7 @@ async function main() {
     const c=context();
     vm.runInContext(`
       writes=0;rtApi=async()=>{writes++;};
-      confirmRotation(RT.data.person,'depart','/api/rotation/me/act');
+      confirmRotation(RT.data.person,'depart','/api/rotation-board/me/act');
       RT.data.clock.date='2026-10-12';
     `,c);
     assert.equal(await c.run(),true);
@@ -154,20 +158,6 @@ async function main() {
     assert.equal(vm.runInContext('confirmationBlocked()',c),false);
     assert.ok(c.messages.some(x=>x.message.includes('联系主管核对当日记录')));
   }
-  {
-    const c=context();
-    vm.runInContext(`
-      confirmBox=(title,message,label,fn)=>{modalTitle=title;run=fn;};
-      RT.data.person.entryHold={reason:'timeout'};RT.data.person.taskTimeout={task:'old'};
-      RT.data.person.confirmationTokens.entry_return='b'.repeat(64);
-      rtApi=async()=>({result:{action:'entry_return',status:'executed',state:'ready'}});
-      confirmRotation(RT.data.person,'entry_return','/api/rotation/me/act');
-    `,c);
-    assert.match(c.modalTitle,/任务超时确认/);assert.doesNotMatch(c.modalTitle,/到达休息室/);
-    assert.equal(await c.run(),true);
-    assert.ok(c.messages.some(x=>x.message.includes('已恢复可分配状态，不新增休息')));
-    assert.ok(!c.messages.some(x=>x.message.includes('已确认到达休息室')));
-  }
-  console.log('rotation confirmation: mobile UI, snapshots, unknown results, conflicts, timeout acknowledgement and response ordering passed');
+  console.log('rotation confirmation: mobile UI, snapshots, unknown results, conflicts and response ordering passed');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

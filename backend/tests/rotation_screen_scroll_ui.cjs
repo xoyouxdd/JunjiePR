@@ -12,7 +12,7 @@ const lines=Array.from({length:12},(_,i)=>({id:`A${i+1}`,group:'A',active:true,p
 for(const state of ['ready','pending','rest','meal','away'])for(let i=0;i<20;i++){
  persons.push({pid:`${state}-${i}`,name:`测试人员 ${i+1}`,state,start:420,end:1080,readyAt:state==='ready'?480:510,flags:[],tags:[]});
 }
-const day={date,status:'live',taskWorkflow:true,lines,persons,timeoutCases:lines.slice(0,4).map(line=>({id:line.id,line:line.id,people:[]}))};
+const day={date,status:'live',ruleVersion:2,taskWorkflow:2,lines,persons};
 (async()=>{for(const engine of (process.env.ROTATION_SCROLL_ENGINES||'edge,webkit').split(',')){
  const [type,options]={edge:[chromium,{channel:'msedge'}],webkit:[webkit,{}]}[engine];
  const browser=await type.launch({...options,headless:true});try{
@@ -22,7 +22,7 @@ const day={date,status:'live',taskWorkflow:true,lines,persons,timeoutCases:lines
   const page=await browser.newPage({viewport:width===1180?{width:620,height:1180}:{width,height},hasTouch:true});
   try{
   await page.goto(`${origin}/rotation/screen`);
-  await page.locator('.rt-timeout-banner').first().waitFor();
+  await page.locator('.rt-lines .rt-line').first().waitFor();
   if(width===1180)await page.setViewportSize({width,height});
   assert(await page.locator('body').evaluate(el=>el.classList.contains('rt-screen-flow')));
   const before=await page.evaluate(()=>scrollY);
@@ -45,29 +45,37 @@ const day={date,status:'live',taskWorkflow:true,lines,persons,timeoutCases:lines
   await page.evaluate(()=>scrollTo(0,600));
   const offset=await page.evaluate(()=>scrollY);
   assert(await page.evaluate(()=>{
-   const before=document.querySelector('.rt-timeout-banner');
+   const before=document.querySelector('.rt-lines .rt-line');
    RT.render();
-   return document.querySelector('.rt-timeout-banner')===before;
+   return document.querySelector('.rt-lines .rt-line')===before;
   }),'clock refresh must retain the current touch target');
-  screen.updateDay({...day,timeoutCases:day.timeoutCases.map((entry,i)=>i?entry:{...entry,handler:'正在核实'})});
+  const refreshed=lines.map((line,i)=>i?line:{...line,posts:line.posts.map((post,j)=>j?post:{...post,name:'已更新岗位'})});
+  screen.updateDay({...day,lines:refreshed});
   await page.evaluate(()=>RT.load());
-  assert.match(await page.locator('.rt-timeout-banner').first().innerText(),/正在核实/);
+  assert.match(await page.locator('.rt-lines .rt-line').first().innerText(),/已更新岗位/);
   assert(Math.abs(await page.evaluate(()=>scrollY)-offset)<=2,'refresh must retain page position');
   const end=page.locator('.rt-pool .rt-sect h2').last();
   await end.scrollIntoViewIfNeeded();
   const geometry=await end.boundingBox();assert(geometry.y+geometry.height<=height+1,'bottom must be reachable');
   assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1));
-  if(width>=960){
-   screen.updateDay({...day,taskWorkflow:false});
-   await page.evaluate(()=>RT.load());
-   assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).overflowY),'hidden','legacy screen layout must remain fixed');
+  if(width===390){
+   const operationRequests=[];
+   page.on('request',request=>{
+    const endpoint=new URL(request.url()).pathname;
+    if(['/api/rotation-screen/act','/api/rotation-screen/confirmation'].includes(endpoint))operationRequests.push(endpoint);
+   });
+   await page.evaluate(date=>sessionStorage.setItem('rotation.pendingConfirmation',JSON.stringify({date,pid:'pending-0',token:'a'.repeat(64)})),date);
+   screen.updateDay({...day,ruleVersion:1,readOnly:true,taskWorkflow:false});
+   await page.reload();
+   await page.getByRole('heading',{name:/轮岗存档/}).waitFor();
+   await page.getByText('旧版记录，仅供查看。',{exact:true}).waitFor();
+   await page.waitForFunction(()=>!sessionStorage.getItem('rotation.pendingConfirmation'));
+   assert.equal(await page.locator('#rtApp button,[draggable=true]').count(),0);
+   assert.match(await page.locator('.rt-lines').innerText(),/测试员工/);
+   assert.match(await page.locator('.rt-pool').innerText(),/测试人员/);
+   assert.deepEqual(operationRequests,[]);
   }
-  await page.locator('body').evaluate(el=>el.classList.remove('rotation-screen'));
-  screen.updateDay(day);
-  await page.evaluate(()=>RT.load());
-  await page.evaluate(()=>scrollTo(0,0));await page.mouse.wheel(0,650);
-  await page.waitForFunction(()=>scrollY>100,{timeout:3000});
-  console.log('PASS',engine,width+'x'+height,'workflow screen scroll, refresh, bottom, legacy and ordinary board');
+  console.log('PASS',engine,width+'x'+height,'formal screen scroll, refresh and archive');
   }finally{try{await page.close();}finally{await screen.close();}}
  }
 }finally{await browser.close();}}})().catch(e=>{console.error(e);process.exitCode=1;});

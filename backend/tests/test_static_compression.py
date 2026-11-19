@@ -63,7 +63,7 @@ def test_small_and_out_of_scope_responses_remain_uncompressed():
         await response(scope, receive, send)
 
     client = TestClient(StaticTextGZipMiddleware(endpoint))
-    for path in ("/static/small.css", "/static/large.png", "/api/records.json", "/api/rotation/stream"):
+    for path in ("/static/small.css", "/static/large.png", "/api/records.json", "/api/rotation-screen/stream"):
         response = client.get(path, headers={"Accept-Encoding": "gzip"})
         assert response.status_code == 200
         assert "content-encoding" not in response.headers

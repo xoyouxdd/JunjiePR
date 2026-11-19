@@ -1,4 +1,5 @@
 'use strict';
+const {resetAndPublish}=require('./support/rotation-daily-fixture.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process');const {chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../..'),work=fs.mkdtempSync(path.join(os.tmpdir(),'rotation-person-swap-'));
@@ -11,17 +12,15 @@ async function main(){try{
   server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
   const base='http://127.0.0.1:'+port;let ready=false;
   for(let i=0;i<120;i++){try{if((await fetch(base+'/health')).ok){ready=true;break;}}catch{}if(server.exitCode!==null)break;await sleep(250);}assert(ready,log);
-  for(const engine of ['edge','webkit','firefox']){
+  for(const engine of (process.env.ROTATION_PERSON_SWAP_ENGINES||'edge,webkit,firefox').split(',')){
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
     const context=await browser.newContext({viewport:{width:1280,height:900}}),request=context.request;
     await ok(await request.post(base+'/api/login',{data:{employee_no:'GSMTEST01',password:'daily-fixture-2026'}}));
-    await ok(await request.post(base+'/api/rotation/enter',{data:{account:'7777777'}}));
-    await ok(await request.post(base+'/api/rotation/test-clock',{data:{action:'set',date:'2026-10-04',time:'07:15'}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'draft_generate',date:'2026-10-04',force:true}}));
-    await ok(await request.post(base+'/api/rotation/draft',{data:{action:'publish',date:'2026-10-04'}}));
-    const board=async()=>(await ok(await request.get(base+'/api/rotation/board'))).day;
-    const post=async data=>ok(await request.post(base+'/api/rotation/act',{data}));
-    const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(base+'/rotation');
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-04',time:'07:15'}}));
+    await resetAndPublish(request,base,'2026-10-04',ok);
+    const board=async()=>(await ok(await request.get(base+'/api/rotation-board/board'))).day;
+    const post=async data=>ok(await request.post(base+'/api/rotation-board/act',{data}));
+    const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(base+'/rotation-board');
     await page.waitForFunction(()=>RT.data?.day?.ruleVersion===2);
     const open=async(pid,line,i)=>{await page.evaluate(()=>RT.load());await page.evaluate(({pid,line,i})=>forecastPlace(pid,line,i),{pid,line,i});};
     const choose=async()=>{await page.locator('[name=place_mode]').selectOption('swap');assert(await page.locator('[data-f-place-detail]').isVisible());};

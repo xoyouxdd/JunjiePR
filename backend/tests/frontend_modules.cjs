@@ -99,7 +99,7 @@ async function fixtureRequest(request, response) {
   if (route === '/api/me') {
     sendJson(response, ['publisher','trainer'].includes(mode) ? {...user, role_code: mode === 'trainer' ? 'TR' : 'GSM', base_role_code: mode === 'trainer' ? 'TR' : 'GSM', role_codes: [mode === 'trainer' ? 'TR' : 'GSM']} : mode === 'member' ? {...user, name: '测试员工', role_code: 'CM', base_role_code: 'CM',
       role_name: 'CM', permissions: ['SELF_RECOGNITION']} : {...user, must_change_password: mode === 'password'});
-  } else if (route === '/api/rotation/adjust/mine') sendJson(response, {items: []});
+  }
   else if (route === '/api/options') sendJson(response, options);
   else if (route === '/api/scoring/recognition-options') sendJson(response, options.recognition_types);
   else if (route === '/api/scoring/deduction-options') sendJson(response, {types:options.deduction_types,levels:options.deduction_levels});

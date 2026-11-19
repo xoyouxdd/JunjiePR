@@ -8,23 +8,20 @@ const {openRotationPage}=require('./support/rotation-browser.cjs');
 
 async function checkRepeatMeal(page){
   await page.evaluate(()=>{
-    me={kind:'supervisor',name:'测试主管'};
+    me={kind:'supervisor',name:'测试主管',capabilities:{can_operate:true,can_manage:true}};
     RT.data.day={date:'2026-10-11'};
     RT.render=()=>{};
     RT.load=async()=>{};
     window.mealPerson={pid:'1',name:'测试员工',ate:true,state:'pending',start:420,end:1000,
       mealOptions:{canChoose:true},confirmationTokens:{arrive:'a'.repeat(64)}};
     window.mealPosts=[];
-    rtApi=async (path,options)=>{
-      assertRotationPost(path,options);
+    window.fetch=async (path,options)=>{
+      if(path!=='/api/rotation-board/act'||options?.method!=='POST')throw new Error('Unexpected rotation request');
       const body=JSON.parse(options.body);
       window.mealPosts.push(body);
       if(body.action==='pool') await new Promise(resolve=>{window.finishMealPost=resolve;});
-      return {ok:true};
+      return Response.json({ok:true});
     };
-    function assertRotationPost(path,options){
-      if(path!=='/api/rotation/act'||options?.method!=='POST')throw new Error('Unexpected rotation request');
-    }
     forecastArrive(window.mealPerson);
     window.mealForm=document.querySelector('[data-form]');
   });
@@ -72,28 +69,30 @@ async function checkRepeatMeal(page){
 async function main(){
   const browser=await chromium.launch({channel:'msedge',headless:true});
   try{
-    const page=await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:1});
-    await openRotationPage(page,'/rotation');
+    const context=await browser.newContext({viewport:{width:390,height:844},deviceScaleFactor:1});
+    const page=await context.newPage();
+    await openRotationPage(page,'/rotation-board?personal=1');
     await page.evaluate(()=>{
-      me={kind:'member',name:'测试员工',employee_no:'1'};
       RT.sync='live';RT.lastSyncedAt=Date.now();RT.fetchedAt=Date.now();
-      RT.data={version:1,test_mode:true,clock:{date:'2026-10-11',minute:495,paused:true,mode:'sim'},settings:{departEarly:0},
-        person:{pid:'1',name:'测试员工',state:'ready',readyAt:480,start:435,end:1000,flags:[],tags:[],
+      RT.data={version:1,clock:{date:'2026-10-11',minute:495,paused:true,mode:'sim'},settings:{departEarly:0},
+        person:{pid:'1',name:'测试员工',state:'ready',readyAt:480,start:435,end:1000,flags:[],tags:[],canDepart:true,
+          task:{status:'assigned',line:'B1',allowedAt:495,deadlineAt:498,beforePosts:[],afterPosts:[],routes:[]},
           confirmationTokens:{depart:'a'.repeat(64)},assign:{line:'B1',entryPost:'塔台协助',mode:'chain',why:'推下班',targetName:'测试目标',targetLine:'B1',targetPost:'分组2',departAt:495}},
         notices:[{kind:'depart',title:'现在出发去 B1 线',body:'在个人待办或大屏确认去轮岗',status:'open'}],
         confirmations:[],today:[],week_minutes:{B1:30},line:{id:'B1',posts:[{name:'塔台协助',open:true,occ:'2',occName:'测试同事'},{name:'分组2',open:true,occ:'3',occName:'测试目标'}]}};
       window.writes=0;
-      rtApi=async(path,options={})=>{
+      window.fetch=async(path,options={})=>{
         if(options.method==='POST'){
+          if(path!=='/api/rotation-board/me/act')throw new Error('Unexpected rotation request');
           window.writes++;
           const body=JSON.parse(options.body);
           if(body.pid!=='1'||body.confirmation_token!=='a'.repeat(64))throw new Error('wrong step');
           const result={pid:'1',action:'depart',minute:495,line:'B1',post:'塔台协助',state:'onpost',source:'member',assignment:{...RT.data.person.assign}};
-          RT.data={...RT.data,version:2,person:{...RT.data.person,state:'onpost',line:'B1',post:'塔台协助',lineStart:495,assign:null,confirmationTokens:{}},
+          RT.data={...RT.data,version:2,person:{...RT.data.person,state:'onpost',line:'B1',post:'塔台协助',lineStart:495,assign:null,task:null,canDepart:false,confirmationTokens:{}},
             notices:[],confirmations:[result],line:{id:'B1',posts:[{name:'塔台协助',open:true,occ:'1',occName:'测试员工'},{name:'分组2',open:true,occ:'2',occName:'测试同事'}]}};
-          return {ok:true,duplicate:false,result};
+          return Response.json({ok:true,duplicate:false,result});
         }
-        return RT.data;
+        return Response.json(RT.data);
       };
       renderWho();RT.render();renderSyncStatus();
     });
@@ -116,7 +115,9 @@ async function main(){
     await page.evaluate(()=>{RT.sync='offline';renderSyncStatus();});
     assert.match(await page.locator('#rtSync').innerText(),/连接中断/);
     console.log('Rotation mobile DOM: confirm, original target post, one write, result card, offline badge and 390px layout passed');
-    await checkRepeatMeal(page);
+    const board=await context.newPage();
+    await openRotationPage(board,'/rotation-board');
+    await checkRepeatMeal(board);
   }finally{await browser.close();}
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

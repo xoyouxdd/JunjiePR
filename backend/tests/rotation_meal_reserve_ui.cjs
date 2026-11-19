@@ -10,7 +10,7 @@ async function main(){try{
   const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
   server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(root,'local_tools/rotation_clock/run.py'),'--demo','--data-dir',path.join(work,'data'),'--port',String(port)],{cwd:root,windowsHide:true,env:{...process.env,PYTHONUTF8:'1'}});
   server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);const base='http://127.0.0.1:'+port;
-  let ready=false;for(let i=0;i<120;i++){try{if((await fetch(base+'/health')).ok){ready=true;break;}}catch{}if(server.exitCode!==null)break;await sleep(250);}assert(ready,log);
+  let ready=false;for(let i=0;i<300;i++){try{if((await fetch(base+'/health')).ok){ready=true;break;}}catch{}if(server.exitCode!==null)break;await sleep(250);}assert(ready,log||'The isolated rotation simulator did not start within 75 seconds');
   for(const engine of (process.env.ROTATION_MEAL_ENGINES||'edge,webkit,firefox').split(',')){
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
     const manager=await browser.newContext({viewport:{width:1280,height:900}}),request=manager.request,errors=[];
@@ -30,7 +30,7 @@ async function main(){try{
     const health=await ok(await member.request.get(base+'/health'));await ok(await member.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}}));
     const display=await browser.newContext({viewport:{width:1280,height:900}});
     await ok(await display.request.post(base+'/api/login',{data:{employee_no:'6666666',password:'1243'}}));
-    const roomPost=async data=>ok(await display.request.post(base+'/api/rotation/screen/act',{data}));
+    const roomPost=async data=>ok(await display.request.post(base+'/api/rotation-screen/act',{data}));
     const own=async()=>ok(await member.request.get(base+'/api/rotation-board/me'));
     const page=await manager.newPage(),phone=await member.newPage(),screen=await display.newPage();
     for(const view of [page,phone,screen])view.on('pageerror',e=>errors.push(e.message));
@@ -59,7 +59,7 @@ async function main(){try{
     await phone.locator('[name=formalRotationMeal][value=meal]').check();await phone.locator('[data-rotation-task=arrive]').click();
     await phone.getByRole('dialog',{name:'确认已到休息室',exact:true}).waitFor();
     const stale=(await own()).person;
-    assert.equal((await display.request.post(base+'/api/rotation/screen/act',{data:{action:'pool',pid:reserves.at(-1),pool:'away'}})).status(),403);
+    assert.equal((await display.request.post(base+'/api/rotation-screen/act',{data:{action:'pool',pid:reserves.at(-1),pool:'away'}})).status(),403);
     await post({action:'pool',pid:reserves.at(-1),pool:'away'});
     await screen.waitForFunction(()=>!RT.modalOpen);
     await phone.getByRole('dialog',{name:'确认已到休息室',exact:true}).waitFor({state:'detached'});

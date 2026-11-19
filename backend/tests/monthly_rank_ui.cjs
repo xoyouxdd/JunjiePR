@@ -72,7 +72,6 @@ const server=http.createServer((req,res)=>{
   }]});
   else if(route==='/api/changelog/announcement')json(res,{read:true});
   else if(route==='/api/announcements/summary')json(res,{pending:0,messages:0,handovers:0});
-  else if(route==='/api/rotation/adjust/mine')json(res,{items:[]});
   else if(route==='/api/export-tasks'&&req.method==='GET')json(res,{items:[]});
   else if(route==='/api/action-center')json(res,{items:[],total:0});
   // Reviewer badge polling can run during this long, multi-role fixture.

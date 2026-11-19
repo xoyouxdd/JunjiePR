@@ -73,7 +73,7 @@ def test_canonical_entry_and_pwa_keep_root_deployment_urls():
 
 
 def test_rotation_shells_share_the_workbench_identity():
-    for page in ("rotation.html", "rotation-board.html", "rotation-screen.html"):
+    for page in ("rotation-board.html", "rotation-screen.html"):
         shell = Shell(page)
         assert shell.title.endswith(f" · {BRAND_EN}")
         assert BRAND_EN in shell.text

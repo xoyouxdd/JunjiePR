@@ -24,7 +24,7 @@ from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
 from app.http_utils import client_ip
 from app.organization_queries import group_display_metadata_bulk
-from app.rotation.access import can_enter as can_enter_rotation, find_rotation_account, rotation_login
+from app.rotation.access import find_screen_account, rotation_login
 from app.routers.rotation_board import can_enter as can_enter_formal_rotation
 from app.services.avatars import own_avatar
 
@@ -96,7 +96,7 @@ def login(payload: dict, request: Request, response: Response, db: Session = Dep
         raise HTTPException(401, "账号或密码/PIN不正确")
     account = accounts[0] if accounts else None
     if not account:
-        rotation_account = find_rotation_account(db, login_name)
+        rotation_account = find_screen_account(db, login_name)
         if rotation_account:
             return rotation_login(db, request, response, rotation_account, password)
         from app.rotation.temporary import TemporaryMember, login as temporary_login

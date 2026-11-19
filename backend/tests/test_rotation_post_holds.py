@@ -1,18 +1,17 @@
-"""Continuous post holds: real permissions/persistence and deterministic engine boundaries."""
-from test_rotation_formal import app, seed, formal_daytime_runtime, seed_today, login, ok, TestClient, SessionLocal, S, F, date, datetime
-from test_rotation_engine import person, live_day, seat, occupants, hm, ActionError
+"""Continuous post holds through the current engine and authenticated board."""
 import pytest
 
+from test_rotation_formal import (
+    app, seed, formal_daytime_runtime, seed_today, login, ok, TestClient, SessionLocal, S, F, date,
+)
+from app.rotation import forecast
+from app.rotation.engine import ActionError
+from test_rotation_forecast import fixture, occupants
 
-def engine():
-    eng,hooks=live_day([person(p,'08:00','18:00') for p in ['a','b','c','next']],lines=[{'id':'A','group':'A','posts':[{'name':str(i)} for i in range(3)]}])
-    for i,p in enumerate(['a','b','c']):seat(eng,p,'A',i,'09:00')
-    return eng,hooks
 
-
-def hold(eng,p='b',on=True,now=hm('09:10')):
-    line,index=eng.find_post(p)
-    eng.act_post_hold(line['id'],index,p,on,'现场接待',now,'test')
+def hold(engine, pid='A1', on=True, now=600):
+    line, index = engine.find_post(pid)
+    engine.act_post_hold(line['id'], index, pid, on, '现场接待', now, 'test')
 
 
 def reset_today():
@@ -28,87 +27,40 @@ def reset_today():
             return seed_today()
 
 
-def test_ordinary_push_skips_fixed_person_and_resumes_without_resetting_standing_time():
-    e,h=engine();hold(e);e.P['next']['assign']={'line':'A','mode':'push','departAt':hm('09:12')}
-    e.act_depart('next',hm('09:12'),'test')
-    assert occupants(e,'A')==['next','b','a']
-    assert e.P['b']['lineStart']==hm('09:00')
-    hold(e,on=False,now=hm('09:15'))
-    assert not e.held('b') and e.P['b']['lineStart']==hm('09:00')
-    assert occupants(e,'A')==['next','b','a']
-    assert h.types().count('post_hold')==1 and h.types().count('post_resume')==1
+def test_ordinary_push_skips_fixed_person_and_preserves_standing_time():
+    engine = fixture((3,))
+    hold(engine)
+    assert forecast.execute(engine, 'new0', 600, 'test', 'A')['executed']
+    assert occupants(engine) == ['new0', 'A1', 'A0']
+    assert engine.P['A1']['lineStart'] == 435
+
+    hold(engine, on=False, now=605)
+    assert not engine.held('A1')
+    assert engine.P['A1']['lineStart'] == 435
+    assert occupants(engine) == ['new0', 'A1', 'A0']
 
 
-def test_hold_overrides_own_shift_end_until_manual_cancel():
-    e,h=engine();hold(e);e.P['b']['end']=hm('09:15');e.d['closeAt']='09:20'
-    e.tick(hm('09:30'))
-    assert not e.d.get('closed') and e.P['b']['state']=='onpost' and e.held('b')
-    assert e.line('A')['posts'][1]['occ']=='b' and e.line('A')['posts'][1]['open']
-    hold(e,on=False,now=hm('09:31'));e.tick(hm('09:31'))
-    assert not e.held('b') and e.P['b']['state']=='done'
-    assert e.line('A')['posts'][1]['open']
+def test_scheduled_close_waits_for_last_shift_end_to_release_hold():
+    engine = fixture((3,))
+    hold(engine)
+    engine.line('A')['posts'][1]['closeAt'] = '10:05'
+    engine.tick(606)
+    assert engine.line('A')['posts'][1]['open'] and engine.held('A1')
+
+    engine.tick(1200)
+    assert engine.d['status'] == 'ended'
+    assert engine.P['A1']['state'] == 'done'
+    assert not engine.held('A1')
+    assert any(event[0] == 'post_resume' and event[-1]['reason'] == '轮岗结束，定岗自动结束'
+               for event in engine.h.events)
 
 
-def test_absence_waits_for_cancel_then_uses_current_time():
-    e,h=engine();hold(e);e.P['b']['absences']=[{'start':hm('09:15'),'end':hm('10:15'),'label':'OJT','done':False}]
-    e.tick(hm('09:20'));assert e.P['b']['state']=='onpost' and e.held('b')
-    assert all(p['pid']!='b' for _,p,_ in e._replace_needs(hm('09:20')))
-    hold(e,on=False,now=hm('09:21'))
-    assert e.P['b']['state']=='away' and e.P['b']['away']['reason']=='OJT'
-
-
-def test_scheduled_close_waits_and_last_shift_end_releases_hold():
-    e,h=engine();hold(e);e.line('A')['posts'][1]['closeAt']='09:15'
-    e.tick(hm('09:16'));assert e.line('A')['posts'][1]['open'] and e.held('b')
-    e.tick(hm('18:00'))
-    assert not any(x.get('hold') for x in e.line('A')['posts'])
-    assert e.d['status']=='ended' and e.P['b']['state']=='done'
-    assert any(event['detail'].get('reason')=='轮岗结束，定岗自动结束' for event in h.events)
-
-
-def test_relief_chain_skips_fixed_middle_post():
-    e,h=engine();hold(e);e.P['c']['end']=hm('09:30')
-    e.P['next']['assign']={'line':'A','mode':'chain','target':'c','why':'推下班','departAt':hm('09:25')}
-    e.act_depart('next',hm('09:25'),'test')
-    assert occupants(e,'A')==['next','b','a'] and e.held('b')
-    assert e.P['c']['state']=='done'
-
-
-def test_all_fixed_posts_leave_newcomer_ready_and_cannot_replace_fixed_target():
-    e,h=engine()
-    for p in ['a','b','c']:hold(e,p)
-    assert e._best_line(e.P['next'],hm('09:12'),{}) is None
-    e.P['next']['assign']={'line':'A','mode':'push','departAt':hm('09:12')}
-    with pytest.raises(ActionError,match='可轮换岗位'):
-        e.act_depart('next',hm('09:12'),'test')
-    assert occupants(e,'A')==['a','b','c'] and e.P['next']['state']=='ready'
-    hold(e,'a',False,hm('09:13'))
-    e.P['next'].update(state='heading',arriveAt=hm('09:14'),departedAt=hm('09:14'),
-        assign={'line':'A','mode':'chain','target':'c','departAt':hm('09:14')})
-    e._arrive_line(e.P['next'],hm('09:14'))
-    assert occupants(e,'A')==['a','b','c'] and e.P['next']['state']=='ready'
-
-
-def test_cancel_after_scheduled_close_and_after_absence_window_does_not_replay_old_actions():
-    e,h=engine();hold(e);e.line('A')['posts'][1]['closeAt']='09:15'
-    e.tick(hm('09:16'));hold(e,on=False,now=hm('09:17'));e.tick(hm('09:17'))
-    assert not e.line('A')['posts'][1]['open']
-    e,h=engine();hold(e);e.P['b']['absences']=[{'start':hm('09:15'),'end':hm('09:20'),'label':'OJT','done':False}]
-    e.tick(hm('09:30'));hold(e,on=False,now=hm('09:31'))
-    assert e.P['b']['state']=='onpost' and not e.held('b')
-
-
-@pytest.mark.parametrize('action',['move','close','line','remove','away','leave'])
-def test_manual_changes_require_explicit_cancel(action):
-    e,h=engine();hold(e)
-    with pytest.raises(ActionError,match='定岗'):
-        if action=='move':e.act_move('b','A',0,hm('09:12'),'test')
-        elif action=='close':e.act_post('A',1,False,hm('09:12'),'test')
-        elif action=='line':e.act_line('A',False,hm('09:12'),'test')
-        elif action=='remove':e.act_fix_remove('b','修正',hm('09:12'),'test')
-        elif action=='away':e.act_away('b','任务',hm('09:12'),'test')
-        else:e.act_leave('b','离岗',hm('09:12'),'test')
-    assert occupants(e,'A')[1]=='b'
+def test_manual_post_closing_leaves_held_person_on_post():
+    engine = fixture((3,))
+    hold(engine)
+    with pytest.raises(ActionError, match='定岗'):
+        forecast.close_post(engine, engine.line('A'), 1, 605, 'test')
+    assert engine.held('A1') and occupants(engine) == ['A0', 'A1', 'A2']
 
 
 @pytest.mark.parametrize('role_index',[1,2,3,4,5])
@@ -125,16 +77,23 @@ def test_tr_lead_and_manager_can_set_cancel_and_share_state(role_index):
         assert not ok(cm.get('/api/rotation-board/board'))['day']['lines'][0]['posts'][0].get('hold')
 
 
-def test_stale_person_and_confirmation_cannot_modify_revised_route():
+def test_hold_rejects_stale_person_and_preserves_fixed_worker_on_confirmation():
     reset_today()
     with TestClient(app) as tr,TestClient(app) as cm:
         login(tr,'9710010');login(cm,'9710000')
-        token=ok(cm.get('/api/rotation-board/me'))['person']['confirmationTokens']['depart']
+        person = ok(cm.get('/api/rotation-board/me'))['person']
         body={'action':'post_hold','line':'A1','i':1,'pid':'9710010','on':True}
         assert tr.post('/api/rotation-board/act',json={**body,'pid':'9710020'}).status_code==400
         assert tr.post('/api/rotation-board/act',json={**body,'on':'true'}).status_code==400
         ok(tr.post('/api/rotation-board/act',json=body))
-        assert cm.post('/api/rotation-board/me/act',json={'action':'depart','pid':'9710000','confirmation_token':token}).status_code==409
+        result = ok(cm.post('/api/rotation-board/me/act', json={
+            'action': 'depart', 'pid': '9710000',
+            'confirmation_token': person['confirmationTokens']['depart'],
+            'expected_line': person['task']['line'],
+        }))
+        assert result['result']['status'] == 'executed'
+        fixed = ok(tr.get('/api/rotation-board/board'))['day']['lines'][0]['posts'][1]
+        assert fixed['occ'] == '9710010' and fixed['hold']['pid'] == '9710010'
         with SessionLocal() as db:
             db.info['rotation_formal']=True
             aid=db.query(F.RotationDay).filter_by(work_date=date.today().isoformat()).one().attraction_id

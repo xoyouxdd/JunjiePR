@@ -19,7 +19,7 @@ from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-CURRENT_RELEASE_NOTE = "清理公告交接和轮岗历史代码"
+CURRENT_RELEASE_NOTE = "轮岗大屏与历史回放迁移"
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:

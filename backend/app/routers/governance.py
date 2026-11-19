@@ -176,7 +176,6 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
         unread_medals = medal_service.visible_notices(db, user.id).filter_by(read_at=None).count()
         if unread_medals:
             items.append(action_center_item('attendance_medal_notice', '全勤勋章消息', unread_medals, 'home', 'info', '请在本人首页查看勋章消息。'))
-    rotation_timeout_cases = []
     # Count only materialized formal steps; this read does not advance the engine.
     from app.routers.rotation_board import can_enter as rotation_allowed
     from app.rotation.namespace import FORMAL_TABLES
@@ -191,20 +190,16 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
             row = db.query(FORMAL_TABLES.RotationDay).filter_by(attraction_id=aid,work_date=current.date().isoformat()).first()
             if row and row.status=='live':
                 rotation_state=json.loads(row.state_json)
+                if rotation_state.get('ruleVersion') != 2:
+                    continue
                 person=rotation_state.get('persons',{}).get(user.employee.employee_no)
-                from app.routers.rotation_board import capabilities as rotation_capabilities
-                if aid==user.employee.attraction_id and rotation_capabilities(user)['can_operate']:
-                    rotation_timeout_cases.extend({'id':c['id'],'line':c['line'],'status':c['status'],'handler':c.get('handler')}
-                        for c in rotation_state.get('timeoutCases',{}).values() if c['status'] in {'open','handling'})
                 now_min=current.hour*60+current.minute+current.second/60
                 if person:
                     assignment=person.get('assign') or {}
                     config=db.query(FORMAL_TABLES.RotationConfig).filter_by(attraction_id=aid).first()
                     early=json.loads(config.settings_json or '{}').get('departEarly',1) if config else 1
-                    actionable=person.get('state') in ('walkback','pending') or bool(person.get('entryHold') and person.get('state') in ('ready','rest')) or (person.get('state')=='ready' and assignment and now_min>=max(person.get('readyAt') or now_min,assignment.get('notBefore',0),assignment.get('departAt',1440)-early))
-                    paused=bool(assignment.get('queueId')) or any(c['status'] in {'open','handling'} and user.employee.employee_no in c['people'] for c in rotation_state.get('timeoutCases',{}).values())
-                    if paused and person.get('state') in ('ready','rest','meal'):actionable=False
-                    if rotation_state.get('ruleVersion') == 2 and person['state'] == 'notyet':
+                    actionable=person.get('state') in ('walkback','pending') or (person.get('state')=='ready' and assignment and now_min>=max(person.get('readyAt') or now_min,assignment.get('notBefore',0),assignment.get('departAt',1440)-early))
+                    if person['state'] == 'notyet':
                         from app.rotation.forecast import BATCH_CHECK_IN_MINUTES, BATCH_LEAD_MINUTES
                         start = person['start']
                         actionable = (start - BATCH_CHECK_IN_MINUTES <= now_min < start - BATCH_LEAD_MINUTES
@@ -214,8 +209,6 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
                                           status='open').first() is not None)
                     if actionable:actionable_count+=1
         if actionable_count:items.append(action_center_item('rotation_step','本人轮岗待确认',actionable_count,'rotationTest','warning','确认班前已到、待上岗或待休息（吃饭），同步对应景点圈轮岗看板。'))
-    if rotation_timeout_cases:
-        items.append(action_center_item('rotation_timeout_related','同线关联任务待核实',len(rotation_timeout_cases),'rotationTest','critical','超时导致同线关联任务暂停，请核实执行情况并恢复相关任务。'))
 
     from app.announcements import summary as announcement_summary
     from app.learning import approval_rows
@@ -332,7 +325,7 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
     items.sort(key=lambda row: (order.get(row["severity"], 9), row["title"]))
     return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month,
             "overdue_review_reminder": overdue_count,
-            "announcement_counts": announcement_counts,"rotation_timeout_cases":rotation_timeout_cases}
+            "announcement_counts": announcement_counts}
 
 
 @router.post("/admin/backup-health/dismiss")

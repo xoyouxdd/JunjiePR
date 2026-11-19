@@ -37,8 +37,9 @@ const STATE_NAME = {
 };
 
 const formalRotation = document.body?.hasAttribute?.('data-formal-rotation')||false;
+const screenRotation = document.body?.classList?.contains('rotation-screen') || false;
+const rotationScreenApi = '/api/rotation-screen';
 const personalRotation = formalRotation&&new URLSearchParams(location.search).get('personal')==='1';
-const rotationApiPath = path => formalRotation?path.replace(/^\/api\/rotation(?=\/|$)/,'/api/rotation-board'):path;
 
 const RT = {
   data: null,
@@ -65,8 +66,6 @@ function canDepartNow(p, n) {
   if(rotationUsesTasks(p)&&p.task?.status!=='assigned')return false;
   if(p.task&&(!p.canDepart||n<p.task.allowedAt-1e-8||n>p.task.deadlineAt+1e-8))return false;
   if(p.departureBlocked||p.assign?.blocked)return false;
-  if(p.entryGroup&&n<p.assign.departAt-.01)return false;
-  if(p.entryGroup&&(p.entryGroup.blocked||p.entryGroup.members.find(m=>m.pid===p.pid)?.confirmed))return false;
   return departureTimeReady(p,n);
 }
 
@@ -80,7 +79,7 @@ function rotationAssignment(p){
 function departureTimeReady(p,n){
   return p.state === 'ready' && !!p.assign && n >= (p.readyAt ?? n) - 0.01
     && n >= (p.assign.notBefore ?? 0) - 0.01
-    && n >= p.assign.departAt - (p.entryGroup?0:departureEarly()) - 0.01;
+    && n >= p.assign.departAt - departureEarly() - 0.01;
 }
 
 function poolState(p, n) {
@@ -128,37 +127,6 @@ function outsideKind(p){
   if(p.role==='excluded'&&/OJT/i.test([p.label,p.note,p.type].join(' ')))return 'OJT';
   return p.state==='away'||p.initialPool==='away'?'出圈':null;
 }
-function groupCanDepart(group,n){
-  return !group.blocked&&group.members.every(m=>{const p=personOf(m.pid);return p&&p.state==='ready'&&p.assign&&n>=Math.max(p.readyAt??n,p.assign.departAt,p.assign.notBefore??0)-.01;});
-}
-function groupedChips(people,chip,n,allowGroup=false){
-  if(RT.data?.day?.taskWorkflow)return people.map(chip).join('');
-  const seen=new Set();return people.map(p=>{
-    if(!p.entryGroup)return chip(p);
-    const g=p.entryGroup;if(seen.has(g.id))return '';seen.add(g.id);
-    const here=people.filter(q=>q.entryGroup?.id===g.id);
-    const button=allowGroup?`<button type="button" class="primary" data-group-depart="${esc(g.members[0].pid)}" ${groupCanDepart(g,n)&&!confirmationBlocked()?'':'disabled'}>整组上岗</button>`:'';
-    return `<div class="rt-entry-group" data-entry-group="${esc(g.id)}"><div class="rt-entry-head"><strong>${esc(g.line)}线 · ${g.members.length}人一组</strong><span>${g.confirmed}/${g.members.length} 已确认安排</span>${button}</div><p>全员确认后一起前往，现场无需再次操作手机。</p>${here.map(chip).join('')}</div>`;
-  }).join('');
-}
-
-function postSwapForm(line,from,to,targetLine=line){
-  if(RT.data?.day?.taskWorkflow){void adjustPreview({action:'post_order',line,i:from,target_line:targetLine,target_i:to,swapMode:'with_people'});return;}
-  const source=RT.data.day.lines.find(x=>x.id===line)?.posts[from],target=RT.data.day.lines.find(x=>x.id===targetLine)?.posts[to];
-  formBox('选择岗位交换方式',`<p>${esc(line)}线 · ${esc(source?.name||'待核实')} ↔ ${esc(targetLine)}线 · ${esc(target?.name||'待核实')}</p><label>交换方式<select name="swapMode"><option value="posts">只交换岗位，人员留在原位置</option><option value="with_people">岗位和人员一起交换</option></select></label><p>累计站岗时间保留；跨线人员在原线的时长记入记录，再从当前时刻计算新线路时长。定岗需先取消。</p>`,
-    values=>adjustPreview({action:'post_order',line,i:from,target_line:targetLine,target_i:to,swapMode:values.swapMode}),{okText:'预览影响'});
-}
-function personDrop(pid,line,i,poolContext=null){
-  const p=personOf(pid);if(!p)return;
-  if(['rest','meal','ready'].includes(p.state)){
-    const target=RT.data.day.lines.find(x=>x.id===line)?.posts[i];
-    const original=target?.occ?personOf(target.occ):null;
-    formBox('确认强制安排上岗',`<p>${esc(p.name)} → ${esc(line)}线 · ${esc(target?.name||'待核实')}</p><p>剩余餐休 ${Math.max(0,Math.ceil((p.readyAt??nowMin())-nowMin()))} 分钟${original?`；${esc(original.name)}将下线，待到大屏确认休息`:''}。</p><label>安排原因（必填）<input name="reason" maxlength="100" required></label><p>按实际时刻中断餐休并开始上岗，不自动补时；全部影响以预览为准。</p>`,
-      values=>adjustPreview({action:'move',pid,line,i,force:true,reason:values.reason,...(poolContext?{pool_context:poolContext}:{})}),{warn:true,okText:'预览影响'});
-  }else if(poolContext)toast('人员状态已变化，请重新打开人员操作',true);
-  else void adjustPreview({action:'move',pid,line,i});
-}
-
 async function rtApi(path, options = {}) {
   const {timeoutMs=12000,...fetchOptions}=options;
   let res;
@@ -166,7 +134,7 @@ async function rtApi(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let body;
   try {
-    res = await fetch(portalPath(rotationApiPath(path)), { credentials: 'same-origin', ...fetchOptions, signal: controller.signal });
+    res = await fetch(portalPath(path), { credentials: 'same-origin', ...fetchOptions, signal: controller.signal });
     body = await res.json();
   } catch (_) {
     const error = new Error(RT.pendingConfirmation ? '网络连接中断，正在核实确认结果' : '网络连接失败，恢复后将重新同步');
@@ -306,7 +274,6 @@ async function act(path, body, okMessage) {
     await rtPost(path, body);
     if (okMessage) toast(okMessage);
     await RT.load();
-    if (typeof afterRotationAdjustment === 'function') afterRotationAdjustment();
     return true;
   } catch (error) {
     toast(error.message, true);
@@ -383,7 +350,7 @@ async function loadLive(path) {
 }
 
 function confirmationBlocked() {
-  return RT.submitting || !!RT.pendingConfirmation || RT.sync === 'offline'
+  return !!RT.data?.day?.readOnly || RT.submitting || !!RT.pendingConfirmation || RT.sync === 'offline'
     || !RT.lastSyncedAt || Date.now() - RT.lastSyncedAt > 20000;
 }
 
@@ -398,6 +365,11 @@ function storePendingConfirmation(value) {
 
 async function checkPendingConfirmation() {
   if (!RT.pendingConfirmation || RT.submitting || RT.checkingConfirmation) return;
+  if (screenRotation && RT.data?.day?.readOnly) {
+    storePendingConfirmation(null);
+    toast('旧版记录已设为只读，请联系主管核对此前确认。', true);
+    return;
+  }
   if (RT.data?.clock.date && RT.pendingConfirmation.date !== RT.data.clock.date) {
     storePendingConfirmation(null);
     toast('此前轮岗确认已跨日，请联系主管核对当日记录。', true);
@@ -410,7 +382,8 @@ async function checkPendingConfirmation() {
   RT.checkingConfirmation = true;
   try {
     const pending = RT.pendingConfirmation;
-    const out = await rtApi(`/api/rotation/confirmation?token=${encodeURIComponent(pending.token)}&date=${encodeURIComponent(pending.date)}`);
+    const api = screenRotation ? rotationScreenApi : '/api/rotation-board';
+    const out = await rtApi(`${api}/confirmation?token=${encodeURIComponent(pending.token)}&date=${encodeURIComponent(pending.date)}`);
     storePendingConfirmation(null);
     toast(out.result?.status==='waiting'?'已核实本人安排确认，仍在等待同行人':out.result?.status==='superseded'?'此前同行安排已调整，请查看最新任务':out.confirmed ? '已核实：确认成功，画面已同步' : '本次未确认，请查看最新安排后重新确认', !out.confirmed);
     await RT.load();
@@ -435,31 +408,26 @@ function arrivalConfirmationText(outcome) {
   return '请确认本人已到达休息室。确认后按餐休安排开始计时。';
 }
 
-function confirmRotation(p, action, path, wholeGroup=false) {
+function confirmRotation(p, action, path) {
   if (confirmationBlocked()) { toast('请等待联网同步或确认结果核实后再操作', true); return; }
   const date = RT.data.clock.date;
-  const tokenAction = wholeGroup?'group_depart':action;
-  const token = p.confirmationTokens?.[tokenAction];
+  const token = p.confirmationTokens?.[action];
   if (!token) { toast('任务已变化，请等待最新画面', true); scheduleLoad(); return; }
-  if (action === 'depart' && !(wholeGroup&&p.entryGroup?groupCanDepart(p.entryGroup,nowMin()):canDepartNow(p, nowMin()))) { toast('休息未结束或还没到出发时间', true); return; }
-  let text = action === 'depart' ? assignmentDescription(p.assign) : action==='entry_return'?`原任务已${p.taskTimeout?.transferredToName?'转由 '+esc(p.taskTimeout.transferredToName)+' 执行':'进入待转接'}；确认后立即恢复可分配状态，不新增休息时间。原任务尚未转接时，可重新承接。`:'请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
-  if(action==='depart'&&p.entryGroup){
-    if(!wholeGroup&&RT.me?.employee_no&&RT.me.employee_no!==p.pid){toast('协同上岗请本人在待办确认',true);return;}
-    text=wholeGroup?`<p>确认以下人员整组上岗：</p><p>${p.entryGroup.members.map(m=>`${esc(m.name)} · ${esc(m.task||'上岗')} → ${esc(p.entryGroup.line)}线 · ${esc(m.entryPost||'待核实')}`).join('<br>')}</p>`:text+`<p>同组 ${p.entryGroup.members.map(m=>esc(m.name)).join('、')}；${p.entryGroup.confirmed}/${p.entryGroup.members.length}人确认。出发前全员确认后一起前往，现场无需再次操作手机。</p>`;
-  }
+  if (action === 'depart' && !canDepartNow(p, nowMin())) { toast('休息未结束或还没到出发时间', true); return; }
+  let text = action === 'depart' ? assignmentDescription(p.assign) : '请确认本人已到达休息室，系统将安排休息、吃饭或结束轮岗。';
   if(action==='depart'){
-    const routes=p.entryGroup?.routes||p.departureRoutes||[];
+    const routes=p.departureRoutes||[];
     const live=p.task?` data-departure-person="${esc(p.pid)}" data-departure-token="${esc(token)}" aria-live="polite"`:'';
     text+=`<h4>现场通知与接替去向</h4><ul${live}>${departureRouteItems(routes)}</ul>${p.task?workflowComparison(p):''}<p>确认后按以上路线通知并接替。</p>`;
   }
-  const step = {pid:p.pid,date,token,tokenAction,checkArrival:action==='arrive'&&rotationUsesTasks(p),outcome:p.arrivalOutcome??null};
+  const step = {pid:p.pid,date,token,tokenAction:action,checkArrival:action==='arrive'&&rotationUsesTasks(p),outcome:p.arrivalOutcome??null};
   if(action==='arrive'){
     if(step.checkArrival)text=`<p data-rt-arrival-outcome aria-live="polite">${arrivalConfirmationText(step.outcome)}</p>`;
     const choices=p.mealOptions?.canChoose?`<fieldset class="rt-meal-choice"><legend>本次选择</legend><label><input type="radio" name="rtMealChoice" value="rest" checked>去休息</label><label><input type="radio" name="rtMealChoice" value="meal">去吃饭</label></fieldset><p class="field-hint">${esc(p.mealOptions.reserveText||`轮岗储备 ${p.mealOptions.supply}人 / ${p.mealOptions.lines}条线`)}，提交时再次核对。</p>`:p.mealOptions?.forced?'<p>已到原有强制饭点，本次安排吃饭。</p>':'';
     if(choices)text+=`<div data-rt-arrival-meals ${step.checkArrival&&step.outcome!==null?'hidden':''}>${choices}</div>`;
   }
-  confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : action==='entry_return'?'任务超时确认':'到达休息室'}`, text,
-    action === 'depart' ? '确认去轮岗' : action==='entry_return'?'确认知晓，重新领取':'确认已到达', async () => {
+  confirmBox(`${esc(p.name)} · ${action === 'depart' ? '去轮岗' : '到达休息室'}`, text,
+    action === 'depart' ? '确认去轮岗' : '确认已到达', async () => {
       if (RT.data?.clock.date !== date) { toast('轮岗日期已变化，请重新确认', true); return true; }
       if (confirmationBlocked()) { toast('当前连接不可用，请稍后确认', true); return false; }
       RT.submitting = true;
@@ -468,7 +436,6 @@ function confirmRotation(p, action, path, wholeGroup=false) {
       const expectedOutcome = step.outcome;
       try {
         out = await rtPost(path, {action, pid:p.pid, confirmation_token:token,
-          ...(wholeGroup?{group_confirm:true,expected_plan:p.entryGroup.id}:{}),
           ...(step.checkArrival?{expected_arrival_outcome:expectedOutcome}:{}),
           meal_choice:action==='arrive'?document.querySelector('[name=rtMealChoice]:checked')?.value||'rest':undefined});
       } catch (error) {
@@ -489,11 +456,11 @@ function confirmRotation(p, action, path, wholeGroup=false) {
       RT.submitting = false;
       if (activeRotationConfirmation === step) activeRotationConfirmation = null;
       storePendingConfirmation(null);
-      toast(out.result?.status==='waiting'?'已确认上岗安排，等待同行人':out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : action==='entry_return'?'已恢复可分配状态，不新增休息':'已确认到达休息室');
+      toast(out.duplicate ? '已确认，无需重复操作' : action === 'depart' ? `已进 ${out.result.line} 线 · ${out.result.post}` : '已确认到达休息室');
       // The mutation succeeded even if the subsequent view refresh fails.
       try { await RT.load(); } catch (_) { toast('确认成功，等待画面恢复同步'); }
       return true;
-    }, {autoCancel: p.entryGroup ? 30000 : 8000});
+    }, {autoCancel: 8000});
   activeRotationConfirmation = step;
 }
 
@@ -513,7 +480,8 @@ function connectLive() {
   try { RT.pendingConfirmation = JSON.parse(sessionStorage.getItem(formalRotation?'formalRotation.pendingConfirmation':'rotation.pendingConfirmation') || 'null'); } catch (_) { /* No persisted request. */ }
   const startPolling = () => { if (!poll) poll = setInterval(scheduleLoad, 5000); };
   if (!window.EventSource) { RT.sync = 'polling'; startPolling(); renderSyncStatus(); checkPendingConfirmation(); return; }
-  const source = new EventSource(portalPath(rotationApiPath('/api/rotation/stream')));
+  const stream = screenRotation ? `${rotationScreenApi}/stream` : '/api/rotation-board/stream';
+  const source = new EventSource(portalPath(stream));
   source.onopen = () => {
     // Discard reads started before reconnect, even if their old version is higher.
     acceptedRequest = liveRequest;
@@ -611,12 +579,11 @@ function pendingAddTime(post){
   return !post.openExpired&&!post.open&&!post.opened&&post.openAt?post.openAt:null;
 }
 function lineCard(L, n, ops, view = {}) {
-  if(!view.daily&&typeof forecastActive==='function'&&forecastActive())return forecastLineCard(L,n,ops);
+  if(!view.daily&&!view.readOnly)return forecastLineCard(L,n,ops);
   const persons = view.day?.persons || RT.data.day.persons;
   const lookup = pid => persons.find(p => p.pid === pid);
   const daily = !!view.daily, editable = daily && view.editable && !L.standby;
   const draftPosts = view.draft?.lines.find(line=>line.id===L.id)?.posts;
-  const incoming = persons.filter(p => p.assign && p.assign.line === L.id).sort((a, b) => a.assign.departAt - b.assign.departAt);
   const openIdx = L.posts.map((x, i) => (x.open ? i : -1)).filter(i => i >= 0);
   const exitIndex = openIdx.length ? openIdx[openIdx.length - 1] : -1;
   const rows = L.posts.map((x, i) => {
@@ -648,25 +615,15 @@ function lineCard(L, n, ops, view = {}) {
       who += rotationSevenBadge(p);
       if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">${preparingText(p.preparing)}</span>`; }
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;
-      else if (p && (p.continuousStart??p.lineStart) !== null && (p.continuousStart??p.lineStart) !== undefined) mins = `${Math.max(0, Math.floor(n - (p.continuousStart??p.lineStart)))} 分`;
       if(p?.waitingReplacement)who+='<span class="rt-badge prep">待接替下班 · 留守</span>';
       if(p?.timingUnverified)who+='<span class="rt-badge prep">历史时间待核实</span>';
     }
     if(x.hold){cls+=' holding';who+=`<span class="rt-badge post-hold">${x.hold101?'101':'定岗'} · ${hm(Math.floor(x.hold.since))}起</span>`;}
     if (i === exitIndex) cls += ' exit';
-    const scheduled = value => /^\d{2}:\d{2}$/.test(value || '') ? Number(value.slice(0,2))*60+Number(value.slice(3)) : null;
-    if (L.active && !x.open && !x.opened && scheduled(x.openAt) > n) {
-      cls += ' pending-add'; who = x.prearranged?who+`<span class="rt-badge prep">待加 ${esc(x.openAt)}</span>`:`待加 ${esc(x.openAt)}`;
-    } else if (L.active && x.open && scheduled(x.closeAt) > n) {
-      cls += ' pending-remove'; who += `<span class="rt-schedule-label">待撤 ${esc(x.closeAt)}</span>`;
-    }
-    const attrs = ops ? ` data-post="${esc(L.id)}#${i}" tabindex="0" role="button"` : '';
-    const drag=ops&&x.occ&&['notyet','onpost'].includes(lookup(x.occ)?.state)?` draggable="true" data-drag-pid="${esc(x.occ)}"`:'';
-    return rotationPostRow(cls+(x.hold101?' holding101':''),attrs,`<${ops?'button type="button"':'span'} class="rt-pn"${ops?` draggable="true" data-drag-post="${esc(L.id)}#${i}" ${x.key?`data-wf-rename="${esc(x.key)}"`:''} aria-label="${esc(x.name)}，双击改名，拖拽交换岗位"`:''}>${esc(x.name)}</${ops?'button':'span'}>`,`<span class="rt-who-name"${drag}>${who}</span>`,mins);
+    return rotationPostRow(cls+(x.hold101?' holding101':''),'',`<span class="rt-pn">${esc(x.name)}</span>`,`<span class="rt-who-name">${who}</span>`,mins);
   }).join('');
-  const inc = !daily&&incoming.length&&!RT.data?.day?.taskWorkflow ? `<div class="rt-incoming">即将进线：${incoming.slice(0, 3).map(p => `<b>${esc(p.name)}</b> ${p.state === 'heading' ? '前往中' : hm(p.assign.departAt)}`).join('，')}${incoming.length > 3 ? ` 等 ${incoming.length} 人` : ''}</div>` : '';
   const occupied = L.posts.filter(x => x.open && x.occ).length;
   const opened = L.posts.filter(x => x.open).length;
-  const head = daily&&view.editable ? ` data-daily-line="${esc(L.id)}" tabindex="0" role="button" aria-label="${esc(L.id)}线预排${L.standby?'启用':'停用'}" title="点击或右键设置线路预排"` : ops ? ` data-line="${esc(L.id)}" tabindex="0" role="button"` : '';
-  return `<div class="rt-line${L.active ? '' : ' off'}"><div class="rt-line-head g-${esc(L.group || '')}"${head}><span class="rt-lid">${esc(L.id)}</span><span>${daily?`${opened}/${L.posts.length} 岗`:L.active ? `${occupied}/${opened} 岗` : '待命线'}</span></div>${rows}${inc}</div>`;
+  const head = daily&&view.editable ? ` data-daily-line="${esc(L.id)}" tabindex="0" role="button" aria-label="${esc(L.id)}线预排${L.standby?'启用':'停用'}" title="点击或右键设置线路预排"` : '';
+  return `<div class="rt-line${L.active ? '' : ' off'}"><div class="rt-line-head g-${esc(L.group || '')}"${head}><span class="rt-lid">${esc(L.id)}</span><span>${daily?`${opened}/${L.posts.length} 岗`:L.active ? `${occupied}/${opened} 岗` : '待命线'}</span></div>${rows}</div>`;
 }

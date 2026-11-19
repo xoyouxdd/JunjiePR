@@ -13,22 +13,23 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     browser=await({edge:chromium,webkit,firefox}[name]).launch({headless:true,...(name==='edge'?{channel:'msedge'}:{})});
     const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     assert((await context.request.post(base+'/api/login',{data:{employee_no:'9710010',password:'formal-fixture-2026'}})).ok());
-    await page.goto(base+'/rotation-board');await page.locator('[data-post="A1#0"]').waitFor();
-    await page.locator('[data-post="A1#0"] .rt-who-name').click();await page.locator('[data-edit-hold]').click();
-    await page.locator('#rtModal [name=reason]').fill('特殊接待 · 合成演示');await page.locator('#rtModal button[type=submit]').click();
-    await page.locator('[data-post="A1#0"] .post-hold').waitFor();
+    await page.goto(base+'/rotation-board');
+    const post=page.locator('[data-f-slot="A1#0"]');
+    await post.locator('[data-f-person]').click();await page.getByRole('button',{name:'设置持续定岗'}).click();
+    await page.locator('#rtModal [data-ok]').click();
+    await post.locator('.post-hold').waitFor();
     const watcher=await browser.newContext({viewport:{width:390,height:844}}),cm=await watcher.newPage();
     assert((await watcher.request.post(base+'/api/login',{data:{employee_no:'9710000',password:'formal-fixture-2026'}})).ok());
-    await cm.goto(base+'/rotation-board');await cm.locator('.rt-post.holding .post-hold').waitFor();
-    assert.equal(await cm.locator('[data-edit-hold]').count(),0);
+    await cm.goto(base+'/rotation-board');await cm.locator('.rt-post .post-hold').waitFor();
+    assert.equal(await cm.locator('[data-f-person]').count(),0);
     for(const width of [320,390,430,768,1440]){
       await page.setViewportSize({width,height:900});assert(!await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1));
       if(width===390||width===1440)await page.screenshot({path:path.join(out,name+'-'+width+'.png'),fullPage:true});
     }
-    await page.locator('[data-post="A1#0"] .rt-who-name').click();assert.match(await page.locator('#rtModal').innerText(),/特殊接待.*手动取消/s);
-    await page.locator('[data-edit-hold]').click();await page.locator('#rtModal [data-ok]').click();
-    await page.locator('[data-post="A1#0"] .post-hold').waitFor({state:'detached'});
-    await cm.locator('.rt-post.holding').waitFor({state:'detached',timeout:15000});
+    await post.locator('[data-f-person]').click();
+    await page.getByRole('button',{name:'取消持续定岗'}).click();await page.locator('#rtModal [data-ok]').click();
+    await post.locator('.post-hold').waitFor({state:'detached'});
+    await cm.locator('.rt-post .post-hold').waitFor({state:'detached',timeout:15000});
     assert.deepEqual(errors,[]);await watcher.close();await context.close();await browser.close();browser=null;
     console.log(name+': TR set/cancel, CM read-only shared state, five widths, actual API passed');
   }

@@ -6,8 +6,8 @@ import pytest
 
 from test_rotation_forecast import add_later_shifts, fixture as engine, occupants
 from test_rotation_forecast_api import rotation, current, board, act, person, DAY
-from app.rotation import forecast as F, service as S, engine as E, workflow as W
-from test_rotation_engine import Hooks
+from app.rotation import forecast as F, service as S, engine as E
+from app.rotation.manual import Hooks
 from app.rotation.forecast_service import notices
 
 PURPOSES = ['sick', 'push7', 'off', 'opening', 'vacancy', 'out', 'push']
@@ -19,8 +19,8 @@ def test_first_shift_is_automatic_but_subsequent_ready_forecast_requires_click()
               'days': {DAY: {str(i): '07:15-20:00' for i in range(1, 4)}}}
     state = E.build_draft(DAY, roster, {'lines': [{'id': 'A', 'posts': [{'name': '入口'}, {'name': '出口'}]}]},
                           settings, {}, {}, push7_history={})
-    e = E.Engine(state, settings, Hooks())
-    W.initialize(e)
+    e = E.Engine(state, settings, Hooks({}))
+    F.initialize(e)
     e.publish(240, 'test')
     assert e.line('A')['sortAt'] == 0 and all(p['state'] == 'notyet' for p in e.P.values())
     e.tick(435)

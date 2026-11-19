@@ -22,6 +22,7 @@ from app.rotation.access import RotationActor, ROTATION_ATTRACTION_NAME, rotatio
 from app.rotation.namespace import runtime_for
 from app.rotation.roster import classify, parse_any
 from app.date_utils import parse_iso_date
+from app.routers.rotation_screen import can_manage_screen_accounts
 
 _request_gates = WeakKeyDictionary()
 
@@ -45,14 +46,15 @@ MANAGERS = {'SUPERVISOR', 'TA_SUPERVISOR', 'GSM', 'TA_GSM'}
 ROLES = MANAGERS | {'CM', 'TR'}
 
 
-def capabilities(user):
+def capabilities(user, db=None):
     if user.rotation_temporary:
-        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings'),False)
+        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings','screen_account_admin'),False)
     codes = set(user.role_codes)
     manage = bool(codes & MANAGERS)
     local_tr = 'TR' in codes and getattr(user.employee.attraction, 'name', None) == ROTATION_ATTRACTION_NAME
     return {'can_operate': manage or local_tr, 'can_manage': manage,
-            'can_records': manage, 'can_settings': manage}
+            'can_records': manage, 'can_settings': manage,
+            'screen_account_admin': db is not None and can_manage_screen_accounts(db, user)}
 
 
 def board_attraction_id(db, user):
@@ -120,12 +122,12 @@ def call(fn, *args, **kwargs):
 
 
 @router.get('/whoami')
-def whoami(user: V2User = Depends(staff)):
+def whoami(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     if not set(user.role_codes)&ROLES:raise HTTPException(403,'此身份只可使用本人轮岗待办')
     return {'kind': 'supervisor' if capabilities(user)['can_operate'] else 'member',
             'kind_label': user.display_role_name, 'name': user.name, 'employee_no': user.employee.employee_no,
-            'attraction_name': identity(user)['attraction_name'], 'test_mode': False, 'formal': True,
-            'adjustment': False, 'can_authorize': False, 'capabilities': capabilities(user)}
+            'attraction_name': identity(user)['attraction_name'], 'formal': True,
+            'capabilities': capabilities(user, db)}
 
 
 @router.get('/board')
@@ -137,7 +139,7 @@ def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     db.rollback()
     S.tick_attraction(aid, formal=True)
     data = call(S.board_payload, db, aid)
-    data.update(capabilities=capabilities(user),identity=identity(user))
+    data.update(capabilities=capabilities(user, db),identity=identity(user))
     if not capabilities(user)['can_manage']:
         for key in ('roster','rosterDates','days','draft'): data.pop(key, None)
         data['settings']={'departEarly':data['settings']['departEarly']}
@@ -154,12 +156,12 @@ def me(attraction_id: int | None = None, db: Session = Depends(formal_db), user:
     S.tick_attraction(aid, formal=True)
     with S.transaction(db):
         data=call(S.member_payload, db, aid, user.employee.employee_no)
-        data.update(capabilities=capabilities(user),identity=identity(user))
+        data.update(capabilities=capabilities(user, db),identity=identity(user))
         data.update(attraction_id=aid,rotation_circles=choices)
         data['identity']['attraction_name']=next(c['name'] for c in choices if c['id']==aid)
         data.pop('week_minutes',None)
         data.pop('today',None)
-        if data.get('line'):
+        if data.get('line') and not data.get('readOnly'):
             row=S.day_row(db,aid,data['clock']['date'])
             state=S.day_state(row)
             eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
@@ -174,7 +176,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
         raise HTTPException(403,'个人待办只能确认本人到位，不能整组代确认')
     if employee_number(payload.get('pid',user.employee.employee_no)) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
-    if payload.get('action') not in ('arrive','depart','entry_return','entry_adjust','batch_check_in'): raise HTTPException(403, '只可确认本人轮岗待办')
+    if payload.get('action') not in ('arrive','depart','batch_check_in'): raise HTTPException(403, '只可确认本人轮岗待办')
     if not payload.get('confirmation_token'): raise HTTPException(400, '请刷新待办后重新确认')
     with runtime_for(db).lock:
         try:
@@ -197,7 +199,7 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
 def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(operator)):
     if not capabilities(user)['can_manage'] and payload.get('action') in ('set_close',):
         raise HTTPException(403, '此操作需要主管或经理权限')
-    if payload.get('action') in ('arrive','depart','entry_return','entry_adjust','batch_check_in') and not payload.get('confirmation_token'):
+    if payload.get('action') in ('arrive','depart','batch_check_in') and not payload.get('confirmation_token'):
         raise HTTPException(400, '请刷新看板后重新确认')
     if payload.get('action') in ('post','move','post_order') and not payload.get('expected_snapshot'):
         raise HTTPException(400,'请先预览当日调整影响')
@@ -288,51 +290,10 @@ def add_numbered_person(db, aid, entered_by, payload):
         raise HTTPException(409, '人员身份刚刚变化，请重新核对') from exc
 
 
-@router.post('/timeout/preview')
-def timeout_preview(payload: dict,db: Session=Depends(formal_db),user: V2User=Depends(operator)):
-    return call(S.timeout_case_preview,db,board_attraction_id(db,user),actor(user),payload)
-
-
 @router.get('/people-search')
 def people_search(q: str = '', db: Session = Depends(formal_db), user: V2User = Depends(operator)):
     from app.rotation.forecast_service import search_people
     return {'people': search_people(db, q)}
-
-
-@router.post('/me/entry-preview')
-def entry_preview(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
-    from app.rotation.cooperation import adjustment
-    from app.rotation.participation import personal_scope
-    selected=payload.get('attraction_id')
-    if selected is not None and (not isinstance(selected,int) or isinstance(selected,bool)):raise HTTPException(400,'轮岗景点圈无效')
-    aid,_=personal_scope(db,user,selected)
-    db.rollback()
-    S.tick_attraction(aid, formal=True)
-    with S.transaction(db):
-        cfg=S.load_config(db,aid)
-        day,now=S.clock_now(cfg)
-        row=S.day_row(db,aid,day)
-        if not row or row.status!='live': raise HTTPException(400,'当日轮岗尚未运行')
-        eng,_=S.engine_for(db,cfg,row,S.day_state(row))
-        p=eng.P.get(user.employee.employee_no)
-        if not p: raise HTTPException(400,'当日名单没有本人')
-        if payload.get('confirmation_token')!=S.confirmation_token(eng,p,'entry_adjust'):
-            raise HTTPException(409,'同行任务已变化，请刷新')
-        return call(adjustment,eng,p['pid'],now,payload.get('missing'))
-
-
-@router.post('/adjust/preview')
-def preview(payload: dict,db: Session = Depends(formal_db),user: V2User = Depends(operator)):
-    from app.rotation.manual import preview as preview_change
-    return call(preview_change,db,board_attraction_id(db,user),payload)
-
-
-@router.post('/adjust/act')
-def execute_preview(payload: dict,db: Session = Depends(formal_db),user: V2User = Depends(operator)):
-    if not payload.get('expected_snapshot') or payload.get('action') not in ('post','move','post_order'):
-        raise HTTPException(400,'请先预览当日调整影响')
-    call(S.do_live_action,db,board_attraction_id(db,user),actor(user),payload)
-    return {'ok':True}
 
 
 @router.get('/confirmation')
@@ -425,6 +386,7 @@ def save_config(payload: dict, db: Session = Depends(formal_db), user: V2User = 
                 ):
                     raise S.ActionError('请选择当天班表中 1 至 4 个不同开班时间')
                 if row and row.status == 'live':
+                    S.require_current_rules(state)
                     S.advance(db, cfg, row, state, now)
                     if state['status'] != 'live':
                         raise S.ActionError('当天轮岗已结束')
@@ -444,7 +406,8 @@ def save_config(payload: dict, db: Session = Depends(formal_db), user: V2User = 
                     S.sync_notices(db, aid, state, eng, now)
                     S.save_day(db, row, state)
             S.mark_changed(db)
-    except S.ActionError as exc: raise HTTPException(400,str(exc)) from exc
+    except S.ActionError as exc:
+        raise HTTPException(409 if isinstance(exc, S.ConfirmationConflict) else 400, str(exc)) from exc
     return {'ok':True}
 
 

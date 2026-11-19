@@ -14,7 +14,7 @@ function forecastShiftFields(start,end,offset=0){
   const day=Number.isFinite(start)?Math.floor(start/1440):offset;
   return `<label>开始日期<select name="start_day_offset"><option value="0">本工作日</option><option value="1" ${day===1?'selected':''}>次日</option></select></label><label>开始<input type="time" name="start" value="${Number.isFinite(start)?hm(start):''}" required></label><label>结束<input type="time" name="end" value="${Number.isFinite(end)?hm(end):''}" required></label><p class="field-hint">结束时间不晚于开始时间时，按跨零点班次处理。</p>`;
 }
-function forecastPath(){return forecastScreen()?'/api/rotation/screen/act':'/api/rotation/act';}
+function forecastPath(){return forecastScreen()?`${rotationScreenApi}/act`:'/api/rotation-board/act';}
 async function forecastSend(body){
   const result=await rtPost(forecastPath(),body);
   await RT.load();
@@ -232,7 +232,7 @@ function forecastAdd(){
     };
     input.oninput=()=>{selected=null;clearTimeout(timer);const generation=++request;
       results.textContent='';if(toggle.checked||!input.value.trim())return;
-      timer=setTimeout(async()=>{try{const data=await rtApi('/api/rotation/people-search?q='+encodeURIComponent(input.value));if(!input.isConnected||generation!==request)return;
+      timer=setTimeout(async()=>{try{const data=await rtApi('/api/rotation-board/people-search?q='+encodeURIComponent(input.value));if(!input.isConnected||generation!==request)return;
         results.innerHTML=data.people.map((p,i)=>`<button type="button" class="secondary" data-f-result="${i}">${esc(p.name)} · ${esc(p.pid)} · ${esc(p.attraction||'')}</button>`).join('');
         results.querySelectorAll('[data-f-result]').forEach(b=>b.onclick=()=>{selected=data.people[Number(b.dataset.fResult)];results.textContent=selected.name+' · '+selected.pid;});
       }catch(error){if(input.isConnected&&generation===request)results.textContent=error.message;}},200);
@@ -244,7 +244,7 @@ function forecastAdd(){
       try{
         if(temporary&&pid&&!preview){
           const generation=revision;
-          const result=await rtPost('/api/rotation/people-preview',body);
+          const result=await rtPost('/api/rotation-board/people-preview',body);
           if(!input.isConnected||generation!==revision)return;
           const facts=result.identity;
           const account=result.initial_pin?'新临时账号用完整工号登录，初始密码为工号后四位。'

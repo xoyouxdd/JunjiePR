@@ -9,9 +9,10 @@ const {chromium}=require('./support/browser-runtime.cjs');
  await page.addScriptTag({content:common});
  await page.evaluate(()=>{RT.data={attraction_name:'示例圈',day:{date:'2026-10-30',lines:[],persons:Array.from({length:22},(_,i)=>({pid:String(i),name:'示例人员'+i,role:'rotation',state:'notyet',flags:[],tags:[],start:i<20?555:i===20?540:600,end:i<21?1335:1080}))}};});
  await page.addScriptTag({content:fs.readFileSync(path.resolve(__dirname,'../app/static/js/rotation-workflow.js'),'utf8')});
+ await page.addScriptTag({content:fs.readFileSync(path.resolve(__dirname,'../app/static/js/rotation-forecast.js'),'utf8')});
  await page.evaluate(()=>document.dispatchEvent(new Event('DOMContentLoaded')));
- for(const daily of [false,true]){
-  await page.evaluate(daily=>{window.drawShiftTest=()=>document.getElementById('rtApp').innerHTML=workflowPools(540,true,{daily,editable:true});drawShiftTest();},daily);
+ {
+  await page.evaluate(()=>{window.drawShiftTest=()=>document.getElementById('rtApp').innerHTML=workflowPools(540,{day:RT.data.day,daily:true,editable:true});drawShiftTest();});
   const groups=page.locator('.rt-others .rt-shift-group');assert.equal(await groups.count(),3);
   const large=groups.filter({has:page.getByText('09:15–22:15',{exact:true})});
   assert.match(await large.locator('summary').innerText(),/20 人/);

@@ -1,5 +1,5 @@
 'use strict';
-// 轮岗（测试）：轮岗主管/经理的看板、初始化、名单、记录、设置；模拟 CM/TR 时的个人页和待办。
+// 正式轮岗看板、每日班表、名单、记录和设置。
 
 const $app = document.getElementById('rtApp');
 const $tabs = document.getElementById('rtTabs');
@@ -10,7 +10,7 @@ try { tab = localStorage.getItem('rotation.tab') || 'board'; } catch (_) { /* �
 if (!TABS.some(([id]) => id === tab)) tab = 'board';
 const view = { logDate: null, log: null, record: null, recordNo: '', rosterDate: null, roster: null, config: null, accounts: null };
 
-const isManager = () => formalRotation?!!me?.capabilities?.can_operate&&!personalRotation:me && (me.kind === 'supervisor' || me.kind === 'manager') && (!me.adjustment || typeof adjustmentState!=='undefined' && !!adjustmentState && !adjustExitPending);
+const isManager = () => !!me?.capabilities?.can_operate && !personalRotation;
 
 // 正在输入时不重绘，避免吞掉输入内容。
 function editing() {
@@ -22,9 +22,7 @@ function editing() {
 
 function renderWho() {
   const who = document.getElementById('rtWho');
-  if(formalRotation){who.textContent=`${me.name}（${me.employee_no}）· ${me.kind_label} · ${me.attraction_name}`;return;}
-  const label = me.kind === 'member' ? `${me.name}（${me.employee_no}）· 模拟 CM/TR` : `${me.name} · ${me.kind_label}`;
-  who.textContent = label;
+  who.textContent = `${me.name}（${me.employee_no}）· ${me.kind_label} · ${me.attraction_name}`;
 }
 
 // The standalone local simulator supplies its own controls on the formal board.
@@ -33,7 +31,7 @@ function renderClockBar() {}
 function renderTabs() {
   if (!isManager()) { $tabs.hidden = true; return; }
   $tabs.hidden = false;
-  $tabs.innerHTML = TABS.filter(([id])=>formalRotation?(me.capabilities.can_manage||id==='board'):!me.adjustment||['board','records'].includes(id)).map(([id, label]) => `<button type="button" class="${id === tab ? 'active' : ''}" data-tab="${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</button>`).join('');
+  $tabs.innerHTML = TABS.filter(([id])=>me.capabilities.can_manage||id==='board').map(([id, label]) => `<button type="button" class="${id === tab ? 'active' : ''}" data-tab="${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</button>`).join('');
   $tabs.querySelectorAll('[data-tab]').forEach(button => {
     button.onclick = () => {
       tab = button.dataset.tab;
@@ -59,153 +57,13 @@ function boardView() {
   if(RT.data.requires_current_rules&&me.capabilities?.can_manage)return '<section class="panel rt-empty"><h2>尚未启用轮岗</h2><p class="rt-warn">旧版预排仅供查看。请在「每日班表」重新生成并核对后启用。</p></section>';
   const d = RT.data.day;
   if (!d) {
-    if(RT.data.roster_changed&&(!formalRotation||me.capabilities.can_manage))return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 尚未启用轮岗</h2><p class="rt-warn">班表已更新，旧预排已过期。请在「每日班表」重新生成预排，核对后手动启用。</p></section>`;
-    if(formalRotation)return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 尚未启用轮岗</h2><p>${me.capabilities.can_manage?'请在「名单」上传正式班表，并在「每日班表」核对预排。':'请等待主管发布当日班表。'}</p></section>`;
-    const draft = RT.data.draft;
-    return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 还没有发布轮岗</h2><p>${draft ? '草稿已生成，到「每日班表」检查并发布后看板开始运转。' : '先在「名单」上传名单，再到「每日班表」生成当天的初始轮岗。'}</p></section>`;
+    if(RT.data.roster_changed&&me.capabilities.can_manage)return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 尚未启用轮岗</h2><p class="rt-warn">班表已更新，旧预排已过期。请在「每日班表」重新生成预排，核对后手动启用。</p></section>`;
+    return `<section class="panel rt-empty"><h2>${esc(RT.data.clock.date)} 尚未启用轮岗</h2><p>${me.capabilities.can_manage?'请在「名单」上传正式班表，并在「每日班表」核对预排。':'请等待主管发布当日班表。'}</p></section>`;
   }
-  if (d.status === 'ended') return `<section class="panel rt-empty"><h2>${esc(d.date)} 的轮岗已结束</h2><p>${!formalRotation||me.capabilities.can_records?'可在「记录」查看当天的操作日志和个人轮岗记录。':'当天轮岗安排已结束。'}</p></section>`;
-  const n = nowMin();
-  if(d.taskWorkflow)return workflowBoardView(n,isManager());
-  const alerts = d.alerts.map(a => `<div class="rt-alert ${esc(a.level)}">${esc(a.msg)}</div>`).join('') + d.notices.slice(-3).map(x => `<div class="rt-alert">${hm(x.t)} ${esc(x.msg)}</div>`).join('');
-  return `${isManager()&&!me.adjustment&&(!formalRotation||me.capabilities.can_manage)?`<section class="panel"><div class="rt-row"><strong>当天运行 · ${esc(d.date)}</strong><span>营业闭园 ${esc(d.closeAt||'未设置')}</span><button type="button" class="secondary" data-live-close>调整闭园时间</button></div></section>`:''}${rotationEndLabel(d)}${alerts ? `<div class="rt-alerts">${alerts}</div>` : ''}<div class="rt-board"><div class="rt-lines">${d.lines.map(L => lineCard(L, n, isManager())).join('')}</div><div class="rt-pool">${poolView(n)}</div></div>`;
+  if(d.readOnly)return `<section class="panel rt-empty"><h2>${esc(d.date)} 旧版轮岗</h2><p class="rt-warn">当天记录仅供查看。${me.capabilities.can_manage?'可在「每日班表」回放当日状态。':''}</p></section>${workflowBoardContent(d,nowMin(),false,{readOnly:true})}`;
+  if (d.status === 'ended') return `<section class="panel rt-empty"><h2>${esc(d.date)} 的轮岗已结束</h2><p>${me.capabilities.can_records?'可在「记录」查看当天的操作日志和个人轮岗记录。':'当天轮岗安排已结束。'}</p></section>`;
+  return workflowBoardView(nowMin(),isManager());
 }
-
-function poolView(n) {
-  const posted=new Set(RT.data.day.lines.flatMap(line=>line.posts.map(post=>post.occ).filter(Boolean)));
-  const ps = RT.data.day.persons.filter(p=>!posted.has(p.pid));
-  const displayed=new Set();
-  const by = states => ps.filter(p => states.includes(poolState(p, n)));
-  const section = (title, list, chip,grouped=false,extra='') => {list.forEach(p=>displayed.add(p.pid));return `<section class="rt-sect"><h2>${title}<span class="rt-n">${list.length}</span></h2><div class="rt-chips${list.length ? '' : ' empty'}">${list.length ? grouped?groupedChips(list,chip,n,isManager()&&title==='待出发'):list.map(chip).join('') : '暂无'}</div>${extra}</section>`;};
-  const button = (p, sub, extra = '', cls = '') => `<button type="button" class="rt-chip ${cls}" data-pid="${esc(p.pid)}"${isManager()&&['notyet','onpost','rest','meal','ready'].includes(p.state)?` draggable="true" data-drag-pid="${esc(p.pid)}"`:''}><span class="rt-nm">${esc(p.name)}${extra}</span><span class="rt-go">${goText(p)}</span><span class="rt-sub">${sub}</span>${p.assign?`<span class="rt-sub">${assignmentPlanText(p,n)}</span>`:''}${badges(p)}</button>`;
-  let html = '';
-  const upcoming=ps.filter(p=>p.upcomingShift&&!waitingInitialRest(p)&&!opWaiting(p));
-  if(upcoming.length)html += section('即将上班 · 预计人数',upcoming,p=>button(p,`${hm(p.start)}–${hm(p.end)} · 班次未开始${p.previewAssign?` · 预计进入 ${esc(p.previewAssign.line)}线 · ${esc(p.previewAssign.entryPost||'入口岗')}`:''}`,'','dim'));
-  html += section('待出发', by(['ready']).filter(p=>!p.entryHold).sort((a, b) => (a.assign ? a.assign.departAt : 9e9) - (b.assign ? b.assign.departAt : 9e9)), p => {
-    if (!p.assign) return button(p, '等待分配', '', 'dim');
-    const over = n - p.assign.departAt;
-    return button(p, over >= 1 ? `已超时 ${Math.floor(over)} 分钟` : '现在出发', '', over >= 2 ? 'late' : 'due');
-  },true,departureForecast(ps,n));
-  html += section('待到大屏点去休息', ps.filter(p=>['walkback','pending'].includes(p.state)||opWaiting(p)).sort((a, b) => (a.walkbackSince || 0) - (b.walkbackSince || 0)), p => button(p, opWaiting(p)?'OP · 可提前确认去休息':p.state === 'pending' ? 'OP 结束待定' : `下线 ${Math.max(0, Math.floor(n - (p.walkbackSince || n)))} 分钟（${esc(p.downReason || '推岗')}）`));
-  html += section('吃饭区', by(['meal']).sort((a,b)=>a.readyAt-b.readyAt), p=>button(p, `吃饭至 ${hm(p.readyAt)}，剩余 ${Math.max(0,Math.ceil(p.readyAt-n))} 分钟`, '', 'meal'));
-  const resting=by(['rest']).filter(p=>!p.entryHold).sort((a,b)=>restUntil(a)-restUntil(b));
-  html += section(`休息区 <span class="rt-hint">${restSummary(resting)}</span>`, resting, p=>button(p, waitingInitialRest(p)?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:`${p.breakKind === 'meal_rest' ? '饭后剩余休息时间：' : ''}至 ${hm(restUntil(p))}，剩余 ${Math.max(0,Math.ceil(restUntil(p)-n))} 分钟`, '', 'rest'),true);
-  const outside=[...ps.filter(outsideKind),...rosterSickPeople(RT.data.day)];outside.forEach(p=>displayed.add(p.pid));
-  html+=`<section class="rt-sect rt-outside"><h2>圈外人员<span class="rt-n">${outside.length}</span></h2>${['病假','出圈','OJT'].map(kind=>`<div data-outside-kind="${kind}"><h3>${kind==='出圈'?'出圈（含暂离）':kind}</h3><div class="rt-chips">${outside.filter(p=>outsideKind(p)===kind).map(p=>p.rosterSick?`<div class="rt-chip dim"><span class="rt-nm">${esc(p.name)}</span><span class="rt-sub">${esc(sickLeaveLabel(p))}</span></div>`:button(p,esc(kind==='病假'?sickLeaveLabel(p):p.leaveReason||p.away?.reason||p.label||kind)+(p.away?.until!=null?` · ${hm(p.away.until)} 回`:''),'','dim')).join('')||'暂无'}</div></div>`).join('')}</section>`;
-  if(ps.some(p=>p.entryHold))html += section('待本人到场重新领取安排',ps.filter(p=>p.entryHold),p=>button(p,'同行任务已调整 · 不记为缺勤','','dim'));
-  const others = by(['op', 'notyet', 'excluded', 'done']).filter(p=>!displayed.has(p.pid)).sort((a, b) => a.start - b.start);
-  html += `<section class="rt-sect"><h2>其他人员<span class="rt-n">${others.length}</span><span class="rt-hint">OP、未到岗、不轮岗、已下班</span></h2><div class="rt-scroll"><table class="rt-table">${others.map(p => `<tr data-pid="${esc(p.pid)}" tabindex="0"><td>${esc(p.name)}</td><td>${hm(p.start)}-${hm(p.end)}</td><td>${STATE_NAME[p.state] || ''}${p.label ? `：${esc(p.label)}` : ''}</td></tr>`).join('')}</table></div></section>`;
-  return html;
-}
-
-function personMenu(p, fromPool = false) {
-  const active = RT.data.day.lines.filter(L => L.active);
-  const poolContext = fromPool ? { date: RT.data.day.date, state: p.state,
-    task: p.task?.id ?? null, revision: p.task?.revision ?? null } : null;
-  const canForcePlace = fromPool && !p.entryHold && ['rest', 'meal', 'ready'].includes(p.state);
-  const state = poolState(p, nowMin());
-  const assignment=rotationAssignment(p);
-  const info = `<dl class="rt-kv">
-    <dt>工号</dt><dd>${esc(p.pid)}</dd>
-    <dt>班次</dt><dd>${hm(p.start)}-${hm(p.end)}${p.mealEligible ? '（有吃饭）' : '（只休息）'}${p.ate ? '，已吃饭' : ''}</dd>
-    <dt>状态</dt><dd>${STATE_NAME[state] || ''}${state === 'rest' ? `至 ${hm(restUntil(p))}` : ''}${p.line ? `：${esc(p.line)} ${esc(p.post || '')}` : ''}${p.away ? `：${esc(p.away.reason)}` : ''}${p.preparing ? `（${preparingText(p.preparing)}）` : ''}</dd>
-    ${p.postHold?`<dt>持续定岗</dt><dd>${hm(Math.floor(p.postHold.since))}起 · ${esc(p.postHold.reason)}；手动取消或在当天轮岗结束时自动解除。</dd>`:''}
-    <dt>去向</dt><dd>${assignment ? `${goText(p)}，${taskTime(assignment.departAt)} 出发` : '待正式派发'}</dd>
-    ${p.timingUnverified?'<dt>计时状态</dt><dd>历史时间待核实，当前分钟数为核实后已记录时间。</dd>':''}
-    <dt>今天去过</dt><dd>${esc(p.visited.join('、') || '无')}</dd>
-    ${p.absences.length ? `<dt>固定暂离</dt><dd>${p.absences.map(a => `${hm(a.start)}-${hm(a.end)} ${esc(a.label)}${a.missed ? '（错过）' : ''}`).join('；')}</dd>` : ''}
-    ${p.note ? `<dt>备注</dt><dd>${esc(p.note)}</dd>` : ''}</dl>`;
-  const actions = [];
-  if (p.state === 'walkback' || p.state === 'pending'||opWaiting(p)) actions.push(['arrive', '代点去休息', 'primary']);
-  if (canDepartNow(p, nowMin())&&(!p.entryGroup||me.employee_no===p.pid)) actions.push(['depart', p.entryGroup?'确认上岗安排':'代点去轮岗', 'primary']);
-  if (['rest', 'meal', 'ready'].includes(p.state) && p.state !== 'ready') actions.push(['undo', '撤回去休息', 'secondary']);
-  if (['rest', 'meal', 'ready'].includes(p.state)) actions.push(['reassign', '改派去向', 'secondary']);
-  if (['walkback', 'pending', 'rest', 'meal', 'ready', 'heading', 'onpost'].includes(p.state)) actions.push(['away', fromPool?'安排出圈（暂离）':'标记暂离（专项任务）', 'secondary']);
-  if (p.state === 'away') actions.push(['back', '回池', 'primary']);
-  if (p.state === 'heading') actions.push(['fix_undo_depart', '更正：撤销出发', 'secondary']);
-  if (p.state === 'onpost') actions.push(['fix_remove', '更正：移出岗位', 'secondary']);
-  if (['walkback', 'pending', 'rest', 'meal', 'ready', 'away', 'onpost'].includes(p.state) && (!fromPool || !p.entryHold)) actions.push(['fix_place', fromPool?'安排到指定岗位':'更正：放入指定岗位', 'secondary']);
-  if (p.state !== 'done' && p.state !== 'excluded') actions.push(['lost', p.flags.includes('送失物') ? '取消送失物' : '标记送失物', 'secondary']);
-  if (p.state !== 'done') actions.push(['leave', fromPool?'标记病假 / 早退':'离岗（病假、早退）', 'danger']);
-  if(!formalRotation||me.capabilities.can_records)actions.push(['record', '查看轮岗记录', 'secondary']);
-  openModal(`<h3>${esc(p.name)}</h3>${info}<div class="rt-actions">${actions.map(([k, t, c]) => `<button type="button" class="${c}" data-a="${k}">${t}</button>`).join('')}<button type="button" class="ghost" data-close>关闭</button></div>`, host => {
-    host.querySelectorAll('[data-a]').forEach(btn => {
-      btn.onclick = async () => {
-        const k = btn.dataset.a;
-        if(formalRotation&&['arrive','depart'].includes(k)){confirmRotation(p,k,'/api/rotation/act');return;}
-        const run = body => act('/api/rotation/act', { pid: p.pid, ...body,
-          ...(poolContext&&['away','leave','fix_place'].includes(body.action)?{pool_context:poolContext}:{}) });
-        if (['arrive', 'depart', 'undo', 'back'].includes(k)) { if (await run({ action: k })) closeModal(); }
-        else if (k === 'lost') { if (await run({ action: 'flag', flag: '送失物', on: !p.flags.includes('送失物') })) closeModal(); }
-        else if (k === 'record') { closeModal(); tab = 'records'; renderTabs(); view.recordNo = p.pid; await loadRecord(p.pid); openTab(); }
-        else if (k === 'reassign') formBox(`改派 ${esc(p.name)}`, `<label>去哪条线<select name="line">${active.map(L => `<option ${p.assign && p.assign.line === L.id ? 'selected' : ''}>${esc(L.id)}</option>`).join('')}</select></label>`, f => run({ action: 'reassign', line: f.line }));
-        else if (k === 'away') formBox(`${esc(p.name)} 暂离`, '<label>原因<input type="text" name="reason" value="专项任务" maxlength="50" required></label>', f => run({ action: 'away', reason: f.reason }));
-        else if (k === 'leave') formBox(`${esc(p.name)} 离岗`, '<label>原因<input type="text" name="reason" value="病假" maxlength="50" required></label><p class="field-hint">离岗后今天不再分配；如在岗位上会留下空岗。</p>', f => run({ action: 'leave', reason: f.reason }), { warn: true });
-        else if (k === 'fix_undo_depart' || k === 'fix_remove') formBox(btn.textContent, '<label>更正原因（必填，记入日志）<input type="text" name="reason" maxlength="100" required></label>', f => run({ action: k, reason: f.reason }));
-        else if (k === 'fix_place') {
-          const options = [];
-          active.forEach(L => L.posts.forEach((x, i) => {
-            const occupant = x.occ ? personOf(x.occ) : null;
-            if (x.open && !x.hold && (!x.occ || canForcePlace && occupant?.state==='onpost')) {
-              options.push(`<option value="${esc(L.id)}#${i}">${esc(L.id)} ${esc(x.name)}${occupant?' · '+esc(occupant.name):''}</option>`);
-            }
-          }));
-          if (!options.length) { toast('当前没有可安排的岗位', true); return; }
-          if (canForcePlace) {
-            formBox('安排到指定岗位', `<label>岗位<select name="post">${options.join('')}</select></label><p class="field-hint">确认前可预览影响。现场安排会结束本人的餐休或等待，并替代尚未确认的任务。</p>`, values=>{
-              const [line,i]=values.post.split('#');
-              setTimeout(()=>personDrop(p.pid,line,i,poolContext),0);
-            }, {okText:'下一步'});
-            return;
-          }
-          formBox('放入岗位', `<label>空岗<select name="post">${options.join('')}</select></label><label>更正原因（必填）<input type="text" name="reason" maxlength="100" required></label>`, f => { const [line, i] = f.post.split('#'); return run({ action: 'fix_place', line, i, reason: f.reason }); });
-        }
-      };
-    });
-  });
-}
-
-$app.addEventListener('click', event => {
-  if (!isManager() || tab !== 'board' || !RT.data.day || RT.data.day.status !== 'live') return;
-  const groupButton=event.target.closest('[data-group-depart]');
-  if(groupButton){const p=personOf(groupButton.dataset.groupDepart);if(p)confirmRotation(p,'depart','/api/rotation/act',true);return;}
-  if(event.target.closest('[data-live-close]')&&!me.adjustment){formBox('调整当天闭园时间','<label>闭园时间<input type="time" name="close" value="'+esc(RT.data.day.closeAt||'')+'" required></label>',f=>act('/api/rotation/act',{action:'set_close',close:f.close},'闭园时间已更新'));return;}
-  const person = event.target.closest('[data-pid]');
-  if (person) { const p = personOf(person.dataset.pid); if (p) personMenu(p,person.hasAttribute('data-pool-person')); return; }
-  const post = event.target.closest('[data-post]');
-  if (post) {
-    const [line, index] = post.dataset.post.split('#');
-    adjustPostMenu(line, Number(index));
-    return;
-  }
-  const line = event.target.closest('[data-line]');
-  if (line) lineMenu(line.dataset.line);
-});
-$app.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && event.target.matches('[data-post],[data-line],tr[data-pid]')) event.target.click();
-});
-
-// 测试预排拖拽：主管/经理可调整未到班次的人员，已开始计时的人员不参与。
-$app.addEventListener('dragstart', event => {
-  if(tab==='draft')return;
-  const source = event.target.closest('[data-drag-pid],tr[data-pid]');
-  const pid = source?.dataset.dragPid || source?.dataset.pid;
-  if (!isManager() || tab !== 'board' || (!event.target.closest('[data-drag-post]')&&!['notyet','onpost','rest','meal','ready'].includes(personOf(pid)?.state))) {event.preventDefault(); return;}
-  RT.pressing = true;
-  RT.dragging = true;
-  event.dataTransfer.setData('text/plain',event.target.closest('[data-drag-post]')?'post:'+event.target.closest('[data-drag-post]').dataset.dragPost:pid);
-});
-$app.addEventListener('dragover', event => {
-  if (isManager() && tab === 'board' && event.target.closest('[data-post]')) event.preventDefault();
-});
-$app.addEventListener('drop', async event => {
-  const target = event.target.closest('[data-post]');
-  if (!isManager() || tab !== 'board' || !target) return;
-  event.preventDefault(); RT.pressing = false; RT.dragging = false;
-  const [line, index] = target.dataset.post.split('#');
-  const raw=event.dataTransfer.getData('text/plain');if(raw.startsWith('post:')){const [source,from]=raw.slice(5).split('#');postSwapForm(source,Number(from),Number(index),line);}else personDrop(raw,line,Number(index));
-});
-$app.addEventListener('dragend', () => {RT.pressing = false; RT.dragging = false;});
 
 // ---------------------------------------------------------------- 初始化（草稿）
 
@@ -268,9 +126,9 @@ async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,pre
   const {version:liveVersion,syncEpoch:liveEpoch}=RT.data;const generation=++daily.request;daily.date=date;daily.month=date.slice(0,7);daily.time=time;daily.source=null;daily.loading=true;daily.error='';
   if(retained)dailyPendingUI();else RT.render(false,true);
   try{
-    const [month,loaded]=await Promise.all([refreshMonth||!retained?rtApi('/api/rotation/daily?month='+encodeURIComponent(daily.month)):Promise.resolve(daily.calendar),rtApi('/api/rotation/daily/'+date+(time?'?at='+encodeURIComponent(time):''))]);
+    const [month,loaded]=await Promise.all([refreshMonth||!retained?rtApi('/api/rotation-board/daily?month='+encodeURIComponent(daily.month)):Promise.resolve(daily.calendar),rtApi('/api/rotation-board/daily/'+date+(time?'?at='+encodeURIComponent(time):''))]);
     if(generation!==daily.request)return;let data=loaded;
-    if(prepare&&data.date>data.today&&data.can_generate&&data.revision===0){try{await rtPost('/api/rotation/daily/'+date,{action:'draft_generate',revision:0});}catch(error){const latest=await rtApi('/api/rotation/daily/'+date);if(!latest.revision)throw error;}data=await rtApi('/api/rotation/daily/'+date);}
+    if(prepare&&data.date>data.today&&data.can_generate&&data.revision===0){try{await rtPost('/api/rotation-board/daily/'+date,{action:'draft_generate',revision:0});}catch(error){const latest=await rtApi('/api/rotation-board/daily/'+date);if(!latest.revision)throw error;}data=await rtApi('/api/rotation-board/daily/'+date);}
     if(generation!==daily.request)return;daily.calendar={...month,days:month.days.map(d=>d.date===date?{...d,status:data.draft?'draft':data.day?.status||null}:d)};daily.data=data;daily.liveVersion=liveVersion;daily.liveEpoch=liveEpoch;
   }catch(error){if(generation===daily.request){daily.error=error.message;if(!retained){daily.data=null;daily.calendar=null;}}}
   finally{if(generation===daily.request){daily.loading=false;if(tab==='draft'&&RT.data){if(retained&&daily.error)dailyPendingUI();else RT.render(false,true);}}}
@@ -307,7 +165,7 @@ async function dailySend(body,onSaved){
   const date=daily.date,revision=daily.data.revision,planRevision=daily.data.plan_revision,request=daily.request;
   const swapping=['draft_swap_people','draft_swap_posts'].includes(body.action);
   try{
-    await rtPost('/api/rotation/daily/'+date,{...body,revision,plan_revision:planRevision});
+    await rtPost('/api/rotation-board/daily/'+date,{...body,revision,plan_revision:planRevision});
     toast('每日班表已保存');
     onSaved?.();
     if(daily.request===request&&daily.date===date)await loadDaily(date,'',body.action!=='draft_discard',{refreshMonth:!swapping});
@@ -328,7 +186,7 @@ function dailyLabel(key,mode){
 }
 function dailyLineMenu(lid){
   if(daily.busy||daily.loading||daily.error||!daily.data?.can_edit)return;
-  if(formalRotation&&!me?.capabilities?.can_manage)return;
+  if(!me?.capabilities?.can_manage)return;
   const line=daily.data.draft?.lines.find(l=>l.id===lid);if(!line)return;
   const active=!line.standby,date=daily.date,{revision,plan_revision}=daily.data;
   confirmBox(`${active?'停用':'启用'} ${esc(lid)}线预排`,
@@ -483,7 +341,7 @@ async function loadRoster(day) {
   const request = ++rosterRequest;
   view.rosterDate = day;
   try {
-    const roster = await rtApi(`/api/rotation/roster?date=${encodeURIComponent(day)}`);
+    const roster = await rtApi(`/api/rotation-board/roster?date=${encodeURIComponent(day)}`);
     if (request !== rosterRequest) return;
     view.roster = roster;
     if (tab === 'roster') RT.render();
@@ -504,7 +362,7 @@ function rosterList() {
 
 function rosterView() {
   return `<section class="panel"><h2>上传名单</h2>
-    <p class="field-hint">支持 ZTP 周班表，或标准模板（列：工号、姓名、日期、班次、备注；班次如 07:15-16:15）。按天上传会覆盖按周上传的同一天。${formalRotation?'以班表为准加入轮岗，跨圈直接识别；账号异常集中确认加入或跳过，未注册人员建立独立轮岗身份。':'名单为模拟数据，只用于轮岗测试。'}</p>
+    <p class="field-hint">支持 ZTP 周班表，或标准模板（列：工号、姓名、日期、班次、备注；班次如 07:15-16:15）。按天上传会覆盖按周上传的同一天。以班表为准加入轮岗，跨圈直接识别；账号异常集中确认加入或跳过，未注册人员建立独立轮岗身份。</p>
     <form id="rosterForm" class="rt-row">
       <input type="file" name="file" accept=".xlsx" required>
       <label><input type="radio" name="scope" value="week" checked> 按周</label>
@@ -529,32 +387,30 @@ function bindRoster() {
     const button=form.querySelector('[type=submit]');if(button.disabled)return;button.disabled=true;
     const perform=async()=>{
       try{
-        const out=await rtApi('/api/rotation/roster/upload',{method:'POST',body:data,timeoutMs:120000});
+        const out=await rtApi('/api/rotation-board/roster/upload',{method:'POST',body:data,timeoutMs:120000});
         const staleDates=out.stale_draft_dates||[];
         toast(staleDates.length?`班表已导入。${staleDates.join('、')} 的旧预排已过期，请到「每日班表」重新生成。`:`已导入 ${out.start_date}${out.end_date!==out.start_date?` 至 ${out.end_date}`:''}，共 ${out.entry_count} 条`);
         form.reset();await RT.load();await loadRoster(out.start_date);return true;
       }catch(error){toast(error.message,true);return false;}
     };
     try {
-      if(formalRotation){
-        const check=new FormData();for(const [key,value] of data.entries())check.append(key,value);check.set('preview','true');
-        const batch=await rtApi('/api/rotation/roster/upload',{method:'POST',body:check});
-        data.set('expected_digest',batch.digest);
-        if(batch.warnings?.length){
-          openModal(`<h3>以下人员存在账号异常</h3><p>正常人员照常导入。勾选异常人员可仅加入轮岗，不会启用其工作台账号。</p><div class="rt-scroll">${batch.warnings.map(p=>`<label class="rt-roster-exception"><input type="checkbox" data-exception-no="${esc(p.employee_no)}" value="${esc(p.employee_no)}" checked><span><strong>${esc(p.name)} · ${esc(p.employee_no)}</strong><small>${esc(p.reasons.join('、'))}</small></span></label>`).join('')}</div>${batch.new.some(p=>batch.identities[p.employee_no]?.temporary)?`<p>另有 ${batch.new.filter(p=>batch.identities[p.employee_no]?.temporary).length} 位未注册人员，将创建独立轮岗身份。</p>`:''}<p class="field-hint">已有登录账号使用原密码；无登录账号使用工号后四位。情况仅在后台轮岗记录中标注。</p><div class="modal-actions"><button type="button" class="ghost" data-close>返回检查</button><button type="button" class="secondary" data-skip-exceptions>跳过异常人员</button><button type="button" class="primary" data-include-exceptions>确认加入轮岗</button></div>`,host=>{
-            const commit=async(skipAll)=>{
-              data.set('confirm_exceptions','true');
-              data.set('skip_employee_nos',JSON.stringify([...host.querySelectorAll('[data-exception-no]')].filter(el=>skipAll||!el.checked).map(el=>el.value)));
-              host.querySelectorAll('button,input').forEach(el=>el.disabled=true);
-              if(await perform())closeModal();else host.querySelectorAll('button,input').forEach(el=>el.disabled=false);
-            };
-            host.querySelector('[data-include-exceptions]').onclick=()=>commit(false);
-            host.querySelector('[data-skip-exceptions]').onclick=()=>commit(true);
-          });return;
-        }
-        if(batch.new.length){
-          confirmBox('确认班表人员',`<p>将为 ${batch.new.length} 位未注册人员创建仅可确认本人轮岗待办的临时账号。</p><div class="rt-scroll"><ul>${batch.new.map(p=>`<li>${esc(p.name)} · ${esc(p.employee_no)}</li>`).join('')}</ul></div><p class="field-hint">完整工号登录，密码为后四位；不进入正式员工统计。已有临时身份复用，历史记录保留。</p>`,'确认导入',perform);return;
-        }
+      const check=new FormData();for(const [key,value] of data.entries())check.append(key,value);check.set('preview','true');
+      const batch=await rtApi('/api/rotation-board/roster/upload',{method:'POST',body:check});
+      data.set('expected_digest',batch.digest);
+      if(batch.warnings?.length){
+        openModal(`<h3>以下人员存在账号异常</h3><p>正常人员照常导入。勾选异常人员可仅加入轮岗，不会启用其工作台账号。</p><div class="rt-scroll">${batch.warnings.map(p=>`<label class="rt-roster-exception"><input type="checkbox" data-exception-no="${esc(p.employee_no)}" value="${esc(p.employee_no)}" checked><span><strong>${esc(p.name)} · ${esc(p.employee_no)}</strong><small>${esc(p.reasons.join('、'))}</small></span></label>`).join('')}</div>${batch.new.some(p=>batch.identities[p.employee_no]?.temporary)?`<p>另有 ${batch.new.filter(p=>batch.identities[p.employee_no]?.temporary).length} 位未注册人员，将创建独立轮岗身份。</p>`:''}<p class="field-hint">已有登录账号使用原密码；无登录账号使用工号后四位。情况仅在后台轮岗记录中标注。</p><div class="modal-actions"><button type="button" class="ghost" data-close>返回检查</button><button type="button" class="secondary" data-skip-exceptions>跳过异常人员</button><button type="button" class="primary" data-include-exceptions>确认加入轮岗</button></div>`,host=>{
+          const commit=async(skipAll)=>{
+            data.set('confirm_exceptions','true');
+            data.set('skip_employee_nos',JSON.stringify([...host.querySelectorAll('[data-exception-no]')].filter(el=>skipAll||!el.checked).map(el=>el.value)));
+            host.querySelectorAll('button,input').forEach(el=>el.disabled=true);
+            if(await perform())closeModal();else host.querySelectorAll('button,input').forEach(el=>el.disabled=false);
+          };
+          host.querySelector('[data-include-exceptions]').onclick=()=>commit(false);
+          host.querySelector('[data-skip-exceptions]').onclick=()=>commit(true);
+        });return;
+      }
+      if(batch.new.length){
+        confirmBox('确认班表人员',`<p>将为 ${batch.new.length} 位未注册人员创建仅可确认本人轮岗待办的临时账号。</p><div class="rt-scroll"><ul>${batch.new.map(p=>`<li>${esc(p.name)} · ${esc(p.employee_no)}</li>`).join('')}</ul></div><p class="field-hint">完整工号登录，密码为后四位；不进入正式员工统计。已有临时身份复用，历史记录保留。</p>`,'确认导入',perform);return;
       }
       await perform();
     } catch (error) { toast(error.message, true); }
@@ -601,13 +457,13 @@ function detailText(item) {
 
 async function loadLog(day) {
   view.logDate = day;
-  try { view.log = (await rtApi(`/api/rotation/log?date=${encodeURIComponent(day)}`)).items; } catch (error) { toast(error.message, true); }
+  try { view.log = (await rtApi(`/api/rotation-board/log?date=${encodeURIComponent(day)}`)).items; } catch (error) { toast(error.message, true); }
   RT.render();
 }
 
 async function loadRecord(no) {
   view.recordNo = no;
-  try { view.record = await rtApi(`/api/rotation/person?employee_no=${encodeURIComponent(no)}&date=${encodeURIComponent(view.logDate || RT.data.clock.date)}`); } catch (error) { toast(error.message, true); }
+  try { view.record = await rtApi(`/api/rotation-board/person?employee_no=${encodeURIComponent(no)}&date=${encodeURIComponent(view.logDate || RT.data.clock.date)}`); } catch (error) { toast(error.message, true); }
   RT.render();
 }
 
@@ -641,8 +497,8 @@ const SETTING_LABELS = [
 
 async function loadSettings() {
   try {
-    view.config = await rtApi('/api/rotation/config');
-    view.accounts = formalRotation?[]:(await rtApi('/api/rotation/accounts')).items;
+    view.config = await rtApi('/api/rotation-board/config');
+    view.accounts = me.capabilities?.screen_account_admin ? (await rtApi(`${rotationScreenApi}/accounts`)).items : null;
   } catch (error) { toast(error.message, true); }
   RT.render();
 }
@@ -676,8 +532,8 @@ function settingsView() {
     ${lateShiftSettings(cfg.late_shifts)}
     <section class="panel"><h2>线和岗位</h2><p class="field-hint">每条线按顺序列出岗位，第一个是入口岗，最后一个是出口岗。可选：openAt 定时开岗、closeAt 定时撤岗、seven 7 点岗位顺序、standby 待命线、walk 路程分钟。</p>
       <form id="linesForm"><textarea name="lines" rows="16" class="rt-json" spellcheck="false">${esc(JSON.stringify(cfg.lines, null, 2))}</textarea><div class="rt-row"><button type="submit" class="primary">保存线和岗位</button></div></form></section>
-    <section class="panel" ${formalRotation?'hidden':''}><h2>轮岗专用账号</h2><p class="field-hint">在登录页直接登录时使用的密码；测试入口里切换模拟账号不需要密码。</p>
-      <table class="rt-table"><thead><tr><th>账号</th><th>类型</th><th>最近登录</th><th></th></tr></thead><tbody>${(view.accounts || []).map(a => `<tr><td>${esc(a.login_account)}</td><td>${esc(a.kind_label)}${a.locked ? '（已锁定）' : ''}</td><td>${esc(a.last_login_at || '从未')}</td><td><button type="button" class="secondary" data-reset="${esc(a.login_account)}">重置密码</button></td></tr>`).join('')}</tbody></table></section>`;
+    ${me.capabilities.screen_account_admin && view.accounts ? `<section class="panel"><h2>休息室大屏账号</h2>
+      <table class="rt-table"><thead><tr><th>账号</th><th>状态</th><th>最近登录</th><th></th></tr></thead><tbody>${view.accounts.map(a => `<tr><td>${esc(a.login_account)}</td><td>${!a.enabled ? '已停用' : a.locked ? '已锁定' : '正常'}</td><td>${esc(a.last_login_at || '从未')}</td><td><button type="button" class="secondary" data-reset="${esc(a.login_account)}">重置密码</button></td></tr>`).join('')}</tbody></table></section>` : ''}`;
 }
 
 function bindSettings() {
@@ -688,7 +544,7 @@ function bindSettings() {
     const save = async selected => {
       lateForm.querySelectorAll('select,button').forEach(el => { el.disabled = true; });
       try {
-        await rtApi('/api/rotation/config', { method:'PUT', headers:{'Content-Type':'application/json'},
+        await rtApi('/api/rotation-board/config', { method:'PUT', headers:{'Content-Type':'application/json'},
           body:JSON.stringify({work_date:view.config.late_shifts.date, late_shifts:selected}) });
         toast(selected===null?'已恢复默认班时':'已保存当日班时');
       } catch (error) { toast(error.message, true); }
@@ -708,35 +564,40 @@ function bindSettings() {
   sform.onsubmit = async event => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(sform).entries());
-    try { await rtApi('/api/rotation/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: values }) }); toast('参数已保存'); view.config = null; await loadSettings(); } catch (error) { toast(error.message, true); }
+    try { await rtApi('/api/rotation-board/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: values }) }); toast('参数已保存'); view.config = null; await loadSettings(); } catch (error) { toast(error.message, true); }
   };
   document.getElementById('linesForm').onsubmit = async event => {
     event.preventDefault();
     let lines;
     try { lines = JSON.parse(new FormData(event.target).get('lines')); } catch (_) { toast('线和岗位不是有效的 JSON', true); return; }
-    try { await rtApi('/api/rotation/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lines }) }); toast('已保存，下次生成草稿时生效'); view.config = null; await loadSettings(); } catch (error) { toast(error.message, true); }
+    try { await rtApi('/api/rotation-board/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lines }) }); toast('已保存，下次生成草稿时生效'); view.config = null; await loadSettings(); } catch (error) { toast(error.message, true); }
   };
   $app.querySelectorAll('[data-reset]').forEach(button => {
-    button.onclick = () => formBox(`重置 ${esc(button.dataset.reset)} 的密码`, '<label>新密码<input name="password" type="text" minlength="4" maxlength="64" autocomplete="off" required></label><p class="field-hint">重置后该账号原有的登录全部失效。</p>', f => act(`/api/rotation/accounts/${encodeURIComponent(button.dataset.reset)}/password`, { new_password: f.password }, '密码已重置'));
+    button.onclick = () => formBox(`重置 ${esc(button.dataset.reset)} 的密码`, '<label>新密码<input name="password" type="text" minlength="4" maxlength="64" autocomplete="off" required></label><p class="field-hint">重置后该账号原有的登录全部失效。</p>', async f => {
+      const updated = await act(`${rotationScreenApi}/accounts/${encodeURIComponent(button.dataset.reset)}/password`, { new_password: f.password }, '密码已重置');
+      if (updated) await loadSettings();
+      return updated;
+    });
   });
 }
 
-// ---------------------------------------------------------------- 模拟 CM/TR 个人页
+// ---------------------------------------------------------------- 个人轮岗
 
 function memberView() {
   const d = RT.data;
   const p = d.person;
   const n = nowMin();
+  if(d.readOnly)return `<section class="panel rt-todo"><h2>我的轮岗</h2><p role="status">旧版轮岗记录仅供查看。</p><p>${esc(p?.name||'')} ${esc(p?.line||'')} ${esc(p?.post||'')}</p></section>`;
   if(p&&rotationTaskPaused(p))return `<section class="panel rt-todo"><h2>关联任务待处理</h2><strong>${esc(p.name)}</strong><p role="status">${p.timeoutPending?'等待前序完成后更新任务，暂不计确认超时':'同线关联任务待负责人核实，暂不计确认超时'}</p><p>旧详情暂停执行，请等待更新后的安排。</p></section>`;
   const assignment=p?rotationAssignment(p):null;
   const open = d.notices.filter(x => x.status === 'open');
   const done = d.notices.filter(x => x.status !== 'open');
-  const action = p?.entryHold?'entry_return':p && (['walkback', 'pending'].includes(p.state)||opWaiting(p)) ? 'arrive' : assignment ? 'depart' : null;
-  const can = action === 'arrive' || action==='entry_return' || (action === 'depart' && canDepartNow(p, n));
+  const action = p && (['walkback', 'pending'].includes(p.state)||opWaiting(p)) ? 'arrive' : assignment ? 'depart' : null;
+  const can = action === 'arrive' || (action === 'depart' && canDepartNow(p, n));
   const actionButton = action ? `<div class="rt-actions"><button type="button" class="primary" data-member-act="${action}" ${can && !confirmationBlocked() ? '' : 'disabled'}>${RT.pendingConfirmation ? '正在核实确认结果' : RT.submitting ? '正在提交' : action==='entry_return'?'确认知晓，重新领取':action === 'arrive' ? '确认已到休息室' : can ? '去轮岗' : '等待出发'}</button></div>` : '';
-  const todo = `<section class="panel rt-todo"><div class="rt-todo-head"><h2>待办</h2>${formalRotation?'':'<span class="rotation-test-badge">测试</span>'}</div>
+  const todo = `<section class="panel rt-todo"><div class="rt-todo-head"><h2>待办</h2></div>
     ${open.length ? open.map(x => `<article class="rt-notice ${esc(x.kind)}"><strong>${esc(x.title)}</strong>${x.body ? `<p>${esc(x.body)}</p>` : ''}</article>`).join('') : '<p class="field-hint">当前没有轮岗待办。</p>'}
-    ${action === 'depart' ? `<div class="rt-route">${assignmentDescription(assignment)}${p.task?`<p>${taskTime(p.task.allowedAt)} 可出发 · ${taskTime(p.task.deadlineAt)} 前确认</p>${n<p.task.allowedAt?`<p>餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(p.task.allowedAt-n))} 分钟</p>`:''}`:''}</div>` : ''}${action==='entry_return'?'<p>确认后立即恢复可分配状态，不新增休息时间；已转给他人的任务保持不变。</p>':''}${actionButton}
+    ${action === 'depart' ? `<div class="rt-route">${assignmentDescription(assignment)}${p.task?`<p>${taskTime(p.task.allowedAt)} 可出发 · ${taskTime(p.task.deadlineAt)} 前确认</p>${n<p.task.allowedAt?`<p>餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(p.task.allowedAt-n))} 分钟</p>`:''}`:''}</div>` : ''}${actionButton}
     ${done.length ? `<details><summary>已完成 ${done.length} 项</summary>${done.map(x => `<p class="rt-notice-done">${esc(x.updated_at || '')} ${esc(x.title)}</p>`).join('')}</details>` : ''}</section>`;
   if (!p) return `${todo}<section class="panel rt-empty"><h2>今天没有你的轮岗</h2><p>名单发布后这里会显示你的状态和所在线。</p></section>`;
   const state = poolState(p, n);
@@ -768,7 +629,7 @@ function memberView() {
 RT.render = (fromTicker,forceDaily=false) => {
   if (!RT.data || !me || RT.dragging) return;
   renderClock();
-  if (personalRotation || me.kind === 'member'&&!formalRotation) {
+  if (personalRotation) {
     const expanded = [...$app.querySelectorAll('details')].map(el => el.open);
     $app.innerHTML = memberView();
     [...$app.querySelectorAll('details')].forEach((el, i) => { el.open = expanded[i] || false; });
@@ -803,11 +664,8 @@ RT.render = (fromTicker,forceDaily=false) => {
   const scroll = [...$app.querySelectorAll('.rt-chips, .rt-scroll')].map(el => el.scrollTop);
   $app.innerHTML = html;
   if(tab!=='draft')$app.removeAttribute('aria-busy');
-  if (tab === 'board') $app.querySelectorAll('tr[data-pid]').forEach(row => {
-    row.draggable = personOf(row.dataset.pid)?.state === 'notyet';
-  });
   [...$app.querySelectorAll('.rt-chips, .rt-scroll')].forEach((el, i) => { el.scrollTop = scroll[i] || 0; });
-  if(formalRotation&&!isManager()&&!personalRotation)$app.querySelectorAll('[data-pid],[data-post],[data-line],[draggable]').forEach(el=>{el.removeAttribute('tabindex');el.draggable=false;if(el.tagName==='BUTTON')el.disabled=true;});
+  if(!isManager()&&!personalRotation)$app.querySelectorAll('[data-pid],[data-post],[data-line],[draggable]').forEach(el=>{el.removeAttribute('tabindex');el.draggable=false;if(el.tagName==='BUTTON')el.disabled=true;});
   if (tab === 'draft'){[...$app.querySelectorAll('details')].forEach((el,i)=>{el.open=expanded[i]||false;});bindDraft();dailyPendingUI();}
   if(pageScroll){for(const [el,x,y] of pageScroll.parents){el.scrollLeft=x;el.scrollTop=y;}window.scrollTo({left:pageScroll.x,top:pageScroll.y,behavior:'instant'});}
   if (tab === 'roster') bindRoster();
@@ -816,28 +674,23 @@ RT.render = (fromTicker,forceDaily=false) => {
 };
 
 RT.load = async () => {
-  await loadLive(personalRotation||me.kind === 'member'&&!formalRotation ? '/api/rotation/me' : '/api/rotation/board');
+  await loadLive(personalRotation ? '/api/rotation-board/me' : '/api/rotation-board/board');
 };
 
 $app.addEventListener('click', event => {
   const button = event.target.closest('[data-member-act]');
-  if (!button || button.disabled || !personalRotation&&me?.kind !== 'member' || !RT.data?.person) return;
-  confirmRotation(RT.data.person, button.dataset.memberAct, '/api/rotation/me/act');
+  if (!button || button.disabled || !personalRotation || RT.data?.readOnly || !RT.data?.person) return;
+  confirmRotation(RT.data.person, button.dataset.memberAct, '/api/rotation-board/me/act');
 });
 
-document.getElementById('rtSwitch').onclick = async () => {
-  if(formalRotation){location.href=portalPath('/?view=actionCenter');return;}
-  storePendingConfirmation(null);
-  try { await rtPost('/api/rotation/logout'); } catch (_) { /* 退出失败也回到入口 */ }
-  location.href = portalPath('/');
+document.getElementById('rtSwitch').onclick = () => {
+  location.href = portalPath('/?view=actionCenter');
 };
 
 (async () => {
   try {
-    me = await rtApi('/api/rotation/whoami');
-    if(formalRotation){if(!me.capabilities.can_manage||personalRotation)tab='board';document.getElementById('rtSwitch').textContent='返回工作台';}
-    if (me.kind === 'screen') { location.href = portalPath('/rotation/screen'); return; }
-    if (me.adjustment&&!['board','records'].includes(tab))tab='board';
+    me = await rtApi('/api/rotation-board/whoami');
+    if(!me.capabilities.can_manage||personalRotation)tab='board';
     renderWho();
     await RT.load();
     renderTabs();

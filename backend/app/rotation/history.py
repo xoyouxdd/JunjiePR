@@ -5,12 +5,8 @@ import json
 
 
 def snapshot(state):
-    cases=state.get('timeoutCases',{})
     return deepcopy({'persons':state['persons'],'lines':state['lines'],
-                     'hold101Active':state.get('hold101Active',False),'closed':state.get('closed',False),
-                     'timeoutCases':cases,'timeoutDemands':state.get('timeoutDemands',[]),
-                     'caseTasks':{id:t for id,t in state.get('rotationTasks',{}).items()
-                                  if t.get('recoveryCase') in cases or any(id in c['tasks'] for c in cases.values())}})
+                     'hold101Active':state.get('hold101Active',False),'closed':state.get('closed',False)})
 
 
 def _posts(state):
@@ -69,21 +65,15 @@ def record(db, eng, before, action, actor, now):
     people.discard(None)
     # A scheduled post change may alter its occupant only on a later clock tick.
     # Keep that person's original state even when scheduling itself didn't move them.
-    pids=people
     lines={values[key]['line'] for values in (left,right) for key in keys if key in values}
-    related_cases={id:c for id,c in before.get('timeoutCases',{}).items() if c['line'] in lines}
-    for c in related_cases.values():pids.update(c['people'])
     payload={'action':action,'lines':sorted(lines),'minute':now,
              'resources':sorted({'post:'+key for key in keys}|{'person:'+pid for pid in people}),
-             'beforePeople':{pid:before['persons'].get(pid) for pid in pids},
+             'beforePeople':{pid:before['persons'].get(pid) for pid in people},
              'beforePosts':{key:left.get(key) for key in keys},
              'beforeLines':{l['id']:{k:v for k,v in l.items() if k!='posts'} for l in before['lines'] if l['id'] in lines},
              'before101':before.get('hold101Active',False),'beforeClosed':before.get('closed',False)}
     if 'existingSegmentIds' in before:
         payload['existingSegmentIds'] = before['existingSegmentIds']
-    if related_cases or any(c['line'] in lines for c in after.get('timeoutCases',{}).values()):
-        payload.update(beforeCases=related_cases,beforeDemands=[d for d in before.get('timeoutDemands',[]) if d['line'] in lines],
-                       beforeCaseTasks={id:t for id,t in before.get('caseTasks',{}).items() if t['line'] in lines})
     model=tables_for(db).RotationEvent
     db.add(model(attraction_id=eng.h.attraction_id,work_date=eng.h.day,minute=now,
                  event_type='workflow_checkpoint',actor_type='system',actor_name=getattr(actor,'name',str(actor)),
@@ -109,17 +99,13 @@ def plan(db, eng, line):
 
 
 def apply(eng, undo, now):
-    from app.rotation import workflow as W
-    case_patches=[]
     affected={v.split(':',1)[1] for v in undo['resources'] if v.startswith('person:')}
     prior_sequences={}
-    current_sequences={}
-    if eng.d.get('ruleVersion') == 2:
-        current_sequences = {pid: eng.P[pid].get('confirmationSequence', 0) for pid in affected}
-        for _, entry in undo['entries']:
-            for pid, person in entry['beforePeople'].items():
-                if person is not None:
-                    prior_sequences.setdefault(pid, person.get('confirmationSequence', 0))
+    current_sequences = {pid: eng.P[pid].get('confirmationSequence', 0) for pid in affected}
+    for _, entry in undo['entries']:
+        for pid, person in entry['beforePeople'].items():
+            if person is not None:
+                prior_sequences.setdefault(pid, person.get('confirmationSequence', 0))
     for _,entry in reversed(undo['entries']):
         for pid,person in entry['beforePeople'].items():
             if person is not None:eng.P[pid]=deepcopy(person)
@@ -132,13 +118,6 @@ def apply(eng, undo, now):
             eng.line(item['line'])['posts'].insert(item['index'],deepcopy(item['post']))
         if entry['action'] in ('hold101','resume101'):eng.d['hold101Active']=entry['before101']
         if entry['action']=='set_close':eng.d['closed']=entry['beforeClosed']
-        if 'beforeCases' in entry:case_patches.append(entry)
-    for task in eng.d.get('rotationTasks',{}).values():
-        if W.resources(task).intersection(undo['resources']) and (
-                task['status'] in W.ACTIVE or task.get('executedAt',-1)>=undo['minute']):
-            task['status']='reversed'
-            owner=eng.P.get(task.get('owner'))
-            if owner and (owner.get('assign') or {}).get('taskId')==task['id']:owner['assign']=None
     for pid in affected:
         p=eng.P[pid]
         p['confirmationSequence']=max(p.get('confirmationSequence',0),current_sequences.get(pid,0))+1
@@ -154,14 +133,6 @@ def apply(eng, undo, now):
             reversed_by_undo = receipt.get('minute', -1) >= undo['minute']
         if reversed_by_undo:
             receipt['status']='reversed'
-    for entry in case_patches:
-        lines=set(entry['lines'])
-        eng.d['timeoutCases']={id:c for id,c in eng.d.get('timeoutCases',{}).items() if c['line'] not in lines}
-        eng.d['timeoutCases'].update(deepcopy(entry['beforeCases']))
-        eng.d['timeoutDemands']=[d for d in eng.d.get('timeoutDemands',[]) if d['line'] not in lines]+deepcopy(entry['beforeDemands'])
-        eng.d['rotationTasks'].update(deepcopy(entry['beforeCaseTasks']))
-        for task in entry['beforeCaseTasks'].values():
-            if task['status']=='exception_hold' and task.get('owner') in eng.P:W.bind(eng,eng.P[task['owner']],eng.d['rotationTasks'][task['id']])
     eng.d.setdefault('reversedCheckpoints',[]).extend(rid for rid,_ in undo['entries'])
     return affected
 
@@ -221,7 +192,6 @@ def execute(db, eng, line, checkpoint, now, actor):
               {'checkpoints':[rid for rid,_ in undo['entries']],'cancelled_segments':cancelled,
                'affected':sorted(affected),'reason':'现场核实后恢复',
                **({'reverted_push7':reverted_push7} if reverted_push7 else {})})
-    if eng.d.get('ruleVersion') == 2:
-        # The current day may still have pre-ID executions in the cached totals.
-        db.flush()
-        eng.d.pop('push7History', None)
+    # The current day may still have pre-ID executions in the cached totals.
+    db.flush()
+    eng.d.pop('push7History', None)

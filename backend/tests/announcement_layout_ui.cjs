@@ -38,7 +38,6 @@ async function handler(req,res){const url=new URL(req.url,'http://fixture'),r=ur
   if(r==='/favicon.ico'){res.writeHead(204);res.end();return;}
   const publisher={all_leads:publishRoles.has(role[0])&&role[0]!=='POC',circles:role[0]==='POC'?[]:[1,2,3],projects:['POC','GSM_POC'].includes(role[0])?[{id:1,name:'暑期活动项目',tiers:Object.keys(tiers),categories}]:[],tiers:Object.keys(tiers),categories};
   if(r==='/api/me'){const base={TA_SUPERVISOR:'CM',TA_GSM:'SUPERVISOR',POC:'CM',GSM_POC:'GSM',GSM_OTHER:'GSM',GSM_ADMIN:'GSM',AM_ADMIN:'AM'}[role[0]]||role[0];json(res,{id:1,name:'UI验收模拟用户',employee_no:'1999999',role_name:role[1],role_code:role[0]==='POC'?'CM':role[0],base_role_code:base,role_codes:[base,...(role[0]==='POC'?[]:[role[0]])],attraction_id:1,attraction_name:'热力追踪',permissions:adminRoles.has(role[0])?['SYSTEM_ADMIN']:[],must_change_password:false});}
-  else if(r==='/api/rotation/adjust/mine')json(res,{items:[]});
   else if(r==='/api/export-tasks'&&req.method==='GET')json(res,{items:[]});
   else if(r==='/api/recognition-inbox')json(res,{unread_count:0,total:0,page:1,page_size:20,items:[]});
   else if(r==='/api/activity-points/me')json(res,{eligible:false,earned:0,used:0,available:0,total:0,page:1,page_size:20,items:[]});

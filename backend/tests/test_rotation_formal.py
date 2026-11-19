@@ -63,7 +63,7 @@ def test_formal_entry_and_permissions(index,operate,manage):
         login(c,f'97100{index}0')
         assert ok(c.get('/api/me'))['rotation_entry']
         who=ok(c.get('/api/rotation-board/whoami'))
-        assert who['formal'] and not who['test_mode']
+        assert who['formal']
         assert who['capabilities']['can_operate']==operate and who['capabilities']['can_manage']==manage
         assert ok(c.get('/api/rotation-board/board'))['clock']['mode']=='real'
         for endpoint in ['/config','/log?date='+date.today().isoformat(),'/daily?month='+date.today().strftime('%Y-%m'),'/roster?date='+date.today().isoformat()]:
@@ -73,7 +73,7 @@ def test_formal_entry_and_permissions(index,operate,manage):
         if not operate:assert c.post('/api/rotation-board/act',json={'action':'line','line':'A1','active':False}).status_code==403
 
 
-def seed_today(rule_version=1, *, leave_draft=False):
+def seed_today(rule_version=2, *, leave_draft=False):
     """Materialized real-day fixture; never change the formal clock to a simulation."""
     with SessionLocal() as db:
         circle=db.query(Attraction).filter_by(name='热力追踪').one(); aid=circle.id
@@ -88,31 +88,17 @@ def seed_today(rule_version=1, *, leave_draft=False):
             cfg=S.load_config(db,aid)
             cfg.lines_json=S._dumps([{'id':'A1','posts':[{'name':'入口'},{'name':'出口'}]}]);cfg.settings_json=S._dumps({'parkClose':'23:59','closeDelay':0})
         S.do_draft_action(db,aid,'fixture',{'action':'draft_generate','date':date.today().isoformat(),'force':True})
-        # Persisted legacy formal days must remain readable/executable. The new
-        # core is exercised separately by test_rotation_forecast_formal.py.
-        with S.transaction(db):
-            row=S.day_row(db,aid,date.today().isoformat()); state=S.day_state(row)
-            if rule_version is None:
-                state.pop('ruleVersion')
-            else:
-                state['ruleVersion']=rule_version
-            state.pop('taskWorkflow',None)
-            if not leave_draft and rule_version != 2:
-                # Store a simulated pre-upgrade live day without going through
-                # the current production path for enabling new drafts.
-                cfg = S.load_config(db, aid)
-                S.remember_initial_draft(state, cfg)
-                eng, hooks = S.engine_for(db, cfg, row, state)
-                hooks.now = minute
-                eng.publish(minute, 'fixture')
-                state['lastTick'] = minute
-                S.write_duties(db, aid, row.work_date, state['plan'])
-                S.sync_notices(db, aid, state, eng, minute)
-            S.save_day(db,row,state)
         if leave_draft:
+            with S.transaction(db):
+                row = S.day_row(db, aid, date.today().isoformat())
+                state = S.day_state(row)
+                if rule_version is None:
+                    state.pop('ruleVersion')
+                else:
+                    state['ruleVersion'] = rule_version
+                S.save_day(db, row, state)
             return aid
-        if rule_version == 2:
-            S.do_draft_action(db,aid,'fixture',{'action':'publish','date':date.today().isoformat()})
+        S.do_draft_action(db,aid,'fixture',{'action':'publish','date':date.today().isoformat()})
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             state['lastTick']=minute
@@ -120,7 +106,8 @@ def seed_today(rule_version=1, *, leave_draft=False):
             for i,no in enumerate(['9710020','9710010']):
                 state['persons'][no].update(state='onpost',line='A1',lineStart=minute-30,flags=[])
                 state['lines'][0]['posts'][i].update(occ=no,since=minute-30)
-            p=state['persons']['9710000'];p['assign']={'line':'A1','mode':'push','departAt':minute-1}
+            from app.rotation import forecast
+            forecast.plan(S.engine_for(db, S.load_config(db, aid), row, state)[0], minute)
             S.save_day(db,row,state)
         return aid
 
@@ -145,7 +132,7 @@ def test_unstarted_legacy_formal_draft_stays_read_only_until_regenerated(rule_ve
         assert draft['requires_current_rules'] and draft['can_generate'] and draft['frozen']
         assert not draft['can_edit'] and not draft['can_publish']
         reject = c.post(path, json={'action': 'publish', 'revision': draft['revision']})
-        assert reject.status_code == 400 and '重新生成' in reject.json()['detail']
+        assert reject.status_code == 409 and '重新生成' in reject.json()['detail']
         with SessionLocal() as db:
             db.info['rotation_formal'] = True
             assert S.day_row(db, aid, work_date).state_json == original
@@ -156,6 +143,60 @@ def test_unstarted_legacy_formal_draft_stays_read_only_until_regenerated(rule_ve
         assert ok(c.get('/api/rotation-board/board'))['day']['ruleVersion'] == 2
 
 
+@pytest.mark.parametrize('rule_version', [None, 1])
+def test_running_legacy_day_keeps_board_and_receipts_read_only(rule_version):
+    aid = seed_today()
+    work_date = date.today().isoformat()
+    pid = '9710000'
+    token = 'a' * 64
+    receipt = {'action': 'depart', 'pid': pid, 'status': 'executed', 'token': token, 'date': work_date}
+    with SessionLocal() as db, S.transaction(db):
+        db.info['rotation_formal'] = True
+        row = S.day_row(db, aid, work_date)
+        current = S.day_state(row)
+        old = deepcopy(current)
+        if rule_version is None:
+            old.pop('ruleVersion')
+        else:
+            old['ruleVersion'] = rule_version
+        old.pop('confirmationEpoch')
+        old['confirmations'] = {token: receipt}
+        row.state_json = S._dumps(old)
+        row.version += 1
+        frozen = row.version, row.state_json
+    try:
+        S.tick_attraction(aid, formal=True)
+        with TestClient(app) as operator, TestClient(app) as member, TestClient(app) as screen:
+            login(operator, '9710010')
+            login(member, pid)
+            board = ok(operator.get('/api/rotation-board/board'))['day']
+            assert board['readOnly'] and board['status'] == 'live'
+            assert board['lines'][0]['posts'][0]['occ'] == '9710020'
+            personal = ok(member.get('/api/rotation-board/me'))
+            assert personal['readOnly'] and personal['person']['confirmationTokens'] == {}
+            assert ok(member.get('/api/rotation-board/confirmation', params={'token': token, 'date': work_date}))['result'] == receipt
+            attempt = member.post('/api/rotation-board/me/act', json={'action': 'depart', 'confirmation_token': 'b' * 64})
+            assert attempt.status_code == 409 and attempt.json()['detail'] == S.LEGACY_READ_ONLY
+            ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
+            assert ok(screen.get('/api/rotation-screen/state'))['day']['readOnly']
+            rejected = screen.post('/api/rotation-screen/act', json={
+                'action': 'depart', 'pid': pid, 'confirmation_token': 'b' * 64,
+            })
+            assert rejected.status_code == 409 and rejected.json()['detail'] == S.LEGACY_READ_ONLY
+            before = operator.post('/api/rotation-board/act', json={
+                'action': 'post', 'line': 'A1', 'i': 0, 'open': False, 'expected_snapshot': 'old-board',
+            })
+            assert before.status_code == 409 and before.json()['detail'] == S.LEGACY_READ_ONLY
+        with SessionLocal() as db:
+            db.info['rotation_formal'] = True
+            row = S.day_row(db, aid, work_date)
+            assert (row.version, row.state_json) == frozen
+    finally:
+        with SessionLocal() as db, S.transaction(db):
+            db.info['rotation_formal'] = True
+            S.save_day(db, S.day_row(db, aid, work_date), current)
+
+
 def test_personal_confirmation_updates_shared_formal_board_without_touching_sandbox():
     aid=seed_today()
     with TestClient(app) as cm,TestClient(app) as tr,TestClient(app) as other:
@@ -164,7 +205,7 @@ def test_personal_confirmation_updates_shared_formal_board_without_touching_sand
         with SessionLocal() as db:
             test_before=db.query(RotationEvent).count();test_cfg=db.query(RotationConfig).filter_by(attraction_id=aid).one().clock_json
         assert any(row['type']=='rotation_step' for row in ok(cm.get('/api/action-center'))['items'])
-        body={'action':'depart','pid':'9710000','confirmation_token':token}
+        body={'action':'depart','pid':'9710000','confirmation_token':token,'expected_line':own['person']['task']['line']}
         assert cm.post('/api/rotation-board/me/act',json={**body,'pid':'9710010'}).status_code==403
         result=ok(cm.post('/api/rotation-board/me/act',json=body))
         assert result['result']['line']=='A1' and result['result']['post']=='入口'
@@ -183,11 +224,10 @@ def test_personal_confirmation_updates_shared_formal_board_without_touching_sand
             assert not db.query(RotationDay).filter_by(attraction_id=aid,work_date=date.today().isoformat()).count()
 
 
-def seed_cohort(three=False, mixed=False):
-    with SessionLocal() as db:
-        aid=db.query(Attraction).filter_by(name='热力追踪').one().id
-        exists=db.query(F.RotationDay).filter_by(attraction_id=aid,work_date=date.today().isoformat()).first() is not None
-    if not exists: seed_today()
+def seed_cohort(three=False):
+    from app.rotation import forecast
+
+    aid = seed_today()
     with SessionLocal() as db:
         db.info['rotation_formal']=True
         with S.transaction(db):
@@ -195,10 +235,6 @@ def seed_cohort(three=False, mixed=False):
             state['persons']={pid:p for pid,p in state['persons'].items() if pid in {'9710000','9710010','9710020','9710030','9710040','9710050'}}
             t=datetime.now();now=t.hour*60+t.minute+t.second/60
             state['lastTick']=now
-            for person in state['persons'].values():
-                for field in ('_taskRefresh','entryHold','taskTimeout'):person.pop(field,None)
-            state['entryVotes']={};state['confirmations']={};state['rotationTasks']={}
-            state['closed']=False;state['hold101Active']=False;state.pop('assignmentBoard',None)
             state['plan'].update(crew={},seven={},push7=[])
             line=state['lines'][0];template=deepcopy(line['posts'][0])
             state['lines']=[line]
@@ -213,89 +249,18 @@ def seed_cohort(three=False, mixed=False):
                 state['persons'][no]=p;line['posts'][i].update(key='fixture-'+str(i),name='岗位'+str(i+1),occ=no,since=now-30)
                 p['continuousStart']=now-30
             for no in ['9710000','9710010']:
-                state['persons'][no].update(state='ready',start=int(now)-5,end=1440,readyAt=now-1,visited=[],
-                    line=None,lineStart=None,breakKind='rest',assign={'line':'A1','mode':'push','departAt':now-1})
-                state['persons'][no].pop('entryHold',None)
-            # These route fixtures explicitly stage a shift-end replacement.
-            state['persons']['9710000']['assign'].update(mode='chain',target='9710020',why='推下班',manual=True)
+                state['persons'][no].update(
+                    state='ready', start=int(now) - 5, end=1440, readyAt=now - 1, readySince=now - 1,
+                    visited=[], line=None, lineStart=None, continuousStart=None, breakKind='rest', assign=None,
+                )
             if three:
                 p=deepcopy(state['persons']['9710010']);p.update(pid='9710050',name='正式模拟TA_GSM0')
                 state['persons']['9710050']=p
             else:
                 state['persons'].pop('9710050',None)
-            if mixed:
-                state['persons']['9710000']['visited'] = ['A1']
-                state['persons']['9710010']['visited'] = ['B1']
-                state['persons']['9710010']['start'] -= 30
+            forecast.plan(S.engine_for(db, S.load_config(db, aid), row, state)[0], now)
             S.save_day(db,row,state)
     return aid
-
-
-def seed_departure_hint():
-    work_date = date.today().isoformat()
-    with SessionLocal() as db:
-        db.info['rotation_formal'] = True
-        with S.transaction(db):
-            aid = seed_cohort()
-            row = S.day_row(db, aid, work_date)
-            state = S.day_state(row)
-            now = state['lastTick']
-            state['persons']['9710000']['assign'] = {'line': 'A1', 'mode': 'push', 'departAt': now, 'manual': True}
-            state['persons']['9710010'].update(state='excluded', assign=None)
-            state['persons']['9710030'].update(end=now+32, continuousStart=now-90)
-            S.set_sim_clock(S.load_config(db, aid), work_date, now, paused=True)
-            S.save_day(db, row, state)
-    return aid, now
-
-
-def test_departure_hint_crosses_30_minutes_without_changing_the_issued_task(monkeypatch):
-    aid, now = seed_departure_hint()
-    clock = {'minute': now}
-    work_date = date.today().isoformat()
-    monkeypatch.setattr(S, 'clock_now', lambda cfg: (work_date, clock['minute']))
-    try:
-        with TestClient(app) as member, TestClient(app) as screen:
-            login(member, '9710000')
-            ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
-            before = ok(member.get('/api/rotation-board/me'))
-            first = before['person']
-            assert '回休息室' in first['departureRoutes'][-1]['to']
-            clock['minute'] = now + 2
-            board = ok(screen.get('/api/rotation/screen/state'))
-            assert board['version'] > before['version']
-            current = next(p for p in board['day']['persons'] if p['pid'] == first['pid'])
-            assert current['departureRoutes'][-1]['to'] == '下班'
-            assert ok(member.get('/api/rotation-board/me'))['person']['departureRoutes'] == current['departureRoutes']
-            assert current['confirmationTokens']['depart'] == first['confirmationTokens']['depart']
-            assert current['task']['id'] == first['task']['id']
-            assert current['task']['afterPosts'] == first['task']['afterPosts']
-            body = {'action': 'depart', 'confirmation_token': first['confirmationTokens']['depart']}
-            executed = ok(member.post('/api/rotation-board/me/act', json=body))
-            duplicate = ok(member.post('/api/rotation-board/me/act', json=body))
-            assert duplicate['duplicate'] and duplicate['result'] == executed['result']
-    finally:
-        with SessionLocal() as db:
-            db.info['rotation_formal'] = True
-            with S.transaction(db):
-                S.load_config(db, aid).clock_json = None
-
-
-def test_formal_personal_routes_survive_reload_and_commit_independently():
-    seed_cohort()
-    with TestClient(app) as a,TestClient(app) as b:
-        login(a,'9710000');login(b,'9710010')
-        av=ok(a.get('/api/rotation-board/me'))['person'];bv=ok(b.get('/api/rotation-board/me'))['person']
-        assert not av['entryGroup'] and av['task']['batch']==bv['task']['batch']
-        assert av['task']['id']!=bv['task']['id']
-        ab={'action':'depart','confirmation_token':av['confirmationTokens']['depart']}
-        bb={'action':'depart','confirmation_token':bv['confirmationTokens']['depart']}
-        assert ok(a.post('/api/rotation-board/me/act',json=ab))['result']['status']=='executed'
-        assert ok(a.post('/api/rotation-board/me/act',json=ab))['duplicate']
-        view=ok(b.get('/api/rotation-board/me'))['person']
-        assert view['state']=='ready' and view['confirmationTokens']['depart']==bb['confirmation_token']
-        assert ok(b.post('/api/rotation-board/me/act',json=bb))['result']['status']=='executed'
-        assert ok(a.get('/api/rotation-board/me'))['person']['post']=='岗位1'
-        assert ok(b.get('/api/rotation-board/me'))['person']['post']=='岗位2'
 
 
 def test_formal_no_group_controls_and_operator_confirm_is_personal_and_idempotent():
@@ -304,7 +269,8 @@ def test_formal_no_group_controls_and_operator_confirm_is_personal_and_idempoten
         login(member,'9710000');login(operator,'9710020')
         p=ok(member.get('/api/rotation-board/me'))['person']
         assert set(p['confirmationTokens'])=={'depart'}
-        personal={'action':'depart','pid':p['pid'],'confirmation_token':p['confirmationTokens']['depart']}
+        personal={'action':'depart','pid':p['pid'],'confirmation_token':p['confirmationTokens']['depart'],
+                  'expected_line':p['task']['line']}
         assert member.post('/api/rotation-board/me/act',json={**personal,'group_confirm':True}).status_code==403
         assert ok(operator.post('/api/rotation-board/act',json=personal))['result']['status']=='executed'
         assert ok(operator.post('/api/rotation-board/act',json=personal))['duplicate']
@@ -313,89 +279,18 @@ def test_formal_no_group_controls_and_operator_confirm_is_personal_and_idempoten
         assert all(next(x for x in ps if x['pid']==no)['state']=='ready' for no in ['9710010','9710050'])
 
 
-def test_forced_meal_placement_requires_preview_and_records_interruption():
-    aid=seed_cohort()
-    with SessionLocal() as db:
-        db.info['rotation_formal']=True
-        with S.transaction(db):
-            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
-            now=state['lastTick']
-            state['persons']['9710000'].update(state='meal',breakKind='meal',breakStart=now-5,
-                                               readyAt=now+30,ate=True,assign=None)
-            S.save_day(db,row,state)
-    with TestClient(app) as operator:
-        login(operator,'9710020')
-        body={'action':'move','pid':'9710000','line':'A1','i':0,'force':True,'reason':'现场应急支援'}
-        assert operator.post('/api/rotation-board/act',json=body).status_code==400
-        preview=ok(operator.post('/api/rotation-board/adjust/preview',json=body))
-        assert preview['summary']=='强制安排上岗'
-        ok(operator.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':preview['expected_snapshot']}))
-        ps=ok(operator.get('/api/rotation-board/board'))['day']['persons']
-        entrant=next(p for p in ps if p['pid']=='9710000')
-        original=next(p for p in ps if p['pid']=='9710020')
-        assert entrant['state']=='onpost' and entrant['interruptedBreak']['kind']=='meal'
-        assert original['state']=='walkback' and original['readyAt'] is None
-
-
-@pytest.mark.parametrize('action, expected_state', [('move', 'onpost'), ('away', 'away'), ('leave', 'done')])
-def test_pool_person_actions_replace_only_unconfirmed_task(action, expected_state):
-    if action == 'move':
-        seed_cross_line()
-    else:
-        seed_cohort()
-    with TestClient(app) as operator, TestClient(app) as member, TestClient(app) as screen:
-        login(operator, '9710020')
-        login(member, '9710000')
-        ok(screen.post('/api/login', json={'employee_no':'6666666','password':'1243'}))
-        own = ok(member.get('/api/rotation-board/me'))
-        person = own['person']
-        task = person['task']
-        assert task['status'] == 'assigned' and person['state'] == 'ready'
-        context = {'date': own['clock']['date'], 'state': person['state'],
-                   'task': task['id'], 'revision': task['revision']}
-        body = {'action': action, 'pid': person['pid'], 'pool_context': context,
-                'reason': '病假' if action == 'leave' else '现场支援'}
-        if action == 'move':
-            body.update(line='B1', i=0, force=True)
-            assert operator.post('/api/rotation-board/adjust/preview', json={
-                key: value for key, value in body.items() if key != 'pool_context'}).status_code == 400
-            assert member.post('/api/rotation-board/adjust/preview', json=body).status_code == 403
-            preview = ok(operator.post('/api/rotation-board/adjust/preview', json=body))
-            ok(operator.post('/api/rotation-board/adjust/act', json={**body, 'expected_snapshot': preview['expected_snapshot']}))
-        else:
-            assert operator.post('/api/rotation-board/act', json={
-                **body, 'pool_context': {**context, 'revision': task['revision']+1}}).status_code == 409
-            ok(operator.post('/api/rotation-board/act', json=body))
-        after = ok(member.get('/api/rotation-board/me'))['person']
-        assert after['state'] == expected_state and after['task'] is None
-        if action == 'move':
-            assert after['line'] == 'B1'
-            assert operator.post('/api/rotation-board/adjust/preview', json=body).status_code == 409
-        shared = ok(screen.get('/api/rotation/screen/state'))['day']['persons']
-        assert next(p for p in shared if p['pid'] == person['pid'])['state'] == expected_state
-        assert member.post('/api/rotation-board/me/act', json={
-            'action':'depart', 'confirmation_token':person['confirmationTokens']['depart']}).status_code == 409
-
-
-def test_formal_legacy_missing_flag_cannot_cancel_other_person_task():
-    seed_cohort()
-    with TestClient(app) as a,TestClient(app) as b:
-        login(a,'9710000');login(b,'9710010')
-        av=ok(a.get('/api/rotation-board/me'))['person'];bv=ok(b.get('/api/rotation-board/me'))['person']
-        body={'action':'depart','confirmation_token':bv['confirmationTokens']['depart'],'single':True,'missing':['9710000']}
-        assert ok(b.post('/api/rotation-board/me/act',json=body))['result']['status']=='executed'
-        current=ok(a.get('/api/rotation-board/me'))['person']
-        assert not current['entryHold'] and current['confirmationTokens']['depart']==av['confirmationTokens']['depart']
-        assert ok(a.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':av['confirmationTokens']['depart']}))['result']['status']=='executed'
-
-
 def test_personal_task_commit_failure_never_publishes_partial_posts(monkeypatch):
     aid=seed_cohort()
     with TestClient(app) as a,TestClient(app) as b:
         login(a,'9710000');login(b,'9710010')
-        first=ok(a.get('/api/rotation-board/me'))['person']['confirmationTokens']['depart']
-        ok(a.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':first}))
-        last=ok(b.get('/api/rotation-board/me'))['person']['confirmationTokens']['depart']
+        first = ok(a.get('/api/rotation-board/me'))['person']
+        ok(a.post('/api/rotation-board/me/act', json={
+            'action': 'depart', 'confirmation_token': first['confirmationTokens']['depart'],
+            'expected_line': first['task']['line'],
+        }))
+        last = ok(b.get('/api/rotation-board/me'))['person']
+        body = {'action': 'depart', 'confirmation_token': last['confirmationTokens']['depart'],
+                'expected_line': last['task']['line']}
         with runtime_for(formal=True).lock:
             with SessionLocal() as db:
                 db.info['rotation_formal']=True
@@ -406,7 +301,7 @@ def test_personal_task_commit_failure_never_publishes_partial_posts(monkeypatch)
                 def fail(): raise RuntimeError('cohort commit failed')
                 monkeypatch.setattr(db,'commit',fail)
                 with pytest.raises(RuntimeError,match='cohort commit failed'):
-                    S.do_live_action(db,aid,who,{'action':'depart','pid':employee.employee_no,'confirmation_token':last})
+                    S.do_live_action(db, aid, who, {**body, 'pid': employee.employee_no})
             with SessionLocal() as db:
                 db.info['rotation_formal']=True
                 row=S.day_row(db,aid,date.today().isoformat())
@@ -414,45 +309,7 @@ def test_personal_task_commit_failure_never_publishes_partial_posts(monkeypatch)
                 state=S.day_state(row)
                 assert state['persons']['9710000']['state']=='onpost'
                 assert state['persons']['9710010']['state']=='ready'
-        assert ok(b.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':last}))['result']['status']=='executed'
-
-
-def test_formal_upcoming_counts_do_not_move_posts_or_skip_opening_rest():
-    aid=seed_cohort()
-    with SessionLocal() as db:
-        db.info['rotation_formal']=True
-        row=S.day_row(db,aid,date.today().isoformat());cfg=S.load_config(db,aid)
-        state=S.day_state(row);eng,_=S.engine_for(db,cfg,row,state)
-        p=state['persons']['9710000'];p.update(state='notyet',start=600,end=1000,readyAt=None,assign=None)
-        assert not S.person_view(eng,p,569,{})['upcomingShift']
-        assert S.person_view(eng,p,570,{})['upcomingShift']
-        assert p['state']=='notyet' and p.get('line') is None
-        p.update(start=435)
-        assert S.person_view(eng,p,430,{})['scheduledRestStart']==435
-        assert not S.person_view(eng,p,405,{})['upcomingShift']
-        assert not S.person_view(eng,p,434,{})['upcomingShift']
-        p.update(start=420)
-        assert not S.person_view(eng,p,390,{})['upcomingShift']
-        p.update(start=450)
-        assert not S.person_view(eng,p,419.99,{})['upcomingShift']
-        assert S.person_view(eng,p,420,{})['upcomingShift']
-        assert not S.person_view(eng,p,450,{})['upcomingShift']
-
-
-def test_three_member_routes_preserve_special_relief_and_no_regroup_step():
-    seed_cohort(three=True)
-    with TestClient(app) as a,TestClient(app) as b,TestClient(app) as c:
-        login(a,'9710000');login(b,'9710010');login(c,'9710050')
-        av=ok(a.get('/api/rotation-board/me'))['person']
-        assert av['task']['mode']=='chain' and av['task']['entryPost']=='岗位1'
-        bv=ok(b.get('/api/rotation-board/me'))['person'];cv=ok(c.get('/api/rotation-board/me'))['person']
-        assert 'entry_adjust' not in bv['confirmationTokens']
-        assert bv['task']['batch']==cv['task']['batch']==av['task']['batch']
-        for client,p in [(c,cv),(b,bv),(a,av)]:
-            assert ok(client.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}))['result']['status']=='executed'
-        ps=ok(b.get('/api/rotation-board/board'))['day']['persons']
-        assert next(p for p in ps if p['pid']=='9710020')['state']=='done'
-        assert all(next(p for p in ps if p['pid']==no)['state']=='onpost' for no in ['9710000','9710010','9710050'])
+        assert ok(b.post('/api/rotation-board/me/act', json=body))['result']['status'] == 'executed'
 
 
 def test_upload_accepts_cross_circle_staff_and_formal_configuration_is_editable():
@@ -466,17 +323,6 @@ def test_upload_accepts_cross_circle_staff_and_formal_configuration_is_editable(
         assert response.status_code==200,response.text
         with SessionLocal() as db:
             assert db.query(Employee).filter_by(employee_no='9710001').one().attraction_id!=db.query(Employee).filter_by(employee_no='9710020').one().attraction_id
-
-
-def test_formal_manual_preview_is_required_and_stale_preview_is_rejected():
-    with TestClient(app) as cm,TestClient(app) as tr:
-        login(cm,'9710000');login(tr,'9710010')
-        body={'action':'post_order','line':'A1','i':0,'target_i':1}
-        assert cm.post('/api/rotation-board/adjust/preview',json=body).status_code==403
-        assert tr.post('/api/rotation-board/adjust/act',json=body).status_code==400
-        preview=ok(tr.post('/api/rotation-board/adjust/preview',json=body))
-        ok(tr.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':preview['expected_snapshot'],'notified':bool(preview['recent'])}))
-        assert tr.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':preview['expected_snapshot']}).status_code==409
 
 
 def test_formal_configuration_reuses_only_static_lines_and_settings():
@@ -574,20 +420,6 @@ def test_own_arrival_preserves_forced_meal_and_duplicate_protection():
         assert again['duplicate'] and first['result']['readyAt']==again['result']['readyAt']
 
 
-def test_mixed_returning_routes_and_receipts_are_consistent():
-    seed_cohort(mixed=True)
-    with TestClient(app) as a, TestClient(app) as b:
-        login(a,'9710000');login(b,'9710010')
-        av=ok(a.get('/api/rotation-board/me'))['person'];bv=ok(b.get('/api/rotation-board/me'))['person']
-        assert av['task']['batch']==bv['task']['batch']
-        assert av['assign']['entryPost']=='岗位1' and bv['assign']['entryPost']=='岗位2'
-        assert any(r['to']=='下班' for r in av['departureRoutes'])
-        assert any('回休息室' in r['to'] for r in bv['departureRoutes'])
-        for client,p in [(a,av),(b,bv)]:
-            receipt=ok(client.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}))['result']
-            assert receipt['status']=='executed' and receipt['post']==p['task']['entryPost']
-
-
 def seed_cross_line():
     aid = seed_cohort()
     with SessionLocal() as db:
@@ -602,29 +434,6 @@ def seed_cross_line():
             state['lines'] = [source, target]
             S.save_day(db, row, state)
     return aid
-
-
-def test_formal_cross_line_swap_preview_execution_and_permissions():
-    seed_cross_line()
-    with TestClient(app) as operator, TestClient(app) as cm:
-        login(operator, '9710010'); login(cm, '9710000')
-        body = {'action':'post_order', 'line':'A1', 'i':0, 'target_line':'B1', 'target_i':0, 'swapMode':'with_people'}
-        assert cm.post('/api/rotation-board/adjust/preview', json=body).status_code == 403
-        before = ok(operator.get('/api/rotation-board/board'))['day']
-        preview = ok(operator.post('/api/rotation-board/adjust/preview', json=body))
-        assert any('A1' in change and 'B1' in change for change in preview['changes'])
-        unchanged = ok(operator.get('/api/rotation-board/board'))['day']
-        assert before['lines'] == unchanged['lines']
-        result = operator.post('/api/rotation-board/adjust/act', json={**body, 'expected_snapshot':preview['expected_snapshot']})
-        ok(result)
-        after = ok(operator.get('/api/rotation-board/board'))['day']
-        lines = {line['id']:line for line in after['lines']}
-        assert lines['A1']['posts'][0]['occ'] == '9710040'
-        assert lines['B1']['posts'][0]['occ'] == '9710020'
-        assert lines['A1']['posts'][0]['name'] == 'B线岗位'
-        people = {p['pid']:p for p in after['persons']}
-        assert people['9710040']['line'] == 'A1' and people['9710020']['line'] == 'B1'
-        assert operator.post('/api/rotation-board/adjust/act', json={**body, 'expected_snapshot':preview['expected_snapshot']}).status_code == 409
 
 
 def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(monkeypatch):
@@ -654,11 +463,11 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
         ok(manager.post(path,json=body))
         after=ok(manager.get(path));board=ok(manager.get('/api/rotation-board/board'))['day']
         assert after['day']['lines']==board['lines']
-        assert ok(screen.get('/api/rotation/screen/state'))['day']['lines']==board['lines']
+        assert ok(screen.get('/api/rotation-screen/state'))['day']['lines']==board['lines']
         live_line={'action':'line','line':'B1','active':False,
             'line_context':{'date':clock['date'],'active':True,'planRevision':board['prestartPlanRevision']}}
         assert cm.post('/api/rotation-board/act',json=live_line).status_code==403
-        assert screen.post('/api/rotation/screen/act',json=live_line).status_code==403
+        assert screen.post('/api/rotation-screen/act',json=live_line).status_code==403
         assert manager.post('/api/rotation-board/act',json={
             'action':'line','line':'B1','active':False}).status_code==409
         assert manager.post('/api/rotation-board/act',json={
@@ -679,7 +488,7 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
             'revision':after['revision'],'plan_revision':after['plan_revision']}))
         after=ok(manager.get(path))
         board=ok(manager.get('/api/rotation-board/board'))['day']
-        assert after['day']['lines']==ok(screen.get('/api/rotation/screen/state'))['day']['lines']==board['lines']
+        assert after['day']['lines']==ok(screen.get('/api/rotation-screen/state'))['day']['lines']==board['lines']
         live_line['line_context']['planRevision']=board['prestartPlanRevision']
         clock['minute']=435
         assert manager.post('/api/rotation-board/act',json=live_line).status_code==409
@@ -689,7 +498,7 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
         started_payload=ok(manager.get('/api/rotation-board/board'))
         started=started_payload['day']
         personal=ok(cm.get('/api/rotation-board/me'))
-        assert personal['syncEpoch']==started_payload['syncEpoch']==ok(screen.get('/api/rotation/screen/state'))['syncEpoch']
+        assert personal['syncEpoch']==started_payload['syncEpoch']==ok(screen.get('/api/rotation-screen/state'))['syncEpoch']
         assert len(personal['syncEpoch'])==32
         assert personal['person']['continuousStart']==435
         assert personal['person']['state']=='onpost'
@@ -698,7 +507,7 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
         live_post=next(post for post in personal['line']['posts'] if post['occ']=='9710000')
         ok(manager.post('/api/rotation-board/act',json={'action':'rename_post','post_key':live_post['key'],'name':'现场测试新岗位'}))
         assert ok(cm.get('/api/rotation-board/me'))['person']['post']=='现场测试新岗位'
-        shared=ok(screen.get('/api/rotation/screen/state'))['day']
+        shared=ok(screen.get('/api/rotation-screen/state'))['day']
         assert next(p for p in shared['persons'] if p['pid']=='9710000')['post']=='现场测试新岗位'
         after_rename=ok(manager.get(path))
         assert after_rename['day']==frozen['day']
@@ -711,14 +520,14 @@ def test_formal_daily_prestart_sync_and_opening_freeze_keep_manager_permission(m
 
 
 def test_committed_live_view_cache_copies_results_and_invalidates_after_edit(monkeypatch):
-    from app.rotation import workflow as W
+    from app.rotation import forecast
     aid = seed_cohort()
     calls = []
-    original = W.task_view
+    original = forecast.task_view
     def counted(*args, **kwargs):
         calls.append(1)
         return original(*args, **kwargs)
-    monkeypatch.setattr(W, 'task_view', counted)
+    monkeypatch.setattr(forecast, 'task_view', counted)
     with SessionLocal() as db:
         db.info['rotation_formal'] = True
         with S.transaction(db):
@@ -740,220 +549,7 @@ def test_committed_live_view_cache_copies_results_and_invalidates_after_edit(mon
             assert next(p for p in changed['persons'] if p['pid'] == '9710000')['name'] == '修改后的模拟名称'
 
 
-def seed_assignment_window(remaining=2):
-    aid=seed_cross_line()
-    with SessionLocal() as db:
-        db.info['rotation_formal']=True
-        with S.transaction(db):
-            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
-            state.pop('assignmentBoard',None);state['closed']=False
-            for line in state['lines']:
-                line['active']=True
-                for post in line['posts']:
-                    post.update(open=True,opened=True,manual=False,openAt=None,closeAt=None)
-                    post.pop('hold',None)
-            for pid,minutes,line in [('9710000',remaining,'A1'),('9710010',10,'B1')]:
-                p=state['persons'][pid]
-                p.update(state='ready' if minutes<=0 else 'rest' if pid=='9710000' else 'meal',
-                         readyAt=now+minutes,breakStart=now-5,breakKind='rest' if pid=='9710000' else 'meal',
-                         assign={'line':line,'mode':'push','departAt':now+max(0,minutes),'manual':True})
-            S.save_day(db,row,state)
-    return aid
-
-
-def test_formal_issued_task_is_locked_but_closed_line_refreshes_destination():
-    seed_assignment_window()
-    with TestClient(app) as operator,TestClient(app) as cm:
-        login(operator,'9710020');login(cm,'9710000')
-        own=ok(cm.get('/api/rotation-board/me'))['person']
-        assert own['assignmentLocked'] and not own['canDepart']
-        assert cm.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':own['confirmationTokens']['depart']}).status_code==400
-        protected={'action':'reassign','pid':'9710000','line':'B1'}
-        assert operator.post('/api/rotation-board/act',json=protected).status_code==400
-        assert operator.post('/api/rotation-board/act',json={**protected,'pid':'9710010','line':'A1'}).status_code==200
-        board=ok(operator.get('/api/rotation-board/board'));people={p['pid']:p for p in board['day']['persons']}
-        assert people['9710000']['assign']['line']=='A1' and people['9710010']['assign']['line']=='A1'
-        assert not people['9710010']['canDepart']
-        ok(operator.post('/api/rotation-board/act',json={'action':'line','line':'A1','active':False,
-            'line_context':{'date':board['day']['date'],'active':True,'planRevision':None}}))
-        blocked=ok(cm.get('/api/rotation-board/me'))['person']
-        assert blocked['assign']['line']=='B1' and not blocked['assign'].get('blocked') and not blocked['canDepart']
-        assert blocked['readyAt']==own['readyAt'], 'refresh must not shorten rest'
-        assert blocked['task']['allowedAt']==own['task']['allowedAt']
-        assert blocked['task']['deadlineAt']==own['task']['deadlineAt']
-        body={'action':'move','pid':'9710000','line':'B1','i':0,'force':True,'reason':'原线路停用，现场核对后安排'}
-        # Refreshed valid tasks remain protected; a force flag cannot bypass rest.
-        assert operator.post('/api/rotation-board/adjust/preview',json=body).status_code==400
-        assert ok(cm.get('/api/rotation-board/me'))['person']['state']=='rest'
-
-
-@pytest.mark.parametrize('transferred',[False,True])
-@pytest.mark.parametrize('board_account',[None,'9710010','9710020'])
-def test_legacy_timeout_ack_excludes_screen_and_preserves_reclaim_rules(monkeypatch,transferred,board_account):
-    from app.rotation import workflow as W
-    aid=seed_cohort()
-    with SessionLocal() as db:
-        db.info['rotation_formal']=True
-        with S.transaction(db):
-            row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);now=state['lastTick']
-            eng,_=S.engine_for(db,S.load_config(db,aid),row,state)
-            W.plan(eng,now)  # Reproduce a task materialized before fixture setup.
-            p=state['persons']['9710000'];assert (p.get('assign') or {}).get('taskId')
-            state['rotationTasks']={};p['assign'].pop('taskId',None)
-            p['readyAt']=now-4;p['assign']['departAt']=now-4
-            state['persons']['9710010'].update(state='rest',readyAt=now+(2 if transferred else 10),assign=None)
-            W.plan(eng,now-4);original=W.task_for(eng,p);old_id=original['id'];W.tick(eng,now)
-            assert original['status']==('assigned' if transferred else 'waiting_transfer')
-            S.save_day(db,row,state)
-    monkeypatch.setattr(S,'clock_now',lambda cfg:(date.today().isoformat(),now))
-    with TestClient(app) as screen,TestClient(app) as cm,TestClient(app) as receiver:
-        if board_account:
-            login(screen,board_account)
-            endpoint='/api/rotation-board/act'
-        else:
-            ok(screen.post('/api/login',json={'employee_no':'6666666','password':'1243'}))
-            endpoint='/api/rotation/screen/act'
-        login(cm,'9710000');login(receiver,'9710010')
-        before=ok(cm.get('/api/rotation-board/me'))['person'];assert before['entryHold']
-        before_receiver=ok(receiver.get('/api/rotation-board/me'))['person']
-        body={'action':'entry_return','pid':'9710000','confirmation_token':before['confirmationTokens']['entry_return']}
-        assert cm.post('/api/rotation-board/me/act',json={**body,'pid':'9710010'}).status_code==403
-        if board_account:
-            assert screen.post(endpoint,json={**body,'confirmation_token':None}).status_code==400
-            assert screen.post(endpoint,json={**body,'confirmation_token':'0'*64}).status_code==409
-        else:
-            assert screen.post(endpoint,json=body).status_code==403
-            assert ok(cm.get('/api/rotation-board/me'))['person']['entryHold']
-        confirmer=screen if board_account else cm
-        confirm_endpoint=endpoint if board_account else '/api/rotation-board/me/act'
-        ok(confirmer.post(confirm_endpoint,json=body))
-        after=ok(cm.get('/api/rotation-board/me'))['person']
-        assert not after['entryHold'] and after['state']=='ready' and after['readyAt']==now
-        assert after['canDepart'] and after['task']['allowedAt']==now and after['task']['deadlineAt']==now+3
-        assert (after['task']['id']!=old_id) is transferred
-        if transferred:
-            peer=ok(receiver.get('/api/rotation-board/me'))['person']
-            assert peer['task']==before_receiver['task']
-            assert peer['confirmationTokens']==before_receiver['confirmationTokens']
-        else:
-            assert after['task']['transferredFromName'] is None
-        assert ok(confirmer.post(confirm_endpoint,json=body))['duplicate']
-        again=ok(cm.get('/api/rotation-board/me'))['person']
-        assert again['task']==after['task'] and again['readyAt']==now
-        ok(cm.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':again['confirmationTokens']['depart']}))
-        assert ok(cm.get('/api/rotation-board/me'))['person']['state']=='onpost'
-
-
-def test_shift_end_marker_refreshes_board_and_screen_without_a_new_task(monkeypatch):
-    aid = seed_cohort()
-    work_date = date.today().isoformat()
-    with SessionLocal() as db:
-        db.info['rotation_formal'] = True
-        with S.transaction(db):
-            row = S.day_row(db, aid, work_date)
-            state = S.day_state(row)
-            now = state['lastTick']
-            for pid in ('9710000', '9710010'):
-                state['persons'][pid].update(state='excluded', assign=None)
-            state['persons']['9710020']['end'] = now + 26
-            S.save_day(db, row, state)
-
-    clock = {'minute': now}
-    monkeypatch.setattr(S, 'clock_now', lambda cfg: (work_date, clock['minute']))
-    with TestClient(app) as operator, TestClient(app) as screen:
-        login(operator, '9710020')
-        ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
-
-        def snapshot(client, endpoint):
-            data = ok(client.get(endpoint))
-            people = data['day']['persons']
-            return data['version'], next(p for p in people if p['pid'] == '9710020'), people
-
-        before, target, _ = snapshot(operator, '/api/rotation-board/board')
-        assert target['preparing'] is None
-        clock['minute'] = now + 1
-        for client, endpoint in [(operator, '/api/rotation-board/board'), (screen, '/api/rotation/screen/state')]:
-            version, target, people = snapshot(client, endpoint)
-            assert version > before
-            assert target['preparing'] == '推下班' and target['state'] == 'onpost'
-            assert not any(p['task'] for p in people)
-
-
-def test_arrival_hint_refreshes_both_boards_at_actual_30_minute_boundary(monkeypatch):
-    aid = seed_cohort()
-    work_date = date.today().isoformat()
-    with SessionLocal() as db:
-        db.info['rotation_formal'] = True
-        with S.transaction(db):
-            row = S.day_row(db, aid, work_date)
-            state = S.day_state(row)
-            now = state['lastTick']
-            state['persons']['9710000'].update(state='walkback', assign=None, end=now+32,
-                                               walkbackSince=now, after='done', arriveAnchor=None)
-            state['persons']['9710010'].update(state='excluded', assign=None)
-            eng, _ = S.engine_for(db, S.load_config(db, aid), row, state)
-            S.sync_notices(db, aid, state, eng, now)
-            S.save_day(db, row, state)
-
-    clock = {'minute': now}
-    monkeypatch.setattr(S, 'clock_now', lambda cfg: (work_date, clock['minute']))
-    with TestClient(app) as operator, TestClient(app) as screen, TestClient(app) as member:
-        login(operator, '9710020')
-        ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
-        readers = [(operator, '/api/rotation-board/board'), (screen, '/api/rotation/screen/state')]
-        login(member, '9710000')
-        versions = []
-        for minute, expected in [(now, None), (now+2, 'done')]:
-            clock['minute'] = minute
-            for client, endpoint in readers:
-                data = ok(client.get(endpoint))
-                versions.append(data['version'])
-                p = next(p for p in data['day']['persons'] if p['pid'] == '9710000')
-                assert p['state'] == 'walkback' and p['after'] == 'done'
-                assert p['arrivalOutcome'] == expected
-            own = ok(member.get('/api/rotation-board/me'))
-            assert own['person']['arrivalOutcome'] == expected
-            notice = next(n for n in own['notices'] if n['status'] == 'open' and n['kind'] == 'arrive')
-            assert ('确认后即可下班' in notice['body']) is (expected == 'done')
-        assert min(versions[2:]) > max(versions[:2])
-        body = {'action': 'arrive', 'pid': p['pid'], 'confirmation_token': p['confirmationTokens']['arrive'],
-                'expected_arrival_outcome': None}
-        stale = member.post('/api/rotation-board/me/act', json=body)
-        assert stale.status_code == 409
-        assert screen.post('/api/rotation/screen/act', json=body).status_code == 409
-        assert ok(member.get('/api/rotation-board/me'))['person']['state'] == 'walkback'
-        confirmed = ok(screen.post('/api/rotation/screen/act', json={**body, 'expected_arrival_outcome': 'done'}))
-        assert confirmed['result']['state'] == 'done'
-        duplicate = ok(member.post('/api/rotation-board/me/act', json=body))
-        assert duplicate['duplicate'] and duplicate['result'] == confirmed['result']
-
-
-def test_screen_666_uses_formal_board_and_has_only_rotation_confirmation_permission():
-    seed_cohort()
-    with TestClient(app) as screen,TestClient(app) as cm:
-        login(screen,'9710020')
-        assert screen.get('/api/me').status_code==200
-        ok(screen.post('/api/login',json={'employee_no':'6666666','password':'1243'}))
-        login(cm,'9710000')
-        who=ok(screen.get('/api/rotation/whoami'));assert who['kind']=='screen' and not who['test_mode']
-        own=ok(cm.get('/api/rotation-board/me'))['person']
-        shared=ok(screen.get('/api/rotation/screen/state'))
-        p=next(p for p in shared['day']['persons'] if p['pid']==own['pid'])
-        assert shared['formal'] and p['task']['id']==own['task']['id']
-        for endpoint in ['/api/me','/api/rotation-board/board','/api/rotation/config','/api/rotation/accounts']:
-            assert screen.get(endpoint).status_code in (401,403)
-        for action in ['move','rename_post','hold101','restore_line','set_close']:
-            assert screen.post('/api/rotation/screen/act',json={'action':action}).status_code==403
-            assert screen.post('/api/rotation/act',json={'action':action}).status_code==403
-        assert screen.post('/api/rotation/test-clock',json={'action':'reset'}).status_code in (403,404)
-        body={'action':'depart','pid':p['pid'],'confirmation_token':p['confirmationTokens']['depart']}
-        assert ok(screen.post('/api/rotation/screen/act',json=body))['result']['status']=='executed'
-        assert ok(cm.get('/api/rotation-board/me'))['person']['state']=='onpost'
-        assert ok(cm.post('/api/rotation-board/me/act',json=body))['duplicate']
-
-
 def test_formal_undo_rest_and_cross_line_dependency_with_stale_and_receipt_protection(monkeypatch):
-    from app.rotation import workflow as W
     aid=seed_cross_line()
     with SessionLocal() as db:
         db.info['rotation_formal']=True
@@ -964,13 +560,14 @@ def test_formal_undo_rest_and_cross_line_dependency_with_stale_and_receipt_prote
         board=ok(operator.get('/api/rotation-board/board'))
         own=ok(cm.get('/api/rotation-board/me'))['person']
         token=own['confirmationTokens']['depart']
-        ok(cm.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':token}))
-        # Move this entrant cross-line after departure. Undo of A1 must include B1 too.
-        body={'action':'move','pid':'9710000','line':'B1','i':0}
-        preview=ok(operator.post('/api/rotation-board/adjust/preview',json=body))
-        assert preview['recent'] and preview['recent'][0]['pid']=='9710000'
-        assert operator.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':preview['expected_snapshot']}).status_code==400
-        ok(operator.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':preview['expected_snapshot'],'notified':True}))
+        ok(cm.post('/api/rotation-board/me/act', json={
+            'action': 'depart', 'confirmation_token': token, 'expected_line': own['task']['line'],
+        }))
+        board = ok(operator.get('/api/rotation-board/board'))['day']
+        ok(operator.post('/api/rotation-board/act', json={
+            'action': 'place', 'pid': '9710000', 'line': 'B1', 'i': 0, 'place_mode': 'swap',
+            'expected_snapshot': board['forecastSnapshot'],
+        }))
         undo=ok(operator.post('/api/rotation-board/undo/preview',json={'line':'A1'}))
         assert set(undo['related_lines'])=={'A1','B1'} and undo['before_lines']!=undo['after_lines']
         restore={'action':'restore_line','line':'A1','checkpoint':undo['checkpoint'],'expected_snapshot':undo['expected_snapshot'],'notified':True}
@@ -1003,13 +600,10 @@ def test_post_rename_keeps_task_token_and_101_binding_and_cancel_does_not_refres
         ok(operator.post('/api/rotation-board/act',json={'action':'hold101','on':True}))
         board=ok(operator.get('/api/rotation-board/board'))
         assert board['day']['lines'][0]['posts'][0]['hold101']
-        before={p['pid']:p['task'] for p in board['day']['persons'] if p.get('task')}
         ok(operator.post('/api/rotation-board/act',json={'action':'hold101','on':False}))
         after=ok(operator.get('/api/rotation-board/board'))
-        after_tasks={p['pid']:p['task'] for p in after['day']['persons'] if p.get('task')}
-        for pid,task in before.items():
-            assert after_tasks[pid]['id']==task['id'] and after_tasks[pid]['revision']==task['revision']
-            assert after_tasks[pid]['deadlineAt']==task['deadlineAt']
+        assert not after['day']['lines'][0]['posts'][0]['hold101']
+        assert after['day']['lines'][0]['posts'][0]['key'] == key
 
 
 @pytest.mark.parametrize('choice',['rest','meal'])
@@ -1032,7 +626,9 @@ def test_line_restore_cancels_confirmed_rest_or_meal_and_restores_continuous_tim
         outgoing=next(r['pid'] for r in p['task']['routes'] if '下岗' in r['to'])
         before=ok(manager.get('/api/rotation-board/board'))['day']
         original=next(q for q in before['persons'] if q['pid']==outgoing)
-        ok(tr.post('/api/rotation-board/me/act',json={'action':'depart','confirmation_token':p['confirmationTokens']['depart']}))
+        ok(tr.post('/api/rotation-board/me/act', json={
+            'action': 'depart', 'confirmation_token': p['confirmationTokens']['depart'], 'expected_line': p['task']['line'],
+        }))
         state=ok(manager.get('/api/rotation-board/board'))['day']
         q=next(q for q in state['persons'] if q['pid']==outgoing)
         if choice=='meal':assert q['mealOptions']['required']==1 and q['mealOptions']['canChoose']
@@ -1049,29 +645,6 @@ def test_line_restore_cancels_confirmed_rest_or_meal_and_restores_continuous_tim
         assert manager.post('/api/rotation-board/act',json=room).status_code==409
 
 
-def test_restore_scheduled_closure_after_it_executed_restores_occupant_state(monkeypatch):
-    aid=seed_cohort()
-    with SessionLocal() as db:
-        db.info['rotation_formal']=True
-        state=S.day_state(S.day_row(db,aid,date.today().isoformat()));minute=int(state['lastTick'])
-    time={'now':float(minute)}
-    monkeypatch.setattr(S,'clock_now',lambda cfg:(date.today().isoformat(),time['now']))
-    with TestClient(app) as operator:
-        login(operator,'9710020')
-        close=minute+1;body={'action':'post','line':'A1','i':0,'open':False,'closeAt':f'{close//60:02d}:{close%60:02d}','closeMode':'direct'}
-        p=ok(operator.post('/api/rotation-board/adjust/preview',json=body))
-        ok(operator.post('/api/rotation-board/adjust/act',json={**body,'expected_snapshot':p['expected_snapshot']}))
-        time['now']=close+.1
-        board=ok(operator.get('/api/rotation-board/board'))['day']
-        assert not board['lines'][0]['posts'][0]['open']
-        assert next(p for p in board['persons'] if p['pid']=='9710020')['state']=='walkback'
-        undo=ok(operator.post('/api/rotation-board/undo/preview',json={'line':'A1'}))
-        ok(operator.post('/api/rotation-board/act',json={'action':'restore_line','line':'A1','checkpoint':undo['checkpoint'],'expected_snapshot':undo['expected_snapshot'],'notified':True}))
-        board=ok(operator.get('/api/rotation-board/board'))['day']
-        assert board['lines'][0]['posts'][0]['open'] and board['lines'][0]['posts'][0]['occ']=='9710020'
-        assert next(p for p in board['persons'] if p['pid']=='9710020')['state']=='onpost'
-
-
 def test_personal_open_notice_projection_hides_legacy_forecast_without_changing_history():
     aid=seed_cohort()
     with SessionLocal() as db:
@@ -1079,8 +652,10 @@ def test_personal_open_notice_projection_hides_legacy_forecast_without_changing_
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             now=state['lastTick'];p=state['persons']['9710000']
-            p.update(state='rest',readyAt=now+45,assign={'line':'A1','mode':'push','departAt':now+80})
-            state['rotationTasks']={}
+            from app.rotation import forecast
+            p.update(state='rest', readyAt=now + 15)
+            cfg = S.load_config(db, aid)
+            forecast.plan(S.engine_for(db, cfg, row, state)[0], now)
             S.save_day(db,row,state)
             Notice=F.RotationNotice
             db.query(Notice).filter_by(attraction_id=aid,work_date=row.work_date,employee_no=p['pid']).delete()
@@ -1092,7 +667,7 @@ def test_personal_open_notice_projection_hides_legacy_forecast_without_changing_
         data=S.member_payload(db,aid,'9710000')
         assert data['taskWorkflow'] is True
         open_notice=next(n for n in data['notices'] if n['id']==old_id)
-        assert '正式任务' in open_notice['body'] and '旧岗位' not in open_notice['body']
+        assert '最新站位' in open_notice['body'] and '旧岗位' not in open_notice['body']
         assert next(n for n in data['notices'] if n['id']==done_id)['body']=='保留的历史正文'
         assert db.get(Notice,old_id).body=='预计进入A1线旧岗位'
         assert db.get(Notice,done_id).body=='保留的历史正文'
@@ -1118,7 +693,7 @@ def test_shift_end_reaches_formal_board_lounge_screen_and_personal_todo(monkeypa
         login(member, '9710000')
         ok(screen.post('/api/login', json={'employee_no': '6666666', 'password': '1243'}))
         board_path = '/api/rotation-board/board'
-        screen_path = '/api/rotation/screen/state'
+        screen_path = '/api/rotation-screen/state'
         assert ok(manager.get(board_path))['day']['rotationEnd'] == 13 * 60
         assert ok(screen.get(screen_path))['day']['status'] == 'live'
         clock['minute'] = 13 * 60

@@ -26,10 +26,6 @@ WAITING_TO_REST = {'pending', 'walkback', 'op'}
 UNSPECIFIED_ROUTE = object()
 
 
-def enabled(eng):
-    return eng.d.get('ruleVersion') == 2
-
-
 def upgrade_opening_requests(state):
     """Previously saved V2 days only identified the line, not its new slot."""
     changed = False
@@ -507,11 +503,32 @@ def post_comparison(eng, line):
              'hold': bool(x.get('hold') or x.get('hold101'))} for x in line['posts']]
 
 
+def locate_post(eng, key):
+    for line in eng.d['lines']:
+        for index, post in enumerate(line['posts']):
+            if post.get('key') == key:
+                return line, index, post
+    return None, None, None
+
+
+def route_view(eng, moves):
+    def label(key, fallback):
+        _, _, post = locate_post(eng, key) if key else (None, None, None)
+        return post['name'] if post else fallback
+
+    outcomes = {'rest': '下岗，回休息室确认休息／吃饭', 'done': '下班', 'away': '出圈', 'sick': '病假'}
+    return [
+        {'pid': move['pid'], 'name': eng.P[move['pid']]['name'],
+         'from': label(move['from'], '待上岗'),
+         'to': label(move['to'], outcomes.get(move.get('outcome'), '下岗'))}
+        for move in moves
+    ]
+
+
 def task_view(eng, p, now):
     a = p.get('assign')
     if not a:
         return None
-    from app.rotation import workflow as W
     at = max(now, readiness(p), a.get('notBefore', 0))
     try:
         moves = route(eng, a, at)
@@ -528,24 +545,28 @@ def task_view(eng, p, now):
         for post in after:
             if post['key'] == move['to']:
                 post.update(occ=move['pid'], occName=eng.P[move['pid']]['name'])
-    fake = {'moves': moves, 'status': 'forecast', 'template': a}
     return {'id': p['pid'], 'revision': p.get('confirmationSequence', 0), 'batch': str(math.floor(readiness(p))),
             'batchSize': a.get('batchSize', 1), 'line': a['line'], 'entryPost': next(x['name'] for x in before if x['key'] == moves[0]['to']),
             'sortAt': float(line.get('sortAt', 0)), 'participatingPosts': len(indexes(line, at)), 'reason': a['why'],
             'allowedAt': a.get('allowedAt', readiness(p)), 'deadlineAt': deadline(eng, p, now, a.get('notBefore', 0)), 'status': 'forecast',
-            'kind': a['kind'], 'mode': a['mode'], 'routes': W.route_view(eng, fake), 'beforePosts': before, 'afterPosts': after,
+            'kind': a['kind'], 'mode': a['mode'], 'routes': route_view(eng, moves), 'beforePosts': before, 'afterPosts': after,
             'push7Route': hashlib.sha256(json.dumps(moves, sort_keys=True).encode()).hexdigest()
             if a['kind'] == 'push7' else None,
             'transferredFromName': None}
 
 
+def finish_continuous(p, now):
+    start = p.get('continuousStart')
+    if start is not None:
+        p.update(lastContinuousMinutes=max(0, now - start), continuousStart=None)
+
+
 def remove(eng, p, now):
-    from app.rotation import workflow as W
     line, i = eng.find_post(p['pid'])
     if line is not None:
         eng._leave_line(p, line, i, max(now, p.get('lineStart') or now))
         line['posts'][i]['occ'] = None
-    W.finish_continuous(p, max(now, p.get('continuousStart') or now))
+    finish_continuous(p, max(now, p.get('continuousStart') or now))
     p.update(assign=None, line=None, arriveAnchor=None, readySince=None)
     p.pop('batchOnPost', None)
     p.pop('directShiftEntry', None)
@@ -620,8 +641,13 @@ def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, a
     plan(eng, now)
 
 
+def clear_completed_seven_badges(target, relief):
+    target['flags'] = [flag for flag in target.get('flags', []) if flag not in ('7点岗', '推7点下来')]
+    target['sevenReplaced'] = True
+    relief['flags'] = [flag for flag in relief.get('flags', []) if flag != '推7点']
+
+
 def execute_moves(eng, p, assignment, moves, now, actor, manual=False, source_key=None, *, base=None):
-    from app.rotation import workflow as W
     line = eng.line(assignment['line'])
     ix = indexes(line, now)
     target_index = next((i for i in ix if line['posts'][i].get('occ') == assignment.get('target')), None)
@@ -641,7 +667,7 @@ def execute_moves(eng, p, assignment, moves, now, actor, manual=False, source_ke
             eng._leave_line(q, oldline, i, stamp)
             post['occ'] = None
         if not move['to']:
-            W.finish_continuous(q, stamp)
+            finish_continuous(q, stamp)
             outcome = move.get('outcome', 'rest')
             if outcome == 'rest' and not q.get('manualRestored') and finishes_on_exit(eng, q, now):
                 outcome = 'done'
@@ -668,11 +694,11 @@ def execute_moves(eng, p, assignment, moves, now, actor, manual=False, source_ke
         target = eng.P[assignment['target']]
         completion = uuid4().hex
         target['push7Completion'] = {'id': completion, 'owner': p['pid'], 'at': now}
-        W.clear_completed_seven_badges(eng, {'template': {'mode': 'push7', 'target': target['pid']}}, p['pid'])
+        clear_completed_seven_badges(target, p)
     elif manual:
         for move in moves:
             if not move['to'] and '7点岗' in eng.P[move['pid']].get('flags', []):
-                W.clear_completed_seven_badges(eng, {'template': {'mode': 'push7', 'target': move['pid']}}, p['pid'])
+                clear_completed_seven_badges(eng.P[move['pid']], p)
         p['flags'] = [flag for flag in p.get('flags', []) if flag != '推7点']
     if update_sort and not manual:
         set_sort_time(line, stamp, base)

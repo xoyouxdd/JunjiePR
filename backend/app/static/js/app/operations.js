@@ -1,11 +1,11 @@
 // Action-center, operations health and change history.
 import { api, json } from './api.js';
 import { announcementWorkspaces, setAnnouncementBadge } from './announcement-state.js';
-import { beginViewRequest, render, registerPageCleanup } from './context.js';
+import { beginViewRequest, render } from './context.js';
 import { mountExportTasks } from './export-tasks.js';
 import { confirmModal } from './dialogs.js';
 import { esc } from './format.js';
-import { menuItems, navIcon, refreshActionBadge, renderTabs, setActionBadge, notifyRotationTimeoutCases } from './navigation.js';
+import { menuItems, navIcon, refreshActionBadge, renderTabs, setActionBadge } from './navigation.js';
 import { workItemDetailsHtml } from './records.js';
 import { bindUpgradeReviewActions, upgradeReviewWorkspace, bindUpgradeRecoveryActions, upgradeRecoveryCards } from './reviews.js';
 import { app, has, state } from './state.js';
@@ -110,7 +110,6 @@ async function renderActionCenter(openPane){
     ? `<p class="review-overdue-reminder">你当前可复核的签卡中，有 <strong>${overdueCount} 条</strong> 已等超过 48 小时。</p>`
     : '';
   setActionBadge(total);
-  notifyRotationTimeoutCases(data.rotation_timeout_cases||[]);
   if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
   const severityOrder={critical:0,warning:1,info:2};
   const visibleItems=items.filter(item=>item.type!=='rotation_step').sort((a,b)=>(severityOrder[a.severity]??3)-(severityOrder[b.severity]??3));
@@ -145,12 +144,6 @@ button.textContent='收起';button.setAttribute('aria-expanded','true');host.que
   }host.scrollIntoView({behavior:'smooth',block:'nearest'});}catch(error){toast(error.message,true)}finally{button.disabled=false;}});
   if(isUpgradeReviewer)bindUpgradeReviewActions(app,()=>renderActionCenter('review'));
   bindUpgradeRecoveryActions(app,recoveryData,()=>renderActionCenter('review'));
-  if(state.me.base_role_code==='TR'||state.me.role_code==='TR'){
-    const host=document.createElement('section');host.className='panel section-gap';host.setAttribute('aria-label','轮岗协助授权');app.append(host);
-    let busy=false;
-    const update=async()=>{if(busy||!request.isCurrent())return;busy=true;try{const result=await api('/api/rotation/adjust/mine');if(!request.isCurrent())return;host.hidden=!result.items?.length;host.innerHTML=`<h3>轮岗协助授权 · 测试</h3>${(result.items||[]).map(g=>`<article><strong>操作码 ${esc(g.code)}</strong><p>${esc(g.issuer)}授权 · 有效至 ${esc(new Date(g.expires_at).toLocaleTimeString())}</p><p>授权期内拥有与LEAD相同的本圈现场调整权限。大屏登录调整选择TR，输入本人账号与操作码。</p></article>`).join('')}`;}catch(_){host.hidden=true;}finally{busy=false;}};
-    await update();const timer=setInterval(update,10000);registerPageCleanup(()=>clearInterval(timer));
-  }
 }
 
 function operationsBackupHtml(backup){
