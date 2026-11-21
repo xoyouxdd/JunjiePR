@@ -172,7 +172,9 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in hr['release']['items']] == [CURRENT_RELEASE_NOTE]
+        assert [item['summary'] for item in hr['release']['items']] == [
+            CURRENT_RELEASE_NOTE, "声明补材料流程更新", "安排仓库负责人",
+        ]
         assert hr['read'] is False
         client.post("/api/logout")
         login(client, "TRTEST01")
