@@ -33,7 +33,10 @@ function readGraph(file, ancestors = []) {
   if (graph.has(file)) return;
   assert(file.startsWith(staticRoot + path.sep), `Module escapes static root: ${file}`);
   const source = fs.readFileSync(file, 'utf8');
-  const dependencies = [...source.matchAll(/^import\s+.*?from\s+['"]([^'"]+)['"];?$/gm)]
+  const dependencies = [
+    ...source.matchAll(/^import\s+.*?from\s+['"]([^'"]+)['"];?$/gm),
+    ...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
+  ]
     .map(match => path.resolve(path.dirname(file), match[1]));
   graph.set(file, dependencies);
   for (const dependency of dependencies) readGraph(dependency, [...ancestors, file]);
