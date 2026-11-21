@@ -103,6 +103,11 @@ async function fixtureRequest(request, response) {
     sendJson(response, ['publisher','trainer'].includes(mode) ? {...user, role_code: mode === 'trainer' ? 'TR' : 'GSM', base_role_code: mode === 'trainer' ? 'TR' : 'GSM', role_codes: [mode === 'trainer' ? 'TR' : 'GSM']} : mode === 'member' ? {...user, name: '测试员工', role_code: 'CM', base_role_code: 'CM',
       role_name: 'CM', permissions: ['SELF_RECOGNITION']} : {...user, must_change_password: mode === 'password'});
   }
+  else if (route === '/api/warehouse/bootstrap') sendJson(response, {
+    operator: {id: user.id, name: user.name},
+    permissions: {manage_assignments:true,manage_warehouse:false,dispatch:false},
+    managers: [], positions: [], items: [],
+  });
   else if (route === '/api/options') sendJson(response, options);
   else if (route === '/api/scoring/recognition-options') sendJson(response, options.recognition_types);
   else if (route === '/api/scoring/deduction-options') sendJson(response, {types:options.deduction_types,levels:options.deduction_levels});
@@ -296,6 +301,16 @@ async function main() {
       await page.locator('#app h2').filter({hasText: '今日工作'}).waitFor();
       await page.waitForTimeout(650);
       assert.deepEqual(await page.evaluate(() => [window.fixtureTimerFired, window.fixtureCleanupFired]), [false, true]);
+      assert(!loadedModules.some(url => new URL(url).pathname.endsWith('/warehouse.js')));
+      await page.evaluate(async () => {
+        const imports = JSON.parse(document.querySelector('script[type="importmap"]').textContent).imports;
+        const {state} = await import(imports['./static/js/app/state.js']);
+        const {render} = await import(imports['./static/js/app/context.js']);
+        state.me.warehouse_entry = true;
+        state.tab = 'warehouse';
+        await render();
+      });
+      await page.locator('#app .wh-home-layout').waitFor();
       assert.equal(new Set(loadedModules.map(url => new URL(url).pathname)).size, moduleFiles.length);
       assert(loadedModules.every(url => new URL(url).searchParams.get('v') === version), 'All module requests must use the shell cache version');
       assert.deepEqual(await page.evaluate(() => window.fixtureCspViolations), [], 'App and import map must load under the production CSP');
