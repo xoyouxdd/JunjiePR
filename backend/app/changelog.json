@@ -1,6 +1,10 @@
 [
   {"version": "2026.11.22.1", "date": "2026-11-22", "status": "candidate", "items": [
-    {"summary": "轮岗提醒与登记流程更新", "detail": "完善轮岗签到提醒、接替与撤岗流程，新增物资管理试用和 POC 批量认可，并完善声明补材料及事件日与生效日的区分。", "audiences": ["all"]}
+    {"summary": "轮岗提醒与登记流程更新", "detail": "完善轮岗签到提醒、接替与撤岗流程。登记记录区分事件日期和处分生效日期。", "audiences": ["all"]},
+    {"summary": "声明补材料流程更新", "detail": "在声明登记统计中核对需补材料的记录及其处理状态。", "audiences": ["all"], "permissions": ["DECLARATION_STATS_VIEW"]},
+    {"summary": "物资管理试用", "detail": "具备收发资格的账号可查看物资与货位并办理出库。已安排的仓库负责人可办理入库、盘点及账实核对。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]},
+    {"summary": "安排仓库负责人", "detail": "在物资管理中安排或移除具备资格的仓库负责人。", "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]},
+    {"summary": "POC 特别贡献支持批量发放", "detail": "使用 Excel 模板导入认可，逐行核对收件人、周期及分值后整批发送。", "audiences": ["TA_GSM", "GSM", "AM", "OM"], "permissions": ["POC_ISSUE"]}
   ]},
   {"version": "2026.11.19.6", "date": "2026-11-19", "status": "candidate", "items": [
     {"summary": "轮岗签到、导出重试与月结检查", "detail": "轮岗更新班前签到、交接提示及未答到标记。景点统计制作中断时可按原条件重试。月结清单可查看各项待处理记录。", "audiences": ["all"]}

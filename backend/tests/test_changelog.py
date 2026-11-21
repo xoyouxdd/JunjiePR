@@ -119,8 +119,18 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" not in cm_text
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
-    assert [item["summary"] for item in admin[0]["items"]] == [CURRENT_RELEASE_NOTE]
-    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [CURRENT_RELEASE_NOTE]
+    assert [item["summary"] for item in admin[0]["items"]] == [
+        CURRENT_RELEASE_NOTE, "声明补材料流程更新", "安排仓库负责人",
+    ]
+    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [
+        CURRENT_RELEASE_NOTE, "物资管理试用",
+    ]
+    assert [item["summary"] for item in gsm[0]["items"]] == [
+        CURRENT_RELEASE_NOTE, "物资管理试用", "POC 特别贡献支持批量发放",
+    ]
+    assert "POC 特别贡献支持批量发放" not in {
+        item["summary"] for item in visible_releases("GSM", set())[0]["items"]
+    }
     assert '员工导入占用工号支持预检后跳过' not in cm_text
     assert '员工导入占用工号支持预检后跳过' not in gsm_text
 

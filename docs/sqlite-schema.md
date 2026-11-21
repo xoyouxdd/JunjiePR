@@ -924,8 +924,9 @@
 | `deduction_level_id` | INTEGER | 否 | FK → `deduction_levels.id` |
 | `deduction_level_name` | VARCHAR(30) | 否 | |
 | `points` | NUMERIC(10,2) | 否 | |
-| `occurred_on` | VARCHAR(10) | 否 | |
-| `deduction_month` | VARCHAR(7) | 否 | |
+| `occurred_on` | VARCHAR(10) | 否 | 处分生效日期，旧记录沿用原日期 |
+| `incident_on` | VARCHAR(10) | 是 | 与生效日分开保存的原事件日期 |
+| `deduction_month` | VARCHAR(7) | 否 | 生效日期归属月份 |
 | `description` | TEXT | 否 | |
 | `document_file_id` | INTEGER | 否 | FK → `stored_files.id` |
 | `submitter_id` | INTEGER | 否 | FK → `employees.id` |
