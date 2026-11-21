@@ -164,15 +164,17 @@ def test_paused_rest_meal_manual_placement_and_records_use_simulated_seconds(man
         assert events and all(e.minute == pytest.approx(original + 1) for e in events)
 
 
-def test_fast_forward_does_not_confirm_and_exact_three_minutes_expires(manager):
+def test_fast_forward_does_not_confirm_and_exact_one_minute_expires(manager):
     clock(manager, 'set', date=DAY, time='07:30:12')
     pid = ready(manager, 1)
     clock(manager, 'jump', minutes=1)
     p = find(board(manager), pid)
     assert p['canDepart'] and p['state'] != 'onpost'
-    clock(manager, 'jump', minutes=1); clock(manager, 'jump', minutes=1)
+    assert p['task']['timeoutWindowMinutes'] == 1
+    assert p['task']['deadlineAt'] == pytest.approx(452.2)
+    clock(manager, 'set', date=DAY, time='07:32:11')
     assert find(board(manager), pid)['state'] != 'exception'
-    clock(manager, 'jump', minutes=1)
+    clock(manager, 'set', date=DAY, time='07:32:12')
     assert find(board(manager), pid)['state'] == 'exception'
     assert find(board(manager), pid)['assign'] is None
 

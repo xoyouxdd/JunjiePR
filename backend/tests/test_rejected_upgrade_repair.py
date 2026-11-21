@@ -7,7 +7,9 @@ from io import BytesIO
 import pytest
 from openpyxl import load_workbook
 from sqlalchemy import text
-from test_upgrade_minimum_and_recovery import app,login,TestClient,setup_flow,SessionLocal,deduction_materials
+from test_upgrade_minimum_and_recovery import (
+    app, login, TestClient, setup_flow, SessionLocal, deduction_materials, freeze_registration_month,
+)
 from app.v2_models import DeductionRecord,DeductionUpgradeRequest,DeductionUpgradeTransfer,StoredFile,AuditLog,EmployeeLOAPeriod
 from app.database.connection import FILE_DIR
 from app.deduction_policy import deduction_counts_for_score
@@ -110,6 +112,7 @@ def test_rejected_work_repair_preserves_scores_history_exports_and_material_perm
             assert db.get(DeductionRecord,f['first']).upgrade_request_id==wid
             if loa:
                 db.add(EmployeeLOAPeriod(employee_id=f['form']['employee_id'],starts_on=new_month+'-20',ends_on=new_month+'-20',status='ended',created_by=f['manager_id'],created_by_name='经理'));db.commit()
+        freeze_registration_month(monkeypatch,new_month)
         approved=manager.post(f'/api/deduction-upgrades/{wid}/resolve',json=dict(decision='approve',issued_confirmed=True,result_level_id=f['levels']['MEMO']['id'],handling_note='新工单真实开具备忘录'))
         assert approved.status_code==200,approved.text
         assert manager.post(f"/api/deduction-upgrades/{f['old_work']}/resolve",json=dict(decision='approve',issued_confirmed=True,result_level_id=f['levels']['MEMO']['id'],handling_note='不得处理旧工单')).status_code==409
@@ -117,6 +120,9 @@ def test_rejected_work_repair_preserves_scores_history_exports_and_material_perm
             assert_history(db,f)
             result=db.get(DeductionRecord,db.get(DeductionUpgradeRequest,wid).result_deduction_id)
             result_id=result.id
+            assert result.incident_on == new_month + '-07'
+            assert result.occurred_on == new_month + '-28'
+            assert result.deduction_month == new_month
             rows=db.query(DeductionRecord).filter_by(employee_id=f['form']['employee_id']).filter(DeductionRecord.id.in_([f['first'],f['sid'],sid,result.id])).all()
             assert {r.id for r in rows if deduction_counts_for_score(r)}=={f['first'],result_id}
             assert float(sum(r.points for r in rows if deduction_counts_for_score(r)))==f['levels']['STATEMENT']['points']+f['levels']['MEMO']['points']
