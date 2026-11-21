@@ -2,13 +2,39 @@
 import { api, holdUnauthorizedRedirect } from './api.js';
 import { captureViewContext, pageTimeout, registerPageCleanup, unregisterPageCleanup } from './context.js';
 import { bindDialogLayer } from './dialogs.js';
-import { esc, portalPath } from './format.js';
+import { declarationMaterialUploader, esc, portalPath } from './format.js';
 import { state } from './state.js';
 import { toast } from './toast.js';
 
 let deductionMaterialPickerSequence=0;
 
-function deductionMaterialPickerMarkup(){const id=`deductionMaterial${++deductionMaterialPickerSequence}`;return `<fieldset class="deduction-material-picker" data-deduction-material><legend>声明材料（可后补）</legend><p class="field-hint">可直接上传 PDF（最多100MB、6页），或拍照/从相册选择照片（最多6张、单张25MB、合计100MB）。未上传时可先提交，主管可后续补充；材料成功后才扣分。</p><div class="evidence-actions native-file-actions"><label class="secondary native-file-trigger" for="${id}Pdf">上传PDF</label><label class="secondary native-file-trigger" for="${id}Camera">拍照</label><label class="secondary native-file-trigger" for="${id}Album">从相册选择</label></div><input id="${id}Pdf" class="native-file-input" data-material-pdf-input type="file" accept="application/pdf,.pdf"><input id="${id}Camera" class="native-file-input" data-material-camera-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" capture="environment"><input id="${id}Album" class="native-file-input" data-material-album-input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image-heif,.jpg,.jpeg,.png,.webp,.heic,.heif" multiple><div class="deduction-material-summary" data-material-summary aria-live="polite">可先不上传，后续由主管补充材料。</div></fieldset>`;}
+function deductionMaterialPickerMarkup(){
+  const id=`deductionMaterial${++deductionMaterialPickerSequence}`;
+  const options=[
+    {suffix:'Pdf',key:'pdf',title:'上传PDF',hint:'已有声明 PDF，最多 100 MB、6 页',
+      accept:'application/pdf,.pdf',icon:'<path d="M7 3h7l4 4v14H7zM14 3v5h4M12.5 18v-6m-2.5 2.5 2.5-2.5 2.5 2.5"/>'},
+    {suffix:'Camera',key:'camera',title:'拍照',hint:'手头有纸质声明，直接拍',
+      accept:'image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif',inputAttributes:' capture="environment"',
+      icon:'<path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="3.5"/>'},
+    {suffix:'Album',key:'album',title:'从相册选择',hint:'选手机里已有的声明照片',
+      accept:'image/jpeg,image/png,image/webp,image/heic,image-heif,.jpg,.jpeg,.png,.webp,.heic,.heif',inputAttributes:' multiple',
+      icon:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8" cy="10" r="1.4"/><path d="m4 17 5-5 3 3 4-4 4 4"/>'},
+  ];
+  return `<section class="deduction-material-picker" data-deduction-material aria-labelledby="${id}Title">
+    <h3 class="deduction-material-title" id="${id}Title">声明</h3>
+    <div class="deduction-material-options">${options.map(({suffix,key,title,hint,accept,inputAttributes='',icon})=>`
+      <div class="deduction-material-option">
+        <input id="${id}${suffix}" class="native-file-input" data-material-${key}-input type="file" accept="${accept}" aria-labelledby="${id}${suffix}Label" aria-describedby="${id}${suffix}Hint"${inputAttributes}>
+        <label for="${id}${suffix}" class="deduction-material-entry">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icon}</svg>
+          <strong id="${id}${suffix}Label">${title}</strong>
+          <span id="${id}${suffix}Hint">${hint}</span>
+        </label>
+      </div>`).join('')}</div>
+    <p class="deduction-material-help"><span>照片最多 6 张，单张 25 MB，合计 100 MB。</span><span>可先提交，主管可后补。材料就绪后才扣分。</span></p>
+    <div class="deduction-material-summary" data-material-summary aria-live="polite"></div>
+  </section>`;
+}
 
 function bindDeductionMaterialPicker(root){
   const picker=root.querySelector('[data-deduction-material]');if(!picker)return null;
@@ -31,7 +57,7 @@ function bindDeductionMaterialPicker(root){
       summary.querySelector('[data-material-replace-photos]').onclick=()=>{clearPhotos();render();};
       summary.querySelectorAll('[data-material-preview]').forEach(image=>image.onerror=()=>{image.hidden=true;});return;
     }
-    summary.textContent='请选择一种材料方式。';
+    summary.textContent='';
   };
   const addPhotos=files=>{const incoming=[...files];if(!incoming.length)return;for(const file of incoming)if(!photoOK(file))return;const next=[...photos,...incoming];if(next.length>maxPhotos)return fail(`一次最多选择${maxPhotos}张照片。`);if(next.reduce((sum,file)=>sum+file.size,0)>maxTotalBytes)return fail('全部照片合计不能超过100MB。');pdfFile=null;pdfInput.value='';photos=next;render();};
   pdfInput.onchange=()=>{const file=pdfInput.files?.[0];if(!file)return;const ext=(file.name.split('.').pop()||'').toLowerCase();if(ext!=='pdf'||!file.size)return fail('请选择可读取的PDF文件。');if(file.size>maxPdfBytes)return fail('PDF不能超过100MB。');pdfFile=file;clearPhotos();render();};
@@ -41,7 +67,7 @@ function bindDeductionMaterialPicker(root){
   return controller;
 }
 
-function showDeductionMaterialState(container,record,onFinished){if(!container||!record)return;const render=current=>{const status=current.material_status||'unknown',businessStatus=current.status||'',businessActive=businessStatus==='active';const failed=status==='failed',ready=status==='ready',missing=status==='missing',processing=status==='processing';const title=failed?'材料生成失败':ready?'材料已就绪':missing?'待补充材料':processing?'材料生成中':'材料状态未知';const body=failed?esc(current.material_error||'照片生成PDF失败，请重新提交材料。'):ready?(businessActive?'正式PDF已生成，扣分记录已生效。':`正式PDF已生成；当前业务状态为“${esc(current.status_name||businessStatus||'待处理')}”，是否计分以业务状态为准。`):missing?'该记录尚未上传材料，暂不计分。':processing?'照片已接收，系统正在后台合成正式PDF；完成后请以业务状态确认是否计分。':'请刷新后查看最新材料状态。';const action=failed||missing?`<button type="button" class="secondary" data-retry-material="${current.id}">${failed?'重新提交材料':'补充材料'}</button>`:ready?'<span class="field-hint">可在我的登记记录中查看材料与业务状态。</span>':'<span class="field-hint">此页面会自动刷新状态。</span>';container.innerHTML=`<div class="material-submission-state ${failed?'failed':ready?'ready':processing?'processing':'pending'}"><strong>${title}</strong><p>${body}</p>${action}</div>`;container.querySelector('[data-retry-material]')?.addEventListener('click',()=>openDeductionMaterialRetry(current.id,updated=>{render(updated);if(updated.material_status==='processing')watchDeductionMaterial(updated,container,onFinished);}));};render(record);if(record.material_status==='processing')watchDeductionMaterial(record,container,onFinished);}
+function showDeductionMaterialState(container,record,onFinished){if(!container||!record)return;const render=current=>{const status=current.material_status||'unknown',businessStatus=current.status||'',businessActive=businessStatus==='active';const failed=status==='failed',ready=status==='ready',missing=status==='missing',processing=status==='processing';const title=failed?'材料生成失败':ready?'材料已就绪':missing?'待补充材料':processing?'材料生成中':'材料状态未知';const body=failed?esc(current.material_error||'照片生成PDF失败，请重新提交材料。'):ready?(businessActive?'正式PDF已生成，扣分记录已生效。':`正式PDF已生成；当前业务状态为“${esc(current.status_name||businessStatus||'待处理')}”，是否计分以业务状态为准。`):missing?'该记录尚未上传材料，暂不计分。':processing?'照片已接收，系统正在后台合成正式PDF；完成后请以业务状态确认是否计分。':'请刷新后查看最新材料状态。';const action=failed||missing?`<button type="button" class="secondary" data-retry-material="${current.id}">${failed?'重新提交材料':'补充材料'}</button>`:ready?'<span class="field-hint">可在我的登记记录中查看材料与业务状态。</span>':'<span class="field-hint">此页面会自动刷新状态。</span>';const uploader=declarationMaterialUploader(current);container.innerHTML=`<div class="material-submission-state ${failed?'failed':ready?'ready':processing?'processing':'pending'}"><strong>${title}</strong><p>${body}</p>${uploader?`<p class="field-hint">${uploader}</p>`:''}${action}</div>`;container.querySelector('[data-retry-material]')?.addEventListener('click',()=>openDeductionMaterialRetry(current.id,updated=>{render(updated);if(updated.material_status==='processing')watchDeductionMaterial(updated,container,onFinished);}));};render(record);if(record.material_status==='processing')watchDeductionMaterial(record,container,onFinished);}
 
 function watchDeductionMaterial(record,container,onFinished){const page=captureViewContext(container);let tries=0;const poll=async()=>{if(!page.isCurrent()||!container?.isConnected)return;try{const current=(await api('/api/deductions/'+record.id+'/material-status')).record;if(!page.isCurrent())return;if(current.material_status==='processing'&&tries++<120){pageTimeout(poll,1500);return;}if(current.material_status==='processing'){container.innerHTML=`<div class="material-submission-state processing"><strong>材料仍在生成</strong><p>处理时间较长，请稍后在我的登记记录查看，或手动刷新。</p><button type="button" class="secondary" data-refresh-material>刷新状态</button></div>`;container.querySelector('[data-refresh-material]')?.addEventListener('click',()=>watchDeductionMaterial(record,container,onFinished));return;}showDeductionMaterialState(container,current,onFinished);if(current.material_status==='ready'){toast(current.status==='active'?'照片材料已生成PDF，扣分记录已生效。':'照片材料已生成PDF，请继续查看业务处理状态。');onFinished?.(current);}}catch(error){if(error?.name==='AbortError'||!page.isCurrent()||!container?.isConnected)return;if(tries++<5)pageTimeout(poll,2500);else toast('材料状态暂时无法刷新，请稍后在我的登记记录查看。',true);}};pageTimeout(poll,1200);}
 

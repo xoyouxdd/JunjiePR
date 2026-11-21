@@ -102,7 +102,8 @@ def seed_today(rule_version=2, *, leave_draft=False):
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row)
             state['lastTick']=minute
-            for no in ['9710000','9710010','9710020']:state['persons'][no].update(role='rotation',state='ready',end=1440,readyAt=minute-1,readySince=minute-1,breakKind='rest',absences=[],assign=None)
+            ready_at = minute - 0.5
+            for no in ['9710000','9710010','9710020']:state['persons'][no].update(role='rotation',state='ready',end=1440,readyAt=ready_at,readySince=ready_at,breakKind='rest',absences=[],assign=None)
             for i,no in enumerate(['9710020','9710010']):
                 state['persons'][no].update(state='onpost',line='A1',lineStart=minute-30,flags=[])
                 state['lines'][0]['posts'][i].update(occ=no,since=minute-30)
@@ -251,7 +252,7 @@ def seed_cohort(three=False):
                 p['continuousStart']=now-30
             for no in ['9710000','9710010']:
                 state['persons'][no].update(
-                    state='ready', start=int(now) - 5, end=1440, readyAt=now - 1, readySince=now - 1,
+                    state='ready', start=int(now) - 5, end=1440, readyAt=now - 0.5, readySince=now - 0.5,
                     visited=[], line=None, lineStart=None, continuousStart=None, breakKind='rest', assign=None,
                 )
             if three:
@@ -563,9 +564,13 @@ def test_formal_undo_rest_and_cross_line_dependency_with_stale_and_receipt_prote
         board=ok(operator.get('/api/rotation-board/board'))
         own=ok(cm.get('/api/rotation-board/me'))['person']
         token=own['confirmationTokens']['depart']
-        ok(cm.post('/api/rotation-board/me/act', json={
+        departure = {
             'action': 'depart', 'confirmation_token': token, 'expected_line': own['task']['line'],
-        }))
+        }
+        result = ok(cm.post('/api/rotation-board/me/act', json=departure))
+        if result.get('line_changed'):
+            result = ok(cm.post('/api/rotation-board/me/act', json={**departure, 'expected_line': result['line']}))
+        assert result['executed'] and result['result']['line'] == 'A1'
         board = ok(operator.get('/api/rotation-board/board'))['day']
         ok(operator.post('/api/rotation-board/act', json={
             'action': 'place', 'pid': '9710000', 'line': 'B1', 'i': 0, 'place_mode': 'swap',

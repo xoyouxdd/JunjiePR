@@ -39,6 +39,7 @@ from app.operations_health import backup_health_payload
 from app.http_utils import client_ip
 from app.data_cache import invalidate_data_caches
 from app.date_utils import parse_score_month
+from app.warehouse.assessment import action_counts as warehouse_action_counts
 
 router = APIRouter()
 
@@ -176,38 +177,10 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
         unread_medals = medal_service.visible_notices(db, user.id).filter_by(read_at=None).count()
         if unread_medals:
             items.append(action_center_item('attendance_medal_notice', '全勤勋章消息', unread_medals, 'home', 'info', '请在本人首页查看勋章消息。'))
-    # Count only materialized formal steps; this read does not advance the engine.
     from app.routers.rotation_board import can_enter as rotation_allowed
-    from app.rotation.namespace import FORMAL_TABLES
+    from app.rotation.participation import pending_formal_steps
     if rotation_allowed(user, db):
-        import json
-        current = datetime.now()
-        from app.rotation.participation import contexts
-        aids={choice['id'] for choice in contexts(db,user.employee.employee_no)}
-        if user.employee.attraction_id:aids.add(user.employee.attraction_id)
-        actionable_count=0
-        for aid in sorted(aids):
-            row = db.query(FORMAL_TABLES.RotationDay).filter_by(attraction_id=aid,work_date=current.date().isoformat()).first()
-            if row and row.status=='live':
-                rotation_state=json.loads(row.state_json)
-                if rotation_state.get('ruleVersion') != 2:
-                    continue
-                person=rotation_state.get('persons',{}).get(user.employee.employee_no)
-                now_min=current.hour*60+current.minute+current.second/60
-                if person:
-                    assignment=person.get('assign') or {}
-                    config=db.query(FORMAL_TABLES.RotationConfig).filter_by(attraction_id=aid).first()
-                    early=json.loads(config.settings_json or '{}').get('departEarly',1) if config else 1
-                    actionable=person.get('state') in ('walkback','pending') or (person.get('state')=='ready' and assignment and now_min>=max(person.get('readyAt') or now_min,assignment.get('notBefore',0),assignment.get('departAt',1440)-early))
-                    if person['state'] == 'notyet':
-                        from app.rotation.forecast import BATCH_CHECK_IN_MINUTES, BATCH_LEAD_MINUTES
-                        start = person['start']
-                        actionable = (start - BATCH_CHECK_IN_MINUTES <= now_min < start - BATCH_LEAD_MINUTES
-                                      and db.query(FORMAL_TABLES.RotationNotice.id).filter_by(
-                                          attraction_id=aid, work_date=row.work_date,
-                                          employee_no=user.employee.employee_no, kind='batch_check_in',
-                                          status='open').first() is not None)
-                    if actionable:actionable_count+=1
+        actionable_count = pending_formal_steps(db, user.employee.employee_no, user.employee.attraction_id)
         if actionable_count:items.append(action_center_item('rotation_step','本人轮岗待确认',actionable_count,'rotationTest','warning','确认班前已到、待上岗或待休息（吃饭），同步对应景点圈轮岗看板。'))
 
     from app.announcements import summary as announcement_summary
@@ -321,8 +294,19 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
         overdue_count = reminder_queries[0].union(*reminder_queries[1:]).count()
     else:
         overdue_count = reminder_queries[0].count() if reminder_queries else 0
+    warehouse_issues, warehouse_low, warehouse_empty = warehouse_action_counts(db, user)
+    warehouse_count = warehouse_issues + warehouse_low + warehouse_empty
+    if warehouse_count:
+        summary = "、".join(f"{value} 项{label}" for label, value in (
+            ("缺货", warehouse_empty), ("低库存", warehouse_low), ("待核对", warehouse_issues),
+        ) if value)
+        task = action_center_item(
+            "warehouse_followup", "物资缺货 · 立即核对" if warehouse_empty else "物资管理待处理",
+            warehouse_count, "warehouse", "critical", f"{summary}。打开物资管理接手处理。",
+        )
+        items.append({**task, "strong_reminder": True})
     order = {"critical": 0, "warning": 1, "info": 2}
-    items.sort(key=lambda row: (order.get(row["severity"], 9), row["title"]))
+    items.sort(key=lambda row: (not row.get("strong_reminder"), order.get(row["severity"], 9), row["title"]))
     return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month,
             "overdue_review_reminder": overdue_count,
             "announcement_counts": announcement_counts}

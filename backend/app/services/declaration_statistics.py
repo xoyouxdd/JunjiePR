@@ -13,6 +13,7 @@ from app.date_utils import subtract_calendar_months
 from app.deduction_policy import deduction_counts_for_score, unused_statement_upgrade_filters
 from app.role_constants import FRONTLINE_CODES
 from app.score_policy import loa_month_exclusion
+from app.services.audit import historical_material_uploaders
 from app.services.identity import base_roles_at
 from app.services.scoring_policies import category
 from app.services.upgrade_recovery import upgrade_work_status_name
@@ -137,6 +138,9 @@ def declaration_payload(
     ).all()} if all_rows else set()
     file_ids = {row.document_file_id for row in all_rows.values() if row.document_file_id}
     files = {row.id: row for row in db.query(StoredFile).filter(StoredFile.id.in_(file_ids)).all()} if file_ids else {}
+    historical_uploaders = historical_material_uploaders(
+        db, (row.id for row in all_rows.values() if not (row.material_uploaded_by_name or "").strip())
+    )
     links = defaultdict(list)
     for work in upgrades:
         if work.status == "approved" and work.result_deduction_id:
@@ -175,10 +179,11 @@ def declaration_payload(
             "id": row.id, "employee_id": row.employee_id, "employee_name": row.employee_name,
             "employee_no": row.employee_no, "attraction_id": row.attraction_id_snapshot,
             "attraction_name": attractions.get(row.attraction_id_snapshot, "未记录原景点"),
-            "occurred_on": row.occurred_on, "type_id": row.deduction_type_id,
+            "occurred_on": row.occurred_on, "incident_on": row.incident_on, "type_id": row.deduction_type_id,
             "type_name": row.deduction_type_name, "level_id": row.deduction_level_id,
             "level_code": level.code if level else "OTHER", "level_name": row.deduction_level_name,
             "description": row.description, "submitter_name": row.submitter_name,
+            "material_uploaded_by_name": (row.material_uploaded_by_name or "").strip() or historical_uploaders.get(row.id, ""),
             "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
             "material_status": MATERIAL_LABELS.get(row.material_status, row.material_status),
             "upgrade_status": UPGRADE_LABELS.get(row.upgrade_state or "", row.upgrade_state or "无"),

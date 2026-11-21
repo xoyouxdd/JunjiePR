@@ -31,7 +31,7 @@ from app.rotation.models import (
     RotationSegment,
     RotationSnapshot,
 )
-from app.rotation.roster import classify
+from app.rotation.roster import SICK_LEAVE_RE, classify
 from app.rotation.namespace import tables_for, runtime_for, runtime_for_row
 from app.database.connection import SessionLocal
 from app.runtime_environment import environment_kind
@@ -329,7 +329,7 @@ def roster_summary(db: Session, attraction_id: int, day: str) -> dict:
 
 def off_people_view(db: Session, attraction_id: int, state: dict) -> list[dict]:
     off = state.get('off', [])
-    missing_shifts = {p['pid'] for p in off if p['label'].strip().lower() in ('病假', 'sl') and 'start' not in p}
+    missing_shifts = {p['pid'] for p in off if SICK_LEAVE_RE.search(p['label']) and 'start' not in p}
     upload_id = state.get('rosterUploadId')
     if not missing_shifts or not upload_id:
         return off
@@ -719,6 +719,7 @@ def lines_view(eng: E.Engine, *, line_id: str | None = None, now: float | None =
 
 
 def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *, committed_only: bool = False) -> dict:
+    from app.rotation.forecast import closure_previews
     from app.rotation.forecast_service import person_view
     from app.rotation.manual import fingerprint
     state = day_state(row, use_cache=not committed_only)
@@ -737,12 +738,14 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *,
         "date": state["date"], "status": state["status"],
         "ruleVersion": state.get('ruleVersion', 1),
         "forecastSnapshot": fingerprint(state),
+        "closurePreviews": closure_previews(eng, now) if state["status"] == "live" else {},
         "prestartPlanRevision": D.plan_revision(state) if D.prestart(state, now) else None,
         "timeoutCases": [],
         "timeoutWaitingMatch": [],
         "lines": lines_view(eng, now=now),
         "persons": [person_view(eng, p, now) for p in state["persons"].values()],
         "off": off_people_view(db, row.attraction_id, state),
+        "rosterSickPoolMoves": state['status'] == 'live',
         "alerts": eng.alerts(now) if state["status"] == "live" else [],
         "notices": state.get("notices", [])[-10:],
         "plan": state["plan"],
@@ -955,7 +958,7 @@ SCREEN_ACTIONS = {"arrive", "depart", "batch_check_in"}
 LIVE_ACTIONS = SCREEN_ACTIONS | {
     "post", "line", "away", "back", "leave", "set_close", "add_person", "plan_place", "move",
     "post_order", "post_hold", "rename_post", "hold101", "restore_line", "pool", "break_time",
-    "shift", "sort_time", "all_close", "place", "sick",
+    "shift", "sort_time", "place", "sick",
 }
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
 
@@ -999,7 +1002,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict, *,
     if act=='move' and body.get('force') is True and not body.get('expected_snapshot'):
         raise ActionError('强制安排必须先预览影响并确认')
     if act not in {"post", "post_order", "line", "set_close", "rename_post", "hold101",
-                   "restore_line", "sort_time", "all_close", "add_person"}:
+                   "restore_line", "sort_time", "add_person"}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
             raise ActionError("工号必须是字符串")

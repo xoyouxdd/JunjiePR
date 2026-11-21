@@ -35,6 +35,8 @@ def _init_db_unlocked() -> None:
     from app.rotation import namespace as rotation_namespace  # noqa: F401
     from app.rotation import temporary as rotation_temporary  # noqa: F401
     from app.rotation import participation as rotation_participation  # noqa: F401
+    from app.warehouse import assessment as warehouse_assessment  # noqa: F401
+    from app.warehouse.models import seed_positions
 
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
@@ -50,6 +52,7 @@ def _init_db_unlocked() -> None:
         ensure_circle_hr_accounts(db)
         from app.attendance_medals_models import backfill_account_identities
         backfill_account_identities(db)
+        seed_positions(db)
         db.commit()
         from app.services.monthly_ranks import backfill_closed_rankings
 

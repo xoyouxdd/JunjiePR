@@ -10,7 +10,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function ok(response){assert(response.ok(),await response.text());return response.json();}
 async function main(){try{
   const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
-  server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(__dirname,'rotation_daily_fixture.py'),work,String(port)],{cwd:path.join(root,'backend'),windowsHide:true,env:{...process.env,ROTATION_FORECAST_FIXTURE:'1',PYTHONUTF8:'1'}});
+  server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(__dirname,'rotation_daily_fixture.py'),work,String(port)],{cwd:path.join(root,'backend'),windowsHide:true,env:{...process.env,ROTATION_FORECAST_FIXTURE:'1',ROTATION_SICK_FIXTURE:'1',PYTHONUTF8:'1'}});
   server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
   const base='http://127.0.0.1:'+port;
   let ready=false;for(let i=0;i<100;i++){try{if((await fetch(base+'/health')).ok){ready=true;break;}}catch{}if(server.exitCode!==null)break;await sleep(300);}assert(ready,log);
@@ -30,16 +30,33 @@ async function main(){try{
     await page.goto(base+'/rotation-board');
     await page.locator('[data-f-board="'+seated+'"]').waitFor({timeout:15000});
     assert.equal(await page.locator('h2').filter({hasText:'待出发'}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'全线关闭',exact:true}).count(),0);
+    const boardTotals=page.locator('#rtBoardTotals');
+    await boardTotals.waitFor();
+    const display=await browser.newContext();
+    try{
+      await ok(await display.request.post(base+'/api/login',{data:{employee_no:'6666666',password:'1243'}}));
+      const screen=await display.newPage();
+      await screen.goto(base+'/rotation/screen');
+      const screenTotals=screen.locator('#rtScreenTotals');
+      await screenTotals.waitFor();
+      const numbers=await boardTotals.locator('[data-rotation-total]').allTextContents();
+      assert.equal(numbers.length,4);
+      assert.deepEqual(numbers,await screenTotals.locator('[data-rotation-total]').allTextContents());
+    }finally{await display.close();}
     assert(await page.locator('[data-f-board="'+seated+'"]').locator('..').evaluate(el=>el.classList.contains('rt-can-board')));
     await page.locator('[data-f-board="'+seated+'"]').click();
     await page.getByRole('button',{name:'确认上岗',exact:true}).click();
     await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='onpost',seated);
     assert.equal((await board()).persons.find(p=>p.pid===seated).state,'onpost');
-    await page.locator('[data-f-head=A]').click({button:'right'});
+    const head=page.locator('[data-f-head=A]');
+    const previousTime=await head.locator('.rt-sort-time').innerText();
+    await head.click({button:'right'});
     await page.getByRole('button',{name:'修改排序时间',exact:true}).click();
     await page.locator('[name=time]').fill('00:00:01');
     await page.getByRole('button',{name:'确定',exact:true}).click();
-    await page.waitForFunction(()=>RT.data.day.lines.find(l=>l.id==='A').sortAt===1/60);
+    await head.getByText('00:00:01',{exact:true}).waitFor();
+    assert.equal(await head.locator('.rt-previous-sort-time').innerText(),'上次 '+previousTime);
     // Removing someone immediately refreshes all remaining forecasts.
     day=await board();const person=day.persons.find(p=>p.state==='rest'||p.state==='pending');
     await post({action:'pool',pid:person.pid,pool:'rest'});
@@ -49,7 +66,7 @@ async function main(){try{
     await page.getByRole('button',{name:'修改餐休剩余时间',exact:true}).click();
     await page.locator('[name=remaining]').fill('20');await page.getByRole('button',{name:'确定',exact:true}).click();
     await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).readyAt===455,person.pid);
-    assert.equal(await page.locator('[data-f-board="'+person.pid+'"]').count(),0);
+    await page.locator('[data-f-board="'+person.pid+'"]').waitFor({state:'hidden'});
     // New personnel dialog searches on demand; temporary identities remain local records.
     await page.locator('[data-f-add]').first().click();
     await page.locator('[name=query]').fill('临时伙伴');await page.locator('[name=temporary]').check();
@@ -69,7 +86,11 @@ async function main(){try{
     await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='rest',dragPid);
     await dropPerson('[data-f-pool=rest] [data-f-drag="'+dragPid+'"]','[data-f-slot="A#0"]');
     await page.locator('[name=place_mode]').selectOption('swap');
-    await page.getByRole('button',{name:'确定',exact:true}).click();
+    const [placed]=await Promise.all([
+      page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/api/rotation-board/act')&&response.request().postDataJSON()?.action==='place'),
+      page.getByRole('button',{name:'确定',exact:true}).click(),
+    ]);
+    await ok(placed);
     await page.waitForFunction(pid=>RT.data.day.lines[0].posts[0].occ===pid,dragPid);
     // An open confirmation may be rerouted repeatedly, never executed on the
     // old line, and must name the immediately preceding route each time.
@@ -90,7 +111,7 @@ async function main(){try{
     // than leaving an executable-looking dialog above the exception pool.
     await post({action:'pool',pid:reviewPid,pool:'rest'});await post({action:'break_time',pid:reviewPid,remaining:0});await page.evaluate(()=>RT.load());
     await page.locator('[data-f-board="'+reviewPid+'"]').click();
-    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'jump',minutes:3}}));await page.evaluate(()=>RT.load());
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'jump',minutes:1}}));await page.evaluate(()=>RT.load());
     assert.equal(await page.getByRole('dialog').count(),0);
     assert.equal((await board()).persons.find(p=>p.pid===reviewPid).state,'exception');
     assert.equal(await page.locator('[data-f-board="'+reviewPid+'"]').count(),0);
@@ -120,23 +141,70 @@ async function main(){try{
     await page.locator('[data-f-head=A]').click();await page.getByRole('button',{name:'撤岗',exact:true}).click();
     await page.locator('[name=i]').selectOption('1');
     assert.equal(await page.locator('[name=day_offset]').inputValue(),'1');
-    await page.locator('[name=time]').fill('00:15');await page.getByRole('button',{name:'确定',exact:true}).click();
-    await page.waitForFunction(()=>RT.data.day.lines[0].posts[1].closeAt==='24:15:00');
+    const withdrawal=page.getByLabel('撤岗方式');
+    assert.equal(await withdrawal.inputValue(),'push');
+    await withdrawal.selectOption('rest');
+    await page.getByText('直接送休息区，表头轮岗时间保持原值。',{exact:true}).waitFor();
+    await withdrawal.selectOption('push');
+    await page.locator('[name=time]').fill('00:15');
+    const destination=page.getByLabel('顺推安排');
+    assert.equal(await destination.inputValue(),'push_off');
+    await destination.selectOption({label:'到点时顺推接替病假人员'});
+    assert.equal(await destination.inputValue(),'push_sick');
+    await destination.selectOption({label:'到点时顺推加岗'});
+    assert.equal(await destination.inputValue(),'push_open');
+    await page.getByRole('button',{name:'确定',exact:true}).click();
+    await page.waitForFunction(()=>{
+      const post=RT.data.day.lines[0].posts[1];
+      return post.closeAt==='24:15:00'&&post.closeMode==='push_open';
+    });
     await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-05',time:'00:20'}}));
     await page.evaluate(()=>RT.load());
     await upcoming.locator('[data-f-board]').waitFor();
     const support=(await board()).persons.find(p=>p.name==='午夜支援');
     assert.equal(support.state,'ready');
     assert.equal(support.directShiftEntry,1460);
+    assert.equal((await board()).lines[0].posts[1].open,false);
     assert.equal(await upcoming.locator('[data-f-arrive]').count(),0);
     for(const width of [320,390,768,1280]){
       await page.setViewportSize({width,height:900});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,'overflow '+width);
+      const totalsBox=await boardTotals.boundingBox();
+      assert(totalsBox&&totalsBox.x+totalsBox.width<=width,'totals overflow '+width);
     }
-    assert.deepEqual(errors,[]);
     const shots=path.join(root,'.handover_review','rotation-forecast-review');fs.mkdirSync(shots,{recursive:true});
     await page.screenshot({path:path.join(shots,'forecast-'+engine+'.png'),fullPage:true});
-    console.log(engine+': forecast, individual execution, head edit, rest edit, temporary person, responsive widths PASS');
+    await ok(await request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'10:30'}}));
+    await resetAndPublish(request,base,'2026-10-06',ok);
+    await page.evaluate(()=>RT.load());
+    const sickTotal=boardTotals.locator('[data-rotation-total=sick]');
+    assert.equal(await sickTotal.innerText(),'2');
+    await dropPerson('[data-f-pool=away] [data-f-drag="9100008"]','[data-f-pool=rest]');
+    await page.locator('[data-f-pool=rest] [data-f-person="9100008"]').waitFor();
+    assert.equal(await sickTotal.innerText(),'1');
+    await page.locator('[data-f-pool=away] [data-f-person="9100009"]').click();
+    await page.getByLabel('目标池').selectOption('meal');
+    await page.locator('[name=start]').fill('07:30');
+    await page.locator('[name=end]').fill('16:30');
+    await page.getByRole('button',{name:'确定',exact:true}).click();
+    await page.locator('[data-f-pool=meal] [data-f-person="9100009"]').waitFor();
+    assert.equal(await sickTotal.innerText(),'0');
+    await post({action:'add_person',temporary:true,name:'批次时间验证',start:'13:30',end:'22:00'});
+    const batchWorker=(await board()).persons.find(p=>p.name==='批次时间验证');
+    const batchClock=async data=>ok(await request.post(base+'/__fixture/rotation-clock',{data}));
+    await batchClock({action:'set',date:'2026-10-06',time:'13:26'});
+    const checked=(await board()).persons.find(p=>p.pid===batchWorker.pid);
+    await post({action:'batch_check_in',pid:checked.pid,confirmation_token:checked.confirmationTokens.batch_check_in});
+    await batchClock({action:'jump',minutes:1+5/60});
+    const assigned=(await board()).persons.find(p=>p.pid===batchWorker.pid);
+    assert.equal(assigned.state,'onpost');
+    assert.equal(assigned.entrySortAt,807+5/60);
+    await page.evaluate(()=>RT.load());
+    const entryStamp=page.locator('[data-f-person="'+assigned.pid+'"] .rt-post-entry-time');
+    await entryStamp.filter({hasText:'入线 13:27:05'}).waitFor();
+    await page.locator('[data-f-head="'+assigned.line+'"] .rt-sort-time').filter({hasText:'13:27:05'}).waitFor();
+    assert.deepEqual(errors,[]);
+    console.log(engine+': forecast, individual execution, head edit, responsive widths, sick leave corrections, batch entry clock PASS');
     await context.close();await browser.close();browser=null;
   }
 }finally{if(browser)await browser.close();if(server){server.kill();await new Promise(r=>server.once('exit',r));}}}

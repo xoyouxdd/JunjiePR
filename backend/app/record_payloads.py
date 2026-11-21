@@ -1,9 +1,12 @@
 """Stable recognition, deduction and absence response projections."""
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from app.deduction_policy import deduction_counts_for_score
 from app.file_types import is_previewable_image, preview_kind
 from app.recognition_policy import effective_recognition_credit
+from app.services.audit import historical_material_uploaders
 from app.v2_models import DeductionFollowUp, DeductionRecord, Employee, RecognitionRecord, SickLeaveRecord, StoredFile
 from sqlalchemy.orm import Session
 
@@ -67,7 +70,7 @@ def recognition_payload(row: RecognitionRecord) -> dict:
     }
 
 
-def deduction_payload(row: DeductionRecord) -> dict:
+def deduction_payload(row: DeductionRecord, *, historical_uploader: str = "") -> dict:
     status_names = {"active": "已扣分", "void": "已作废", "pending_upgrade": "待升级审核", "pending_material": "待补充材料（未扣分）", "material_processing": "材料生成中", "material_failed": "材料生成失败"}
     upgrade_state_names = {"pending": "待升级审核", "awaiting_reviewer": "材料已就绪 · 待重新指派", "source_first": "已升级（原声明）", "source_second": "已用于升级，不计分", "result": "升级结果", "rejected": "审核不通过"}
     return {
@@ -81,6 +84,7 @@ def deduction_payload(row: DeductionRecord) -> dict:
         "points": float(row.points),
         "actual_points": float(row.points) if deduction_counts_for_score(row) else 0.0,
         "occurred_on": row.occurred_on,
+        "incident_on": row.incident_on,
         "description": row.description,
         "submitter_id": row.submitter_id,
         "submitter_name": row.submitter_name,
@@ -98,7 +102,7 @@ def deduction_payload(row: DeductionRecord) -> dict:
         "material_error": row.material_error or "",
         "material_source_type": row.material_source_type or "pdf",
         "material_job_id": row.material_job_id or 0,
-        "material_uploaded_by_name": row.material_uploaded_by_name or "",
+        "material_uploaded_by_name": (row.material_uploaded_by_name or "").strip() or historical_uploader,
         "material_uploaded_at": row.material_uploaded_at.strftime("%Y-%m-%d %H:%M:%S") if row.material_uploaded_at else "",
         "material_revision": int(row.material_revision or 1),
         "legacy_upgrade_excluded": bool(row.legacy_upgrade_excluded),
@@ -112,6 +116,13 @@ def deduction_payload(row: DeductionRecord) -> dict:
         "upgrade_state_name": upgrade_state_names.get(row.upgrade_state or "", ""),
         "available_actions": (["supplement_material"] if row.status in {"pending_material", "material_failed"} else []) + (["void"] if row.status == "active" and not row.upgrade_request_id else []),
     }
+
+
+def deduction_payloads(db: Session, rows: Sequence[DeductionRecord]) -> list[dict]:
+    names = historical_material_uploaders(
+        db, (row.id for row in rows if not (row.material_uploaded_by_name or "").strip())
+    )
+    return [deduction_payload(row, historical_uploader=names.get(row.id, "")) for row in rows]
 
 
 def deduction_follow_up_payload(row: DeductionFollowUp) -> dict:

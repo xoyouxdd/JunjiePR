@@ -2,7 +2,7 @@
 const {buffer:downloadedBytes}=require('node:stream/consumers');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');const assert=require('node:assert/strict');const{chromium,webkit,firefox}=require('./support/browser-runtime.cjs');
 const root=path.resolve(__dirname,'../app/static'),out=path.resolve(__dirname,'../../output/appearance-preview');fs.mkdirSync(out,{recursive:true});
-const original=fs.readFileSync(path.join(root,'index.html'),'utf8').replaceAll('__STATIC_CACHE_VERSION__','memory-local');const html=original.replace('src="static/js/app.js?v=memory-local"','src="static/js/memory-harness.js"');
+const original=fs.readFileSync(path.join(root,'index.html'),'utf8').replaceAll('__STATIC_CACHE_VERSION__','memory-local');const html=original.replace(/src="static\/js\/app\.js\?v=memory-local[^"]*"/,'src="static/js/memory-harness.js"');
 const security=fs.readFileSync(path.join(root,'../security.py'),'utf8');const policy=[.../CONTENT_SECURITY_POLICY\s*=\s*"; "\.join\(\s*\(([\s\S]*?)\)\s*\)/.exec(security)[1].matchAll(/"([^"\r\n]+)"/g)].map(m=>m[1]).join('; ');const map=/<script type="importmap">([\s\S]*?)<\/script>/.exec(html)[1];const csp=policy.replace("script-src 'self'",`script-src 'self' 'sha256-${crypto.createHash('sha256').update(map.replace(/\r\n?/g,'\n')).digest('base64')}'`);
 const month='2026-10';let identity='CM',long=false,empty=false,storageBlocked=false;const calls=[],errors=[];
 const person=()=>({id:42,name:'演职人员姓名示例',employee_no:'MEMORY42',role_code:identity,base_role_code:identity==='TA_SUPERVISOR'?'CM':identity,role_name:identity,role_label:identity,attraction_name:'热力追踪',permissions:[],avatar_key:'new-zoo-clawhauser',led_groups:[]});

@@ -9,6 +9,8 @@ const lines=Array.from({length:12},(_,i)=>({id:`A${i+1}`,group:'A',active:true,p
  persons.push({pid,name:'测试员工',state:'onpost',start:420,end:1080,lineStart:470,flags:[],tags:[]});
  return {name:`岗位 ${j+1}`,occ:pid,open:true};
 })}));
+lines[0].sortAt=1440+1/60;
+lines[0].previousSortAt=1439+58/60;
 for(const state of ['ready','pending','rest','meal','away'])for(let i=0;i<20;i++){
  persons.push({pid:`${state}-${i}`,name:`测试人员 ${i+1}`,state,start:420,end:1080,readyAt:state==='ready'?480:510,canDepart:state==='ready',flags:[],tags:[],...(state==='ready'?{task:{deadlineAt:i===0?480.5:483}}:{})});
 }
@@ -26,6 +28,12 @@ const day={date,status:'live',ruleVersion:2,taskWorkflow:2,rotationEnd:1080,line
   await page.goto(`${origin}/rotation/screen`);
   await page.locator('.rt-lines .rt-line').first().waitFor();
   if(width===1180)await page.setViewportSize({width,height});
+  const head=page.locator('[data-f-head=A1]');
+  const currentTime=head.locator('.rt-sort-time'),previousTime=head.locator('.rt-previous-sort-time');
+  assert.equal(await currentTime.innerText(),'次日 00:00:01');
+  assert.equal(await previousTime.innerText(),'上次 23:59:58');
+  assert((await currentTime.boundingBox()).y<(await previousTime.boundingBox()).y);
+  assert.equal(await page.locator('[data-f-head=A2] .rt-previous-sort-time').innerText(),'上次 —');
   assert(await page.locator('body').evaluate(el=>el.classList.contains('rt-screen-flow')));
   const before=await page.evaluate(()=>scrollY);
   const summary=await page.locator('#rtScreenSummary').boundingBox();

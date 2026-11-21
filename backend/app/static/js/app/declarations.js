@@ -5,7 +5,7 @@ import { toast } from './toast.js';
 import { beginViewRequest, registerPageCleanup, unregisterPageCleanup } from './context.js';
 import { confirmModal, formModal } from './dialogs.js';
 import { bindFilePreviews } from './files.js';
-import { esc, monthNow, portalPath } from './format.js';
+import { declarationMaterialUploader, esc, monthNow, portalPath } from './format.js';
 import { app, has } from './state.js';
 
 const declarationLevelTones={STATEMENT:0,MEMO:1,WARNING_1:2,WARNING_2:3};
@@ -45,12 +45,14 @@ function declarationRecordCard(row,levels=[],types=[],readOnly=false){
   let reason=row.raw_status==='void'?'本条已作废，不计入绩效扣分，原记录和材料留档。':row.raw_status!=='active'?'本条尚未生效，当前不扣分。':row.upgrade_role==='source_second'?'本条是触发升级的第二次声明，不单独扣分；请查看对应备忘录或警告。':row.upgrade_role==='source_first'?(row.actual_points>0?'首次声明的扣分保留；对应备忘录或警告的扣分单独列示。':'首次声明单独计分，是否扣分按本条所属月份判断。'):row.upgrade_role==='result'?'由两张原声明升级生成，实际扣分按本条所属月份判断。':'实际扣分按本条记录所属月份及业务状态判断。';
   if(row.loa_excluded)reason+=' 本条所属月份为 LOA，不计入该月绩效，原登记分数保留。';
   const points=Number.isFinite(row.actual_points)?(row.actual_points?'−'+row.actual_points:'0'):'—';
+  const uploader=declarationMaterialUploader(row);
   return `<article class="declaration-record ${row.upgrade_role==='result'?'declaration-upgrade-result':''}" data-declaration-record="${row.id}"><header class="declaration-record-heading"><div class="declaration-card-identity"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small><span class="field-hint">${esc(row.level_name)} #${row.id}</span>${declarationStatusBadge(row.business_status)}</div></header>
-    <div class="declaration-record-context"><time>事件日期 ${esc(row.occurred_on)}</time>${row.deduction_month?`<span>绩效月份 ${esc(row.deduction_month)}</span>`:''}</div>${classification(row)}
+    <div class="declaration-record-context"><time>${row.incident_on?'生效日':'事件日期'} ${esc(row.occurred_on)}</time>${row.deduction_month?`<span>绩效月份 ${esc(row.deduction_month)}</span>`:''}</div>${classification(row)}
     <p class="declaration-description">${esc(row.description)}</p>
     <section class="declaration-score" aria-label="本条记录计分说明"><span class="declaration-score-status">${esc(row.score_status||row.business_status)}</span><span class="declaration-performance-score">实际扣分 <strong>${points}</strong> 分</span></section>
     <div class="declaration-operations"><div class="declaration-material-actions">${material(row)}</div>${actions(row)}</div>
-    <details class="declaration-card-details"><summary>详情${history?'及审核历史':''}</summary><div class="declaration-record-context"><span>${esc(row.attraction_name)}</span><span>${esc(row.submitter_name)} · ${esc(row.submitted_at)}</span><span>${esc(row.material_status)}</span></div>
+    ${uploader?`<p class="field-hint">${uploader}</p>`:''}
+    <details class="declaration-card-details"><summary>详情${history?'及审核历史':''}</summary><div class="declaration-record-context"><span>${esc(row.attraction_name)}</span>${row.incident_on&&row.incident_on!==row.occurred_on?`<span>原事件日期 ${esc(row.incident_on)}</span>`:'' }<span>登记人：${esc(row.submitter_name)} · ${esc(row.submitted_at)}</span><span>${esc(row.material_status)}</span></div>
     <p class="declaration-score-reason">${esc(reason)}</p><p class="declaration-registered-score">原登记分数 ${Number.isFinite(row.registered_points)?esc(row.registered_points):'—'} 分</p>
     ${row.void_reason?`<p class="declaration-void-note">作废原因：${esc(row.void_reason)}</p>`:''}${history}</details></article>`;
 }

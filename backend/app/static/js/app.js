@@ -32,11 +32,23 @@ import { renderVideoLearning } from './app/video-learning.js';
 import { renderLearningShares } from './app/learning-shares.js';
 import { mountDailyWish } from './app/daily-wish.js';
 
+async function openWarehouse(){
+  const request=beginViewRequest();
+  const initialView=state.warehouseOpenTasks?'tasks':undefined;
+  state.warehouseOpenTasks=false;
+  const {renderWarehouse}=await import('./app/warehouse.js');
+  if(!request.isCurrent())return;
+  return renderWarehouse(app,{
+    api,initialView,userId:state.me.id,isCurrent:request.isCurrent,onChanged:refreshActionBadge,
+  });
+}
+
 configureViews({
   home: renderHome,
   activityPoints: renderActivityPoints,
   activities: renderActivities,
   actionCenter: renderActionCenter,
+  warehouse: openWarehouse,
   operations: renderOperations,
   register: renderRegister,
   absence: renderAbsence,
@@ -88,6 +100,7 @@ async function initializeApp(){
     state.options=await api('/api/options');
     startExportTasks(state.me);
     if(new URLSearchParams(location.search).get('view')==='actionCenter')state.tab='actionCenter';
+    if(new URLSearchParams(location.search).get('view')==='warehouse'&&state.me.warehouse_entry)state.tab='warehouse';
     if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';
     applyCircleTheme();
     mountDailyWish(document.getElementById('themeStory'),state.me.id,{integrated:true});

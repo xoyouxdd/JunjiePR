@@ -53,7 +53,7 @@ def state(db: Session = Depends(get_db)):
 
 _ACTION_FIELDS = frozenset({
     "action", "pid", "confirmation_token", "meal_choice", "expected_line",
-    "expected_push7", "expected_opening", "expected_kind", "expected_arrival_outcome",
+    "expected_push7", "expected_opening", "expected_kind", "expected_route", "expected_arrival_outcome",
 })
 
 

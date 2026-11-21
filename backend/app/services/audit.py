@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,36 @@ from app.v2_models import (
 
 
 AUDIT_EMPLOYEE_ENTITY_TYPES = {"employee", "employee_group", "employee_loa", "employee_login_archive", "employee_number_change"}
+DEDUCTION_MATERIAL_SUPPLEMENT_ACTION = "补充扣分材料"
+
+
+def historical_material_uploaders(db: Session, record_ids: Iterable[int]) -> dict[int, str]:
+    """Resolve the latest supplement for deduction records already visible to the caller."""
+    ids = list(dict.fromkeys(str(record_id) for record_id in record_ids))
+    names: dict[int, str] = {}
+    for start in range(0, len(ids), 500):
+        events = (
+            db.query(AuditLog.entity_id, AuditLog.operator_name, AuditLog.after_json)
+            .filter(
+                AuditLog.entity_type == "deduction",
+                AuditLog.action == DEDUCTION_MATERIAL_SUPPLEMENT_ACTION,
+                AuditLog.entity_id.in_(ids[start:start + 500]),
+            )
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+            .all()
+        )
+        for entity_id, operator_name, after_json in events:
+            record_id = int(entity_id)
+            if record_id in names:
+                continue
+            try:
+                details = json.loads(after_json or "{}")
+            except ValueError:
+                details = None
+            contributor = details.get("contributor") if isinstance(details, dict) else None
+            name = contributor.strip() if isinstance(contributor, str) else ""
+            names[record_id] = name or (operator_name or "").strip()
+    return names
 
 
 def audit_summary(row: AuditLog) -> dict:

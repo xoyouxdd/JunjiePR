@@ -63,7 +63,7 @@ def build_declaration_workbook(data: dict) -> Workbook:
             subset = [row for row in rows if row["level_id"] == level["id"]]
             summary.append(excel_row([circle["attraction_name"], level["name"], len(subset), len({row["employee_id"] for row in subset}), *[sum(row["business_status"] == state for row in subset) for state in ("已生效", "待补材料", "审核中", "已作废")]]))
     detail = wb.create_sheet("逐条明细")
-    detail.append(["员工", "工号", "原景点圈", "事件日期", "处分类型", "处分等级", "内容", "登记人", "登记时间", "材料状态", "审核或升级状态", "业务状态", "升级工单号", "材料入口"])
+    detail.append(["员工", "工号", "原景点圈", "事件日期 / 生效日", "处分类型", "处分等级", "内容", "登记人", "登记时间", "材料状态", "审核或升级状态", "业务状态", "升级工单号", "材料入口"])
     for row in data["records"]:
         detail.append(excel_row([row["employee_name"], row["employee_no"], row["attraction_name"], row["occurred_on"], row["type_name"], row["level_name"], row["description"], row["submitter_name"], row["submitted_at"], row["material_status"], row["upgrade_status"], row["business_status"], row["upgrade_request_id"] or "", "系统内查看" if row["document_url"] else "无可查看材料"]))
     for ws in wb:

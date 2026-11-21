@@ -43,9 +43,10 @@ def live(aid,no):
             state['lastTick']=now;state['plan'].update(crew={},seven={},push7=[])
             for line in state['lines']:
                 for post in line['posts']:post['occ']=None
-            p=state['persons'][no];p.update(state='ready',role='rotation',start=0,end=1440,readyAt=now-1,
-                readySince=now-1,breakKind='rest',absences=[],visited=['A1'],line=None,
-                assign={'line':'A1','mode':'push','departAt':now-1})
+            ready_at = now - 0.5
+            p=state['persons'][no];p.update(state='ready',role='rotation',start=0,end=1440,readyAt=ready_at,
+                readySince=ready_at,breakKind='rest',absences=[],visited=['A1'],line=None,
+                assign={'line':'A1','mode':'push','departAt':ready_at})
             # Materialize the same issued task a real live board has before
             # comparing a roster import; otherwise the background clock can
             # legitimately add its taskId between the two snapshots.

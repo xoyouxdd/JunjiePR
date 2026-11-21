@@ -29,12 +29,13 @@ function frameClass(frame){
 function profilePortrait(me,key=me.avatar_key,frame=me.avatar_frame){
   return `<span class="employee-avatar-portrait ${frameClass(frame)}">${validKey(key)?`<img src="${esc(thumb(key))}" alt="${esc(me.name)}的头像" width="64" height="64">`:`<span aria-hidden="true">${esc((me.name||'我').slice(0,1))}</span>`}</span>`;
 }
-function mountAvatarWardrobe(host,{isCurrent=()=>true}={}){
+function mountAvatarWardrobe(host,{isCurrent=()=>true,appearanceDialog=false}={}){
   let disposed=false,catalog=null,preferences=null,draft='',draftFrame='plain',group='',page=0,busy=false,token=0;
   let wardrobe={favorites:[],recent:[],presets:[null,null,null]},filter='all',activePreset=0,frameOpen=false,presetOpen=false,themeOpen=false,wardrobeQueue=Promise.resolve();
   let activePane='avatars';
   const owner=state.me.id,valid=()=>!disposed&&host.isConnected&&isCurrent()&&state.me.id===owner;
-  host.innerHTML=`<div class="employee-avatar-profile"><div data-avatar-profile>${profilePortrait(state.me)}</div><div><strong>${esc(state.me.name)}</strong><p class="field-hint">个人形象 · 由你选择</p></div><button type="button" class="secondary" data-avatar-open aria-expanded="false">装扮头像</button></div><section class="avatar-wardrobe" aria-label="头像与边框" hidden></section>`;
+  const openLabel=appearanceDialog?'<span class="appearance-wardrobe-desktop-label">装扮头像</span><span class="appearance-wardrobe-mobile-label">头像装扮</span>':'装扮头像';
+  host.innerHTML=`<div class="employee-avatar-profile"><div data-avatar-profile>${profilePortrait(state.me)}</div><div><strong>${esc(state.me.name)}</strong><p class="field-hint">个人形象 · 由你选择</p></div><button type="button" class="secondary" data-avatar-open aria-expanded="false">${openLabel}</button></div><section class="avatar-wardrobe" aria-label="头像与边框" hidden></section>`;
   const editor=host.querySelector('.avatar-wardrobe'),open=host.querySelector('[data-avatar-open]');
   const changed=event=>{if(valid()&&event.detail?.owner===owner)host.querySelector('[data-avatar-profile]').innerHTML=profilePortrait(state.me);};
   window.addEventListener('app:avatar-changed',changed);
@@ -127,12 +128,12 @@ function mountAvatarWardrobe(host,{isCurrent=()=>true}={}){
 function showAvatarSettings({onSaved}={}){
   if(document.querySelector('[data-avatar-dialog]'))return;
   const originalFocus=document.activeElement;
-  const overlay=document.createElement('div');overlay.className='modal-overlay';
-  overlay.innerHTML='<section class="modal-card avatar-settings-dialog member-home-panel" data-avatar-dialog role="dialog" aria-modal="true" aria-labelledby="avatarSettingsTitle"><div class="avatar-wardrobe-heading"><h2 id="avatarSettingsTitle">个人外观</h2><button type="button" class="secondary" data-avatar-dialog-close>关闭</button></div><div data-appearance-host></div><div data-avatar-settings-host></div></section>';
+  const overlay=document.createElement('div');overlay.className='modal-overlay personal-appearance-overlay';
+  overlay.innerHTML='<section class="modal-card avatar-settings-dialog member-home-panel personal-appearance-dialog" data-avatar-dialog role="dialog" aria-modal="true" aria-labelledby="avatarSettingsTitle"><div class="avatar-wardrobe-heading personal-appearance-heading"><h2 id="avatarSettingsTitle">个人外观</h2><button type="button" class="secondary" data-avatar-dialog-close>关闭</button></div><div class="personal-appearance-scroll"><div data-appearance-host></div><div class="appearance-wardrobe-host" data-avatar-settings-host></div><div data-appearance-account></div></div></section>';
   document.body.append(overlay);
   const owner=state.me.id,host=overlay.querySelector('[data-avatar-settings-host]');
   const disposeAppearance=mountAppearance(overlay.querySelector('[data-appearance-host]'));
-  const dispose=mountAvatarWardrobe(host,{isCurrent:()=>overlay.isConnected&&state.me.id===owner});
+  const dispose=mountAvatarWardrobe(host,{isCurrent:()=>overlay.isConnected&&state.me.id===owner,appearanceDialog:true});
   const saved=event=>{if(event.detail?.owner===owner)onSaved?.();};window.addEventListener('app:avatar-changed',saved);
   let pageCleanup;
   const layer=bindDialogLayer(overlay,{initialFocus:overlay.querySelector('[data-avatar-dialog-close]'),onClose:()=>{disposeAppearance();dispose();unregisterPageCleanup(pageCleanup);window.removeEventListener('app:avatar-changed',saved);if(!originalFocus?.isConnected)document.getElementById('appearanceBtn')?.focus({preventScroll:true});}});

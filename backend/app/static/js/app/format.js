@@ -14,6 +14,11 @@ function portalPath(path) {
 
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 
+export function declarationMaterialUploader(record) {
+  const name=String(record.material_uploaded_by_name??'').trim();
+  return name?`<span class="declaration-material-uploader">材料上传人：${esc(name)}</span>`:'';
+}
+
 const pad2 = value => String(value).padStart(2,'0');
 const employeeNumber = value => String(value??'').trim().replace(/^0([0-9]{7})$/,'$1');
 

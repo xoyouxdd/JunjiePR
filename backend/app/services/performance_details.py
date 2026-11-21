@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.record_payloads import (
     ATTENDANCE_FILTER_STATUSES, DEDUCTION_FILTER_STATUSES,
-    RECOGNITION_FILTER_STATUSES, deduction_payload, recognition_payload,
+    RECOGNITION_FILTER_STATUSES, deduction_payload, deduction_payloads, recognition_payload,
     sick_leave_payloads,
 )
 from app.search_utils import like_escaped_pattern
@@ -21,6 +21,7 @@ from app.score_policy import loa_month_exclusion
 from app.score_queries import employee_month_scores
 from app.v2_models import AttendanceMonthlyScore, DeductionRecord, Employee, RecognitionAttachment, RecognitionRecord, SickLeaveRecord
 from app.services.attendance import ensure_month_attendance
+from app.services.audit import historical_material_uploaders
 from app.services.identity import acting_period_notes, identity_label, identity_labels
 
 def member_records_payload(
@@ -60,7 +61,7 @@ def member_records_payload(
             query = query.filter(DeductionRecord.status == status)
         elif status in RECOGNITION_FILTER_STATUSES or status in ATTENDANCE_FILTER_STATUSES:
             query = query.filter(DeductionRecord.id == -1)
-        result.extend(deduction_payload(row) for row in query.order_by(DeductionRecord.submitted_at.desc()).limit(1000).all())
+        result.extend(deduction_payloads(db, query.order_by(DeductionRecord.submitted_at.desc()).limit(1000).all()))
     if record_type in {"all", "sick_leave"}:
         query = db.query(SickLeaveRecord).filter(SickLeaveRecord.employee_id.in_(member_ids) if member_ids else SickLeaveRecord.id == -1)
         if month:
@@ -98,9 +99,13 @@ def member_score_detail_payload(
     *,
     role_name: str | None = None,
     sick_leave_rows: list[dict] | None = None,
+    historical_uploaders: dict[int, str] | None = None,
 ) -> dict:
     recognition_rows = [recognition_payload(row) for row in recognitions]
-    deduction_rows = [deduction_payload(row) for row in deductions]
+    historical_uploaders = historical_uploaders or {}
+    deduction_rows = [
+        deduction_payload(row, historical_uploader=historical_uploaders.get(row.id, "")) for row in deductions
+    ]
     if sick_leave_rows is None:
         sick_leave_rows = sick_leave_payloads(db, sick_leaves)
     all_records: list[dict] = []
@@ -141,6 +146,7 @@ def member_score_detail_payload(
                 "title": f"{row['deduction_type']} · {row['deduction_level']}",
                 "content": row["description"] + (f" · 作废原因：{row['void_reason']}" if row["void_reason"] else ""),
                 "operator_name": row["submitter_name"],
+                "material_uploaded_by_name": row["material_uploaded_by_name"],
                 "status": row["status"],
                 "status_name": row["status_name"],
                 "reason": row["void_reason"],
@@ -313,6 +319,9 @@ def monthly_member_score_rows(
     # the whole batch rather than once per employee.
     for record, payload in zip(records.sick_leaves, sick_leave_payloads(db, records.sick_leaves)):
         sick_payload_groups[record.employee_id].append(payload)
+    historical_uploaders = historical_material_uploaders(
+        db, (row.id for row in records.deductions if not (row.material_uploaded_by_name or "").strip())
+    )
     labels = identity_labels(db, employee_ids)
     notes = acting_period_notes(db, employee_ids, f"{month}-01", f"{month}-{monthrange(int(month[:4]), int(month[5:]))[1]:02d}")
     empty_score = {"recognition_score": 0, "deduction_score": 0, "attendance_score": 0, "total_score": 0}
@@ -324,6 +333,7 @@ def monthly_member_score_rows(
                 sick_leave_groups[employee_id], records.attendance.get(employee_id),
                 role_name=labels.get(employee_id, "未配置"),
                 sick_leave_rows=sick_payload_groups[employee_id],
+                historical_uploaders=historical_uploaders,
             ),
             "acting_note": notes.get(employee_id, ""),
         }

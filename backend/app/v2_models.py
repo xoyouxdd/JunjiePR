@@ -1089,6 +1089,9 @@ class DeductionRecord(Base):
     points: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     scoring_policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     occurred_on: Mapped[str] = mapped_column(String(10), index=True)
+    # Advanced dispositions use occurred_on for the effective date. Keep the
+    # original incident date for traceability and related incident workflows.
+    incident_on: Mapped[str | None] = mapped_column(String(10), nullable=True)
     deduction_month: Mapped[str] = mapped_column(String(7), index=True)
     description: Mapped[str] = mapped_column(Text)
     document_file_id: Mapped[int] = mapped_column(ForeignKey("stored_files.id"))

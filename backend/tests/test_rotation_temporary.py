@@ -159,7 +159,8 @@ def seed_live():
         with S.transaction(db):
             row=S.day_row(db,aid,date.today().isoformat());state=S.day_state(row);state['lastTick']=minute
             state['plan'].update(crew={},seven={},push7=[])
-            p=state['persons']['9730100'];p.update(state='ready',role='rotation',start=0,end=1440,readyAt=minute-1,readySince=minute-1,
+            ready_at = minute - 0.5
+            p=state['persons']['9730100'];p.update(state='ready',role='rotation',start=0,end=1440,readyAt=ready_at,readySince=ready_at,
                 breakKind='rest',absences=[],visited=['A1'],assign=None)
             eng, _ = S.engine_for(db, cfg, row, state)
             forecast.plan(eng, minute)

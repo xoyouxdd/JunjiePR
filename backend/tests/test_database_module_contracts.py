@@ -243,6 +243,8 @@ def mock_bootstrap(monkeypatch):
     monkeypatch.setattr(monthly_ranks, "backfill_closed_rankings", record("backfill_closed_rankings"))
     medals = importlib.import_module("app.attendance_medals_models")
     monkeypatch.setattr(medals, "backfill_account_identities", record("backfill_account_identities"))
+    warehouse = importlib.import_module("app.warehouse.models")
+    monkeypatch.setattr(warehouse, "seed_positions", record("seed_positions"))
     for name in (
         "run_schema_migration_steps", "seed_reference_data", "seed_test_accounts",
         "ensure_gsm_management_scopes", "disable_test_accounts", "ensure_highest_admin_account",
@@ -259,7 +261,8 @@ def test_each_start_reapplies_guarantees_in_original_order_and_closes_session(mo
     expected = [
         "directories", "create_all", "run_schema_migration_steps", "seed_reference_data",
         "seed_test_accounts", "ensure_gsm_management_scopes", "disable_test_accounts",
-        "ensure_highest_admin_account", "ensure_circle_hr_accounts", "backfill_account_identities", "commit", "backfill_closed_rankings", "create_score_view",
+        "ensure_highest_admin_account", "ensure_circle_hr_accounts", "backfill_account_identities",
+        "seed_positions", "commit", "backfill_closed_rankings", "create_score_view",
         "ensure_rotation_accounts", "close",
     ]
     bootstrap.init_db()

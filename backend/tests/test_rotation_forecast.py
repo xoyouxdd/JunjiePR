@@ -38,6 +38,64 @@ def occupants(e, lid='A'):
     return [x.get('occ') for x in e.line(lid)['posts']]
 
 
+@pytest.mark.parametrize('mode,exit_pid,expected,sort_time', [
+    ('push_off', 'A2', [None, 'A0', 'A1', 'A3'], 435),
+    ('push', 'A3', [None, 'A0', 'A1', 'A2'], 600),
+])
+def test_withdrawal_can_push_the_longest_standing_off_duty_worker(mode, exit_pid, expected, sort_time):
+    e = fixture((4,))
+    e.S['lateShiftsByDay'] = {e.d['date']: []}
+    e.P['A2'].update(end=625, continuousStart=None, lineStart=450)
+    e.P['A3'].update(end=610, continuousStart=500)
+    plan = F.closure_plan(e, e.line('A'), 0, 600, mode)
+    assert plan['exit']['pid'] == exit_pid and plan['outcome'] == 'done'
+    F.withdraw_post(e, e.line('A'), 0, 600, 'test', mode)
+    assert occupants(e) == expected and not e.line('A')['posts'][0]['open']
+    assert e.P[exit_pid]['state'] == 'done'
+    assert e.P['A0']['continuousStart'] == 420
+    assert e.line('A')['sortAt'] == sort_time
+
+
+def test_withdrawal_fills_a_vacancy_without_leaving_the_line_or_changing_its_clock():
+    e = fixture((4,))
+    line = e.line('A')
+    F.remove(e, e.P['A2'], 600)
+    e.P['A2']['state'] = 'pending'
+    line['posts'][1]['hold'] = {'pid': 'A1'}
+    assert F.closure_plan(e, line, 0, 600, 'push_off')['exit'] is None
+    F.withdraw_post(e, line, 0, 600, 'test', 'push_off')
+    assert occupants(e) == [None, 'A1', 'A0', 'A3']
+    assert line['sortAt'] == 435
+
+
+def test_withdrawal_can_fill_a_requested_opening_past_an_unrelated_vacancy():
+    e = fixture((4,))
+    line = e.line('A')
+    for pid in ('A1', 'A3'):
+        F.remove(e, e.P[pid], 600)
+        e.P[pid]['state'] = 'pending'
+    line['posts'][3]['openRequest'] = True
+    variants = F.closure_previews(e, 600)['A0']
+    assert variants['push_open']['openingPost'] == 'A3'
+    assert variants['push_open']['exitName'] is None
+    assert variants['push_sick'] is None
+    F.withdraw_post(e, line, 0, 600, 'test', 'push_open')
+    assert occupants(e) == [None, None, 'A0', 'A2']
+    assert not line['posts'][0]['open'] and not line['posts'][3]['openRequest']
+    assert line['sortAt'] == 435
+
+
+def test_withdrawal_to_relieve_a_sick_worker_in_the_middle_keeps_tail_and_clock():
+    e = fixture((4,))
+    line = e.line('A')
+    e.P['A2']['requestedExit'] = 'sick'
+    assert F.closure_previews(e, 600)['A0']['push_sick']['target'] == 'A2'
+    F.withdraw_post(e, line, 0, 600, 'test', 'push_sick')
+    assert occupants(e) == [None, 'A0', 'A1', 'A3']
+    assert e.P['A2']['state'] == 'sick' and 'requestedExit' not in e.P['A2']
+    assert line['sortAt'] == 435
+
+
 def add_later_shifts(people, starts=(480, 510)):
     template = next(iter(people.values()))
     for start in starts:
@@ -106,7 +164,7 @@ def test_targeted_prefix_push_updates_head_only_when_target_is_last(kind, index)
     assert a['kind'] == kind and a['target'] == p['pid']
     F.execute(e, 'new0', 600, 'test', 'A')
     assert p['state'] == {'sick': 'sick', 'off': 'done', 'out': 'away'}[kind]
-    assert e.line('A')['sortAt'] == (600 if index == 2 else 435)
+    assert e.P['new0']['entrySortAt'] == e.line('A')['sortAt'] == (600 if index == 2 else 435)
 
 
 @pytest.mark.parametrize('index,expected,sort_time', [
@@ -142,13 +200,27 @@ def test_timeout_removes_only_unconfirmed_person_and_refreshes_forecasts():
     e = fixture()
     e.P['new1']['readyAt'] = 601
     e.P['new2']['readyAt'] = e.P['new3']['readyAt'] = 610
-    F.tick(e, 603)
+    F.tick(e, 600 + 59/60)
+    assert e.P['new0']['state'] == 'rest' and e.P['new0']['assign']
+    F.tick(e, 601)
     assert e.P['new0']['state'] == 'exception' and e.P['new0']['assign'] is None
     assert e.P['new1']['assign'] and e.P['new1']['state'] == 'rest'
     with pytest.raises(E.ActionError):
-        F.execute(e, 'new0', 603, 'test', 'A')
+        F.execute(e, 'new0', 601, 'test', 'A')
     F.manual_place(e, 'new0', 'A', 0, 'push', 604, 'screen')
     assert e.P['new0']['state'] == 'onpost' and not e.P['new0'].get('exception')
+
+
+def test_saved_three_minute_deadline_shortens_without_losing_paused_time():
+    e = fixture()
+    waiting = e.P['new0']
+    waiting['timeoutAt'] = 633
+    F.tick(e, 630 + 59/60)
+    assert F.task_view(e, waiting, 630 + 59/60)['deadlineAt'] == 631
+    F.tick(e, 631)
+    assert waiting['state'] == 'exception'
+    assert waiting['exception']['deadlineAt'] == 631
+    assert waiting['exception']['timeoutWindowMinutes'] == 1
 
 
 def test_pool_return_and_remaining_time_and_repeat_meal_confirmation():
@@ -175,7 +247,7 @@ def test_all_closed_pauses_timeouts_and_manual_other_does_not_auto_restore():
     assert not e.P['new0'].get('exception')
     e.line('A')['active'] = True
     F.tick(e, 621)
-    assert e.P['new0']['timeoutAt'] == 624
+    assert e.P['new0']['timeoutAt'] == 622
     assert e.P['new1']['state'] == 'other' and e.P['new1']['assign'] is None
 
 
@@ -293,6 +365,49 @@ def test_same_shift_end_time_uses_later_post_but_earlier_shift_beats_position():
     assert e.P['new1']['assign']['target'] in {'A3', 'B3'}
 
 
+@pytest.mark.parametrize('short_stint', ['A2', 'B2'], ids=['same-line', 'cross-line'])
+def test_off_duty_ranks_end_time_before_continuous_standing_time(short_stint):
+    e = fixture(now=935)
+    add_later_shifts(e.P)
+    e.P['A1'].update(end=960, continuousStart=880)
+    e.P[short_stint].update(end=930, continuousStart=915)
+    F.plan(e, 935)
+    assert e.P['new0']['assign']['target'] == short_stint
+
+    e.P[short_stint]['end'] = 960
+    F.plan(e, 935)
+    assert e.P['new0']['assign']['target'] == 'A1'
+
+
+def test_off_duty_uses_segment_start_then_position_for_old_records():
+    e = fixture((3,), now=935)
+    add_later_shifts(e.P)
+    e.P['A1'].update(end=960, continuousStart=None, lineStart=880)
+    e.P['A2'].update(end=960, continuousStart=915, lineStart=850)
+    F.plan(e, 935)
+    assert e.P['new0']['assign']['target'] == 'A1'
+
+    for pid in ('A1', 'A2'):
+        e.P[pid].update(continuousStart=None, lineStart=None)
+    F.plan(e, 935)
+    assert e.P['new0']['assign']['target'] == 'A2'
+
+
+def test_longer_stint_midline_relief_keeps_header_until_actual_last_open_post():
+    e = fixture((4,), now=935)
+    add_later_shifts(e.P)
+    e.line('A')['posts'][3].update(open=False, occ=None)
+    e.P['A3']['state'] = 'other'
+    e.P['A1'].update(end=960, continuousStart=880)
+    e.P['A2'].update(end=960, continuousStart=915)
+    F.plan(e, 935)
+    assert e.P['new0']['assign']['target'] == 'A1'
+    assert F.execute(e, 'new0', 935, 'test', 'A')['executed']
+    assert e.P['A1']['state'] == 'done' and e.line('A')['sortAt'] == 435
+    assert F.execute(e, 'new1', 935, 'test', 'A')['executed']
+    assert e.P['A2']['state'] == 'done' and e.line('A')['sortAt'] == 935
+
+
 def test_manual_middle_placement_keeps_head_clock_and_crossline_swap_updates_correct_lines():
     e = fixture()
     F.manual_place(e, 'new0', 'A', 1, 'swap', 600, 'screen')
@@ -374,12 +489,12 @@ def test_push7_timeout_gives_next_ready_candidate_the_route_without_recording_a_
     e.P['new2']['state'] = e.P['new3']['state'] = 'pending'
     F.tick(e, 600)
     assert e.P['new0']['assign']['kind'] == 'push7'
-    F.tick(e, 603)
+    F.tick(e, 602)
     assert e.P['new0']['state'] == 'exception'
     assert e.P['new1']['assign']['kind'] == 'push7'
     assert occupants(e) == ['A0', 'A1', 'A2'] and F.push7_history(e) == {}
-    assert F.execute(e, 'new1', 603, 'test', 'A')['executed']
-    assert F.push7_history(e) == {'new1': (1, e.d['date'], 603)}
+    assert F.execute(e, 'new1', 602, 'test', 'A')['executed']
+    assert F.push7_history(e) == {'new1': (1, e.d['date'], 602)}
 
 
 def test_first_prearranged_person_is_never_shifted_before_their_start():
@@ -457,6 +572,26 @@ def test_early_manual_placement_keeps_late_shift_in_rotation_in_last_twenty_minu
     assert occupants(eng) == [person['pid']]
 
 
+def test_confirmed_break_allows_final_twenty_minute_push_but_respects_absence_and_shift_end():
+    e = fixture((1,), now=940)
+    person = e.P['new0']
+    person.update(start=430, breakStart=925)
+    for pid in ('new1', 'new2', 'new3'):
+        e.P[pid]['state'] = 'other'
+    for p in e.P.values():
+        p['end'] = 960
+    # The only occupied post belongs to the late shift, so the route is an ordinary push.
+    e.S['lateShiftsByDay'] = {e.d['date']: [435 * 60]}
+    F.plan(e, 940)
+    assert person['assign']['kind'] == 'push'
+    person['absences'] = [{'start': 950, 'end': 970}]
+    assert not F.eligible(e, person, 940)
+    person['absences'] = []
+    assert not F.eligible(e, person, 960)
+    person['breakStart'] = 930
+    assert not F.eligible(e, person, 940)
+
+
 def test_scheduled_opening_is_forecast_but_cannot_execute_early_or_timeout_while_closed():
     e = fixture((1,))
     e.line('A')['posts'][0].update(open=False, opened=False, openAt='10:30', manual=False, occ=None)
@@ -468,7 +603,7 @@ def test_scheduled_opening_is_forecast_but_cannot_execute_early_or_timeout_while
     F.tick(e, 620)
     assert e.P['new0']['state'] == 'rest'
     F.tick(e, 630)
-    assert e.P['new0']['timeoutAt'] == 633
+    assert e.P['new0']['timeoutAt'] == 631
     F.execute(e, 'new0', 630, 'test', 'A')
     assert occupants(e) == ['new0'] and not e.line('A').get('adding')
     assert e.line('A')['sortAt'] == 435 and not e.line('A')['posts'][0]['openRequest']

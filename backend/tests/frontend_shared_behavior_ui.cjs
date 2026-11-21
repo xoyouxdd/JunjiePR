@@ -7,7 +7,7 @@ const {routeFrontend} = require('./support/frontend-page.cjs');
 (async () => {
   const browser = await chromium.launch({channel: 'msedge', headless: true});
   try {
-    const page = await browser.newPage({viewport: {width: 390, height: 900}});
+    const page = await browser.newPage({viewport: {width: 390, height: 900}, reducedMotion: 'reduce'});
     const errors = [];
     const requests = [];
     let conflict = false;
@@ -208,10 +208,38 @@ const {routeFrontend} = require('./support/frontend-page.cjs');
       host.innerHTML = deductionMaterialPickerMarkup();
       bindDeductionMaterialPicker(host);
     });
+    const materials = page.getByRole('region', {name: '声明', exact: true});
+    assert.equal(await materials.getByRole('heading').innerText(), '声明');
+    const uploadEntries = materials.locator('.deduction-material-entry');
+    for (const width of [320, 390, 875]) {
+      await page.setViewportSize({width, height: 900});
+      await page.waitForFunction(expectedWidth => innerWidth === expectedWidth, width);
+      const boxes = await uploadEntries.evaluateAll(labels => labels.map(label => label.getBoundingClientRect().toJSON()));
+      assert.equal(boxes.length, 3);
+      assert.ok(boxes.every(box => box.left >= 0 && box.right <= width && box.height >= 68), JSON.stringify({width, boxes}));
+      if (width === 875) {
+        assert.ok(boxes.every(box => box.top === boxes[0].top && box.height === boxes[0].height));
+        assert.ok(boxes[0].right <= boxes[1].left && boxes[1].right <= boxes[2].left);
+      } else {
+        assert.ok(boxes.every(box => box.left === boxes[0].left && box.width === boxes[0].width));
+        assert.ok(boxes[0].bottom <= boxes[1].top && boxes[1].bottom <= boxes[2].top);
+      }
+    }
+    await page.setViewportSize({width: 390, height: 900});
+    const chooseFile = async (entry, associatedInput) => {
+      const [chooser] = await Promise.all([page.waitForEvent('filechooser'), entry.click()]);
+      assert.equal(await chooser.element().getAttribute('id'), await associatedInput.getAttribute('id'));
+      return chooser;
+    };
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+Xdy8AAAAASUVORK5CYII=', 'base64');
     const album = page.locator('[data-material-album-input]');
     const image = name => ({name, mimeType: 'image/png', buffer: png});
-    await album.setInputFiles([image('first.png'), image('second.png')]);
+    const camera = page.locator('[data-material-camera-input]');
+    assert.equal(await camera.getAttribute('capture'), 'environment');
+    await (await chooseFile(uploadEntries.nth(1), camera)).setFiles(image('camera.png'));
+    assert.match(await materials.locator('[data-material-summary]').innerText(), /camera.png/);
+    await materials.getByRole('button', {name: '删除第1张照片'}).click();
+    await (await chooseFile(uploadEntries.nth(2), album)).setFiles([image('first.png'), image('second.png')]);
     assert.equal(await page.locator('[data-material-preview]').count(), 2);
     assert.match(await page.locator('[data-material-preview]').first().getAttribute('src'), /^blob:/);
     await page.getByRole('button', {name: '删除第1张照片'}).click();
@@ -221,11 +249,13 @@ const {routeFrontend} = require('./support/frontend-page.cjs');
     assert.equal(await page.locator('[data-material-preview]').count(), 0);
     await album.setInputFiles(image('replacement.png'));
     assert.match(await page.locator('[data-material-summary]').innerText(), /replacement.png/);
-    await page.locator('[data-material-pdf-input]').setInputFiles({name: 'new.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7')});
+    const pdf = page.locator('[data-material-pdf-input]');
+    await (await chooseFile(uploadEntries.nth(0), pdf)).setFiles({name: 'new.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.7')});
     assert.match(await page.locator('[data-material-summary]').innerText(), /new.pdf/);
     assert.equal(await page.locator('[data-material-preview]').count(), 0);
     await page.locator('[data-material-remove-pdf]').click();
-    assert.match(await page.locator('[data-material-summary]').innerText(), /请选择一种材料方式/);
+    assert.equal(await page.locator('[data-material-summary]').innerText(), '');
+    assert.match(await materials.locator('.deduction-material-help').innerText(), /主管可后补.*材料就绪后才扣分/);
 
     await page.evaluate(async () => {
       const {attachmentControl, bindFilePreviews} = await import('/static/js/app/files.js');

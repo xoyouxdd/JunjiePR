@@ -194,6 +194,22 @@ p { margin: 0 0 12px; color: var(--muted); }
 .operations-closures > div { display: grid; gap: 7px; padding: 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .operations-closures small { color: var(--muted); overflow-wrap: anywhere; }
 .form-stack { display: grid; gap: 12px; }
+.poc-batch {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+.poc-batch > summary { color: var(--primary-dark); font-weight: 700; cursor: pointer; }
+.poc-batch > form { margin-top: 12px; }
+.poc-batch .download-link { justify-self: start; }
+.poc-batch .field-hint, [data-poc-batch-status] p { margin: 0; }
+[data-poc-batch-status]:empty { display: none; }
+.poc-batch-recipients { max-height: min(42vh, 320px); overflow: auto; padding-inline-start: 1.5rem; overflow-wrap: anywhere; }
+.poc-batch-recipients > li { padding: 8px 6px; border-bottom: 1px solid var(--line); }
+.poc-batch-recipients small { display: block; color: var(--muted); }
+.poc-batch-recipients p { margin: 4px 0 0; }
 label { display: grid; gap: 6px; color: var(--text-label); font-weight: 600; }
 input, select, textarea {
   width: 100%;
@@ -219,6 +235,7 @@ input, select, textarea {
 .recognizer-person { width: 100%; min-height: 40px; padding: 8px 12px 8px 18px; border: 0; border-radius: var(--radius-sm); background: var(--panel); color: var(--text); text-align: left; font: inherit; }
 .recognizer-person:hover, .recognizer-person:focus-visible, .recognizer-person[aria-selected="true"] { background: var(--info-bg); color: var(--primary-dark); outline: 2px solid color-mix(in srgb, var(--primary) 18%, transparent); outline-offset: -2px; }
 .recognizer-empty { padding: 10px 12px; color: var(--muted); font-size: var(--fs-base); font-weight: 400; }
+.deduction-classification-fields { align-items: start; }
 .deduction-type-picker { min-width: 0; }
 .deduction-type-picker .recognizer-menu { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; max-height: min(360px, 50vh); }
 .deduction-type-picker .recognizer-trigger > [data-deduction-type-value] { min-width: 0; overflow-wrap: anywhere; }
@@ -240,9 +257,32 @@ textarea { min-height: 92px; resize: vertical; }
 .native-file-trigger { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: 44px; padding: 0 14px; border: 0; border-radius: var(--radius-sm); margin: 0; background: var(--btn-secondary-bg); color: var(--btn-secondary-text); font: inherit; font-weight: 600; cursor: pointer; text-align: center; }
 .native-file-input { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .native-file-input:focus-visible + * { outline: 3px solid rgba(29,111,216,.32); outline-offset: 3px; }
-.deduction-material-picker { border: 1px dashed #7da8d8; border-radius: var(--radius-lg); padding: 12px; display: grid; gap: 9px; background: var(--info-bg-soft); transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, background var(--motion-fast) ease; }
-.deduction-material-picker.is-selected { border-style: solid; border-color: #1d6fd8; background: var(--info-bg-soft); box-shadow: 0 0 0 3px rgba(29,111,216,.09); }
-.deduction-material-picker legend { padding: 0 5px; color: #173d68; font-weight: 700; }
+.deduction-material-picker {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  background: var(--panel);
+}
+.deduction-material-picker.is-selected { border-color: var(--primary); }
+.deduction-material-title { margin: 0; color: var(--text-strong); font-size: var(--fs-2xl); }
+.deduction-material-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+.deduction-material-option { position: relative; display: grid; min-width: 0; }
+.deduction-material-entry {
+  align-content: start;
+  min-height: 104px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--primary) 6%, var(--panel));
+  color: var(--text-strong);
+  cursor: pointer;
+}
+.deduction-material-entry:hover, .native-file-input:focus-visible + .deduction-material-entry { border-color: var(--primary); }
+.deduction-material-entry svg { width: 20px; height: 20px; color: var(--primary); }
+.deduction-material-entry strong { font-size: var(--fs-lg); }
+.deduction-material-entry span, .deduction-material-help { color: var(--text-secondary); font-size: var(--fs-sm); font-weight: 400; overflow-wrap: anywhere; }
+.deduction-material-help { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; }
 .material-selected-file { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .material-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 8px; max-width: 520px; }
 .material-photo-card { position: relative; min-width: 0; margin: 0; overflow: hidden; border: 1px solid #d8e4f2; border-radius: var(--radius-md); background: var(--panel); }
@@ -251,7 +291,7 @@ textarea { min-height: 92px; resize: vertical; }
 .material-photo-remove { position: absolute; top: 4px; right: 4px; width: 26px; min-width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-pill); background: rgba(15, 23, 42, .78); color: var(--text-on-dark); font-size: var(--fs-xl); line-height: 1; }
 .material-selection-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .material-selection-actions button { min-width: auto; }
-.deduction-material-summary { min-height: 38px; padding: 9px 10px; border-radius: var(--radius-md); background: var(--panel); color: var(--text-secondary); font-size: var(--fs-base); line-height: 1.5; }
+.deduction-material-summary:not(:empty) { min-height: 38px; margin-top: 10px; padding: 9px 10px; border-radius: var(--radius-md); background: var(--surface-soft); color: var(--text-secondary); font-size: var(--fs-base); line-height: 1.5; }
 .deduction-material-summary strong { color: #173d68; }
 .deduction-material-summary span { color: var(--muted); }
 .material-submission-state { margin-top: 4px; border-radius: var(--radius-md); padding: 11px 13px; border: 1px solid #7da8d8; background: var(--info-bg-soft); color: #173d68; }
@@ -802,8 +842,9 @@ th { background: var(--neutral-bg); font-weight: 700; white-space: nowrap; }
   table { min-width: 700px; }
   input, select, textarea, button { font-size: var(--fs-lg); }
   .record-line { align-items: flex-start; }
-  .deduction-material-picker .evidence-actions { display: grid; grid-template-columns: 1fr; }
-  .deduction-material-picker .evidence-actions button, .deduction-material-picker .evidence-actions .native-file-trigger { width: 100%; }
+  .deduction-material-options { grid-template-columns: minmax(0, 1fr); }
+  .deduction-material-entry { grid-template-columns: 20px minmax(0, 1fr); align-content: center; align-items: center; gap: 2px 8px; min-height: 68px; padding: 10px 12px; }
+  .deduction-material-entry span { grid-column: 2; }
   .material-photo-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .material-selection-actions { align-items: stretch; }
   .image-preview-stage img.is-landscape { width: 118%; max-width: none; }

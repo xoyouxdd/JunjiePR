@@ -3,6 +3,7 @@
 
 const $app = document.getElementById('rtApp');
 const $tabs = document.getElementById('rtTabs');
+const boardTotals = document.getElementById('rtBoardTotals');
 const TABS = [['board', '看板'], ['draft', '每日班表'], ['roster', '名单'], ['records', '记录'], ['settings', '设置']];
 let me = null;
 let tab = 'board';
@@ -635,6 +636,7 @@ RT.render = (fromTicker,forceDaily=false) => {
     [...$app.querySelectorAll('details')].forEach((el, i) => { el.open = expanded[i] || false; });
     return;
   }
+  renderRotationTotals(boardTotals, RT.data.day, nowMin());
   // Refresh an idle editable daily board on live changes or the first-shift boundary.
   if(tab==='draft'&&!forceDaily&&daily.data?.can_edit&&daily.date<=RT.data.clock.date&&!daily.loading&&!daily.busy&&!editing()){
     // Only an already enabled board freezes at the first shift.

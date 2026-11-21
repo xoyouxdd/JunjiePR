@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { mountMedalCollection } from './attendance-medals.js';
 import { beginViewRequest, captureViewContext } from './context.js';
 import { attachmentControl, bindFilePreviews } from './files.js';
-import { esc, fmt, fmtDeduction, monthNow, prefersReducedMotion } from './format.js';
+import { declarationMaterialUploader, esc, fmt, fmtDeduction, monthNow, prefersReducedMotion } from './format.js';
 import { updateIdentityMemberCount } from './navigation.js';
 import { coveredSickDisclosure, splitCoveredSickRecords } from './records.js';
 import { app } from './state.js';
@@ -25,7 +25,7 @@ function memberRecordCard(record){
   const score=record.record_type==='sick_leave'?'':`<strong class="member-record-score ${scoreClass} ${!record.included?'not-included':''}">${esc(record.score_text)}</strong>`;
   const reason=record.status==='rejected'&&record.reason?`<div class="member-reject-reason"><strong>不通过原因：</strong>${esc(record.reason)}</div>`:'';
   const employee=record.employee_name?`<span class="member-record-employee">${esc(record.employee_name)}${record.employee_no?` · ${esc(record.employee_no)}`:''}</span>`:'';
-  return `<article class="member-detail-card ${stateClass} ${!record.included?'is-excluded':''}"><div class="member-detail-top"><div><span class="member-record-type type-${record.record_type}">${esc(record.record_type_name)}</span>${employee}<strong>${esc(record.business_date)} · ${esc(record.title)}</strong></div>${score}</div><p>${esc(record.content)}</p>${reason}<div class="member-detail-meta"><span class="member-record-status status-${esc(record.status)}">${esc(record.status_name)}</span><span>登记人：${esc(record.operator_name)}</span><span class="member-included ${includedClass}">${record.included?'已计入综合分':'未计入综合分'}</span>${memberAttachment(record)}</div></article>`;
+  return `<article class="member-detail-card ${stateClass} ${!record.included?'is-excluded':''}"><div class="member-detail-top"><div><span class="member-record-type type-${record.record_type}">${esc(record.record_type_name)}</span>${employee}<strong>${esc(record.business_date)} · ${esc(record.title)}</strong></div>${score}</div><p>${esc(record.content)}</p>${reason}<div class="member-detail-meta"><span class="member-record-status status-${esc(record.status)}">${esc(record.status_name)}</span><span>登记人：${esc(record.operator_name)}</span>${declarationMaterialUploader(record)}<span class="member-included ${includedClass}">${record.included?'已计入综合分':'未计入综合分'}</span>${memberAttachment(record)}</div></article>`;
 }
 
 function memberScoreDetailHtml(row,kind){

@@ -15,6 +15,9 @@ const integer=(value,min=1)=>{const number=Number(value);if(!Number.isSafeIntege
 const required=value=>{if(!String(value||'').trim())throw new Error('请填写完整的必填内容');return String(value).trim();};
 const localInput=offset=>new Date(Date.now()+offset+8*3600000).toISOString().slice(0,16);
 const input=(name,label,type='text',value='',extra='')=>`<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra} required></label>`;
+const giftArt='<svg viewBox="0 0 160 120" fill="none" aria-hidden="true"><ellipse cx="80" cy="104" rx="47" ry="6" fill="currentColor" opacity=".12"/><rect x="40" y="48" width="80" height="54" rx="5" fill="currentColor" opacity=".7"/><rect x="35" y="39" width="90" height="18" rx="4" fill="currentColor"/><path d="M75 39h10v63H75z" fill="var(--panel)" opacity=".65"/><path d="M80 39C48 39 47 17 60 18c13 0 20 21 20 21Zm0 0c32 0 33-22 20-21-13 0-20 21-20 21Z" stroke="currentColor" stroke-width="5"/><path d="m23 23 2 6 6 2-6 2-2 6-2-6-6-2 6-2Zm112 45 2 5 5 2-5 2-2 5-2-5-5-2 5-2Z" fill="currentColor" opacity=".55"/></svg>';
+const walletMarkup=funds=>`<div class="activity-wallet-total"><small>可用积点</small><strong>${esc(funds.available)}</strong></div>${funds.frozen?`<span class="activity-frozen">冻结 ${esc(funds.frozen)} 点 <abbr title="竞拍冻结的积点暂不可再次使用" aria-label="竞拍冻结的积点暂不可再次使用">ⓘ</abbr></span>`:''}`;
+const signatureMarkup=count=>`待签收${count?`<span class="activity-count">${esc(count)}</span>`:''}`;
 
 function prizeFields(kind='draw'){return `<div class="activity-prize-editor">${input('prize_name','奖品名称')}${prizePhotoFields()}${input('prize_quantity',kind==='auction'?'份数（每个竞拍单元一件）':'份数','number',1,kind==='auction'?'readonly':'min="1" max="1000"')}<label>奖品说明<input name="prize_description" maxlength="2000"></label><button type="button" class="secondary" data-remove-prize>移除此奖品</button></div>`;}
 function lotFields(kind){return `<fieldset class="activity-lot-editor"><legend>${kind==='draw'?'奖池':'拍品'}</legend>
@@ -128,17 +131,19 @@ export async function renderActivities(){
   function paint(){
     const funds=data.balance;
     const events=data.items;
-    host.innerHTML=`${focusedEvent?backLink():''}<section class="panel activity-heading"><div><span class="field-hint">PR · 活动中心</span><h2>${focusedEvent?'活动详情':'用认可积点，参与精彩活动'}</h2>${focusedEvent?'':'<p>抽奖每次必得奖品 · 拍卖以积点竞价</p>'}</div><div class="activity-wallet"><strong>${esc(funds.available)}<small> 可用积点</small></strong><span>冻结 ${esc(funds.frozen)} 点</span></div></section>
-      <div class="activity-toolbar"><div>${[['all','全部活动'],['mine','我的活动'],['sign',`待本人签收 ${data.pending_signatures||0}`],...(data.can_create||data.can_manage?[['manage','活动管理']]:[])].map(([id,name])=>`<button type="button" class="${filter===id?'primary':'secondary'}" data-filter="${id}" aria-pressed="${filter===id}">${name}</button>`).join('')}</div><div><button type="button" class="secondary" data-refresh>刷新</button>${data.can_create?'<button type="button" class="primary" data-create>创建活动</button>':''}</div></div>
-      <p class="field-hint">北京时间 · 页面自动刷新。余额不足也可以查看奖池；冻结积点不能再次使用。</p>
-      <div class="activity-events">${events.map(event=>eventMarkup(details.get(event.id)||event,funds,opened.has(event.id))).join('')||'<section class="panel empty">暂无符合条件的活动</section>'}</div>${focusedEvent?'':pager(page,data.total,data.page_size,'list')}`;
+    host.innerHTML=`${focusedEvent?backLink():''}<section class="panel activity-heading"><header class="activity-heading-top"><div><h2>${focusedEvent?'活动详情':'活动中心'}</h2>${data.can_create||data.can_manage?`<button type="button" class="activity-text-link" data-filter="manage" aria-pressed="${filter==='manage'}">管理活动</button>`:''}</div><button type="button" class="activity-text-link" data-my-records>我的记录 ›</button></header><div class="activity-wallet">${walletMarkup(funds)}</div></section>
+      <div class="activity-toolbar"><nav class="activity-tabs" aria-label="活动筛选">${[['all','全部活动'],['mine','我的活动'],['sign',signatureMarkup(data.pending_signatures||0)]].map(([id,name])=>`<button type="button" data-filter="${id}" aria-pressed="${filter===id}">${name}</button>`).join('')}</nav><button type="button" class="activity-refresh" data-refresh aria-label="刷新" title="刷新活动"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 10a8 8 0 1 0-1.4 7M20 4v6h-6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+      ${filter==='manage'?`<div class="activity-manage-bar"><span>活动管理</span>${data.can_create?'<button type="button" class="primary" data-create>创建活动</button>':''}</div>`:''}
+      <div class="activity-events">${events.map(event=>eventMarkup(details.get(event.id)||event,funds,opened.has(event.id))).join('')||'<section class="panel empty">暂无符合条件的活动</section>'}</div>${!focusedEvent&&data.total>data.page_size?pager(page,data.total,data.page_size,'list'):''}`;
     bindBack();
     host.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{focusedEvent=null;returnToPending=false;filter=b.dataset.filter;page=1;opened.clear();load();});
     host.querySelector('[data-refresh]').onclick=()=>load();
+    host.querySelector('[data-my-records]').onclick=()=>host.querySelector('[data-filter=mine]').click();
     host.querySelector('[data-create]')?.addEventListener('click',async()=>{if(await createDialog()){page=1;await load();}});
     bindEventControls(host);
     host.querySelectorAll('details[data-event]').forEach(node=>node.addEventListener('toggle',()=>{
       if(!node.isConnected)return;const id=Number(node.dataset.event);
+      node.querySelector('.activity-card-cta').textContent=node.open?'收起详情 −':'查看活动 ›';
       if(node.open){opened.add(id);if(!details.has(id)&&!detailLoads.has(id))loadDetail(id);}else opened.delete(id);
     }));
     host.querySelectorAll('[data-page-kind]').forEach(b=>b.onclick=()=>{if(b.dataset.pageKind==='list'){page=Number(b.dataset.page);opened.clear();load();}else{const id=Number(b.dataset.pageEvent);recordViews.get(id).page=Number(b.dataset.page);loadRecords(id);}});
@@ -179,8 +184,10 @@ export async function renderActivities(){
   }
   function eventMarkup(event,funds,open){
     const circleNames=event.circle_ids.map(id=>(state.options.employee_circles||[]).find(c=>c.id===id)?.name||'指定圈');
-    if(!event.lots)return `<details class="panel activity-event" data-event="${event.id}" ${open?'open':''}><summary><span><b>${esc(event.title)}</b><small>${event.kind==='draw'?'必得抽奖':'积点拍卖'} · ${esc(labels[event.state])} · ${esc(circleNames.join('、')||'全员')}</small></span><span>查看活动 ＋</span></summary><div class="activity-event-body"><p class="field-hint">展开后加载奖池和领取记录</p><button type="button" class="secondary" data-detail-retry="${event.id}">加载详情</button></div></details>`;
-    return `<details class="panel activity-event" data-event="${event.id}" ${open?'open':''}><summary><span><b>${esc(event.title)}</b><small>${event.kind==='draw'?'必得抽奖':'积点拍卖'} · ${esc(labels[event.state])} · ${esc(circleNames.join('、')||'全员')}</small></span><span>查看活动 ＋</span></summary>
+    const status=labels[event.state];
+    const summary=`<summary><span class="activity-cover activity-cover-${event.kind==='auction'?'auction':'draw'}">${giftArt}<span>${event.kind==='draw'?'必得抽奖':'积点拍卖'}</span></span><span class="activity-card-copy"><b>${esc(event.title)}</b><span class="activity-status" data-status="${esc(event.state)}">${esc(status)}</span><small>${event.kind==='draw'?'参与即有礼':'以积点竞价'} · ${esc(circleNames.join('、')||'全员')}</small><span class="activity-card-cta">${open?'收起详情 −':'查看活动 ›'}</span></span></summary>`;
+    if(!event.lots)return `<details class="panel activity-event" data-event="${event.id}" ${open?'open':''}>${summary}<div class="activity-event-body"><p class="field-hint">展开后加载奖池和领取记录</p><button type="button" class="secondary" data-detail-retry="${event.id}">加载详情</button></div></details>`;
+    return `<details class="panel activity-event" data-event="${event.id}" ${open?'open':''}>${summary}
       <div class="activity-event-body"><p class="activity-copy">${esc(event.description)}</p><p class="field-hint">开放 ${stamp(event.starts_at)} · 原定截止 ${stamp(event.ends_at)}<br>领取截止（含宽限期）${stamp(event.claim_until)} · ${esc(event.location)}</p>
       <p class="field-hint">${event.kind==='draw'?'每次参与必得一份随机奖品，按库存限售。':'出价成功不可自行撤回；被超价立即解冻，成交后扣点。'}待领取逾期可关闭；已发放须由员工本人签字，不能自动算完成。缺货由发起人退款。</p>
       ${event.summary?`<div class="activity-summary"><span>参与 / 成交 <b>${event.summary.records}</b> 笔</span><span>净消耗 <b>${event.summary.net_used}</b> 点</span><span>已退回 <b>${event.summary.refunded}</b> 点</span><span>冻结 <b>${event.summary.frozen}</b> 点</span><span>待领取 <b>${event.summary.ready}</b> 份</span><span>待签收 <b>${event.summary.issued||0}</b> 份</span><span>签收异常 <b>${event.summary.disputed||0}</b> 份</span><span>已签收 <b>${event.summary.claimed}</b> 份</span></div>`:''}
@@ -304,9 +311,9 @@ export async function renderActivities(){
         &&data.items.map(e=>e.id).join(',')===result.items.map(e=>e.id).join(',');
       data=result;displayedFilter=filter;displayedEvent=focusedEvent;detailLoads.clear();
       if(samePage){
-        host.querySelector('.activity-wallet').innerHTML=`<strong>${esc(data.balance.available)}<small> 可用积点</small></strong><span>冻结 ${esc(data.balance.frozen)} 点</span>`;
+        host.querySelector('.activity-wallet').innerHTML=walletMarkup(data.balance);
         const signFilter=host.querySelector('[data-filter="sign"]');
-        if(signFilter)signFilter.textContent=`待本人签收 ${data.pending_signatures||0}`;
+        if(signFilter)signFilter.innerHTML=signatureMarkup(data.pending_signatures||0);
         for(const event of result.items){
           const node=host.querySelector(`details[data-event="${event.id}"]`);if(!node)continue;
           const template=document.createElement('template');template.innerHTML=eventMarkup(event,data.balance,node.open);

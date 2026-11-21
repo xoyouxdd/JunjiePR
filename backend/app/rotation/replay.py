@@ -24,6 +24,8 @@ def opening_status(state, line, index):
 
 
 def lines_view(state):
+    from app.rotation.forecast import sort_time
+
     people = state['persons']
     plan = state.get('plan', {})
     crew = plan.get('crew', {})
@@ -46,13 +48,15 @@ def lines_view(state):
                 'occName': person.get('name'), 'since': post.get('since'), 'hold': post.get('hold') or post.get('hold101'),
                 'prearranged': person.get('state') == 'notyet', 'hold101': bool(post.get('hold101')),
                 'hold101Role': post.get('hold101Role'), 'manualHold': post.get('hold'),
-                'continuousStart': person.get('continuousStart'), 'openingStatus': opening_status(state, line, index),
+                'continuousStart': person.get('continuousStart'), 'entrySortAt': person.get('entrySortAt'),
+                'openingStatus': opening_status(state, line, index),
                 'openAt': post.get('openAt'), 'openExpired': bool(post.get('openExpired')), 'closeAt': post.get('closeAt'),
                 'closeMode': post.get('closeMode'), 'opened': post.get('opened'), 'seven': post.get('seven'),
             })
         lines.append({
             'id': line['id'], 'group': line.get('group'), 'active': line.get('active'), 'standby': line.get('standby'),
-            'sortAt': line.get('sortAt', 0), 'adding': bool(line.get('adding') or state.get('ruleVersion') == 2
+            'sortAt': sort_time(line), 'previousSortAt': line.get('previousSortAt'),
+            'adding': bool(line.get('adding') or state.get('ruleVersion') == 2
                 and line.get('active') and any(p.get('openRequest') and p.get('open') and not p.get('occ') for p in line['posts'])),
             'walk': 0.0, 'posts': posts,
         })
@@ -72,7 +76,7 @@ def planned_state(state):
     for pid, person in view['persons'].items():
         person.update(state='excluded' if person.get('role') == 'excluded' else 'notyet',
                       flags=['送失物'] if pid in lost else [], line=None, lineStart=None,
-                      continuousStart=None, assign=None, readyAt=None, breakKind=None)
+                      continuousStart=None, entrySortAt=None, assign=None, readyAt=None, breakKind=None)
     return view
 
 
@@ -80,7 +84,7 @@ _PERSON_FIELDS = (
     'pid', 'name', 'state', 'role', 'label', 'note', 'start', 'end', 'line', 'lineStart', 'readyAt',
     'breakKind', 'breakStart', 'flags', 'tags', 'away', 'leaveReason', 'interruptedBreak', 'entryHold',
     'walkbackSince', 'arriveAt', 'ate', 'lastDeparture', 'downReason', 'after', 'visited', 'mark',
-    'absences', 'continuousStart', 'timingUnverified', 'sevenReplaced', 'requestedExit', 'initialPool', 'type',
+    'absences', 'continuousStart', 'entrySortAt', 'timingUnverified', 'sevenReplaced', 'requestedExit', 'initialPool', 'type',
     'scheduledRestStart', 'batchCheckedIn', 'batchResult', 'awaitingShiftEntry',
 )
 

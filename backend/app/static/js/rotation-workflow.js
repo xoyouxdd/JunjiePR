@@ -17,7 +17,11 @@ function rotationName(p){return `<span class="rt-name-row"><strong>${esc(p.name)
 function workflowComparison(p){
   if(!p.task)return '';
   const t=p.task;
-  const table=(posts,after)=>`<div class="rt-task-line"><header>${esc(t.line)}</header>${posts.map((x,i)=>`<div class="rt-task-slot ${after&&x.occ!==t.beforePosts[i]?.occ?'changed':''}"><span>${esc(x.name)}</span><strong>${esc(x.occName||'空岗')}</strong></div>`).join('')}</div>`;
+  const table=(posts,after)=>`<div class="rt-task-line"><header>${esc(t.line)}</header>${posts.map((x,i)=>{
+    const changed=after&&x.occ!==t.beforePosts[i]?.occ;
+    const entryTime=Number.isFinite(t.beforePosts[i]?.entrySortAt)||Number.isFinite(t.afterPosts[i]?.entrySortAt);
+    return `<div class="rt-task-slot${changed?' changed':''}${entryTime?' entry-time-row':''}"><span>${esc(x.name)}</span><div class="rt-task-person"><span class="rt-task-name"><strong>${esc(x.occName||'空岗')}</strong>${rotationPostEntryTime(x)}</span></div></div>`;
+  }).join('')}</div>`;
   return `<section class="rt-task-comparison"><h4>执行本任务前后</h4><div class="rt-task-columns"><div><p>执行前 · 当前站位</p>${table(t.beforePosts,false)}</div><div><p>执行后 · 预计站位</p>${table(t.afterPosts,true)}</div></div><small>蓝色仅标出本任务变化，不代表其他任务已经执行。</small></section>`;
 }
 function workflowPools(n,view){

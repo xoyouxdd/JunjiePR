@@ -37,6 +37,8 @@ from app.routers import (
 )
 
 from app.file_types import is_previewable_image, preview_kind
+from app.warehouse.assessment import router as warehouse_assessment_router
+from app.warehouse.core import router as warehouse_router
 
 
 router = APIRouter(prefix="/api", tags=["v2"])
@@ -70,3 +72,6 @@ for _module in (
     learning,
 ):
     router.include_router(_module.router)
+
+router.include_router(warehouse_router)
+router.include_router(warehouse_assessment_router)

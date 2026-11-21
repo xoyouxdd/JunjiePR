@@ -32,6 +32,7 @@ function menuItems() {
   if(has('DATA_VIEW')&&!items.some(([id])=>id==='statistics'))items.push(['statistics',has('DATA_EXPORT')?'景点数据与导出':'景点数据查看']);
   if(['CM','TR','SUPERVISOR','TA_SUPERVISOR','TA_GSM','GSM','AM','OM'].includes(state.me.base_role_code||r))items.push(['activityPoints','我的积点卡']);
   if(!state.me.rotation_temporary)items.push(['activities','活动中心']);
+  if(state.me.warehouse_entry)items.push(['warehouse','物资管理']);
   if(has('REVIEW_SUPERVISOR'))items.splice(Math.min(items.length,1),0,['supervisorReview','主管复核']);
   if(has('LOA_REGISTER'))items.push(['loa','LOA登记']);
   if(has('SICK_LEAVE_IMPORT'))items.push(['sickLeaveImport','缺勤登记']);
@@ -128,7 +129,7 @@ function mobileIdentityCard(){
 const NAV_FOOTER_IDS=['password'];
 
 const NAV_GROUP_DEFS=[
-  {id:'work',label:'工作',ids:['announcements','home','review','supervisorReview','register','absence','members','entries','videoLearning']},
+  {id:'work',label:'工作',ids:['announcements','home','review','supervisorReview','register','absence','members','entries','videoLearning','warehouse']},
   {id:'data',label:'数据',ids:['statistics','prRankings','declarationStatistics','sickLeaveImport','hrMonthlyReport']},
   {id:'people',label:'人事',ids:['hrEmployees','circleHrAccounts','hrGroups','circleTransfers','loa']},
   {id:'close',label:'结算',ids:['monthClose','hrScores']},
@@ -139,6 +140,7 @@ const NAV_GROUP_DEFS=[
 
 function navIcon(id){
   const inner={
+    warehouse:'<path d="m3 8 9-5 9 5v12H3zM7 20v-9h10v9M7 14h10M7 17h10"/>',
     home:'<path d="M4 11 12 4l8 7"/><path d="M6 10.5V20h4.5v-6h3V20H18v-9.5"/>',
     actionCenter:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10h8M8 14h5"/>',
     announcements:'<path d="M4 10v5h4l9 4V6L8 10H4zM8 15l2 5M20 9v7"/>',
@@ -232,18 +234,28 @@ function syncAppBadge(total){
   }catch(_){/* Browser and installed-app badge support is optional. */}
 }
 
-function setActionBadge(total){
+let actionBadgeRequest=0;
+
+function setActionBadge(total,todoCount){
+  ++actionBadgeRequest;
   state.actionBadgeTotal=Math.max(0,Number(total)||0);
   document.querySelectorAll('[data-action-center-badge]').forEach(badge=>{
     badge.textContent=state.actionBadgeTotal>99?'99+':String(state.actionBadgeTotal);
     badge.hidden=state.actionBadgeTotal===0;
   });
+  if(todoCount!==undefined){
+    const todo=app.querySelector('[data-action-center-todo-count]');
+    const summary=app.querySelector('[data-action-center-total-count]');
+    if(todo)todo.textContent=String(todoCount);
+    if(summary)summary.textContent=String(state.actionBadgeTotal);
+  }
   syncAppBadge(state.actionBadgeTotal);
 }
 
 async function refreshActionBadge(){
   if(state.me?.rotation_temporary)return;
   if(!state.me||!menuItems().some(([id])=>id==='actionCenter'))return;
+  const request=++actionBadgeRequest;
   const employeeId=state.me.id;
   const isUpgradeReviewer=state.me.role_code==='GSM'&&has('DEDUCTION_ALL');
   try{
@@ -252,8 +264,9 @@ async function refreshActionBadge(){
       isUpgradeReviewer?api('/api/deduction-upgrades/pending?mine_only=true'):Promise.resolve({items:[]}),
       api('/api/deduction-upgrades/recovery'),
     ]);
-    if(state.me?.id!==employeeId)return;
-    setActionBadge(Number(data.total||0)+(upgradeData.items||[]).length+(upgradeData.notices||[]).length+(recoveryData.items||[]).length);
+    if(request!==actionBadgeRequest||state.me?.id!==employeeId)return;
+    const todoCount=Number(data.total||0);
+    setActionBadge(todoCount+(upgradeData.items||[]).length+(upgradeData.notices||[]).length+(recoveryData.items||[]).length,todoCount);
     if(data.announcement_counts)setAnnouncementBadge(data.announcement_counts);
   }catch(_){/* A badge refresh must never interrupt the existing page workflow. */}
 }

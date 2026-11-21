@@ -598,7 +598,10 @@ def _apply_success_result(db, job: DeductionMaterialJob, output: StoredFile, ded
         except HTTPException as exc:
             raise MaterialError("repeat_upgrade_required", str(exc.detail)) from exc
         deduction.status = "active"
-        follow_ups = db.query(DeductionFollowUp).filter_by(employee_id=deduction.employee_id, deduction_type_id=deduction.deduction_type_id, occurred_on=deduction.occurred_on, status="pending").all()
+        follow_ups = db.query(DeductionFollowUp).filter_by(
+            employee_id=deduction.employee_id, deduction_type_id=deduction.deduction_type_id,
+            occurred_on=deduction.incident_on or deduction.occurred_on, status="pending",
+        ).all()
         for follow_up in follow_ups:
             follow_up.status = "issued"
             follow_up.issued_deduction_id = deduction.id

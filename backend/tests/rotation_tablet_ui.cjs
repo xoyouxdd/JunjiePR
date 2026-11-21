@@ -14,6 +14,7 @@ function fixture(){
     const p=scheduled||vacant?null:person(standby?'notyet':'onpost',{
       line:id,post:name,...(i===2?{name:'欧阳沐辰·现场支援',mealEligible:true,preparing:standby?null:'推下班'}:{}),
       ...(i===3?{name:'司马晓筠·轮岗伙伴',flags:['7点岗'],mealEligible:true,preparing:standby?null:'推病假'}:{}),
+      ...(j===0&&i===0?{entrySortAt:450+5/60}:{}),
     });
     return {name,key:`${id}#${i}`,open:!scheduled&&!standby,opened:!scheduled,openAt:scheduled?'09:00':null,
       closeAt:j===1&&i===3?'08:45':null,occ:p?.pid||null};
@@ -28,6 +29,7 @@ function fixture(){
   for(let i=5;i>=0;i--)person('meal',{pid:`meal-${i}`,name:`餐休伙伴 ${i+1}`,readyAt:506+i*3});
   person('done',{pid:'sick',name:'病假测试',leaveReason:'病假'});
   person('away',{pid:'outside',name:'出圈测试',away:{reason:'专项任务'}});
+  person('notyet',{pid:'future-outside',name:'待出圈测试',initialPool:'away',start:900});
   person('excluded',{pid:'ojt',name:'OJT测试',role:'excluded',label:'OJT'});
   person('done',{pid:'ended',name:'已下班测试'});
   person('notyet',{pid:'later',name:'待到班测试',start:900});
@@ -35,8 +37,14 @@ function fixture(){
   person('notyet',{pid:'check-in',name:'可签到测试',upcomingShift:true,start:485,canBatchCheckIn:true});
   person('exception',{pid:'timeout',name:'上岗超时测试',exception:{assignment:{line:'A1'},allowedAt:470,at:473,deadlineAt:473}});
   for(let i=1;i<=3;i++)person('exception',{name:`超时伙伴 ${i}`,exception:{assignment:{line:'A1'},allowedAt:470-i,at:473-i,deadlineAt:473-i}});
+  const off=[
+    {pid:'sick-shift',name:'当前班次病假',label:'病假',start:470,end:500},
+    {pid:'sick-later',name:'后续班次病假',label:'病假',start:510,end:600},
+    {pid:'sick-ended',name:'已结束班次病假',label:'病假',start:450,end:480},
+    {pid:'sick-all-day',name:'未标时间的病假',label:'病假'},
+  ];
   const date='2026-10-11';
-  return {version:1,clock:{date,minute:480,paused:true,mode:'sim'},settings:{departEarly:0},day:{date,status:'live',ruleVersion:2,taskWorkflow:2,lines,persons}};
+  return {version:1,clock:{date,minute:480,paused:true,mode:'sim'},settings:{departEarly:0},day:{date,status:'live',ruleVersion:2,taskWorkflow:2,lines,persons,off}};
 }
 async function main(){
   const screen=createScreenFixture(fixture(), {demo:true});
@@ -48,11 +56,23 @@ async function main(){
     const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(`${origin}/`);
     await page.locator('.rt-screen-live .rt-line').first().waitFor();
     assert.equal(await page.locator('.rt-line').count(),9);
+    const entry=page.locator('[data-f-slot="A1#0"] .rt-post-entry-time');
+    assert.equal(await entry.innerText(),'入线 07:30:05');
+    assert(await entry.evaluate(el=>el.getBoundingClientRect().right<=el.closest('.rt-post').getBoundingClientRect().right+1));
     assert.equal(await page.locator('.rt-screen-live [data-f-pool]').count(),8);
     const pool=key=>page.locator(`[data-f-pool="${key}"]`);
     const count=key=>page.locator(`[data-screen-count="${key}"]`).innerText();
+    const total=key=>page.locator(`[data-rotation-total="${key}"]`).innerText();
     assert(await page.locator('#rtScreenSummary').isVisible());
     assert.deepEqual(await Promise.all(['pending','ready','exception','checkin'].map(count)),['14','5','4','1']);
+    const totals=()=>Promise.all(['posts','rest','sick','away'].map(total));
+    assert.deepEqual(await totals(),['41','30','3','1']);
+    const totalsBox=await page.locator('#rtScreenTotals').boundingBox();
+    assert(totalsBox.x+totalsBox.width<=width);
+    if(width>1040){
+      const summaryBox=await page.locator('#rtScreenSummary').boundingBox();
+      assert(totalsBox.x>=summaryBox.x+summaryBox.width);
+    }
     assert.equal(await pool('ready').locator('[data-f-board]').count(),5);
     assert.equal(await page.locator('[data-f-board]').count(),5);
     assert.equal(await pool('ready').locator('[data-f-board]').first().getAttribute('data-f-board'),'priority-4');
@@ -137,9 +157,25 @@ async function main(){
     const unopened=page.locator('[data-f-pool="rest"] .rt-chip').filter({hasText:'待开始休息测试'});
     assert.match(await unopened.innerText(),/准备上班 · 距到班 1 分钟/);
     assert.equal(await unopened.locator('button').count(),0);
-    await page.evaluate(()=>{RT.data.day.persons=RT.data.day.persons.filter(p=>p.state==='onpost');RT.render();});
+    assert.deepEqual(await totals(),['41','30','2','1']);
+    await page.evaluate(()=>{
+      RT.data.clock.minute=500;
+      Object.assign(RT.data.day.persons.find(p=>p.pid==='outside'),{state:'rest',away:null,readyAt:525});
+      RT.render();
+    });
+    assert.deepEqual(await totals(),['41','31','2','0']);
+    await page.evaluate(()=>{RT.data.clock.minute=510;RT.render();});
+    assert.equal(await total('sick'),'3');
+    await page.evaluate(()=>{
+      RT.data.day.persons=RT.data.day.persons.filter(p=>p.state==='onpost');
+      RT.data.day.off=[];
+      RT.data.day.lines[0].posts[0].open=false;
+      RT.data.day.lines[1].active=false;
+      RT.render();
+    });
     assert.equal(await page.locator('[data-f-pool].is-empty').count(),7);
     assert.deepEqual(await Promise.all(['pending','ready','exception'].map(count)),['0','0','0']);
+    assert.deepEqual(await totals(),['34','0','0','0']);
     assert.equal(await page.locator('[data-screen-count="checkin"]').isVisible(),false);
     assert.equal(await pool('checkin').count(),0);
     const emptyHeight=(await pool('pending').boundingBox()).height;
@@ -147,6 +183,7 @@ async function main(){
     await page.evaluate(()=>{RT.data.day=null;RT.render();});
     assert.match(await page.locator('#rtApp').innerText(),/没有开始/);
     assert.equal(await page.locator('#rtScreenSummary').isVisible(),false);
+    assert.equal(await page.locator('#rtScreenTotals').isVisible(),false);
     assert(!await page.locator('.rt-top').evaluate(el=>getComputedStyle(el).gridTemplateAreas.includes('metrics')));
     await page.close();console.log(`PASS ${width}x${height}: populated, empty and unstarted display`);
   }}finally{try{await browser?.close();}finally{await screen.close();}}

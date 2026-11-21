@@ -17,6 +17,23 @@ const pause=ms=>new Promise(r=>setTimeout(r,ms));
   p.on('request',r=>{if(/\/api\/activities\/\d+(\?|$)/.test(r.url()))details.push(r.url());});
   await p.goto(base+'/');await p.locator('[data-tab="activities"]:visible').click();
   await p.locator('.activity-event').first().waitFor();assert.equal(await p.locator('.activity-event').count(),10);assert.equal(details.length,0,'collapsed cards must not request detail');
+  assert.equal(await p.locator('#themeStory').isVisible(),false,'activity hall hides the global wish');
+  assert.equal(await p.locator('[data-create]').count(),0,'creation belongs to management');
+  assert.equal(await p.locator('.activity-frozen').count(),0,'zero frozen balance is hidden');
+  for(const width of [320,390,1440]){
+   await p.setViewportSize({width,height:1000});
+   await p.evaluate(()=>window.FZAppearance.set('medal'));
+   assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'hall overflow '+width);
+   const tabs=await p.locator('.activity-tabs button').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().top));
+   assert(tabs.every(top=>Math.abs(top-tabs[0])<1),'tabs stay on one row');
+   assert((await p.locator('.activity-event').first().boundingBox()).y<650,'activities visible above fold');
+   await p.screenshot({path:path.join(out,`activity-hall-${width}.png`)});
+  }
+  for(const skin of ['blue','green','ivory','dark','circle']){
+   await p.evaluate(skin=>window.FZAppearance.set(skin),skin);
+   assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'skin overflow '+skin);
+  }
+  await p.evaluate(()=>window.FZAppearance.set('medal'));
   for(const width of [390,1280]){
    await p.setViewportSize({width,height:1000});assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
    await p.locator('[data-page-kind="list"][data-page="2"]').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(out,`activities-pagination-${width}.png`)});
@@ -80,11 +97,11 @@ const pause=ms=>new Promise(r=>setTimeout(r,ms));
    await route.fulfill({response,json:{...body,pending_signatures:3}});
   });
   await p.getByRole('button',{name:'刷新',exact:true}).click();
-  await signFilter.getByText('待本人签收 3',{exact:true}).waitFor({timeout:3000});
+  await signFilter.locator('.activity-count').getByText('3',{exact:true}).waitFor({timeout:3000});
   assert(await originalSignFilter.evaluate(el=>el.isConnected),'badge update keeps the filter control');
   await p.unroute(base+'/api/activities?*');
   await p.getByRole('button',{name:'刷新',exact:true}).click();
-  await signFilter.getByText('待本人签收 0',{exact:true}).waitFor();
+  await signFilter.getByText('待签收',{exact:true}).waitFor();assert.equal(await signFilter.locator('.activity-count').count(),0);
   // Out-of-order list filter responses must not restore the old activity list.
   let releaseList,listStarted;const listBegan=new Promise(r=>listStarted=r);
   await p.route('**/api/activities?*',async route=>{if(new URL(route.request().url()).searchParams.get('view')==='manage'){const response=await route.fetch();listStarted();await new Promise(r=>releaseList=r);await route.fulfill({response});}else await route.continue();});

@@ -113,7 +113,11 @@ def apply(eng, undo, now):
         for line in eng.d['lines']:
             line['posts']=[p for p in line['posts'] if p.get('key') not in restored]
             if line['id'] in entry['beforeLines']:
-                line.update(deepcopy(entry['beforeLines'][line['id']]))
+                before = entry['beforeLines'][line['id']]
+                line.update(deepcopy(before))
+                for key in ('previousSortAt', 'sortBase'):
+                    if key not in before:
+                        line.pop(key, None)
         for item in sorted((p for p in restored.values() if p),key=lambda p:(p['line'],p['index'])):
             eng.line(item['line'])['posts'].insert(item['index'],deepcopy(item['post']))
         if entry['action'] in ('hold101','resume101'):eng.d['hold101Active']=entry['before101']

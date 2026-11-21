@@ -17,6 +17,26 @@ def opening_engine(header=435):
     return eng
 
 
+@pytest.mark.parametrize(('start', 'plan'), [(420, 'seven'), (435, 'crew')])
+def test_initial_crew_starts_standing_without_advancing_the_header(start, plan):
+    eng = fixture((3,))
+    for worker in eng.P.values():
+        worker.update(state='pending', line=None, assign=None)
+    worker = eng.P['A0']
+    worker.update(state='notyet', start=start, flags=[])
+    line = eng.line('A')
+    line['sortAt'] = 0
+    for post in line['posts']:
+        post.update(occ=None, since=None)
+    eng.d['plan'][plan] = {'A#0': worker['pid']}
+
+    F.tick(eng, start)
+
+    assert worker['state'] == 'onpost'
+    assert worker['lineStart'] == worker['continuousStart'] == line['posts'][0]['since'] == start
+    assert line['sortAt'] == 0 and 'previousSortAt' not in line
+
+
 @pytest.mark.parametrize('header', [0, 435, 518+12/60])
 def test_opening_keeps_actual_header_and_clears_only_completed_demand(header):
     eng = opening_engine(header)
@@ -33,13 +53,15 @@ def test_opening_keeps_actual_header_and_clears_only_completed_demand(header):
 
 def test_virtual_opening_preserves_clock_then_next_ordinary_push_advances_it():
     eng = opening_engine();eng.line('B')['sortAt'] = 440
+    eng.line('A')['previousSortAt'] = 990
     F.plan(eng,600)
     assert [(eng.P['new'+str(i)]['assign']['line'],eng.P['new'+str(i)]['assign']['kind']) for i in range(3)] == [('A','opening'),('A','push'),('B','push')]
     F.execute(eng,'new0',600,'test','A')
-    assert eng.line('A')['sortAt'] == 435
+    assert eng.line('A')['sortAt'] == 435 and eng.line('A')['previousSortAt'] == 990
     assert eng.P['new1']['assign']['line'] == 'A' and eng.P['new1']['assign']['kind'] == 'push'
     F.execute(eng,'new1',600,'test','A')
     assert eng.line('A')['sortAt'] == 600 and eng.P['new2']['assign']['line'] == 'B'
+    assert eng.line('A')['previousSortAt'] == 435
 
 
 def test_overnight_opening_keeps_header_and_uses_actual_post_time():

@@ -26,11 +26,11 @@ def test_first_shift_is_automatic_but_subsequent_ready_forecast_requires_click()
     e.tick(435)
     seated = set(occupants(e))
     assert len(seated) == 2 and all(e.P[pid]['state'] == 'onpost' for pid in seated)
-    assert e.line('A')['sortAt'] == 435
+    assert e.line('A')['sortAt'] == 0
     next_person = next(p for p in e.P.values() if p['pid'] not in seated)
     assert next_person['readyAt'] == 450 and next_person['state'] == 'rest'
     e.tick(450)
-    assert set(occupants(e)) == seated and e.line('A')['sortAt'] == 435
+    assert set(occupants(e)) == seated and e.line('A')['sortAt'] == 0
     F.execute(e, next_person['pid'], 450, 'test', 'A')
     assert next_person['state'] == 'onpost' and e.line('A')['sortAt'] == 450
 
@@ -141,7 +141,7 @@ def test_planned_opening_does_not_publish_ready_notice_or_deadline_before_openin
     F.tick(e, 600)
     assert notices(e, 600)[('new0', 'step')][0] == 'rest'
     task = F.task_view(e, e.P['new0'], 600)
-    assert task['allowedAt'] == 630 and task['deadlineAt'] == 633
+    assert task['allowedAt'] == 630 and task['deadlineAt'] == 631
 
 
 def test_distinct_people_confirm_same_line_concurrently_and_each_retry_is_idempotent(current):
@@ -173,7 +173,7 @@ def test_timeout_and_confirmation_race_at_exact_deadline_cannot_admit_late_perso
     body = {'action': 'depart', 'pid': '5', 'expected_line': p['assign']['line'],
             'confirmation_token': p['confirmationTokens']['depart']}
     with r.factory() as db, S.transaction(db):
-        S.set_sim_clock(S.load_config(db, r.attraction_id), DAY, 603, paused=True)
+        S.set_sim_clock(S.load_config(db, r.attraction_id), DAY, 601, paused=True)
     def submit():
         try:
             return act(r, body)
@@ -216,7 +216,7 @@ def test_moving_shift_start_later_does_not_inherit_an_expired_readiness_deadline
     S.tick_attraction(r.attraction_id)
     p = person(r)
     assert p['state'] == 'rest' and p['canDepart']
-    assert p['readyAt'] == 660 and p['task']['deadlineAt'] == 663
+    assert p['readyAt'] == 660 and p['task']['deadlineAt'] == 661
 
 
 def test_overnight_person_can_confirm_and_finish_at_exact_last_shift_end(current):

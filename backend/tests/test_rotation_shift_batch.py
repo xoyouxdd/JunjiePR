@@ -27,8 +27,8 @@ def batch_fixture(counts, ready):
 
 
 @pytest.mark.parametrize('counts,expected', [
-    ((2, 3), 'ABABB'),
-    ((1, 2, 3, 2, 3), 'ABCDEBCDECE'),
+    ((2, 3), 'ABBAB'),
+    ((1, 2, 3, 2, 3), 'ABCDECEBDCE'),
 ])
 def test_batch_skips_protected_workers_and_rests_overflow(counts, expected):
     eng = batch_fixture(counts, len(expected) + 1)
@@ -39,7 +39,7 @@ def test_batch_skips_protected_workers_and_rests_overflow(counts, expected):
         lid = line['id']
         ids = [f'late{i:02}' for i, choice in enumerate(expected) if choice == lid]
         assert occupants(eng, lid) == ids[::-1]
-        assert line['sortAt'] == 810 + expected.rindex(lid) / 60
+        assert line['sortAt'] == 807
         for pid in ids:
             result = eng.P[pid]['batchResult']
             assert result['handoff']['outcome'] == 'pending'
@@ -158,7 +158,7 @@ def test_older_direct_shift_end_results_keep_the_shift_end_label():
     assert result['shiftEndPosts'] == ['a0']
 
 
-def test_batch_uses_resting_workers_first_and_original_time_for_tail_relief():
+def test_batch_uses_resting_workers_first_and_keeps_their_ready_time_for_standing():
     eng = batch_fixture((2, 3), 1)
     add_later_shifts(eng.P, (900,))
     eng.P['resting'] = dict(eng.P['late00'], pid='resting', name='resting', state='rest',
@@ -168,12 +168,14 @@ def test_batch_uses_resting_workers_first_and_original_time_for_tail_relief():
     assert eng.P['A1']['state'] == 'done'
     assert eng.P['resting']['batchResult']['handoff'] == {
         'post': 'A0', 'name': 'A0', 'outcome': 'post', 'destination': 'A1', 'steps': 1}
-    assert eng.line('A')['sortAt'] == eng.P['A0']['lineStart'] == 808
+    assert eng.line('A')['sortAt'] == 807
+    assert eng.P['resting']['entrySortAt'] == 807
+    assert eng.P['A0']['lineStart'] == 808
     assert eng.P['resting']['batchResult']['line'] == 'A'
     assert eng.P['late00']['batchResult']['line'] == 'B'
 
 
-def test_conflict_at_next_second_preserves_round_robin_in_preview_and_execution():
+def test_same_second_header_keeps_real_time_in_preview_and_execution():
     eng = batch_fixture((3,) * 8, 0)
     template = deepcopy(eng.P.pop('late00'))
     for i in range(19):
@@ -186,8 +188,25 @@ def test_conflict_at_next_second_preserves_round_robin_in_preview_and_execution(
     for i, line in enumerate(expected):
         now = 810 if i < 8 else 810 + 1/60
         assert F.execute(eng, f'new{i:02}', now, 'test', line)['executed']
-        assert eng.line(line)['sortAt'] == 810 + i/60
+        assert eng.line(line)['sortAt'] == now
         assert eng.P[f'new{i:02}']['lineStart'] == eng.line(line)['sortAt']
+
+
+def test_seven_people_over_three_lines_use_following_positions_after_the_batch():
+    eng = batch_fixture((4, 4, 4), 7)
+    F.tick(eng, 807, advance_batches=True)
+
+    first_seven = [eng.P[f'late{i:02}'] for i in range(7)]
+    assert ''.join(p['batchResult']['line'] for p in first_seven) == 'ABCABCA'
+    assert all(p['lineStart'] == 810 and p['continuousStart'] == 810 for p in first_seven)
+    assert {line['sortAt'] for line in eng.d['lines']} == {807}
+    assert eng.line('A')['previousSortAt'] == 807
+
+    F.tick(eng, 810, advance_batches=True)
+    eighth = eng.P['late07']
+    assert eighth['assign']['line'] == 'B'
+    assert F.execute(eng, eighth['pid'], 810, 'test', 'B')['executed']
+    assert eng.line('B')['sortAt'] == eighth['lineStart'] == 810
 
 
 @pytest.mark.parametrize('last,second', [(1, 1), (2, 9), (3, 10)])
@@ -259,6 +278,9 @@ def test_check_in_window_and_batch_commit_with_isolated_database(current, monkey
     assert act(r, payload)['executed']
     assert act(r, payload)['duplicate']
     assert person(r, '101')['batchCheckedIn']
+    advance(807 - 1/60)
+    assert person(r, '101')['state'] == 'notyet'
+    dispatch_at = 807 + 5/60
     with r.factory() as db:
         cfg = S.load_config(db, r.attraction_id)
         row = S.day_row(db, r.attraction_id, DAY)
@@ -267,19 +289,59 @@ def test_check_in_window_and_batch_commit_with_isolated_database(current, monkey
                 raise RuntimeError('injected batch commit failure')
             patch.setattr(db, 'commit', fail_commit)
             with pytest.raises(RuntimeError, match='injected batch commit failure'), S.transaction(db):
-                S.advance(db, cfg, row, S.day_state(row), 807)
+                S.advance(db, cfg, row, S.day_state(row), dispatch_at)
     assert person(r, '101')['state'] == 'notyet'
-    advance(807)
-    assert person(r, '101')['state'] == 'onpost'
+    advance(dispatch_at)
+    worker = person(r, '101')
+    assert worker['state'] == 'onpost'
+    assert worker['lineStart'] == 810
+    assert worker['entrySortAt'] == dispatch_at
+    assert next(l for l in board(r)['lines'] if l['id'] == worker['line'])['sortAt'] == dispatch_at
     assert person(r, '5')['state'] == 'onpost'
     assert person(r, '102')['state'] == 'notyet'
-    advance(807)
+    advance(dispatch_at)
     with r.factory() as db:
-        assert db.query(RotationEvent).filter_by(event_type='depart', actor_type='system').count() == 2
+        events = db.query(RotationEvent).filter_by(event_type='depart', actor_type='system').all()
+        assert len(events) == 2 and all(e.minute == dispatch_at for e in events)
         assert db.query(RotationNotice).filter_by(kind='batch_result', status='open').count() == 2
         assert {seg.end_min for seg in db.query(RotationSegment)} == {808, 810}
     advance(810)
     assert person(r, '102')['awaitingShiftEntry']
+
+
+def test_late_tick_dispatches_after_opening_and_carries_the_entry_header_through_a_push(rotation):
+    from app.rotation.models import RotationDay
+    eng = batch_fixture((4,), 1)
+    line = eng.line('A')
+    post = line['posts'][-1]
+    del eng.P[post['occ']]
+    post.update(occ=None, open=False, opened=False, openAt='13:27:03')
+    state = eng.d
+    state.update(date=DAY, lastTick=806)
+    dispatch_at = 807 + 5/60
+    with rotation.factory() as db, S.transaction(db):
+        aid = rotation.attraction_id
+        cfg = S.load_config(db, aid)
+        row = RotationDay(attraction_id=aid, work_date=DAY, status='live',
+                          state_json=json.dumps(state), version=1)
+        db.add(row)
+        db.flush()
+        assert S.advance(db, cfg, row, state, dispatch_at)
+        saved, _ = S.engine_for(db, cfg, row, S.day_state(row))
+        arriving = saved.P['late00']
+        assert saved.d['completedShiftBatches'][str(810 * 60)] == dispatch_at
+        assert saved.line('A')['sortAt'] == arriving['entrySortAt'] == 780
+        assert arriving['lineStart'] == 810
+        assert arriving['batchResult']['openingPosts'] == [{'key': post['key'], 'name': post['name']}]
+        assert arriving['batchResult']['afterPosts'][0]['entrySortAt'] == 780
+
+        F.tick(saved, 811)
+        next_person = saved.P['late01']
+        assert F.execute(saved, next_person['pid'], 811, 'test', 'A')['executed']
+        assert occupants(saved)[:2] == ['late01', 'late00']
+        assert saved.line('A')['sortAt'] == next_person['entrySortAt'] == 811
+        assert arriving['entrySortAt'] == 780
+        assert S.lines_view(saved)[0]['posts'][1]['entrySortAt'] == 780
 
 
 def test_scheduled_close_inside_relief_path_waits_for_relief():
@@ -322,6 +384,15 @@ def test_0500_and_0515_can_check_in_but_enter_pending_rest(start):
     assert worker['state'] == 'pending' and not worker.get('batchResult')
 
 
+@pytest.mark.parametrize('start', [360, 390, 420, 430, 435])
+def test_shifts_at_or_before_0715_are_not_dispatched_three_minutes_early(start):
+    eng = fixture(now=start - 15)
+    worker = eng.P['new0']
+    worker.update(state='notyet', start=start, readyAt=None, batchCheckedInFor=start)
+    F.tick(eng, start - 3, advance_batches=True)
+    assert worker['state'] == 'notyet' and not worker.get('batchResult')
+
+
 def test_0727_without_a_0730_shift_only_picks_signed_in_morning_rest():
     eng = fixture(now=447)
     for pid in ('new0', 'new1'):
@@ -352,7 +423,7 @@ def test_direct_shift_entry_waits_for_a_route_before_starting_timeout():
     F.tick(eng, 816)
     ready = API.person_view(eng, p, 816)
     assert ready['awaitingShiftEntry'] and ready['canDepart']
-    assert ready['task']['deadlineAt'] == 819
+    assert ready['task']['deadlineAt'] == 817
     assert F.execute(eng, p['pid'], 816, 'test', 'A')['executed']
     assert not API.person_view(eng, p, 816)['awaitingShiftEntry']
 

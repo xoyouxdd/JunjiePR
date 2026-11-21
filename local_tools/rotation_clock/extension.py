@@ -136,7 +136,8 @@ def install(app):
     # Do not rewind the engine cursor or replay past automatic transitions.
     advance = S.advance
     def forward_only(db, cfg, row, state, target):
-        if target < state.get('lastTick', target):
+        cursor = state.get('lastTick')
+        if cursor is not None and (target < cursor or (target == cursor and S.clock_state(cfg).get('paused'))):
             return False
         return advance(db, cfg, row, state, target)
     S.advance = forward_only

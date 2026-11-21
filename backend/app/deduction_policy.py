@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.date_utils import add_calendar_months, parse_iso_date, subtract_calendar_months
+from app.role_constants import GSM_CODES
 from app.services.identity import role_at
 from app.v2_auth import V2User, load_user_identity
 from app.v2_models import DeductionLevel, DeductionRecord, DeductionType, Employee, UserAccount
@@ -57,6 +58,8 @@ DEDUCTION_TYPE_ORDER = (
 
 
 DEDUCTION_LEVEL_ORDER = {"STATEMENT": 1, "MEMO": 2, "WARNING_1": 3, "WARNING_2": 4}
+DECISION_DATED_LEVEL_CODES = {"MEMO", "WARNING_1", "WARNING_2"}
+DECISION_DATED_ISSUER_CODES = GSM_CODES | {"AM", "OM"}
 
 
 # Only two unused statements participate in automatic upgrading. Results do not.

@@ -22,6 +22,12 @@ const hm=value=>{
   return `${String(Math.floor(minute/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}`;
 };
 const taskTime=value=>value===null||value===undefined?'--:--':hm(value)+(Math.floor((value-Math.floor(value))*60+1e-6)?':'+String(Math.floor((value-Math.floor(value))*60+1e-6)).padStart(2,'0'):'');
+function postEntryTime(post){
+  if(!Number.isFinite(post.entrySortAt))return '';
+  const seconds=Math.round(post.entrySortAt*60),day=Math.floor(seconds/86400);
+  const stamp=(day===1?'次日 ':day>1?'+'+day+'日 ':'')+hm(Math.floor(seconds/60))+':'+String(seconds%60).padStart(2,'0');
+  return `<time class="rt-post-entry-time" datetime="${esc(stamp.split(' ').at(-1))}" title="入线时的表头时间">入线 ${esc(stamp)}</time>`;
+}
 const personalTaskPaused=p=>!!(p.timeoutCase||p.timeoutPending||p.task?.status==='exception_hold');
 function personalAssignment(p,data){
   if(personalTaskPaused(p)||p.entryHold)return null;
@@ -40,7 +46,7 @@ function personalReceipt(result){
 function entryRoutes(routes){return (routes||[]).map(r=>`<li><strong>${esc(r.name)}</strong>：${esc(r.from)} → ${esc(r.to)}</li>`).join('');}
 function taskLine(line,pid){
   if(!line)return '';
-  return `<div class="rt-line"><div class="rt-line-head"><strong>${esc(line.id)}线 · 岗位详情</strong></div>${line.posts.map(post=>`<div class="rt-post ${post.occ===pid?'me':''}"><span class="rt-pn">${esc(post.name)}</span><span class="rt-who-name">${post.occ===pid?`<strong class="rt-own-post-name">${esc(post.occName||'空岗')}</strong>`:esc(post.occName||'空岗')}${post.missedCheckIn?'<small class="rt-badge rt-missed-attendance">未答到</small>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span><span class="rt-mins">${post.open?'':'未开岗'}</span></div>`).join('')}</div>`;
+  return `<div class="rt-line"><div class="rt-line-head"><strong>${esc(line.id)}线 · 岗位详情</strong></div>${line.posts.map(post=>`<div class="rt-post ${post.occ===pid?'me':''}"><span class="rt-pn">${esc(post.name)}</span><span class="rt-who-name">${post.occ===pid?`<strong class="rt-own-post-name">${esc(post.occName||'空岗')}</strong>`:esc(post.occName||'空岗')}${postEntryTime(post)}${post.missedCheckIn?'<small class="rt-badge rt-missed-attendance">未答到</small>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span><span class="rt-mins">${post.open?'':'未开岗'}</span></div>`).join('')}</div>`;
 }
 
 function personalTaskComparison(p){
@@ -60,10 +66,11 @@ function personalTaskComparison(p){
     const sevenRow=originalSeven||task.afterPosts[i]?.seven;
     const missed=post.missedCheckIn;
     const attendanceRow=original?.missedCheckIn||task.afterPosts[i]?.missedCheckIn;
+    const entryTimeRow=Number.isFinite(original?.entrySortAt)||Number.isFinite(task.afterPosts[i]?.entrySortAt);
     const changed=after&&post.occ!==original?.occ;
     const newWorker=changed&&post.occ&&!originalWorkers.has(post.occ);
-    const classes=(shiftEndRow?' shift-end-row':'')+(sevenRow?' seven-row':'')+(attendanceRow?' attendance-row':'')+(opening?' opening-row':'')+(shiftEnd?' shift-end':'')+(changed?' changed':'')+(newWorker?' new-worker':'');
-    const name=`<strong>${esc(post.occName||(opening&&!after?'—':post.open===false?'未开岗':'空岗'))}</strong>`;
+    const classes=(shiftEndRow?' shift-end-row':'')+(sevenRow?' seven-row':'')+(attendanceRow?' attendance-row':'')+(entryTimeRow?' entry-time-row':'')+(opening?' opening-row':'')+(shiftEnd?' shift-end':'')+(changed?' changed':'')+(newWorker?' new-worker':'');
+    const name=`<span class="rt-task-name"><strong>${esc(post.occName||(opening&&!after?'—':post.open===false?'未开岗':'空岗'))}</strong>${postEntryTime(post)}</span>`;
     const sevenBadge=seven?'<small class="rt-badge p7">7点</small>':'';
     const missedBadge=missed?'<small class="rt-badge rt-missed-attendance">未答到</small>':'';
     const person=seven||shiftEnd||missed?`<div class="rt-task-person${shiftEnd?' rt-shift-end-person':''}">${name}${sevenBadge}${missedBadge}${shiftEnd?'<small>下班</small>':''}</div>`:name;
@@ -129,7 +136,7 @@ function personalConfirmation(p,action,data,pending,result){
   </section>`;
 }
 
-function mountRotationTasks(host,request,onComplete){
+function mountRotationTasks(host,request,onComplete,reminderAnchor=host){
   if(!host||!state.me.rotation_entry)return;
   if(!document.getElementById('formalRotationStyles')){const css=document.createElement('link');css.id='formalRotationStyles';css.rel='stylesheet';css.href=portalPath('/static/css/rotation.css')+new URL(import.meta.url).search;document.head.appendChild(css);}
   let busy=false,loading=false,closed=false,data=null,selectedCircle=null,queuedScope=false;
@@ -138,6 +145,56 @@ function mountRotationTasks(host,request,onComplete){
   selectedCircle=pending?.body?.attraction_id||null;
   const save=value=>{pending=value;try{if(value)sessionStorage.setItem(key,JSON.stringify(value));else sessionStorage.removeItem(key);}catch{}};
   const current=()=>!closed&&request.isCurrent()&&host.isConnected;
+  const reminder=document.createElement('section');
+  reminder.className='rt-shift-reminder';
+  reminder.hidden=true;
+  reminderAnchor.before(reminder);
+  const punchKey='formalRotation.punchReminder.'+state.me.id;
+  let punch=null, clockReceivedAt=0;
+  try{punch=JSON.parse(sessionStorage.getItem(punchKey)||'null');}catch{}
+  function savePunch(value){
+    punch=value;
+    try{sessionStorage.setItem(punchKey,JSON.stringify(value));}catch{}
+  }
+  function rememberPunch(date,body){
+    if(body.action==='batch_check_in'&&body.confirmation_token&&punch?.token!==body.confirmation_token){
+      savePunch({date,token:body.confirmation_token,dismissed:false});
+    }
+  }
+  function updateReminder(){
+    const p=data?.person, clock=data?.clock;
+    const deadline=p?.batchCheckInDeadline;
+    const seconds=p?.canBatchCheckIn&&Number.isFinite(deadline)
+      ? Math.ceil((deadline-clock.minute)*60-(clock.paused?0:(performance.now()-clockReceivedAt)/1000*(clock.speed??1))-1e-6)
+      : 0;
+    const alreadyConfirmed=punch?.date===clock?.date&&punch?.token===p?.confirmationTokens?.batch_check_in;
+    const canSign=seconds>0&&!alreadyConfirmed&&!data.readOnly&&!pending&&!host.dataset.scopeLoading;
+    const showPunch=punch&&!punch.dismissed&&clock?.date===punch.date;
+    const mode=canSign?'check-in':showPunch?'punch':'';
+    if(reminder.dataset.mode!==mode){
+      reminder.dataset.mode=mode;
+      reminder.hidden=!mode;
+      if(mode==='check-in'){
+        reminder.innerHTML=`<div class="rt-shift-reminder-heading"><div><h3 role="status"></h3><p data-shift-deadline></p></div><span class="rt-shift-countdown" role="timer" aria-label="签到剩余时间"></span></div><button type="button" class="rt-shift-reminder-primary" data-rotation-task="batch_check_in">已到</button>`;
+        reminder.querySelector('button').onclick=()=>submit('batch_check_in');
+      }else if(mode==='punch'){
+        reminder.innerHTML='<div><h3 role="status">上班卡打了吗？</h3><p>请在考勤系统完成上班打卡。</p></div><div class="rt-shift-reminder-actions"><button type="button" class="rt-shift-reminder-primary" data-punch-dismiss>已打卡</button><button type="button" class="secondary" data-punch-dismiss>稍后处理</button></div>';
+        reminder.querySelectorAll('[data-punch-dismiss]').forEach(button=>button.onclick=()=>{
+          savePunch({...punch,dismissed:true});
+          updateReminder();
+        });
+      }else reminder.replaceChildren();
+    }
+    if(!canSign)return;
+    const urgent=seconds<=120;
+    reminder.classList.toggle('rt-shift-reminder-urgent',urgent);
+    const title=reminder.querySelector('h3');
+    const titleText=urgent?'签到即将截止':'请确认已到';
+    if(title.textContent!==titleText)title.textContent=titleText;
+    reminder.querySelector('[data-shift-deadline]').textContent=`${hm(p.start)} 班 · ${hm(deadline)} 截止`;
+    reminder.querySelector('[role=timer]').textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
+    reminder.querySelector('button').disabled=busy;
+  }
   const confirmScope=(title,message,options)=>confirmModal(title,`<p>当前景点圈：${esc(data?.identity?.attraction_name||state.me.attraction_name||'')}</p>${message}`,'确认',options);
   const arrivalFormState=payload=>{
     const p=payload?.person;
@@ -145,7 +202,7 @@ function mountRotationTasks(host,request,onComplete){
       p?.canDepart,p?.arrivalOutcome,p?.mealEligible,p?.ate,p?.mealOptions?.canChoose,p?.mealOptions?.forced,
       p?.mealOptions?.supply,p?.mealOptions?.required,p?.mealOptions?.reserveWithin,personalTaskPaused(p||{})]);
   };
-  async function load(force=false){
+  async function load(force=false,{syncBadge=true}={}){
     if(loading){if(force)queuedScope=true;return;}
     if(!current()||busy)return;
     loading=true;
@@ -160,7 +217,9 @@ function mountRotationTasks(host,request,onComplete){
         active?.matches?.('[name=formalRotationMeal]')&&arrivalFormState(data)===arrivalFormState(next)
         ||active?.matches?.('[data-personal-circle]')&&JSON.stringify(data?.rotation_circles)===JSON.stringify(next.rotation_circles)
           &&arrivalFormState(data)===arrivalFormState(next));
-      data=next;selectedCircle=next.attraction_id||selectedCircle;
+      const checkInChanged=Boolean(data?.person?.canBatchCheckIn)!==Boolean(next.person?.canBatchCheckIn);
+      data=next;clockReceivedAt=performance.now();selectedCircle=next.attraction_id||selectedCircle;
+      if(syncBadge&&checkInChanged)void refreshActionBadge();
       if(keepControl&&!data.readOnly)return;
       if(data.readOnly&&pending)save(null);
       if(pending){
@@ -169,6 +228,7 @@ function mountRotationTasks(host,request,onComplete){
           const result=await api('/api/rotation-board/confirmation?date='+encodeURIComponent(pending.date)+'&token='+encodeURIComponent(pending.body.confirmation_token)+(pending.body.attraction_id?'&attraction_id='+pending.body.attraction_id:''));
           // A successful receipt lookup is authoritative even when the old
           // step was not committed or was revoked. Transport errors keep it.
+          if(result.confirmed&&result.result?.action==='batch_check_in')rememberPunch(pending.date,pending.body);
           save(null);
           if(result.confirmed&&onComplete){
             toast('已核实轮岗确认成功');
@@ -182,9 +242,11 @@ function mountRotationTasks(host,request,onComplete){
       const scopeHtml=circles.length?`<div class="panel rt-personal-scope"><label>当前轮岗景点圈${circles.length>1?`<select data-personal-circle ${pending?'disabled':''}>${circles.map(c=>`<option value="${c.id}" ${c.id===data.attraction_id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>`:`<strong>${esc(circles[0].name)}</strong>`}</label>${pending?'<small>此前确认结果待核对，核对完成后可切换。</small>':''}</div>`:'';
       host.dataset.rotationCircle=data.attraction_id||'';
       delete host.dataset.scopeLoading;
+      updateReminder();
       const bindScope=()=>host.querySelector('[data-personal-circle]')?.addEventListener('change',event=>{
         if(busy||pending)return;
         selectedCircle=Number(event.target.value);host.dataset.scopeLoading='true';
+        updateReminder();
         host.querySelectorAll('button,select').forEach(el=>el.disabled=true);void load(true);
       });
       const previousMeal=sameArrival?host.querySelector('[name=formalRotationMeal]:checked')?.value:null;
@@ -203,7 +265,7 @@ function mountRotationTasks(host,request,onComplete){
       }
       const a=personalAssignment(p,data),autoMorning=p.morningRest&&p.batchCheckedIn;
       const needsArrival=['walkback','pending','op'].includes(p.state);
-      const action=p.canBatchCheckIn?'batch_check_in':needsArrival?'arrive':!autoMorning&&a&&((['assigned','forecast'].includes(p.task?.status)&&['rest','meal','ready'].includes(p.state))||(p.state==='ready'&&p.canDepart))?'depart':null;
+      const action=needsArrival?'arrive':!autoMorning&&a&&((['assigned','forecast'].includes(p.task?.status)&&['rest','meal','ready'].includes(p.state))||(p.state==='ready'&&p.canDepart))?'depart':null;
       const waiting=p.scheduledRestStart!==null&&p.scheduledRestStart!==undefined;
       const status=p.timeoutCase?'同线关联任务待负责人核实，暂不计确认超时':p.timeoutPending?'等待前序完成后更新任务，暂不计确认超时':waiting?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:['rest','meal'].includes(p.state)?`${p.state==='meal'?'吃饭':'休息'}至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil((p.readyAt??data.clock.minute)-data.clock.minute))} 分钟`:p.state==='heading'?`前往 ${esc(a?.line||'')} 线，预计${hm(p.arriveAt)}到岗`:p.state==='onpost'?`已确认安排 · ${esc(p.line)}线 · ${esc(p.post)}`:p.state==='ready'&&!action?'等待上岗时间':action==='arrive'?'待确认休息／吃饭':p.state==='done'?'当日轮岗已结束':p.state==='exception'?'上岗超时，等待大屏、主管、TR或经理人工安排':'请留意当日轮岗安排';
       const result=data.confirmations?.find(r=>!['reversed','superseded'].includes(r.status)
@@ -211,7 +273,8 @@ function mountRotationTasks(host,request,onComplete){
       const confirmation=personalConfirmation(p,action,data,pending,result);
       host.innerHTML=confirmation?scopeHtml+confirmation:`${scopeHtml}<section class="panel rt-personal-task"><div class="record-line"><h3>${action==='arrive'?'回休息室确认':action==='depart'?'上岗前确认':'我的轮岗'}</h3><a class="secondary" href="${portalPath('/rotation-board')}">当日看板</a></div><div class="rt-personal-identity"><strong>${esc(p.name)}</strong><span>${personalShift(p)}</span></div><p>${status}</p>${action==='arrive'?'<p class="rt-confirm-reminder">到达休息室后再确认，餐休从确认时开始计时。</p>':action==='depart'?'<p class="rt-confirm-reminder">看清本次任务，确认后前往指定岗位执行。</p>':''}${p.postHold?`<p role="status">持续定岗 · ${hm(p.postHold.since)}起 · ${esc(p.postHold.reason)}，手动取消或在当天轮岗结束时自动解除。</p>`:''}${a?`<p>安排：${esc(a.line)}线 · ${esc(a.entryPost||'入口岗位')}，${hm(a.departAt)}出发${a.targetName?' · 替换'+esc(a.targetName):''}</p>`:''}${a?`<p class="field-hint">${a.blocked?'安排失效，待主管核对':p.assignmentLocked?('本轮任务已派发'):'预计安排 · 整轮正式派发前可能调整'}；餐休结束后才可确认，以出发前最新任务为准。</p>`:''}${action==='arrive'&&p.mealOptions?.canChoose?'<fieldset><legend>本次选择</legend><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="rest" checked>休息</label><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="meal">吃饭</label></fieldset>':''}${action==='arrive'&&p.mealOptions?.forced?'<p>已到饭点，本次按原规则安排吃饭。</p>':''}${pending?'<p role="status">上次提交结果待核对，可刷新或使用原步骤重试。</p><button type="button" class="primary" data-rotation-retry>重试本次确认</button>':action?`<button type="button" class="primary" data-rotation-task="${action}">${action==='batch_check_in'?'已到':action==='depart'?'确认去上岗':'确认已到休息室'}</button>`:''}${result?`<p class="field-hint">最近安排生效：${hm(result.minute)} · ${personalReceipt(result)}</p>`:''}${taskLine(a||p.state==='onpost'?data.line:null,p.pid)}</section>`;
       if(state.me.rotation_temporary||data.attraction_id&&data.attraction_id!==state.me.attraction_id)host.querySelector('a[href]')?.remove();
-      if(state.me.rotation_temporary&&data.notices?.some(n=>n.status==='open'))host.querySelector('.rt-personal-task').insertAdjacentHTML('beforeend',`<div role="status">${data.notices.filter(n=>n.status==='open').map(n=>`<p><strong>${esc(n.title)}</strong><br>${esc(n.body)}</p>`).join('')}</div>`);
+      const otherNotices=state.me.rotation_temporary&&data.notices?.filter(n=>n.status==='open'&&n.kind!=='batch_check_in');
+      if(otherNotices?.length)host.querySelector('.rt-personal-task').insertAdjacentHTML('beforeend',`<div role="status">${otherNotices.map(n=>`<p><strong>${esc(n.title)}</strong><br>${esc(n.body)}</p>`).join('')}</div>`);
       if(previousMeal==='meal'&&action==='arrive'&&p.mealOptions?.canChoose){const option=host.querySelector('[name=formalRotationMeal][value=meal]');if(option)option.checked=true;}
       host.querySelector('[data-rotation-task]')?.addEventListener('click',()=>submit(action));
       bindScope();
@@ -243,7 +306,8 @@ function mountRotationTasks(host,request,onComplete){
         panel.insertAdjacentHTML('afterbegin',p.canDepart?'<p>准备上班 · 已到班</p>':'<p>准备上班 · 已到班，等待安排</p>');
       }else if(p.upcomingShift){
         const preview=p.previewAssign;
-        panel.insertAdjacentHTML('afterbegin',`<p>准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-data.clock.minute))} 分钟${preview?` · 预计 ${esc(preview.line)}线${preview.entryPost?` · ${esc(preview.entryPost)}`:''}`:''}</p>`);
+        const upcoming=p.batchCheckedIn?'已到确认成功 · 等待排岗':`准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-data.clock.minute))} 分钟`;
+        panel.insertAdjacentHTML('afterbegin',`<p>${upcoming}${preview?` · 预计 ${esc(preview.line)}线${preview.entryPost?` · ${esc(preview.entryPost)}`:''}`:''}</p>`);
       }
       host.querySelector('[data-rotation-retry]')?.addEventListener('click',()=>submit(pending.body.action,true));
     }catch(error){if(current())host.innerHTML=`<section class="panel"><p role="alert">轮岗待办暂未同步：${esc(error.message)}</p><button type="button" class="secondary" data-rotation-refresh>重新同步</button></section>`;host.querySelector('[data-rotation-refresh]')?.addEventListener('click',load);}
@@ -253,6 +317,7 @@ function mountRotationTasks(host,request,onComplete){
     if(busy||host.dataset.scopeLoading||data?.readOnly||!data?.person)return;
     if(!retry&&action==='depart'&&!data.person.canDepart){toast('餐休未结束或尚未到允许出发时间',true);return;}
     busy=true;
+    updateReminder();
     const p=data.person,meal=host.querySelector('[name=formalRotationMeal]:checked')?.value||'rest';
     let completed=false;
     const body=retry?{...pending.body}:{action,pid:p.pid,confirmation_token:p.confirmationTokens?.[action],meal_choice:meal,...(data.attraction_id?{attraction_id:data.attraction_id}:{})};
@@ -261,6 +326,7 @@ function mountRotationTasks(host,request,onComplete){
       body.expected_push7=p.task.push7Route??null;
       body.expected_opening=p.task.openingRoute??null;
       body.expected_kind=p.task.kind;
+      body.expected_route=p.task.routeSignature;
     }
     const date=retry?pending.date:data.clock.date;
     async function refreshConfirmation(){
@@ -325,6 +391,7 @@ function mountRotationTasks(host,request,onComplete){
             body.expected_push7=out.task?.push7Route??null;
             body.expected_opening=out.task?.openingRoute??null;
             body.expected_kind=out.task?.kind;
+            body.expected_route=out.task?.routeSignature;
             continue;
           }
           break;
@@ -339,14 +406,17 @@ function mountRotationTasks(host,request,onComplete){
         }
       }
       if(!out)return;
+      if(out.executed||out.duplicate)rememberPunch(date,body);
       save(null);completed=true;
+      updateReminder();
       toast(action==='batch_check_in'?'已签到':out.duplicate?'本次已确认，无需重复操作':'轮岗已确认，正在同步看板');
     }catch(error){if(error.status&&error.status<500)save(null);toast(error.message||'提交结果待核对，请勿重复确认',true);}
-    finally{busy=false;if(current()){await load();await refreshActionBadge();if(completed&&current())onComplete?.();}}
+    finally{busy=false;if(current()){await load(false,{syncBadge:false});await refreshActionBadge();if(completed&&current())onComplete?.();}}
   }
   const timer=setInterval(()=>{if(!document.hidden)void load();},5000);
+  const countdown=setInterval(()=>{if(!document.hidden&&current())updateReminder();},1000);
   const visible=()=>{if(!document.hidden)void load();};document.addEventListener('visibilitychange',visible);
-  registerPageCleanup(()=>{closed=true;clearInterval(timer);document.removeEventListener('visibilitychange',visible);});
+  registerPageCleanup(()=>{closed=true;clearInterval(timer);clearInterval(countdown);reminder.remove();document.removeEventListener('visibilitychange',visible);});
   void load();
 }
 

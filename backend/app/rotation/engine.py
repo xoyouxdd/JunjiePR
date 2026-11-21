@@ -362,11 +362,11 @@ class Engine:
         return p['end'], 'off', None
 
     def can_board(self, p, arrival, now):
-        """到岗时距下班/出圈必须大于 noBoardBefore 分钟。"""
+        """按下班、出圈限制及已开始的餐休判断能否上岗。"""
         t, kind, _ = self.leave_at(p, now)
         if kind == 'off':
             from app.rotation import forecast
-            if forecast.late_shift(self, p):
+            if forecast.late_shift(self, p) or forecast.returning_from_break(p, arrival):
                 return arrival < t
         return t - arrival > self.S['noBoardBefore']
 
@@ -396,7 +396,7 @@ class Engine:
                 x['manual'] = bool(x.get('draftClosed'))
         for p in self.P.values():
             p.update(state='notyet', assign=None, visited=[], ate=False, flags=[],
-                     line=None, lineStart=None, continuousStart=None, readyAt=None, breakKind=None, breakStart=None,
+                     line=None, lineStart=None, continuousStart=None, entrySortAt=None, readyAt=None, breakKind=None, breakStart=None,
                      walkbackSince=None, arriveAt=None, away=None, after=None, lastLine=None,
                      push7done=False, departedAt=None, downReason=None, walkBack=None, arriveAnchor=None,
                      readySince=None)

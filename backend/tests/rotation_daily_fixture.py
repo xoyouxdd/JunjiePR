@@ -76,6 +76,9 @@ with TestClient(app) as client:
     for day in ('2026-10-04', '2026-10-06'):
         for i, name in enumerate(['陈予安', '林知夏', '周明远', '许念初', '江云舟', '苏景和', '长姓名测试 Alexander', '午班测试']):
             wb.active.append([str(9100000+i), name, day, '07:15-16:15' if i < 7 else '12:00-21:00', ''])
+    if os.environ.get('ROTATION_SICK_FIXTURE') == '1':
+        wb.active.append(['9100008', '班次病假测试', '2026-10-06', '07:15-16:15', 'SL'])
+        wb.active.append(['9100009', '仅病假标记测试', '2026-10-06', '病假', ''])
     if os.environ.get('ROTATION_EARLY_POST_FIXTURE') == '1':
         wb.active.append(['9100008', '早班测试', '2026-10-06', '07:00-16:00', ''])
     buf = BytesIO()

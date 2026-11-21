@@ -32,6 +32,7 @@ async function run(){
     const gsm=await session('GSMTEST01');
     async function create(kind,title){
       await gsm.page.setViewportSize({width:390,height:950});
+      if(await gsm.page.locator('[data-filter="manage"]').getAttribute('aria-pressed')!=='true')await gsm.page.locator('[data-filter="manage"]').click();
       await gsm.page.getByRole('button',{name:'创建活动',exact:true}).click();
       const modal=gsm.page.getByRole('dialog');await modal.locator('[name=title]').fill(title);
       await modal.locator('[name=kind]').selectOption(kind);
@@ -159,7 +160,7 @@ async function run(){
     await ac2.getByRole('button',{name:'我要出价'}).click();await cm2.page.getByRole('dialog').locator('[name=amount]').fill('30');
     await cm2.page.getByRole('dialog').getByRole('button',{name:'确认出价并冻结'}).click();await cm2.page.getByRole('dialog').waitFor({state:'hidden'});
     await cm.page.getByRole('button',{name:'刷新',exact:true}).click();
-    await cm.page.locator('.activity-wallet').getByText('冻结 0 点',{exact:true}).waitFor();
+    await cm.page.locator('.activity-frozen').waitFor({state:'hidden'});
     await gsm.context.request.post(base+`/__fixture/end/${auction.lots[0].id}`);
     await gsm.page.getByRole('button',{name:'刷新',exact:true}).click();
     const ga=gsm.page.locator(`details[data-event="${auction.id}"]`);
@@ -193,9 +194,12 @@ async function run(){
     // Actual downloads, including on the narrow GSM layout, must produce XLSX files.
     await gsm.page.setViewportSize({width:390,height:950});
     for(const [name,eventCard] of [['auction',ga],['draw',gmCard]]){
-      const downloading=gsm.page.waitForEvent('download');
-      await eventCard.getByRole('link',{name:'导出核销Excel',exact:true}).click();
-      const download=await downloading;
+      if(!await eventCard.evaluate(node=>node.open))await eventCard.locator(':scope > summary').click();
+      await eventCard.getByRole('link',{name:'导出核销Excel',exact:true}).waitFor();
+      const [download]=await Promise.all([
+        gsm.page.waitForEvent('download'),
+        eventCard.getByRole('link',{name:'导出核销Excel',exact:true}).click(),
+      ]);
       assert(download.suggestedFilename().endsWith('.xlsx'));
       const target=path.join(output,`receipt-${name}.xlsx`);
       await download.saveAs(target);assert.equal(await download.failure(),null);
@@ -212,7 +216,7 @@ async function run(){
       }
     }
     // The creation dialog must also fit a narrow phone.
-    await gsm.page.setViewportSize({width:320,height:900});await gsm.page.getByRole('button',{name:'创建活动',exact:true}).click();
+    await gsm.page.setViewportSize({width:320,height:900});await gsm.page.locator('[data-filter="manage"]').click();await gsm.page.getByRole('button',{name:'创建活动',exact:true}).click();
     await gsm.page.getByRole('dialog').locator('[name=kind]').selectOption('auction');
     assert(await gsm.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'creation modal overflow');
     await gsm.page.getByRole('dialog').screenshot({path:path.join(output,'create-320.png')});

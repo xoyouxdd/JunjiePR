@@ -4,6 +4,7 @@ from __future__ import annotations
 from app.record_payloads import deduction_payload
 from app.v2_models import DeductionRecord
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 
@@ -22,7 +23,7 @@ def pending_material_conflict(
             DeductionRecord.employee_id == employee_id,
             DeductionRecord.deduction_type_id == deduction_type_id,
             DeductionRecord.deduction_level_id == deduction_level_id,
-            DeductionRecord.occurred_on == occurred_on,
+            func.coalesce(DeductionRecord.incident_on, DeductionRecord.occurred_on) == occurred_on,
             DeductionRecord.status.in_({"pending_material", "material_failed"}),
         )
         .order_by(DeductionRecord.submitted_at.asc(), DeductionRecord.id.asc())

@@ -70,7 +70,9 @@
 .rt-line.off { opacity: .6; }
 .rt-line-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-weight: 700; color: var(--text-strong); background: var(--neutral-bg); }
 .rt-line-head[role="button"] { cursor: pointer; }
-.rt-sort-time { font-variant-numeric:tabular-nums; font-size:var(--fs-sm); white-space:nowrap; }
+.rt-sort-times { display:grid; justify-items:center; gap:2px; line-height:1.15; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.rt-sort-time { font-size:var(--fs-sm); }
+.rt-previous-sort-time { font-size:var(--fs-xs); font-weight:400; opacity:.8; }
 .rt-chip.rt-can-board { border:2px solid #1677d2; box-shadow:0 0 0 1px #1677d2; }
 .rt-personal-task.rt-can-board { border:2px solid #1677d2; }
 .rt-forecast-name { padding:0; border:0; background:transparent; color:inherit; text-align:left; width:100%; }
@@ -102,6 +104,7 @@
 .rt-pn { color: var(--text-secondary); font-size: var(--fs-base); }
 .rt-who-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
 .rt-post-shift-end { display: inline-block; margin-inline-start: 5px; color: var(--text-secondary); font-size: var(--fs-xs); font-weight: 400; white-space: nowrap; }
+.rt-post-entry-time { display:inline-block; margin-inline-start:5px; color:var(--text-secondary); font-size:var(--fs-xs); font-weight:400; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .rt-mins { color: var(--text-faint); font-size: var(--fs-sm); }
 
 /* ---------- 休息区 */
@@ -404,7 +407,7 @@ button.rt-chip { cursor: pointer; }
 .rt-confirm-result p .rt-special-instruction,.rt-single-task-summary p .rt-special-instruction{color:#000;font-weight:800}
 .rt-single-task-summary .rt-batch-result-heading>strong{font-size:18px;color:var(--primary);overflow-wrap:anywhere}
 .rt-single-task-summary p{margin:6px 0 0;overflow-wrap:anywhere}
-.rt-task-comparison .rt-task-slot:is(.shift-end-row,.seven-row,.attendance-row){min-height:50px}
+.rt-task-comparison .rt-task-slot:is(.shift-end-row,.seven-row,.attendance-row,.entry-time-row){min-height:50px}
 .rt-task-comparison .rt-task-slot.seven-row:is(.shift-end-row,.attendance-row),
 .rt-task-comparison .rt-task-slot.shift-end-row.attendance-row{min-height:64px}
 .rt-task-comparison .rt-task-slot.seven-row.shift-end-row.attendance-row{min-height:78px}
@@ -413,6 +416,7 @@ button.rt-chip { cursor: pointer; }
 .rt-task-post-label{display:grid;gap:2px;line-height:1.2}
 .rt-task-post-label small{color:#22643f;font-size:11px;font-weight:700}
 .rt-task-person{display:grid;min-width:0;justify-items:end;line-height:1.2}
+.rt-task-slot .rt-task-name{min-width:0;text-align:end;color:inherit}
 .rt-badge.rt-missed-attendance{background:var(--danger-bg);color:var(--danger-text);white-space:nowrap}
 .rt-own-post-name{color:#000;font-weight:800}
 .rt-post .rt-post-check-in{display:block;min-height:28px;padding:2px 5px;white-space:nowrap}
@@ -444,6 +448,43 @@ button.rt-chip { cursor: pointer; }
 .rotation-page .rt-workflow-board .rt-others .rt-shift-group>.rt-chips:not(.empty){max-height:none;overflow:visible}
 .rt-shift-group[open]>.rt-chips{padding-bottom:8px}
 .rt-personal-task{max-width:460px;margin-left:auto;margin-right:auto}.rt-personal-task .rt-confirm-reminder{border-left:3px solid var(--primary);background:var(--info-bg);padding:8px 10px;font-size:var(--fs-base)}.rt-personal-task>button.primary{width:100%;min-height:44px}
+.rt-shift-reminder:not([hidden]) {
+  --reminder-bg: light-dark(#fff6df, #392b18);
+  --reminder-ink: light-dark(#704008, #ffdc9f);
+  --reminder-border: light-dark(#e6bb6a, #a27c40);
+  --reminder-action: light-dark(#824906, #ffdb96);
+  --reminder-action-text: light-dark(#fff, #372508);
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--reminder-ink);
+  background: var(--reminder-bg);
+  border: 1px solid var(--reminder-border);
+  border-inline-start-width: 4px;
+  border-radius: 10px;
+}
+.rt-shift-reminder[data-mode="check-in"].rt-shift-reminder-urgent {
+  --reminder-bg: light-dark(#fff0ee, #3d2228);
+  --reminder-ink: light-dark(#97281c, #ffc1b7);
+  --reminder-border: light-dark(#e8a197, #aa6a64);
+  --reminder-action: light-dark(#b52c22, #ffb6a9);
+  --reminder-action-text: light-dark(#fff, #430f0c);
+}
+.rt-shift-reminder[data-mode="punch"] {
+  --reminder-bg: light-dark(#eaf2ff, #243754);
+  --reminder-ink: light-dark(#183b80, #d0e0ff);
+  --reminder-border: light-dark(#8caeed, #628ad1);
+  --reminder-action: light-dark(#2455c1, #bbd0ff);
+  --reminder-action-text: light-dark(#fff, #142849);
+}
+.rt-shift-reminder-heading,.rt-shift-reminder-actions { display:flex;align-items:center;flex-wrap:wrap;gap:8px }
+.rt-shift-reminder-heading { justify-content:space-between }
+.rt-shift-reminder h3 { margin:0;font-size:var(--fs-lg);color:inherit }
+.rt-shift-reminder p { margin:4px 0 0;color:inherit }
+.rt-shift-countdown { font-size:var(--fs-lg);font-weight:700;font-variant-numeric:tabular-nums }
+.rt-shift-reminder button { min-height:44px }
+.rt-shift-reminder .rt-shift-reminder-primary { background:var(--reminder-action);color:var(--reminder-action-text);border-color:transparent }
+.rotation-personal-only .rt-shift-reminder { max-width:460px;margin:10px auto }
 
 /* Real mobile confirmation screens, matching the approved compact previews. */
 .rt-confirm-page{--confirm-navy:#102033;padding:20px!important;max-width:390px!important;border-radius:var(--radius-3xl);overflow:hidden}
@@ -514,7 +555,12 @@ html[data-skin="dark"] .rt-line-head:is(.g-A,.g-B,.g-C,.g-D,.g-E) { color: #1622
 .rotation-screen .rt-clock { grid-area:clock; margin:0; flex-wrap:wrap; gap:2px 8px; max-width:240px; }
 .rotation-screen .rt-clock-big b { flex-basis:100%; order:-1; font-size:clamp(34px,3.2vw,64px); line-height:1; letter-spacing:0; }
 .rotation-screen .rt-date { color:#c4d4e8; opacity:1; }
-.rotation-screen .rt-sync { grid-area:sync; font-size:var(--fs-base); }
+.rt-screen-status { grid-area:sync; display:grid; justify-items:end; gap:4px; }
+.rotation-screen .rt-sync { font-size:var(--fs-base); }
+.rt-rotation-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 8px; }
+.rt-rotation-totals > span { display:flex; align-items:baseline; justify-content:space-between; gap:6px; padding:2px 8px; border-radius:var(--radius-sm); background:#1b334c; color:#e5eef8; font-size:var(--fs-sm); white-space:nowrap; }
+.rt-rotation-totals strong { font-size:clamp(18px,1.3vw,24px); line-height:1; font-variant-numeric:tabular-nums; }
+.rt-board-totals { order:1; margin-inline-start:auto; }
 .rotation-screen #localSimulationBadge { grid-column:1/-1; justify-self:end; }
 .rt-screen-summary:not([hidden]) { grid-area:metrics; display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:8px; min-width:0; }
 .rt-screen-summary > a { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 8px; align-items:center; min-height:48px; padding:6px 9px; border:1px solid #375470; border-radius:var(--radius-md); background:#1b334c; color:#e5eef8; text-decoration:none; }
@@ -640,7 +686,10 @@ html[data-skin="dark"] .rt-line-head:is(.g-A,.g-B,.g-C,.g-D,.g-E) { color: #1622
   .rotation-screen.rt-screen-has-summary .rt-top { grid-template-areas:"title clock" "sync clock" "metrics metrics"; }
   .rotation-screen .rt-title { font-size:clamp(14px,4vw,18px); }
   .rotation-screen .rt-brand-en { font-size:9px; }
+  .rt-screen-status { justify-items:start; }
   .rotation-screen .rt-sync { font-size:var(--fs-xs); }
+  .rt-rotation-totals > span { gap:4px; padding:2px 4px; font-size:11px; }
+  .rt-rotation-totals strong { font-size:16px; }
   .rotation-screen .rt-screen-live .rt-lines { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .rotation-screen .rt-screen-live .rt-screen-priority { grid-template-columns:minmax(0,1fr); }
   .rotation-screen .rt-screen-live .rt-screen-secondary .rt-chips:not(.empty) { grid-template-columns:repeat(2,minmax(0,1fr)); }

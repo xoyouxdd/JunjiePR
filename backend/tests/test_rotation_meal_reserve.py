@@ -198,7 +198,7 @@ def test_rest_conversion_revalidates_and_credits_time_before_a_timer_edit(curren
     assert act(r, body)['executed']
     converted = person(r)
     assert converted['state'] == expected_state and converted['ate'] and converted['readyAt'] == 645
-    assert converted['breakStart'] == 600 and converted['timeoutAt'] == 648
+    assert converted['breakStart'] == 600 and converted['timeoutAt'] == 646
     assert converted['breakKind'] == ('meal_rest' if expected_state == 'rest' else 'meal')
     with pytest.raises(S.ConfirmationConflict):
         act(r, body)

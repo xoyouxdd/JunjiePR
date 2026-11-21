@@ -23,10 +23,12 @@ from app.role_constants import LEADER_CODES
 from app.services.organization import current_group_for_employee
 from app.services.identity import duty_code_at, scoring_category
 from app.upload_storage import remove_upload_file
-from app.services.audit import write_audit
+from app.services.audit import DEDUCTION_MATERIAL_SUPPLEMENT_ACTION, write_audit
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
 from app.date_utils import add_calendar_months, parse_iso_date, subtract_calendar_months
 from app.deduction_policy import (
+    DECISION_DATED_ISSUER_CODES,
+    DECISION_DATED_LEVEL_CODES,
     DEDUCTION_LEVEL_ORDER,
     REPEAT_CONTROLLED_DEDUCTION_CODES,
     direct_only_deduction_user,
@@ -46,7 +48,7 @@ from app.access_policy import (
     void_operator_snapshot,
 )
 from app.http_utils import client_ip
-from app.record_payloads import deduction_follow_up_payload, deduction_payload
+from app.record_payloads import deduction_follow_up_payload, deduction_payload, deduction_payloads
 from app.month_closure import ensure_month_open
 from app.idempotency import (
     existing_submission,
@@ -292,7 +294,6 @@ async def create_deduction(
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.active or not target_circle.employee_circle:
         raise HTTPException(400, "被扣分员工未配置有效景点圈")
-    ensure_month_open(db, occurred_on[:7], target_circle.id, "新增扣分")
     level = db.get(DeductionLevel, deduction_level_id)
     deduction_type = db.get(DeductionType, deduction_type_id)
     if not level or not level.active or not deduction_type or not deduction_type.active:
@@ -300,6 +301,11 @@ async def create_deduction(
     ensure_deduction_type_allowed(user, deduction_type, db, occurred_on)
     if "DEDUCTION_DIRECT" in user.permissions and "DEDUCTION_ALL" not in user.permissions and level.code != "STATEMENT":
         raise HTTPException(403, "TA主管、主管只能登记声明1分")
+    uses_registration_date = level.code in DECISION_DATED_LEVEL_CODES and user.role.code in DECISION_DATED_ISSUER_CODES
+    registered_at = datetime.now() if uses_registration_date else None
+    effective_on = registered_at.date().isoformat() if registered_at else occurred_on
+    deduction_month = effective_on[:7]
+    ensure_month_open(db, deduction_month, target_circle.id, "新增扣分")
     existing_pending_material = pending_material_conflict(
         db,
         employee_id=target.id,
@@ -373,8 +379,10 @@ async def create_deduction(
             deduction_level_name=level.name,
             points=scoring_config.deduction_points(db, deduction_type, level, occurred_on),
             scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)),
-            occurred_on=occurred_on,
-            deduction_month=occurred_on[:7],
+            occurred_on=effective_on,
+            incident_on=occurred_on if uses_registration_date else None,
+            deduction_month=deduction_month,
+            submitted_at=registered_at,
             description=description,
             document_file_id=file_row.id,
             submitter_id=user.id,
@@ -761,6 +769,8 @@ def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, 
         ensure_month_open(db, second.deduction_month, second.attraction_id_snapshot, "处理声明升级工单")
         if decision not in {"approve", "reject"}:
             raise HTTPException(400, "无效处理结论")
+        decided_at = datetime.now()
+        effective_on = decided_at.date().isoformat()
         level = None
         if decision == "approve":
             level_id = int(payload.get("result_level_id") or 0)
@@ -773,6 +783,8 @@ def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, 
             scoring_config.validate_statement_upgrade_pair(db, second, first.id)
             if not level.active:
                 raise HTTPException(409, "所选处分等级已停用，请刷新后重选")
+            if effective_on[:7] != second.deduction_month:
+                ensure_month_open(db, effective_on[:7], second.attraction_id_snapshot, "开具声明升级处分")
         claimed = db.execute(
             update(DeductionUpgradeRequest)
             .where(DeductionUpgradeRequest.id == row.id, DeductionUpgradeRequest.status == "pending")
@@ -786,18 +798,29 @@ def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, 
             second.status, second.upgrade_state = "void", "rejected"
             second.void_reason = "声明升级审核不通过：" + note
             first.upgrade_request_id, first.upgrade_role, first.upgrade_state = None, None, "eligible"
-            row.handling_note, row.resolved_by, row.resolved_by_name, row.resolved_at = note, user.id, user.name, datetime.now()
+            row.handling_note, row.resolved_by, row.resolved_by_name, row.resolved_at = note, user.id, user.name, decided_at
         else:
             placeholder = StoredFile(storage_key=f"system/no-document-{secrets.token_hex(12)}", original_filename="无需上传正式文书", extension=".none", mime_type="application/octet-stream", file_size=0, sha256="0" * 64, uploaded_by=user.id, status="not_required")
             db.add(placeholder)
             db.flush()
-            result = DeductionRecord(employee_id=second.employee_id, employee_no=second.employee_no, employee_name=second.employee_name, employee_role_snapshot=second.employee_role_snapshot, employee_group_id_snapshot=second.employee_group_id_snapshot, attraction_id_snapshot=second.attraction_id_snapshot, deduction_type_id=second.deduction_type_id, deduction_type_name=second.deduction_type_name, deduction_level_id=level.id, deduction_level_name=level.name, points=scoring_config.stored_deduction_points(db, second, level), scoring_policy_json=second.scoring_policy_json, occurred_on=second.occurred_on, deduction_month=second.deduction_month, description=note, document_file_id=placeholder.id, submitter_id=user.id, submitter_name=user.name, submitter_role_snapshot=user.role.name, permission_scope_snapshot="声明升级审核", status="active", upgrade_role="result", upgrade_state="result")
+            result = DeductionRecord(
+                employee_id=second.employee_id, employee_no=second.employee_no, employee_name=second.employee_name,
+                employee_role_snapshot=second.employee_role_snapshot, employee_group_id_snapshot=second.employee_group_id_snapshot,
+                attraction_id_snapshot=second.attraction_id_snapshot, deduction_type_id=second.deduction_type_id,
+                deduction_type_name=second.deduction_type_name, deduction_level_id=level.id, deduction_level_name=level.name,
+                points=scoring_config.stored_deduction_points(db, second, level), scoring_policy_json=second.scoring_policy_json,
+                occurred_on=effective_on, incident_on=second.occurred_on, deduction_month=effective_on[:7],
+                description=note, document_file_id=placeholder.id, submitted_at=decided_at,
+                submitter_id=user.id, submitter_name=user.name, submitter_role_snapshot=user.role.name,
+                submitter_role_code_snapshot=user.role.code, submitter_base_role_code_snapshot=user.base_role.code,
+                permission_scope_snapshot="声明升级审核", status="active", upgrade_role="result", upgrade_state="result",
+            )
             db.add(result)
             db.flush()
             first.upgrade_role, first.upgrade_state = "source_first", "source_first"
             second.status, second.upgrade_role, second.upgrade_state = "active", "source_second", "source_second"
             row.result_level_id, row.result_deduction_id, row.handling_note, row.issued_confirmed = level.id, result.id, note, True
-            row.resolved_by, row.resolved_by_name, row.resolved_at = user.id, user.name, datetime.now()
+            row.resolved_by, row.resolved_by_name, row.resolved_at = user.id, user.name, decided_at
         write_audit(db, user.employee, "处理声明升级工单", "deduction_upgrade", row.id,
                     after={"decision": decision, "note": note, "reviewer_id": row.reviewer_id,
                            "resolved_by": row.resolved_by}, ip_address=client_ip(request))
@@ -818,7 +841,7 @@ def list_deductions(month: str | None = None, db: Session = Depends(get_db), use
         query = query.filter(DeductionRecord.submitter_id == user.id)
     if month:
         query = query.filter(DeductionRecord.deduction_month == month)
-    return [deduction_payload(row) for row in query.order_by(DeductionRecord.submitted_at.desc()).limit(500).all()]
+    return deduction_payloads(db, query.order_by(DeductionRecord.submitted_at.desc()).limit(500).all())
 
 
 @router.get("/deductions/pending-materials")
@@ -850,7 +873,7 @@ def pending_deduction_materials(
     total = query.count()
     rows = query.order_by(DeductionRecord.submitted_at.desc(), DeductionRecord.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
     return {
-        "items": [deduction_payload(row) for row in rows],
+        "items": deduction_payloads(db, rows),
         "scope": scope,
         "total": total,
         "page": page,
@@ -866,7 +889,7 @@ def deduction_material_status(record_id: int, db: Session = Depends(get_db), use
         raise HTTPException(404, "扣分记录不存在")
     if row.submitter_id != user.id and "SYSTEM_ADMIN" not in user.permissions and user.role.code not in MATERIAL_COLLABORATOR_CODES:
         raise HTTPException(403, "无权查看该材料状态")
-    return {"ok": True, "record": deduction_payload(row)}
+    return {"ok": True, "record": deduction_payloads(db, [row])[0]}
 
 
 def require_material_retry_access(row: DeductionRecord, user: V2User) -> None:
@@ -1059,7 +1082,7 @@ async def retry_deduction_material(
             reviewer_id=reviewer.id if reviewer else None,
             first_deduction_id=first.id if first else None,
         )
-        write_audit(db, user.employee, "补充扣分材料", "deduction", row.id, after={"material_status": "processing", "contributor": user.name, "retry_of_job_id": old_job.id if old_job else None}, ip_address=client_ip(request))
+        write_audit(db, user.employee, DEDUCTION_MATERIAL_SUPPLEMENT_ACTION, "deduction", row.id, after={"material_status": "processing", "contributor": user.name, "retry_of_job_id": old_job.id if old_job else None}, ip_address=client_ip(request))
         db.commit()
     except Exception:
         db.rollback()

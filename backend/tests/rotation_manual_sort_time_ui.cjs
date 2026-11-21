@@ -29,7 +29,7 @@ async function main(){try{
     let day=await board();const a=day.lines[0].posts[0].occ;
     await post({action:'pool',pid:a,pool:'rest'});await open(a,'A',0);
     assert(await checkbox().isVisible());assert.equal(await checkbox().isChecked(),false);
-    await save();day=await board();assert.equal(day.lines[0].sortAt,435);assert.equal(day.lines[0].posts[0].since,450);
+    await save();day=await board();assert.equal(day.lines[0].sortAt,0);assert.equal(day.lines[0].posts[0].since,450);
     assert.equal(writes.at(-1).update_sort_time,false);
     // Normal confirmation remains automatic and has no manual override checkbox.
     await post({action:'add_person',temporary:true,name:'确认上岗验证',start:'07:00',end:'20:00'});

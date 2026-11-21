@@ -27,6 +27,7 @@ from app.organization_queries import group_display_metadata_bulk
 from app.rotation.access import find_screen_account, rotation_login
 from app.routers.rotation_board import can_enter as can_enter_formal_rotation
 from app.services.avatars import own_avatar
+from app.warehouse.access import can_access as can_enter_warehouse
 
 router = APIRouter()
 
@@ -78,6 +79,7 @@ def user_payload(db: Session, user: V2User) -> dict:
         "must_change_password": user.account.must_change_password,
         # 正式轮岗入口按当前有效角色及班表参与资格判断。
         "rotation_entry": can_enter_formal_rotation(user, db),
+        "warehouse_entry": can_enter_warehouse(user),
     }
 
 

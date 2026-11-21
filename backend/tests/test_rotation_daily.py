@@ -1,9 +1,10 @@
 """Daily plans: real isolated SQLite transactions, history and concurrent edit guards."""
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
-from test_rotation_transaction_boundaries import rotation, DAY, draft, live
+from test_rotation_transaction_boundaries import formal_rotation, rotation, DAY, draft, live
 from app.rotation import service as S
 from app.rotation import daily as D
 from app.rotation import forecast
@@ -75,6 +76,68 @@ def test_roster_sick_leave_appears_in_board_and_screen_without_entering_rotation
         day = S.board_payload(db, rotation.attraction_id)['day']
         assert next(p for p in day['off'] if p['pid'] == '22')['end'] == 975
         assert 'end' not in next(p for p in S.day_state(row)['off'] if p['pid'] == '22')
+
+
+def test_correcting_imported_sick_leave_moves_the_same_person_without_rewriting_the_roster(formal_rotation):
+    rotation = formal_rotation
+    cells = {'21': 'SL', '22': '07:15-16:15\n病假', '23': '07:15-16:15', '24': 'OFF', '25': '08:00-11:00 SL'}
+    parsed = {'people': {pid: {'name': f'员工{pid}'} for pid in cells}, 'days': {FUTURE: cells}, 'hours': {}}
+    with rotation.factory() as db:
+        S.save_roster(db, rotation.attraction_id, parsed, scope='day', file_name='病假.xlsx',
+                      uploader_id=None, uploader_name='测试')
+        with S.transaction(db):
+            S.set_sim_clock(S.load_config(db, rotation.attraction_id), FUTURE, 600, paused=True)
+        initial = S.board_payload(db, rotation.attraction_id)['day']
+        roster = S.roster_summary(db, rotation.attraction_id, FUTURE)
+
+        def move(pid, pool, actor='测试', **shift):
+            return S.do_live_action(db, rotation.attraction_id, actor, {
+                'action': 'pool', 'pid': pid, 'pool': pool,
+                'roster_sick': {'date': FUTURE, **shift},
+            })
+
+        with pytest.raises(S.ActionError, match='缺少参数'):
+            move('21', 'meal')
+        with pytest.raises(S.ActionError, match='用餐工时'):
+            move('25', 'meal')
+        with pytest.raises(S.ConfirmationConflict, match='日期'):
+            move('22', 'rest', date=DAY)
+        with pytest.raises(S.ConfirmationConflict, match='病假名单'):
+            move('24', 'rest')
+        with pytest.raises(S.ActionError, match='休息室大屏只可'):
+            move('22', 'rest', actor=SimpleNamespace(kind='screen'))
+        assert [p['pid'] for p in S.board_payload(db, rotation.attraction_id)['day']['persons']] == ['23']
+
+        move('22', 'rest')
+        move('21', 'meal', start='07:30', end='16:30')
+        with pytest.raises(S.ConfirmationConflict, match='状态'):
+            move('22', 'meal')
+
+        for payload in (S.board_payload, S.screen_payload):
+            day = payload(db, rotation.attraction_id)['day']
+            people = {p['pid']: p for p in day['persons']}
+            assert (people['22']['state'], people['22']['start'], people['22']['end'], people['22']['readyAt']) == ('rest', 435, 975, 615)
+            assert (people['21']['state'], people['21']['start'], people['21']['end'], people['21']['readyAt']) == ('meal', 450, 990, 645)
+            assert all(not people[pid]['manualPaused'] for pid in ('21', '22'))
+            assert {l['id']: (l['sortAt'], [p['occ'] for p in l['posts']]) for l in day['lines']} == {
+                l['id']: (l['sortAt'], [p['occ'] for p in l['posts']]) for l in initial['lines']
+            }
+        assert S.roster_summary(db, rotation.attraction_id, FUTURE) == roster
+
+
+def test_moving_prescheduled_sick_person_clears_the_pending_sick_marker(rotation):
+    live(rotation)
+    with rotation.factory() as db:
+        daily = D.day_payload(db, rotation.attraction_id, DAY)
+        D.edit(db, rotation.attraction_id, '测试', DAY, {
+            'action': 'draft_person', 'pid': '1', 'operation': 'sick', 'plan_revision': daily['plan_revision'],
+        })
+        day = S.board_payload(db, rotation.attraction_id)['day']
+        assert next(p for p in day['persons'] if p['pid'] == '1')['initialPool'] == 'sick'
+        S.do_live_action(db, rotation.attraction_id, '测试', {'action': 'pool', 'pid': '1', 'pool': 'rest'})
+        day = S.board_payload(db, rotation.attraction_id)['day']
+        p = next(p for p in day['persons'] if p['pid'] == '1')
+        assert p['state'] == 'rest' and 'initialPool' not in p
 
 
 def prepare(rotation):

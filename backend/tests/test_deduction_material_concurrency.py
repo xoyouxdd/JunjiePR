@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.database.reference_data import ROLE_PERMISSION_CODES
 from app.database.connection import SessionLocal
-from app.v2_models import DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, StoredFile  # noqa: E402
+from app.v2_models import DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, MonthClosure, StoredFile  # noqa: E402
 
 # Test the retained legacy route under a test-only grant, not a production role change.
 ROLE_PERMISSION_CODES["TA_SUPERVISOR"] = (*ROLE_PERMISSION_CODES["TA_SUPERVISOR"], "SICK_REGISTER")
@@ -214,6 +214,19 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
         if upgrade:
             resolve_path = f"/api/deduction-upgrades/{work_order_id}/resolve"
             decision = dict(decision="approve", result_level_id=memo["id"], issued_confirmed=True, handling_note="Concurrent material approval test")
+            if month == "2098-05":
+                with SessionLocal() as db:
+                    closure = MonthClosure(closure_month=date.today().strftime("%Y-%m"), status="closed")
+                    db.add(closure)
+                    db.commit()
+                    closure_id = closure.id
+                blocked = manager.post(resolve_path, json=decision)
+                assert blocked.status_code == 423 and blocked.json()["detail"]["code"] == "MONTH_CLOSED"
+                with SessionLocal() as db:
+                    work_order = db.get(DeductionUpgradeRequest, work_order_id)
+                    assert work_order.status == "pending" and work_order.result_deduction_id is None
+                    db.delete(db.get(MonthClosure, closure_id))
+                    db.commit()
             approved = manager.post(resolve_path, json=decision)
             assert approved.status_code == 200, approved.text
             duplicate = manager.post(resolve_path, json=decision)
@@ -223,12 +236,16 @@ def test_lead_and_gsm_cannot_supplement_the_same_declaration_twice(
             rows = db.query(DeductionRecord).filter_by(employee_id=target["id"], deduction_month=month).all()
             counted = [row for row in rows if deduction_counts_for_score(row)]
             if upgrade:
-                assert len(rows) == 3
+                assert len(rows) == 2
                 work_order = db.get(DeductionUpgradeRequest, work_order_id)
                 result = db.get(DeductionRecord, work_order.result_deduction_id)
                 assert work_order.status == "approved" and result.upgrade_role == "result"
-                assert {row.id for row in counted} == {first_record["id"], result.id}
-                assert sum(float(row.points) for row in counted) == statement["points"] + memo["points"]
+                assert result.occurred_on == work_order.resolved_at.date().isoformat()
+                assert result.deduction_month == result.occurred_on[:7] != month
+                assert result.incident_on == month + "-05"
+                assert db.get(DeductionRecord, record_id).occurred_on == result.incident_on
+                assert [row.id for row in counted] == [first_record["id"]]
+                assert deduction_counts_for_score(result) and float(result.points) == memo["points"]
             else:
                 assert len(rows) == 1 and [row.id for row in counted] == [record_id]
                 assert float(counted[0].points) == statement["points"]

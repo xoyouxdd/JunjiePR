@@ -6,6 +6,7 @@ import pytest
 
 from app.rotation import forecast as F
 from app.rotation import service as S
+from app.rotation.replay import lines_view
 from test_rotation_forecast import add_later_shifts, fixture, occupants
 from test_rotation_forecast_api import rotation, current, board, act, person, DAY
 
@@ -79,6 +80,32 @@ def test_confirmation_time_then_participating_post_count(counts, headers, winner
     assert result.get('line_changed') and result['line'] == winner
     assert F.execute(e, 'new3', 600, 'test', winner)['executed']
     assert occupants(e, winner)[0] == 'new3'
+
+
+@pytest.mark.parametrize('pos', [1, 2])
+def test_tied_headers_compare_following_posts_in_order(pos):
+    e = fixture((4, 3))
+    worker = e.P[f'B{pos}']
+    worker.update(continuousStart=None, lineStart=410)
+    e.P[f'A{pos + 1}']['continuousStart'] = 400
+    F.plan(e, 600)
+    p = e.P['new0']
+    assert p['assign']['line'] == 'B'
+    assert F.execute(e, p['pid'], 600, 'test', 'B')['executed']
+    if pos == 1:
+        assert worker['continuousStart'] == 410
+
+
+def test_existing_tie_break_seconds_use_the_stored_real_header():
+    e = fixture()
+    e.line('A').update(sortAt=435+1/60, sortBase=435)
+    assert [line['sortAt'] for line in lines_view(e.d)] == [435, 435]
+    F.plan(e, 600)
+    p = e.P['new0']
+    assert p['assign']['line'] == 'A'
+    assert F.execute(e, p['pid'], 600, 'test', 'A')['executed']
+    assert e.line('A')['previousSortAt'] == 435
+    assert 'sortBase' not in e.line('A')
 
 
 @pytest.mark.parametrize('kind,outcome', [('sick', 'sick'), ('off', 'done'), ('out', 'away')])

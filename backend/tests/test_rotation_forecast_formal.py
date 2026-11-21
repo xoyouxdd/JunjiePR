@@ -314,6 +314,8 @@ def test_batch_sign_in_is_shared_by_screen_and_personal_todo(today):
 
 
 def test_overnight_personal_confirmation_receipt_uses_workday_not_calendar_date(today, monkeypatch):
+    from app.rotation import forecast
+
     previous = (date.today() - timedelta(days=1)).isoformat()
     with SessionLocal() as db:
         db.info['rotation_formal'] = True
@@ -325,6 +327,8 @@ def test_overnight_personal_confirmation_receipt_uses_workday_not_calendar_date(
                 p['end'] = 1600
             state['persons']['9710000'].update(state='rest', readyAt=1450, timeoutAt=1453, assign=None)
             row.work_date = previous
+            engine, _ = S.engine_for(db, S.load_config(db, today), row, state)
+            forecast.plan(engine, 1450)
             S.save_day(db, row, state)
     monkeypatch.setattr(S, 'clock_now', lambda cfg: (previous, 1450))
     with TestClient(app) as cm:
@@ -332,6 +336,7 @@ def test_overnight_personal_confirmation_receipt_uses_workday_not_calendar_date(
         data = ok(cm.get('/api/rotation-board/me'))
         assert data['clock']['date'] == previous
         p = data['person']
+        assert p['task']['deadlineAt'] == 1451
         result = ok(cm.post('/api/rotation-board/me/act', json={
             'action': 'depart', 'expected_line': p['assign']['line'],
             'confirmation_token': p['confirmationTokens']['depart']}))

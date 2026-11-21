@@ -1,7 +1,7 @@
 """Real local upgrade flows: minimum levels and restricted assignee recovery."""
 import importlib
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from threading import Event
 
@@ -17,6 +17,15 @@ from app.v2_models import EmployeeActingDuty, Permission, Role, RolePermission, 
 from app.deduction_policy import deduction_counts_for_score
 from io import BytesIO
 from openpyxl import load_workbook
+
+
+def freeze_registration_month(monkeypatch, month):
+    class RegistrationClock(datetime):
+        @classmethod
+        def now(cls):
+            return cls.fromisoformat(f"{month}-28T09:00:00")
+
+    monkeypatch.setattr(importlib.import_module("app.routers.deductions"), "datetime", RegistrationClock)
 
 
 def setup_flow(manager,month,*,supplement=True,higher=False,actor=None,registrar=None,photos=False):
@@ -121,6 +130,7 @@ def test_assisted_upgrade_notice_is_private_and_can_be_closed(monkeypatch, decis
 
 @pytest.mark.parametrize('supplement,higher,month',[(False,True,'2041-01'),(True,True,'2041-05'),(False,False,'2041-09'),(True,False,'2042-01')])
 def test_only_statement_pair_matters_during_preview_entry_and_approval(monkeypatch,supplement,higher,month):
+    freeze_registration_month(monkeypatch, month)
     monkeypatch.setattr(importlib.import_module('app.main'),'start_deduction_material_worker',lambda:None)
     with TestClient(app) as manager,TestClient(app) as reviewer:
         ensure_second_gsm()
@@ -213,6 +223,7 @@ def test_invalid_reviewer_recovery_preserves_record_material_and_audit(monkeypat
 
 @pytest.mark.parametrize("ta_is_registrar,month", [(True, "2046-01"), (False, "2046-05")])
 def test_ta_gsm_can_recover_own_upgrade_only_while_awaiting_material(monkeypatch, ta_is_registrar, month):
+    freeze_registration_month(monkeypatch, month)
     monkeypatch.setattr(importlib.import_module("app.main"), "start_deduction_material_worker", lambda: None)
     with TestClient(app) as gsm, TestClient(app) as ta, TestClient(app) as outsider:
         login(gsm, "GSMTEST01")
@@ -777,6 +788,7 @@ def test_existing_warning_does_not_escalate_pending_statement_pair(monkeypatch):
 
 
 def test_completed_results_and_used_sources_do_not_chain_into_new_pair(monkeypatch):
+    freeze_registration_month(monkeypatch, "2047-01")
     monkeypatch.setattr(importlib.import_module('app.main'),'start_deduction_material_worker',lambda:None)
     with TestClient(app) as manager:
         login(manager,'GSMTEST01')

@@ -41,7 +41,7 @@ BUSINESS_IMAGE_MAX_PIXELS = 89_478_485
 _decode_limiter = RunVar[CapacityLimiter]("recognition_image_decode_limiter")
 
 
-async def _validate_image_in_worker(path: Path) -> tuple[str, str]:
+async def run_image_work(operation, *args):
     # Per-event-loop limiter avoids sharing locks between TestClient lifespans.
     # Bound decoding before reserving a thread, keeping other requests responsive.
     try:
@@ -49,7 +49,11 @@ async def _validate_image_in_worker(path: Path) -> tuple[str, str]:
     except LookupError:
         limiter = CapacityLimiter(2)
         _decode_limiter.set(limiter)
-    return await to_thread.run_sync(validate_image_file, path, limiter=limiter)
+    return await to_thread.run_sync(operation, *args, limiter=limiter)
+
+
+async def _validate_image_in_worker(path: Path) -> tuple[str, str]:
+    return await run_image_work(validate_image_file, path)
 
 
 def validate_image_file(path: Path) -> tuple[str, str]:

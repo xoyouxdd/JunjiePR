@@ -3,6 +3,7 @@
 
 const $app = document.getElementById('rtApp');
 const screenSummary = document.getElementById('rtScreenSummary');
+const screenTotals = document.getElementById('rtScreenTotals');
 const screenWide = window.matchMedia('(min-width:1200px)');
 const screenPriority = ['exception','checkin','ready','pending'];
 const screenSecondary = ['meal','rest','away','other'];
@@ -12,8 +13,8 @@ function screenOrder(people, minute) {
   return people.sort((a,b) => number(minute(a))-number(minute(b)));
 }
 
-function screenSections(day) {
-  const sections = new Map(forecastPoolData(day).map(([key,title,people]) => [key,{title,people}]));
+function screenSections(day, pools) {
+  const sections = new Map(pools.map(([key,title,people]) => [key,{title,people}]));
   const checkin = day.persons.filter(p => p.canBatchCheckIn);
   const checkinIds = new Set(checkin.map(p => p.pid));
   const ready = [];
@@ -133,9 +134,11 @@ RT.render = () => {
   renderClock();
   const day = RT.data.day;
   document.body.classList.toggle('rt-screen-flow', !!day && (day.readOnly || day.status !== 'ended'));
-  const sections = day?.ruleVersion === 2 && !day.readOnly && day.status !== 'ended' ? screenSections(day) : null;
-  renderScreenSummary(sections);
+  const pools = day?.ruleVersion === 2 && !day.readOnly && day.status !== 'ended' ? forecastPoolData(day) : null;
+  const sections = pools ? screenSections(day, pools) : null;
   const n = nowMin();
+  renderScreenSummary(sections);
+  renderRotationTotals(screenTotals, day, n, pools);
   replaceScreenRegion($app,screenView(day,sections,n));
   if (!sections) return;
   const prestart = day.persons.length > 0 && day.persons.every(p => n < p.start);

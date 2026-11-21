@@ -23,13 +23,14 @@ async function main(){try{
     const post=async data=>ok(await request.post(base+'/api/rotation-board/act',{data}));
     let day=await board();const ids=day.persons.filter(p=>p.state==='onpost').slice(0,3).map(p=>p.pid);assert.equal(ids.length,3);
     const rest=async(pid,remaining=0)=>{await post({action:'pool',pid,pool:'rest'});await post({action:'break_time',pid,remaining});};
-    await rest(ids[0]);await clock({action:'jump',minutes:1+10/60});await rest(ids[1]);await clock({action:'jump',minutes:1+34/60});await rest(ids[2],11);
+    await rest(ids[0]);await clock({action:'jump',minutes:10/60});await rest(ids[1]);await clock({action:'jump',minutes:34/60});await rest(ids[2],11);
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(base+'/rotation-board');
     const elapsed=pid=>page.locator('[data-f-person="'+pid+'"]').locator('..').locator('.rt-forecast-overdue');
-    await elapsed(ids[0]).waitFor();assert.equal(await elapsed(ids[0]).innerText(),'超时2分44秒');assert.equal(await elapsed(ids[1]).innerText(),'超时1分34秒');
+    await elapsed(ids[0]).waitFor();assert.equal(await elapsed(ids[0]).innerText(),'超时0分44秒');assert.equal(await elapsed(ids[1]).innerText(),'超时0分34秒');
+    assert.match(await elapsed(ids[0]).getAttribute('title'),/满1分钟进入异常池/);
     assert.equal(await elapsed(ids[2]).count(),0);
     await page.waitForFunction(pid=>{const el=document.querySelector('[data-f-person="'+pid+'"]')?.parentElement.querySelector('.rt-forecast-overdue');return el?.isConnected&&getComputedStyle(el).color==='rgb(180, 35, 24)';},ids[0]);
-    await sleep(1100);assert.equal(await elapsed(ids[0]).innerText(),'超时2分44秒','paused clock must freeze the display');
+    await sleep(1100);assert.equal(await elapsed(ids[0]).innerText(),'超时0分44秒','paused clock must freeze the display');
     for(const width of [320,390,1280]){
       await page.setViewportSize({width,height:900});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
       assert(await elapsed(ids[0]).evaluate(el=>el.scrollWidth<=el.clientWidth+1));
@@ -37,17 +38,19 @@ async function main(){try{
     }
     // A paused-closure allowance must come from the adjusted deadline rather
     // than counting all wall time since the original break ended.
-    assert.match(await page.evaluate(()=>forecastOverdue({canDepart:true,state:'rest',readyAt:600,task:{deadlineAt:633}},631)),/超时1分00秒/);
+    assert.match(await page.evaluate(()=>forecastOverdue({canDepart:true,state:'rest',readyAt:600,task:{deadlineAt:631,timeoutWindowMinutes:1}},630.5)),/超时0分30秒/);
+    assert.match(await page.evaluate(()=>forecastOverdue({state:'exception',readyAt:600,exception:{deadlineAt:603}},603)),/超时3分00秒/);
     await clock({action:'jump',minutes:16/60});await page.evaluate(()=>RT.load());
-    assert.equal((await board()).persons.find(p=>p.pid===ids[0]).state,'exception');assert.equal(await elapsed(ids[0]).innerText(),'超时3分00秒');
+    assert.equal((await board()).persons.find(p=>p.pid===ids[0]).state,'exception');assert.equal(await elapsed(ids[0]).innerText(),'超时1分00秒');
     assert.equal(await page.locator('[data-f-board="'+ids[0]+'"]').count(),0);
     await post({action:'break_time',pid:ids[1],remaining:5});await page.evaluate(()=>RT.load());assert.equal(await elapsed(ids[1]).count(),0);
     // Midnight keeps elapsed minutes, not a negative clock subtraction.
     await post({action:'shift',pid:ids[2],start:'07:15',end:'01:30'});await clock({action:'set',date:'2026-10-04',time:'23:59'});
-    await rest(ids[2]);await clock({action:'set',date:'2026-10-05',time:'00:01'});await page.evaluate(()=>RT.load());
-    assert.equal(await elapsed(ids[2]).innerText(),'超时2分00秒');assert.equal(await page.evaluate(()=>RT.data.clock.date),'2026-10-04');
+    await clock({action:'jump',minutes:0.5});await rest(ids[2]);
+    await clock({action:'set',date:'2026-10-05',time:'00:00'});await clock({action:'jump',minutes:0.25});await page.evaluate(()=>RT.load());
+    assert.equal(await elapsed(ids[2]).innerText(),'超时0分45秒');assert.equal(await page.evaluate(()=>RT.data.clock.date),'2026-10-04');
     assert.deepEqual(errors,[]);await context.close();await browser.close();browser=null;
-    console.log(engine+': red elapsed minutes/seconds, paused display, three-minute exception, rest edit, adjusted deadline, midnight and 320/390/1280px PASS');
+    console.log(engine+': red elapsed minutes/seconds, paused display, one-minute exception, rest edit, adjusted deadline, midnight and 320/390/1280px PASS');
   }
 }finally{if(browser)await browser.close();if(server&&server.exitCode===null){server.kill();await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(report,'server.log'),log);}}
 main().catch(error=>{console.error(error);console.error(log.slice(-3000));process.exitCode=1;});

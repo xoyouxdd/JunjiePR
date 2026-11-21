@@ -35,8 +35,8 @@ function mountArtwork(host){
 }
 
 const SKINS = [
-  {id:'medal',name:'月度勋章 · 星光礼赞',caption:'午夜蓝与香槟金，珍藏每一份用心。',collection:'HONORS COLLECTION'},
-  {id:'circle',name:'景点圈 · 手绘漫游',caption:'跟随所属景点圈，走进伙伴的故事。',collection:'STORYBOOK COLLECTION'},
+  {id:'medal',name:'月度勋章 · 星光礼赞',caption:'午夜蓝与香槟金，珍藏每一份用心。',collection:'HONORS COLLECTION',palette:'午夜蓝 · 香槟金'},
+  {id:'circle',name:'景点圈 · 手绘漫游',caption:'跟随所属景点圈，走进伙伴的故事。',collection:'STORYBOOK COLLECTION',palette:'浅绿 · 景点插画'},
   {id:'blue',name:'经典蓝',caption:'清晰有序 · 熟悉的工作台'},
   {id:'green',name:'清新青绿',caption:'柔和清爽 · 从容处理日常'},
   {id:'ivory',name:'暖米白',caption:'温暖简洁 · 专注阅读与工作'},
@@ -44,34 +44,63 @@ const SKINS = [
 ];
 
 function mountAppearance(host) {
-  const card=s=>`<button type="button" class="appearance-option ${s.collection?'appearance-featured':''}" data-skin-choice="${s.id}" aria-pressed="false"><span class="appearance-preview appearance-preview-${s.id}" aria-hidden="true">${s.collection?`<span class="appearance-collection">${s.collection}</span><span class="appearance-art"></span><span class="appearance-preview-word">${s.id==='medal'?'每一份用心<br>都值得闪耀':'让日常<br>多一点奇想'}</span>`:'<span class="appearance-preview-top"></span><span class="appearance-preview-side"></span><span class="appearance-preview-content"><i></i><i></i><i></i></span>'}</span><span class="appearance-option-title">${s.name}<span class="appearance-check" aria-hidden="true">✓</span></span><span class="appearance-caption">${s.caption}</span></button>`;
-  host.innerHTML=`<section class="appearance-section" aria-label="界面皮肤"><div class="appearance-heading"><div><h3>把喜欢的故事，带进工作台</h3><p>两款主题系列，开启不一样的日常。</p></div><span class="appearance-label">主题精选</span></div><div class="appearance-options appearance-feature-options" role="group" aria-label="主题系列">${SKINS.filter(s=>s.collection).map(card).join('')}</div><p class="appearance-theme-note">勋章主题为外观设计，实际月度勋章仍在个人页面查看。景点圈主题跟随你的所属景点圈。</p><details class="appearance-basics"><summary>基础外观 <span>经典蓝 · 清新青绿 · 暖米白 · 夜间深色</span></summary><div class="appearance-options appearance-basic-options" role="group" aria-label="基础外观">${SKINS.filter(s=>!s.collection).map(card).join('')}</div></details><div class="appearance-footer"><p data-skin-status role="status" aria-live="polite">仅保存在当前浏览器，不同设备可分别选择。</p><button type="button" class="appearance-reset" data-skin-reset>恢复经典蓝</button></div></section>`;
+  const card=skin=>`<button type="button" class="appearance-option ${skin.collection?'appearance-featured':''}" data-skin-choice="${skin.id}" aria-pressed="false">
+    <span class="appearance-preview appearance-preview-${skin.id}" aria-hidden="true">${skin.collection?`
+      <span class="appearance-collection">${skin.collection}</span><span class="appearance-art"></span>
+      <span class="appearance-preview-word">${skin.id==='medal'?'每一份用心<br>都值得闪耀':'让日常<br>多一点奇想'}</span>`:'<span class="appearance-preview-top"></span><span class="appearance-preview-side"></span><span class="appearance-preview-content"><i></i><i></i><i></i></span>'}
+    </span>
+    <span class="appearance-option-copy">
+      <span class="appearance-option-title">${skin.name}<span class="appearance-check" aria-hidden="true">✓</span></span>
+      <span class="appearance-caption">${skin.caption}</span>
+      ${skin.collection?`<span class="appearance-palette">${skin.palette}</span><span class="appearance-selected-label" aria-hidden="true">✓ 当前使用</span>`:''}
+    </span>
+  </button>`;
+  host.innerHTML=`<section class="appearance-section" aria-label="界面皮肤">
+    <div class="appearance-heading"><div><h3>把喜欢的故事，带进工作台</h3><p>两款主题系列，开启不一样的日常。</p></div><span class="appearance-label">主题精选</span></div>
+    <h3 class="appearance-mobile-title">界面主题</h3>
+    <div class="appearance-options appearance-feature-options" role="group" aria-label="主题系列">${SKINS.filter(s=>s.collection).map(card).join('')}</div>
+    <p class="appearance-theme-note">勋章主题为外观设计，实际月度勋章仍在个人页面查看。景点圈主题跟随你的所属景点圈。</p>
+    <details class="appearance-basics"><summary>基础外观 <span>经典蓝 · 清新青绿 · 暖米白 · 夜间深色</span></summary><div class="appearance-options appearance-basic-options" role="group" aria-label="基础外观">${SKINS.filter(s=>!s.collection).map(card).join('')}</div></details>
+    <div class="appearance-footer"><p data-skin-status role="status" aria-live="polite">主题和页眉插画保存在当前浏览器。</p><button type="button" class="appearance-reset" data-skin-reset>恢复经典蓝</button></div>
+  </section>`;
   const me=state.me||{},badge=document.getElementById('userBadge');
   const identity={name:me.name||badge?.dataset.employeeName||'',employeeNo:me.employee_no||badge?.dataset.employeeNo||'',role:me.role_label||me.role_name||badge?.dataset.roleLabel||'',circle:me.attraction_name||badge?.dataset.circleLabel||''};
   const summary=document.createElement('section');summary.className='appearance-identity';summary.setAttribute('aria-label','我的身份');
   summary.innerHTML=`<div><strong>${esc(identity.name)}</strong><p>${[['工号',identity.employeeNo],['身份',identity.role],['景点圈',identity.circle]].filter(([,value])=>value).map(([label,value])=>`<span>${label} ${esc(value)}</span>`).join('')}</p></div><button type="button" class="secondary" data-appearance-logout>退出登录</button><span class="appearance-logout-status" role="status" aria-live="polite"></span>`;
-  host.prepend(summary);
   summary.querySelector('[data-appearance-logout]').onclick=async event=>{const button=event.currentTarget;button.disabled=true;try{await logout();}catch(error){summary.querySelector('[role=status]').textContent=error.message||'退出失败，请重试';button.disabled=false;}};
   const artworkHost=document.createElement('div');artworkHost.className='appearance-artwork-host';host.querySelector('.appearance-footer').before(artworkHost);
   const disposeArtwork=mountArtwork(artworkHost);
-  host.querySelector('.appearance-basics').open=['blue','green','ivory','dark'].includes(window.FZAppearance.get());
+  const section=host.querySelector('.appearance-section');
+  const basics=host.querySelector('.appearance-basics');
+  const footer=host.querySelector('.appearance-footer');
+  const reset=footer.querySelector('[data-skin-reset]');
+  const feedback=footer.querySelector('[data-skin-status]');
+  const account=host.parentElement?.querySelector('[data-appearance-account]');
+  const mobile=matchMedia('(max-width: 760px)');
+  const placeControls=()=>{
+    if(mobile.matches&&account){account.before(footer);account.append(summary);basics.append(reset);}
+    else{host.prepend(summary);section.append(footer);footer.append(reset);}
+  };
+  placeControls();
+  mobile.addEventListener('change',placeControls);
+  basics.open=['blue','green','ivory','dark'].includes(window.FZAppearance.get());
   const sync=()=>host.querySelectorAll('[data-skin-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.skinChoice===window.FZAppearance.get())));
   const select=value=>{
     const persisted=window.FZAppearance.set(value);
     const name=SKINS.find(s=>s.id===window.FZAppearance.get()).name;
-    host.querySelector('[data-skin-status]').textContent=persisted?`已使用${name}，当前浏览器会记住你的选择。`:`已使用${name}；浏览器未允许保存，下次打开需重新选择。`;
+    feedback.textContent=persisted?`已使用${name}，当前浏览器会记住你的选择。`:`已使用${name}；浏览器未允许保存，下次打开需重新选择。`;
   };
   host.querySelectorAll('[data-skin-choice]').forEach(button=>button.onclick=()=>select(button.dataset.skinChoice));
   host.querySelector('[data-skin-reset]').onclick=()=>select('blue');
   window.addEventListener('app:skin-changed',sync);sync();
-  return ()=>{disposeArtwork();window.removeEventListener('app:skin-changed',sync);};
+  return ()=>{disposeArtwork();mobile.removeEventListener('change',placeControls);window.removeEventListener('app:skin-changed',sync);};
 }
 
 function showAppearanceSettings() {
   if(document.querySelector('[data-appearance-dialog]'))return;
   document.getElementById('appearanceBtn')?.focus({preventScroll:true});
-  const overlay=document.createElement('div');overlay.className='modal-overlay';
-  overlay.innerHTML='<section class="modal-card appearance-dialog" data-appearance-dialog role="dialog" aria-modal="true" aria-labelledby="appearanceTitle"><div class="appearance-dialog-heading"><h2 id="appearanceTitle">个人外观</h2><button type="button" class="secondary" data-appearance-close>关闭</button></div><div data-appearance-host></div></section>';
+  const overlay=document.createElement('div');overlay.className='modal-overlay personal-appearance-overlay';
+  overlay.innerHTML='<section class="modal-card appearance-dialog personal-appearance-dialog" data-appearance-dialog role="dialog" aria-modal="true" aria-labelledby="appearanceTitle"><div class="appearance-dialog-heading personal-appearance-heading"><h2 id="appearanceTitle">个人外观</h2><button type="button" class="secondary" data-appearance-close>关闭</button></div><div class="personal-appearance-scroll"><div data-appearance-host></div><div data-appearance-account></div></div></section>';
   document.body.append(overlay);
   const dispose=mountAppearance(overlay.querySelector('[data-appearance-host]'));
   let pageCleanup;

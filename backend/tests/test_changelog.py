@@ -19,7 +19,7 @@ from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-CURRENT_RELEASE_NOTE = "轮岗签到、导出重试与月结检查"
+CURRENT_RELEASE_NOTE = "轮岗提醒与登记流程更新"
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:

@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { captureViewContext } from './context.js';
 import { confirmModal } from './dialogs.js';
 import { attachmentControl, imagePreviewButton } from './files.js';
-import { esc, fmtDeduction, recognitionScoreNote, recognitionScoreText } from './format.js';
+import { declarationMaterialUploader, esc, fmtDeduction, recognitionScoreNote, recognitionScoreText } from './format.js';
 import { state } from './state.js';
 import { toast } from './toast.js';
 
@@ -62,8 +62,9 @@ function entryRow(row){
   const materialNote=row.status==='pending_material'?'<br><small class="material-inline-state">待补充声明材料，暂不计分。</small>':row.material_status==='processing'?'<br><small class="material-inline-state">材料正在生成PDF，暂不计分。</small>':row.material_status==='failed'?`<br><small class="material-inline-state failed">${esc(row.material_error||'材料生成失败，请重新提交。')}</small>`:'';
   const supplement=row.available_actions.includes('supplement_material')?`<button data-entry-material-retry="${row.id}" class="secondary">补充材料</button>`:'';
   const actions=`${supplement}${row.available_actions.includes('void')?` <button data-entry-void="${row.id}" class="secondary">作废</button>`:''}`;
-  const submitterNote=Number(row.submitter_id)===Number(state.me.id)?'':`<br><small>登记人：${esc(row.submitter_name)}</small>`;
-  return `<tr class="${row.status==='void'?'void-row':''}"><td>${esc(row.submitted_at)}</td><td>扣分</td><td>${esc(row.employee_name)}<br><small>${esc(row.employee_no)}</small></td><td>${esc(row.occurred_on)}</td><td>${esc(row.deduction_type)} · ${esc(row.deduction_level)}<br>${esc(row.description)} ${attachmentControl(row.document_url,'声明PDF',row.document_preview_kind)}${submitterNote}${materialNote}</td><td class="score-negative">${row.material_status==='processing'||row.material_status==='failed'?'暂不计分':fmtDeduction(row.points)}</td><td>${statusBadge(row)}</td><td>${actions}</td></tr>`;
+  const uploader=declarationMaterialUploader(row);
+  const submitterNote=uploader||Number(row.submitter_id)!==Number(state.me.id)?`<br><small>登记人：${esc(row.submitter_name)}</small>`:'';
+  return `<tr class="${row.status==='void'?'void-row':''}"><td>${esc(row.submitted_at)}</td><td>扣分</td><td>${esc(row.employee_name)}<br><small>${esc(row.employee_no)}</small></td><td>${esc(row.occurred_on)}</td><td>${esc(row.deduction_type)} · ${esc(row.deduction_level)}<br>${esc(row.description)} ${attachmentControl(row.document_url,'声明PDF',row.document_preview_kind)}${submitterNote}${uploader?`<br><small>${uploader}</small>`:''}${materialNote}</td><td class="score-negative">${row.material_status==='processing'||row.material_status==='failed'?'暂不计分':fmtDeduction(row.points)}</td><td>${statusBadge(row)}</td><td>${actions}</td></tr>`;
 }
 
 function entryCard(row){
@@ -87,7 +88,9 @@ function entryCard(row){
   const actions=`${supplement}${row.available_actions.includes('void')?` <button data-entry-void="${row.id}" class="secondary">作废</button>`:''}`;
   const material=row.document_url?attachmentControl(row.document_url,'查看材料',row.document_preview_kind):'';
   const points=row.material_status==='processing'||row.material_status==='failed'?'暂不计分':fmtDeduction(row.points);
-  return `<article class="work-card ${row.status==='void'?'void-row':''}"><div class="work-card-head">${person}${chip}</div><p>${esc(row.occurred_on)} · 扣分 · ${esc(row.deduction_type)} · ${points}</p><p>${esc(row.description)} ${material}</p><div class="work-card-actions">${actions}</div></article>`;
+  const uploader=declarationMaterialUploader(row);
+  const submitterNote=uploader||Number(row.submitter_id)!==Number(state.me.id)?`<p class="field-hint">登记人：${esc(row.submitter_name)}</p>`:'';
+  return `<article class="work-card ${row.status==='void'?'void-row':''}"><div class="work-card-head">${person}${chip}</div><p>${esc(row.occurred_on)} · 扣分 · ${esc(row.deduction_type)} · ${points}</p><p>${esc(row.description)} ${material}</p>${submitterNote}${uploader?`<p class="field-hint">${uploader}</p>`:''}<div class="work-card-actions">${actions}</div></article>`;
 }
 
 export { workItemDetailsHtml, bindWithdraw, coveredSickDisclosure, entryCard, entryRow, opt, recognitionCard, recognitionEntryActions, sameDayDuplicateBadge, splitCoveredSickRecords, statusBadge };

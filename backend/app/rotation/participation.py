@@ -1,5 +1,6 @@
 """Roster-authorized participation, independent of HR ownership and workbench roles."""
 from datetime import datetime
+from contextlib import contextmanager
 import json
 
 from fastapi import HTTPException
@@ -40,13 +41,19 @@ def roster_metadata(db,aid,day,upload_id=None):
     return {r.employee_no:json.loads(r.metadata_json) for r in db.query(RosterIdentity).filter_by(upload_id=uid)}
 
 
-def contexts(db,no,day=None):
+@contextmanager
+def _formal(db):
     previous=db.info.get('rotation_formal')
     db.info['rotation_formal']=True
-    try:return _contexts(db,no,day)
+    try:yield
     finally:
         if previous is None:db.info.pop('rotation_formal',None)
         else:db.info['rotation_formal']=previous
+
+
+def contexts(db,no,day=None):
+    with _formal(db):
+        return _contexts(db,no,day)
 
 
 def _contexts(db,no,day=None):
@@ -61,7 +68,7 @@ def _contexts(db,no,day=None):
         if row.work_date != day:
             if state.get('ruleVersion') != 2:
                 continue
-            cfg=S.load_config(db,row.attraction_id)
+            cfg=S.load_config(db,row.attraction_id,read_only=True)
             if S.clock_now(cfg)[0] != row.work_date:
                 continue
         if no in state.get('persons',{}):
@@ -78,6 +85,39 @@ def _contexts(db,no,day=None):
             metadata = roster_metadata(db, aid, day).get(no, {}) if present else {}
         out.append({'id':aid,'name':circle.name,'metadata':metadata})
     return out
+
+
+def pending_formal_steps(db, employee_no, home_attraction_id):
+    """Count committed tasks using the same formal workday and clock as the personal board."""
+    from app.rotation import forecast as F, service as S
+    from app.rotation.namespace import FORMAL_TABLES
+    with _formal(db):
+        aids = {choice['id'] for choice in _contexts(db, employee_no)}
+        if home_attraction_id:
+            aids.add(home_attraction_id)
+        count = 0
+        for aid in sorted(aids):
+            cfg = S.load_config(db, aid, read_only=True)
+            day, minute = S.clock_now(cfg)
+            row = db.query(FORMAL_TABLES.RotationDay).filter_by(attraction_id=aid, work_date=day, status='live').first()
+            if row is None:
+                continue
+            state = json.loads(row.state_json)
+            person = state.get('persons', {}).get(employee_no)
+            if state.get('ruleVersion') != 2 or not person:
+                continue
+            if F.can_check_in_for_day(state, person, minute) and not F.checked_in(person):
+                count += 1
+                continue
+            assignment = person.get('assign')
+            early = S.settings_of(cfg)['departEarly']
+            if person['state'] in ('walkback', 'pending') or (
+                person['state'] == 'ready' and assignment and minute >= max(
+                    person.get('readyAt') or minute, assignment.get('notBefore', 0), assignment.get('departAt', 1440) - early
+                )
+            ):
+                count += 1
+        return count
 
 
 def personal_scope(db,user,selected=None):

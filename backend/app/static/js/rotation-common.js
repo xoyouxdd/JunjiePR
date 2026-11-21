@@ -570,6 +570,11 @@ function rotationPostShiftEnd(person){
   const end=hm(person.end);
   return `<time class="rt-post-shift-end" datetime="${end}" title="下班时间">${end}</time>`;
 }
+function rotationPostEntryTime(person){
+  if(!Number.isFinite(person?.entrySortAt))return '';
+  const stamp=forecastClock(person.entrySortAt);
+  return `<time class="rt-post-entry-time" datetime="${esc(stamp.split(' ').at(-1))}" title="入线时的表头时间">入线 ${esc(stamp)}</time>`;
+}
 function rotationSevenBadge(person, planned = false){
   const flags = person?.flags || [];
   return (planned || flags.includes('7点岗')) && !flags.includes('推7点下来')
@@ -594,7 +599,7 @@ function lineCard(L, n, ops, view = {}) {
       const label=view.editable?`<button type="button" class="rt-pn rt-daily-post" data-daily-rename="${esc(key)}" ${editable?`draggable="true" data-daily-post="${esc(key)}"`:''} aria-label="${esc(x.name)}，双击改名${editable?'，拖拽交换岗位':''}">${esc(x.name)}</button>`:`<span class="rt-pn">${esc(x.name)}</span>`;
       const plannedSeven=p?.start===420&&!p.sevenReplaced;
       const addTime=pendingAddTime(x),who=p?.name||(addTime?`${addTime} 加岗`:'空岗');
-      const personName=esc(who)+rotationPostShiftEnd(p)+rotationSevenBadge(p,plannedSeven);
+      const personName=esc(who)+(p?.state==='onpost'?rotationPostEntryTime(p):'')+rotationPostShiftEnd(p)+rotationSevenBadge(p,plannedSeven);
       const livePerson=p&&typeof forecastActive==='function'&&forecastActive()&&RT.data.day.status==='live'&&view.day?.date===RT.data.day.date;
       const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(who)}，岗位操作" aria-haspopup="dialog">${personName}</button>`:livePerson?`<button type="button" class="rt-who-name" data-f-person="${esc(p.pid)}">${personName}</button>`:`<span class="rt-who-name">${personName}</span>`;
       let status=x.open?(p?'预排':'空岗'):p?'预排 · 未开岗':'未开岗';
@@ -611,7 +616,7 @@ function lineCard(L, n, ops, view = {}) {
     else {
       const p = lookup(x.occ);
       who = esc(p ? p.name : x.occ);
-      if (p?.state === 'onpost') who += rotationPostShiftEnd(p);
+      if (p?.state === 'onpost') who += rotationPostEntryTime(p)+rotationPostShiftEnd(p);
       who += rotationSevenBadge(p);
       if (p && p.preparing) { cls += ' prep'; who += `<span class="rt-badge prep">${preparingText(p.preparing)}</span>`; }
       if (p && p.state === 'notyet') mins = `${hm(p.start)} 开始`;

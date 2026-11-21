@@ -1,18 +1,19 @@
 """Recognition entry and review endpoints."""
 from __future__ import annotations
 from app.database.connection import reserve_writer
-from app.employee_numbers import employee_number
+from app.employee_numbers import employee_number, employee_number_aliases
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from typing import Literal
+from urllib.parse import quote
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from sqlalchemy import func, or_, select, update, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from app.v2_auth import V2User, current_user, require_permissions
+from app.v2_auth import V2User, current_user, load_user_identity, require_permissions
 from app.database.connection import FILE_DIR, get_db
 from app.database.reference_data import LEGACY_CIRCLE_BY_VENUE
 from app.v2_models import Attraction, DeductionFollowUp, DeductionRecord, Employee, EmployeeRoleAssignment, RecognitionRecord, RecognitionAttachment, RecognitionInboxItem, RecognitionMonthlyQuota, RecognitionReissue, RecognitionReview, RecognitionType, Role, SickLeaveRecord, UserAccount
@@ -25,6 +26,7 @@ from app.services.attendance import loa_excludes_month
 from app.services.identity import TEMPORARY_RECOGNIZER_LABEL, temporary_recognizer_ids
 from app.services.activity_points import sync_recognition as sync_activity_points
 from app.services.monthly_ranks import sealed_self_score
+from app.poc_batch_xlsx import POC_FILE_LIMIT, PocWorkbookRow, poc_row_errors, poc_template, read_poc_workbook
 from app.role_constants import (
     ACTING_TA_GSM_RECOGNIZER_CODES,
     FRONTLINE_CODES,
@@ -44,7 +46,7 @@ from app.services.identity import (
 )
 from app.services.organization import current_leader_for_employee, direct_member_ids
 from app.upload_storage import save_image_upload
-from app.services.audit import write_audit
+from app.services.audit import historical_material_uploaders, write_audit
 from app.record_payloads import (
     ATTENDANCE_FILTER_STATUSES,
     DEDUCTION_FILTER_STATUSES,
@@ -732,6 +734,81 @@ async def create_self_recognition_batch(
             "encouragement_options": results[0].get("encouragement_options", [])}
 
 
+def ensure_poc_issuer(user: V2User) -> None:
+    if user.role.code not in SENIOR_RECOGNIZER_CODES or "POC_ISSUE" not in user.permissions:
+        raise HTTPException(403, "仅TA GSM、GSM、AM、OM可以开具POC特别贡献")
+
+
+def poc_amount(points: str) -> Decimal:
+    try:
+        amount = Decimal(str(points))
+    except InvalidOperation as exc:
+        raise HTTPException(400, "POC分值必须为1至5的整数") from exc
+    if not amount.is_finite() or amount not in {Decimal("1"), Decimal("2"), Decimal("3"), Decimal("4"), Decimal("5")}:
+        raise HTTPException(400, "POC分值必须为1至5分")
+    return amount
+
+
+def poc_day(value: str) -> date:
+    day = parse_iso_date(value, "认可日期")
+    if day.isoformat() != value:
+        raise HTTPException(400, "认可日期格式必须为YYYY-MM-DD")
+    return day
+
+
+def poc_recognition_type(db: Session) -> RecognitionType:
+    recognition_type = db.query(RecognitionType).filter_by(code="POC", active=True).first()
+    if not recognition_type:
+        raise HTTPException(500, "POC认可类型尚未初始化")
+    return recognition_type
+
+
+def build_poc_recognition(
+    db: Session, user: V2User, employee_id: int, day: date, amount: Decimal,
+    poc_period_type: str, reason: str, recognition_type: RecognitionType,
+) -> RecognitionRecord:
+    if poc_period_type not in {"month", "quarter"}:
+        raise HTTPException(400, "请选择月度或季度认可周期")
+    if not reason or len(reason) > 100:
+        raise HTTPException(400, "特别贡献原因必填且不能超过100字")
+    target, target_role = ensure_enabled_poc_target(db, employee_id)
+    if target.id == user.id:
+        raise HTTPException(403, "不能为本人开具POC特别贡献")
+    recognition_date = day.isoformat()
+    acting_duty = duty_code_at(db, target.id, recognition_date)
+    if acting_duty == "TA_GSM":
+        raise HTTPException(403, "代理TA GSM期间的主管不能由他人开具POC，请其本人登记后由AM或正式GSM复核")
+    target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
+    if not target_circle or not target_circle.employee_circle:
+        raise HTTPException(400, "被认可员工未配置有效景点圈")
+    period_key = recognition_date[:7] if poc_period_type == "month" else f"{day.year}-Q{((day.month - 1) // 3) + 1}"
+    return RecognitionRecord(
+        employee_id=target.id, employee_no=target.employee_no, employee_name=target.name,
+        employee_role_snapshot=target_role.name, employee_role_code_snapshot=target_role.code,
+        home_attraction_id=target.attraction_id, home_attraction_name=target.attraction.name if target.attraction else "",
+        occurred_attraction_id=target_circle.id, recognition_date=recognition_date, recognition_month=recognition_date[:7],
+        recognition_type_id=recognition_type.id, recognition_type_name=recognition_type.name, content="POC特别贡献",
+        recognizer_employee_id=user.id, recognizer_name=user.name, recognizer_role_snapshot=user.role.name,
+        recognizer_role_code_snapshot=user.role.code, operator_employee_id=user.id, operator_name=user.name,
+        operator_role_snapshot=user.role.name, operator_role_code_snapshot=user.role.code, source="manager",
+        operator_base_role_code_snapshot=user.base_role.code, recognizer_base_role_code_snapshot=user.base_role.code,
+        employee_acting_duty_code=acting_duty,
+        fraction=amount, credited_fraction=amount, monthly_cap_status="not_applicable", status="confirmed",
+        poc_period_type=poc_period_type, poc_period_key=period_key, poc_reason=reason,
+    )
+
+
+def deliver_poc_recognition(
+    db: Session, user: V2User, row: RecognitionRecord, request: Request, *, batch_line: int | None = None,
+) -> None:
+    db.add(RecognitionInboxItem(recognition_id=row.id))
+    write_audit(
+        db, user.employee, "登记POC特别贡献", "recognition", row.id, after=recognition_payload(row),
+        reason=f"Excel批量导入第{batch_line}行" if batch_line is not None else None, ip_address=client_ip(request),
+    )
+    sync_activity_points(db, row)
+
+
 @router.post("/recognitions/poc")
 def create_poc_recognition(
     request: Request,
@@ -745,8 +822,7 @@ def create_poc_recognition(
     db: Session = Depends(get_db),
     user: V2User = Depends(require_permissions("POC_ISSUE")),
 ):
-    if user.role.code not in {"TA_GSM", "GSM", "AM", "OM"}:
-        raise HTTPException(403, "仅TA GSM、GSM、AM、OM可以开具POC特别贡献")
+    ensure_poc_issuer(user)
     request_key = normalize_request_key(idempotency_key)
     payload_digest = submission_payload_digest(
         {
@@ -761,58 +837,20 @@ def create_poc_recognition(
     duplicate_row = existing_submission(db, user.id, "poc", request_key, RecognitionRecord, payload_digest)
     if duplicate_row:
         return {"ok": True, "record": recognition_payload(duplicate_row), "duplicate": True}
-    recognition_date = str(recognition_date or "")
-    parse_iso_date(recognition_date, "认可日期")
-    try:
-        amount = Decimal(str(points))
-    except InvalidOperation as exc:
-        raise HTTPException(400, "POC分值必须为1至5的整数") from exc
-    if amount not in {Decimal("1"), Decimal("2"), Decimal("3"), Decimal("4"), Decimal("5")}:
-        raise HTTPException(400, "POC分值必须为1至5分")
-    if poc_period_type not in {"month", "quarter"}:
-        raise HTTPException(400, "请选择月度或季度认可周期")
-    reason = poc_reason.strip()
-    if not reason or len(reason) > 100:
-        raise HTTPException(400, "特别贡献原因必填且不能超过100字")
-    target, target_role = ensure_enabled_poc_target(db, int(employee_id))
-    if target.id == user.id:
-        raise HTTPException(403, "不能为本人开具POC特别贡献")
-    if duty_code_at(db, target.id, recognition_date) == "TA_GSM":
-        raise HTTPException(403, "代理TA GSM期间的主管不能由他人开具POC，请其本人登记后由AM或正式GSM复核")
-    target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
-    if not target_circle or not target_circle.employee_circle:
-        raise HTTPException(400, "被认可员工未配置有效景点圈")
-    recognition_type = db.query(RecognitionType).filter_by(code="POC", active=True).first()
-    if not recognition_type:
-        raise HTTPException(500, "POC认可类型尚未初始化")
-    parsed = date.fromisoformat(recognition_date)
-    period_key = f"{parsed.year}-{parsed.month:02d}" if poc_period_type == "month" else f"{parsed.year}-Q{((parsed.month - 1) // 3) + 1}"
-    row = RecognitionRecord(
-        employee_id=target.id, employee_no=target.employee_no, employee_name=target.name,
-        employee_role_snapshot=target_role.name, employee_role_code_snapshot=target_role.code,
-        home_attraction_id=target.attraction_id, home_attraction_name=target.attraction.name if target.attraction else "",
-        occurred_attraction_id=target_circle.id, recognition_date=recognition_date, recognition_month=recognition_date[:7],
-        recognition_type_id=recognition_type.id, recognition_type_name=recognition_type.name, content="POC特别贡献",
-        recognizer_employee_id=user.id, recognizer_name=user.name, recognizer_role_snapshot=user.role.name,
-        recognizer_role_code_snapshot=user.role.code, operator_employee_id=user.id, operator_name=user.name,
-        operator_role_snapshot=user.role.name, operator_role_code_snapshot=user.role.code, source="manager",
-        operator_base_role_code_snapshot=user.base_role.code, recognizer_base_role_code_snapshot=user.base_role.code,
-        employee_acting_duty_code=duty_code_at(db, target.id, recognition_date),
-        fraction=amount, credited_fraction=amount, monthly_cap_status="not_applicable", status="confirmed",
-        poc_period_type=poc_period_type, poc_period_key=period_key, poc_reason=reason,
+    day = poc_day(recognition_date)
+    row = build_poc_recognition(
+        db, user, employee_id, day, poc_amount(points), poc_period_type, poc_reason.strip(), poc_recognition_type(db),
     )
     try:
         db.add(row)
         db.flush()
         remember_submission(db, user.id, "poc", request_key, row.id, payload_digest)
-        ensure_month_open(db, row.recognition_month, target_circle.id, "新增POC特别贡献")
+        ensure_month_open(db, row.recognition_month, row.home_attraction_id, "新增POC特别贡献")
         if reissue_of_id is not None:
             if not reissue_original(db, user, reissue_of_id).poc_period_type:
                 raise HTTPException(400, "请使用原签卡对应的主动认可入口重新发卡")
             db.add(RecognitionReissue(original_id=reissue_of_id, replacement_id=row.id))
-        db.add(RecognitionInboxItem(recognition_id=row.id))
-        write_audit(db, user.employee, "登记POC特别贡献", "recognition", row.id, after=recognition_payload(row), ip_address=client_ip(request))
-        sync_activity_points(db, row)
+        deliver_poc_recognition(db, user, row, request)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -827,6 +865,145 @@ def create_poc_recognition(
         raise
     invalidate_data_caches()
     return {"ok": True, "record": recognition_payload(row)}
+
+
+@router.get("/recognitions/poc-batch/template")
+def download_poc_batch_template(user: V2User = Depends(require_permissions("POC_ISSUE"))):
+    ensure_poc_issuer(user)
+    filename = quote("特别贡献认可导入模板.xlsx")
+    return Response(
+        poc_template(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=poc-recognition-template.xlsx; filename*=UTF-8''{filename}",
+                 "Cache-Control": "private, no-store"},
+    )
+
+
+def poc_batch_input(workbook: UploadFile, recognition_date: str):
+    if not (workbook.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400, "请导入下载并填好的 .xlsx 原文件。")
+    content = workbook.file.read(POC_FILE_LIMIT + 1)
+    if len(content) > POC_FILE_LIMIT:
+        raise HTTPException(400, "认可模板文件不能超过 1 MB。")
+    day = poc_day(recognition_date)
+    lines = read_poc_workbook(content)
+    data = sorted((row.employee_no, row.name, row.period_type, row.reason, row.points) for row in lines)
+    scores = {row.points for row in lines}
+    if len(scores) == 1:
+        # Keep the receipt key for equivalent batches sent with the original common-score template.
+        batch_key = submission_payload_digest({"date": day.isoformat(), "points": lines[0].points,
+                                               "rows": [row[:-1] for row in data]})
+    else:
+        batch_key = submission_payload_digest({"date": day.isoformat(), "rows": data})
+    return day, lines, batch_key
+
+
+def plan_poc_batch(
+    db: Session, user: V2User, day: date, lines: list[PocWorkbookRow], batch_key: str,
+):
+    recognition_type = poc_recognition_type(db)
+    numbers = {alias for line in lines for alias in employee_number_aliases(line.employee_no)}
+    matches: dict[str, list[Employee]] = {}
+    for employee in db.query(Employee).filter(Employee.employee_no.in_(numbers)):
+        matches.setdefault(employee_number(employee.employee_no), []).append(employee)
+    records, preview_rows, errors = [], [], []
+    for line in lines:
+        candidates = matches.get(line.employee_no, [])
+        if len(candidates) != 1:
+            message = "此员工号匹配到多个账号，请联系管理员核对。" if candidates else "该员工号未找到，请核对。"
+            errors.append({"row": line.line, "message": message})
+            continue
+        target = candidates[0]
+        if target.name.strip() != line.name:
+            errors.append({"row": line.line, "message": "姓名与该员工号对应的在职档案不一致。"})
+            continue
+        try:
+            row = build_poc_recognition(
+                db, user, target.id, day, Decimal(line.points), line.period_type, line.reason, recognition_type,
+            )
+            ensure_month_open(db, row.recognition_month, row.home_attraction_id, "新增POC特别贡献")
+        except HTTPException as exc:
+            message = exc.detail.get("message") if isinstance(exc.detail, dict) else exc.detail
+            errors.append({"row": line.line, "message": message})
+            continue
+        records.append(row)
+        preview_rows.append({
+            "row": line.line, "employee_name": row.employee_name, "employee_no": employee_number(row.employee_no),
+            "circle": row.home_attraction_name, "role": row.employee_role_snapshot,
+            "period_type": row.poc_period_type, "period_key": row.poc_period_key, "reason": row.poc_reason,
+            "points": line.points,
+        })
+    poc_row_errors(errors)
+    confirmation = submission_payload_digest({
+        "batch": batch_key,
+        "issuer": [user.id, user.role.code, user.name],
+        "targets": sorted((row.employee_id, row.home_attraction_id, row.home_attraction_name,
+                           row.employee_role_code_snapshot, row.employee_name, row.poc_period_type, row.poc_reason)
+                          for row in records),
+        "type": [recognition_type.id, recognition_type.name],
+    })
+    return records, preview_rows, confirmation
+
+
+@router.post("/recognitions/poc-batch/preview")
+def preview_poc_batch(
+    workbook: UploadFile = File(...),
+    recognition_date: str = Form(...),
+    db: Session = Depends(get_db),
+    user: V2User = Depends(require_permissions("POC_ISSUE")),
+):
+    ensure_poc_issuer(user)
+    day, lines, batch_key = poc_batch_input(workbook, recognition_date)
+    if existing_submission(db, user.id, "poc_batch", batch_key, RecognitionRecord):
+        return {"duplicate": True, "sent_count": len(lines)}
+    records, rows, confirmation = plan_poc_batch(db, user, day, lines, batch_key)
+    return {
+        "rows": rows, "recipient_count": len({row.employee_id for row in records}),
+        "recognition_date": day.isoformat(), "confirmation": confirmation,
+    }
+
+
+@router.post("/recognitions/poc-batch/send")
+def send_poc_batch(
+    request: Request,
+    workbook: UploadFile = File(...),
+    recognition_date: str = Form(...),
+    confirmation: str = Form(..., min_length=64, max_length=64),
+    db: Session = Depends(get_db),
+    user: V2User = Depends(require_permissions("POC_ISSUE")),
+):
+    ensure_poc_issuer(user)
+    day, lines, batch_key = poc_batch_input(workbook, recognition_date)
+    actor_id, account_id = user.id, user.account.id
+    reserve_writer(db)
+    try:
+        employee = db.get(Employee, actor_id)
+        account = db.get(UserAccount, account_id)
+        if not employee or not employee.is_active or not account or not account.enabled or account.employee_id != actor_id:
+            raise HTTPException(403, "签卡账号已不可用，请重新登录。")
+        user = load_user_identity(db, employee, account)
+        ensure_poc_issuer(user)
+        if existing_submission(db, actor_id, "poc_batch", batch_key, RecognitionRecord, confirmation):
+            db.rollback()
+            return {"ok": True, "duplicate": True, "sent_count": len(lines)}
+
+        records, _, current_confirmation = plan_poc_batch(db, user, day, lines, batch_key)
+        if confirmation != current_confirmation:
+            raise HTTPException(409, "表格或收件人信息已变化，请重新核对后再发送。")
+        db.add_all(records)
+        db.flush()
+        for line, row in zip(lines, records):
+            deliver_poc_recognition(db, user, row, request, batch_line=line.line)
+        remember_submission(db, actor_id, "poc_batch", batch_key, records[0].id, confirmation)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "本批认可未发送，请重新核对后再试。") from exc
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_data_caches()
+    return {"ok": True, "sent_count": len(records)}
 
 
 @router.delete("/recognitions/{record_id}")
@@ -1254,6 +1431,12 @@ def my_entries(
     total = len(items)
     start = (page - 1) * page_size
     page_items = items[start:start + page_size]
+    missing_uploaders = [
+        row for row in page_items if row["record_type"] == "deduction" and not row["material_uploaded_by_name"]
+    ]
+    historical_uploaders = historical_material_uploaders(db, (row["id"] for row in missing_uploaders))
+    for row in missing_uploaders:
+        row["material_uploaded_by_name"] = historical_uploaders.get(row["id"], "")
     active_deductions = sum(row["actual_points"] for row in items if row["record_type"] == "deduction")
     recognition_score = sum(row.get("credited_fraction", row["fraction"]) for row in items if row["record_type"] == "recognition" and row["status"] == "confirmed")
     active_sick_days = sum(row["leave_days"] for row in items if row["record_type"] == "sick_leave" and row["status"] == "active")
