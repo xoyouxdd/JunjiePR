@@ -189,7 +189,10 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post('/api/logout');login(client,'TRTEST01')
         assert client.get('/api/changelog/announcement').json()['read'] is True
         client.post('/api/logout');login(client,'GSMTEST01')
-        assert [item['summary'] for item in client.get('/api/changelog/announcement').json()['release']['items']] == [CURRENT_RELEASE_NOTE]
+        gsm = client.get("/api/changelog/announcement").json()
+        assert [item["summary"] for item in gsm["release"]["items"]] == [
+            CURRENT_RELEASE_NOTE, "声明补材料流程更新", "物资管理试用", "POC 特别贡献支持批量发放",
+        ]
 
 
 def test_import_skip_note_requires_hr_role_and_manage_permission():

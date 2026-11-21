@@ -366,6 +366,7 @@ def test_versions_come_from_a_single_source() -> None:
         # Follow declared imports from the served entry, so both missing map
         # entries and extra entries for abandoned modules are detected.
         declared_import = re.compile(r"""^\s*(?:import|export)\s+(?:[\w*$ {},\n]+\s+from\s+)?['"]([^'"\n]+)['"]""", re.MULTILINE)
+        lazy_import = re.compile(r"""\bimport\s*\(\s*['"]([^'"\n]+)['"]\s*\)""")
         pending = [("/" + path, "/" + path + f"?v={STATIC_CACHE_VERSION}") for tag, kind, path in seen
                    if tag == "script" and kind == "module"]
         reachable = set()
@@ -373,7 +374,7 @@ def test_versions_come_from_a_single_source() -> None:
             path, target = pending.pop()
             module = client.get(target)
             assert module.status_code == 200, target
-            for reference in declared_import.findall(module.text):
+            for reference in declared_import.findall(module.text) + lazy_import.findall(module.text):
                 specifier = "." + urljoin(path, reference)
                 assert specifier in imports, (path, reference)
                 if specifier not in reachable:
