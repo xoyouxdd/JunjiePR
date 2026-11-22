@@ -90,6 +90,7 @@
 | `deduction_types` | 扣分类型 |
 | `deduction_levels` | 扣分等级 |
 | `deduction_records` | 扣分 |
+| `deduction_original_upgrades` | 原单升级快照，一条扣分记录至多一条 |
 | `deduction_material_jobs` | 照片转 PDF 任务 |
 | `deduction_upgrade_requests` | 声明升级工单 |
 | `deduction_upgrade_transfers` | 升级工单转交 |
@@ -905,6 +906,8 @@
 类型：`id` PK；`code`、`name` UNIQUE；`active`。
 
 等级另有 `points NUMERIC(10,2)`。
+
+原单升级在 `deduction_original_upgrades` 按 `record_id` 保存原归属月、原等级和原分值、结果等级和分值、处理人、MOD 确认信息及原因。原扣分记录在同一事务更新，沿用原编号。仓库启动补齐 25 个标准货位中的缺项，保留已有位置及编号。
 
 ### `deduction_records`
 

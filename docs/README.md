@@ -38,7 +38,7 @@
 | [identity-and-supervisor.md](identity-and-supervisor.md) | 本职与代理职务、主管绩效登记复核、日期展示及统计口径 |
 | [monthly-self-rank.md](monthly-self-rank.md) | 个人月结游戏段位、同分中位算法、隐私和未发布开关 |
 | [leave-management.md](leave-management.md) | LOA、月度病假事务导入与单人备用登记 |
-| [declaration-statistics.md](declaration-statistics.md) | 声明登记统计、跨圈权限与导出 |
+| [declaration-statistics.md](declaration-statistics.md) | 声明事件核对、原单升级、跨圈统计与导出 |
 | [hr-monthly-report-plan.md](hr-monthly-report-plan.md) | HR 月报制作、三套模板、统计口径及PPTX导出 |
 | [excel-export-presentation.md](excel-export-presentation.md) | Excel总览、完整明细、低频列折叠与同批次核对 |
 | [local-update-20261011.md](local-update-20261011.md) | 10月11日讨论与本地落实清单 |
@@ -54,7 +54,7 @@
 | [release.md](release.md) | 发布打包 |
 | [deployment.md](deployment.md) | 生产部署：本地构建与人工授权上线 |
 | [operations.md](operations.md) | 备份与恢复入口 |
-| [workbench-experience.md](workbench-experience.md) | 今日工作、连续登记与后台导出边界 |
+| [workbench-experience.md](workbench-experience.md) | 今日工作、连续登记、后台导出与物资管理 |
 | [security.md](security.md) | 仓库边界与内部约定 |
 | [changelog.md](changelog.md) | 应用内更新记录的数据源 |
 | [avatar-artwork.md](avatar-artwork.md) | 头像装扮、素材来源、内部授权与低负担接入 |

@@ -2,7 +2,7 @@
   {"version": "2026.11.23.1", "date": "2026-11-23", "status": "candidate", "items": [
     {"summary": "今日小祝福与版本记录更新", "detail": "调整今日小祝福入口，关于系统显示累计版本数，并完善轮岗签到提醒和上岗安排。", "audiences": ["all"]},
     {"summary": "声明事件核对与原单升级", "detail": "登记时核对同一事件。具备资格的正式 GSM 可办理原单升级，记录保留关联和生效月份。", "audiences": ["all"], "permissions": ["DECLARATION_STATS_VIEW"]},
-    {"summary": "物资库存导出与批量入库", "detail": "物资管理增加库存 Excel 导出、批量入库预览和库位盘点。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]},
+    {"summary": "物资库存导出与批量入库", "detail": "物资管理增加 A 至 F 架及地面暂存区。仓库负责人可导出库存 Excel、预览批量入库并办理库位盘点。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]},
     {"summary": "仓库负责人交接保护", "detail": "撤下最后一位有效负责人前，需要先安排接任人。", "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]}
   ]},
   {"version": "2026.11.22.1", "date": "2026-11-22", "status": "candidate", "items": [
