@@ -66,7 +66,7 @@ async function checkReset(page) {
   assert.equal(await page.locator('#declarationFilter [name=status]').inputValue(),'current');
   assert.equal(await search.getAttribute('aria-expanded'),'false');
   assert(await page.locator('#declarationEmployeeResults').isHidden());
-  assert.equal(await page.locator('#declarationEmployeeHint').textContent(),'可输入部分姓名或工号，也可从候选中选择');
+  assert.equal(await page.locator('#declarationEmployeeHint').textContent(),'可输入部分姓名、工号或 #声明编号，也可从候选中选择');
   const request=page.waitForRequest(r=>r.url().includes('/api/declaration-statistics?'));
   await page.getByRole('button',{name:'查询',exact:true}).tap();
   assert.deepEqual(Object.fromEntries(new URL((await request).url()).searchParams),{month:defaults,status:'current'});
