@@ -14,6 +14,11 @@ from app.version import APP_VERSION
 RELEASES: list[dict] = json.loads(Path(__file__).with_name("changelog.json").read_text(encoding="utf-8"))
 
 
+def recorded_version_count() -> int:
+    """Count every recorded version once, independent of note visibility."""
+    return len({release["version"] for release in RELEASES})
+
+
 def item_visible(item: dict, role_code: str | set[str], permissions: set[str]) -> bool:
     """`role_code` may be a set: base identity plus acting duties all count."""
     if item.get("feature") == "monthly_ranks":

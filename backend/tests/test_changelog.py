@@ -15,11 +15,12 @@ os.environ["RECOGNITION_TEST_DEFAULT_PASSWORD"] = "1234"
 os.environ["RECOGNITION_TEST_ADMIN_PASSWORD"] = "HR123"
 
 from app.main import app  # noqa: E402
+from app import changelog as changelog_source
 from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-CURRENT_RELEASE_NOTE = "轮岗提醒与登记流程更新"
+CURRENT_RELEASE_NOTE = "今日小祝福与版本记录更新"
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:
@@ -120,16 +121,16 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
     assert [item["summary"] for item in admin[0]["items"]] == [
-        CURRENT_RELEASE_NOTE, "声明补材料流程更新", "安排仓库负责人",
+        CURRENT_RELEASE_NOTE, "声明事件核对与原单升级", "仓库负责人交接保护",
     ]
     assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [
-        CURRENT_RELEASE_NOTE, "物资管理试用",
+        CURRENT_RELEASE_NOTE, "物资库存导出与批量入库",
     ]
     assert [item["summary"] for item in gsm[0]["items"]] == [
-        CURRENT_RELEASE_NOTE, "物资管理试用", "POC 特别贡献支持批量发放",
+        CURRENT_RELEASE_NOTE, "物资库存导出与批量入库",
     ]
     assert "POC 特别贡献支持批量发放" not in {
-        item["summary"] for item in visible_releases("GSM", set())[0]["items"]
+        item["summary"] for release in visible_releases("GSM", set()) for item in release["items"]
     }
     assert '员工导入占用工号支持预检后跳过' not in cm_text
     assert '员工导入占用工号支持预检后跳过' not in gsm_text
@@ -149,11 +150,30 @@ def test_changelog_api_is_scoped_to_the_logged_in_role() -> None:
         assert data.status_code == 200, data.text
         body = data.json()
         assert body["app_version"] == APP_VERSION
+        assert body["version_count"] == len({release["version"] for release in RELEASES})
         assert body["role_code"] == "CM"
         assert body["releases"]
         summaries = [item["summary"] for release in body["releases"] for item in release["items"]]
         assert any("更新记录" in row for row in summaries)
         assert all("全局月结" not in row for row in summaries)
+
+
+def test_changelog_count_is_shared_and_deduplicated(monkeypatch) -> None:
+    admin_only = {
+        "version": "2099.01.01.1", "items": [{"summary": "管理员测试记录", "audiences": ["SYSTEM_ADMIN"]}],
+    }
+    monkeypatch.setattr(changelog_source, "RELEASES", [*RELEASES, RELEASES[0], admin_only])
+    expected = len({release["version"] for release in RELEASES}) + 1
+    with TestClient(app) as client:
+        login(client, "CMTEST01")
+        cm = client.get("/api/changelog").json()
+        client.post("/api/logout")
+        login(client, "HR01", "HR123")
+        admin = client.get("/api/changelog").json()
+
+    assert cm["version_count"] == admin["version_count"] == expected
+    assert admin_only["version"] not in {release["version"] for release in cm["releases"]}
+    assert admin_only["version"] in {release["version"] for release in admin["releases"]}
 
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
@@ -173,7 +193,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item['summary'] for item in hr['release']['items']] == [
-            CURRENT_RELEASE_NOTE, "声明补材料流程更新", "安排仓库负责人",
+            CURRENT_RELEASE_NOTE, "声明事件核对与原单升级", "仓库负责人交接保护",
         ]
         assert hr['read'] is False
         client.post("/api/logout")
@@ -191,7 +211,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post('/api/logout');login(client,'GSMTEST01')
         gsm = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in gsm["release"]["items"]] == [
-            CURRENT_RELEASE_NOTE, "声明补材料流程更新", "物资管理试用", "POC 特别贡献支持批量发放",
+            CURRENT_RELEASE_NOTE, "声明事件核对与原单升级", "物资库存导出与批量入库",
         ]
 
 

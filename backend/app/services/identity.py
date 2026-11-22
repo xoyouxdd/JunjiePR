@@ -195,9 +195,11 @@ def identity_label(db: Session, employee_id: int, on_date: str | date | None = N
     return identity_labels(db, [employee_id], on_date).get(employee_id, "未配置")
 
 
-def base_role_at(db: Session, employee_id: int, on_date: str | date | None = None) -> Role | None:
+def primary_role_assignment_at(
+    db: Session, employee_id: int, on_date: str | date | None = None,
+) -> EmployeeRoleAssignment | None:
     value = _date_value(on_date)
-    assignment = (
+    return (
         db.query(EmployeeRoleAssignment)
         .filter(
             EmployeeRoleAssignment.employee_id == employee_id,
@@ -208,6 +210,11 @@ def base_role_at(db: Session, employee_id: int, on_date: str | date | None = Non
         .order_by(EmployeeRoleAssignment.starts_on.desc(), EmployeeRoleAssignment.id.desc())
         .first()
     )
+
+
+def base_role_at(db: Session, employee_id: int, on_date: str | date | None = None) -> Role | None:
+    value = _date_value(on_date)
+    assignment = primary_role_assignment_at(db, employee_id, value)
     if assignment:
         return assignment.role
     latest = (

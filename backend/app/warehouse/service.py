@@ -11,10 +11,10 @@ from app.json_digest import canonical_json
 from app.v2_auth import V2User
 from app.v2_models import Employee
 from app.warehouse.models import (
-    WarehouseBalance, WarehouseIssue, WarehouseIssueLine, WarehouseItem, WarehouseMovement,
+    GROUND_SHELF, SHELF_ZONES, WarehouseBalance, WarehouseIssue, WarehouseIssueLine, WarehouseItem, WarehouseMovement,
     WarehousePhoto, WarehousePosition, WarehouseTransaction, WarehouseTransactionPhoto, warehouse_now,
 )
-from app.warehouse.schemas import AdjustmentInput, Attachment, CorrectionInput, ItemInput, ResolveInput, TransactionInput
+from app.warehouse.schemas import INBOUND_BATCH_KEY, AdjustmentInput, Attachment, CalibrationInput, CorrectionInput, ItemInput, ResolveInput, TransactionInput
 
 
 def stamp(value: datetime | None) -> str | None:
@@ -52,6 +52,7 @@ def position_data(db: Session, row: WarehousePosition) -> dict:
         current.update(updated_at=stamp(row.latest_photo_set_at), stale=row.latest_photo_version != row.version,
                        transaction_id=row.latest_photo_transaction_id)
     return {"id": row.id, "shelf": row.shelf, "level": row.level, "label": row.label,
+            "kind": "ground" if row.shelf == GROUND_SHELF else "shelf", "zone": SHELF_ZONES.get(row.shelf),
             "version": row.version, "updated_at": stamp(row.updated_at), "photo": current}
 
 
@@ -76,11 +77,12 @@ def item_data(item: WarehouseItem, locations: list[dict]) -> dict:
             "total": sum(row["quantity"] for row in locations), "locations": locations}
 
 
-def save_item(db: Session, body: ItemInput, item: WarehouseItem | None = None) -> WarehouseItem:
-    def normalized(value: str) -> str:
-        return normalize("NFKC", " ".join(value.split())).casefold()
+def warehouse_item_key(value: str) -> str:
+    return normalize("NFKC", " ".join(value.split())).casefold()
 
-    name_key, spec_key = normalized(body.name), normalized(body.spec)
+
+def save_item(db: Session, body: ItemInput, item: WarehouseItem | None = None) -> WarehouseItem:
+    name_key, spec_key = warehouse_item_key(body.name), warehouse_item_key(body.spec)
     duplicate = db.query(WarehouseItem.id).filter_by(name_key=name_key, spec_key=spec_key).scalar()
     if duplicate is not None and (item is None or item.id != duplicate):
         raise HTTPException(409, "已有同名同规格的物资，请使用现有档案")
@@ -116,8 +118,10 @@ def fresh_state(db: Session, keys: set[tuple[int, int]], position_ids: set[int] 
     }
 
 
-def require_versions(db: Session, versions: dict[int, int], keys: set[tuple[int, int]]) -> None:
-    changed = {position_id for _, position_id in keys if versions.get(position_id) != get_position(db, position_id).version}
+def require_versions(db: Session, versions: dict[int, int], keys: set[tuple[int, int]],
+                     position_ids: set[int] | None = None) -> None:
+    ids = position_ids if position_ids is not None else {position_id for _, position_id in keys}
+    changed = {position_id for position_id in ids if versions.get(position_id) != get_position(db, position_id).version}
     if changed:
         raise HTTPException(409, {"code": "STALE_POSITIONS", "message": "货位已有新收发，请核对标出的层位",
                                   **fresh_state(db, keys, changed)})
@@ -324,9 +328,15 @@ def get_transaction_by_client(db: Session, user: V2User, client_id: str) -> Ware
     return db.query(WarehouseTransaction).filter_by(actor_id=user.id, client_id=client_id).one_or_none()
 
 
+def require_new_inbound_batch(db: Session, client_id: str) -> None:
+    posted = db.query(WarehouseTransaction.id).filter_by(kind="inbound", client_id=client_id).first()
+    if posted:
+        raise HTTPException(409, {"code": "INBOUND_BATCH_POSTED", "transaction_id": posted.id,
+                                  "message": f"这份 Excel 已按入库单 {posted.id} 入账。新一批到货请重新下载模板。"})
+
+
 def post_outbound(db: Session, tx: WarehouseTransaction, user: V2User, now: datetime,
-                  quantities: dict[tuple[int, int], int], *, recovered: bool = False,
-                  adjusted_positions: set[int] | None = None) -> None:
+                  quantities: dict[tuple[int, int], int], *, adjusted_positions: set[int] | None = None) -> None:
     positions = {position_id for _, position_id in quantities}
     occurred_before = {position_id: get_position(db, position_id).updated_at for position_id in positions}
     for (item_id, position_id), quantity in quantities.items():
@@ -338,16 +348,22 @@ def post_outbound(db: Session, tx: WarehouseTransaction, user: V2User, now: date
         WarehouseTransactionPhoto.transaction_id == tx.id,
     ):
         checkpoint = occurred_before[link.position_id]
-        fresh = not recovered or checkpoint is None or photo.captured_at >= checkpoint
+        fresh = checkpoint is None or photo.captured_at >= checkpoint
         update_latest_photo(db, get_position(db, link.position_id), photo, now, transaction_id=tx.id, fresh=fresh)
 
 
 def confirm_transaction(db: Session, user: V2User, body: TransactionInput, now: datetime) -> tuple[WarehouseTransaction, set[int]]:
+    imported = body.kind == "inbound" and INBOUND_BATCH_KEY.fullmatch(body.client_id)
     prior = get_transaction_by_client(db, user, body.client_id)
     if prior is not None:
         if prior.fingerprint != fingerprint(body):
+            if imported:
+                require_new_inbound_batch(db, body.client_id)
             raise HTTPException(409, {"code": "TRANSACTION_KEY_REUSED", "message": "该编号已经用于另一张单，请查看原单状态"})
         return prior, set()
+    if imported:
+        # The transaction route holds the warehouse writer lock across this check and posting.
+        require_new_inbound_batch(db, body.client_id)
 
     quantities, receipts = validate_transaction(db, body)
     keys = set(quantities)
@@ -395,10 +411,23 @@ def confirm_transaction(db: Session, user: V2User, body: TransactionInput, now: 
     return tx, {item_id for item_id, _ in keys} if not holding else set()
 
 
+def require_no_pending_outbound(db: Session, position_id: int, item_ids: set[int]) -> None:
+    if not item_ids:
+        return
+    pending = db.query(WarehouseIssueLine.id).join(WarehouseIssue).join(
+        WarehouseTransaction, WarehouseTransaction.id == WarehouseIssue.transaction_id,
+    ).filter(WarehouseIssue.status != "closed", WarehouseTransaction.kind == "outbound",
+             WarehouseTransaction.status == "pending", WarehouseIssueLine.position_id == position_id,
+             WarehouseIssueLine.item_id.in_(item_ids)).first()
+    if pending:
+        raise HTTPException(409, "该货位的物资有待补记出库，请先在负责人待办核对原单，再调整数量")
+
+
 def apply_adjustment(db: Session, user: V2User, body: AdjustmentInput, now: datetime) -> WarehouseTransaction:
     key = (body.item_id, body.position_id)
     get_item(db, body.item_id, active=True)
     require_versions(db, {body.position_id: body.version}, {key})
+    require_no_pending_outbound(db, body.position_id, {body.item_id})
     if body.kind == "opening" and db.get(WarehouseBalance, key) is not None:
         raise HTTPException(409, "此货位已有库存记录，请使用盘点调整")
     tx = new_transaction(db, user, body.kind, now, reason=body.reason)
@@ -409,6 +438,53 @@ def apply_adjustment(db: Session, user: V2User, body: AdjustmentInput, now: date
         touch_positions(db, {body.position_id}, now)
     mark_posted(tx, user, now)
     return tx
+
+
+def calibrate_position(db: Session, user: V2User, position_id: int, body: CalibrationInput,
+                       now: datetime) -> tuple[WarehouseTransaction, set[int]]:
+    counts = {line.item_id: line.quantity for line in body.items}
+    if len(counts) != len(body.items) or (not counts and not body.photo_id):
+        raise HTTPException(422, "请填写实盘数量或上传现况照，同一物资只录入一次")
+    signature = sha256(canonical_json({
+        "position_id": position_id, "items": counts, "reason": body.reason, "photo_id": body.photo_id,
+    }, compact=True).encode("utf-8")).hexdigest()
+    prior = get_transaction_by_client(db, user, body.client_id)
+    if prior:
+        if prior.kind != "calibration" or prior.fingerprint != signature:
+            raise HTTPException(409, "这个单号已用于另一条记录，请先核对原校准单")
+        return prior, set()
+
+    position = get_position(db, position_id)
+    keys = {(item_id, position_id) for item_id in counts}
+    require_versions(db, {position_id: body.version}, keys, {position_id})
+    require_no_pending_outbound(db, position_id, set(counts))
+    for item_id in counts:
+        get_item(db, item_id, active=True)
+    photo = staged_photo(db, body.photo_id, user) if body.photo_id else None
+    if photo:
+        previous = db.get(WarehousePhoto, position.latest_photo_id) if position.latest_photo_id else None
+        if (position.updated_at and photo.captured_at < position.updated_at) or (
+            previous and photo.captured_at < previous.captured_at
+        ):
+            raise HTTPException(409, "现场照早于货位最新记录，请核对后重拍")
+
+    tx = new_transaction(db, user, "calibration", now, reason=body.reason)
+    tx.client_id, tx.fingerprint = body.client_id, signature
+    tx.payload = {"lines": [{"item_id": item_id, "position_id": position_id, "quantity": value}
+                            for item_id, value in counts.items()]}
+    changed = False
+    for item_id, target in counts.items():
+        balance = db.get(WarehouseBalance, (item_id, position_id))
+        current = balance.quantity if balance else 0
+        changed |= balance is None or target != current
+        add_movement(db, tx, item_id, position_id, "adjustment", target - current, now)
+    if changed:
+        touch_positions(db, {position_id}, now)
+    if photo:
+        attach_transaction_photos(db, tx, [(Attachment(photo_id=photo.id, position_id=position_id), photo)], now)
+        update_latest_photo(db, position, photo, now, transaction_id=tx.id)
+    mark_posted(tx, user, now)
+    return tx, set(counts)
 
 
 def resolve_issue(db: Session, user: V2User, issue: WarehouseIssue, body: ResolveInput, now: datetime) -> set[int]:
@@ -444,7 +520,7 @@ def resolve_issue(db: Session, user: V2User, issue: WarehouseIssue, body: Resolv
                                         for (item_id, position_id), row in observations.items() if position_id in adjusted_positions]}
         mark_posted(correction, user, now)
     if recovered:
-        post_outbound(db, tx, user, now, pending_quantities, recovered=True, adjusted_positions=adjusted_positions)
+        post_outbound(db, tx, user, now, pending_quantities, adjusted_positions=adjusted_positions)
     else:
         touch_positions(db, adjusted_positions, now)
 

@@ -13,7 +13,8 @@ if(circleSelect){
 }
 let drawerLayer;
 const frame=document.querySelector('.app-frame');
-mountDailyWish(document.getElementById('themeStory'),'preview-'+(document.getElementById('userBadge')?.dataset.employeeNo||'demo'),{integrated:true});
+const story=document.getElementById('themeStory');
+if(story&&!story.hidden)mountDailyWish(story,'preview-'+(document.getElementById('userBadge')?.dataset.employeeNo||'demo'),{integrated:true});
 frame.addEventListener('click',event=>{
   event.preventDefault();event.stopImmediatePropagation();
   const personal=event.target.closest('[data-avatar-settings],[data-appearance-settings]');

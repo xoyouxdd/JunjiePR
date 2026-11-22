@@ -1,9 +1,11 @@
 import { esc, portalPath } from './format.js';
 import { json } from './api.js';
+import { newSubmissionKey } from './submission.js';
 import { clearWarehouseDraft, compressWarehousePhoto, saveWarehouseDraft, warehouseDraft } from './warehouse-drafts.js';
 
 const quantity = value => Number(value) || 0;
 const mounted = new WeakMap();
+const inboundBatchPrefix = 'inbound-import-';
 const matchKey = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s·_-]+/g, '');
 const timeFormat = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Shanghai',
@@ -30,6 +32,82 @@ function receiptItem(id, locationId) {
     id, received: '', damaged: '', direct: '', destination: '', note: '',
     allocations: locationId ? [{ locationId, quantity: '' }] : [],
   };
+}
+
+function warehouseEntryData(state) {
+  return {
+    items: new Map(state.items.map(item => [item.id, item])),
+    positions: new Map(state.positions.map(position => [position.id, position])),
+    balances: new Map(state.items.flatMap(item => item.locations.map(location => [issueKey(location.position_id, item.id), location.quantity]))),
+  };
+}
+
+function inboundImportMarkup() {
+  return `<div class="we-import"><div class="we-import-actions">
+    <a class="wh-button" href="${esc(portalPath('/api/warehouse/inbound/template.xlsx'))}" download>下载 Excel 模板</a>
+    <button type="button" class="wh-button" data-we-import>导入 Excel</button>
+    <input type="file" data-we-import-file accept=".xlsx" hidden></div>
+    <div class="we-import-status" data-we-import-status aria-live="polite" hidden></div>
+  </div>`;
+}
+
+function showInboundImportStatus(work) {
+  const region = work.root.querySelector('[data-we-import-status]');
+  if (!region) return;
+  const {message, rows = [], error = false} = work.importStatus || {};
+  region.hidden = !message;
+  region.dataset.error = String(error);
+  region.innerHTML = message ? `<p>${esc(message)}</p>${rows.length ? `<ul>${rows.map(row => `<li>第 ${esc(row.row)} 行 · ${esc(row.message)}</li>`).join('')}</ul>` : ''}` : '';
+  work.root.querySelector('[data-we-import]').disabled = Boolean(work.importing);
+  work.root.querySelector('[data-we-next]').disabled = Boolean(work.importing) || !work.draft.items.length;
+}
+
+async function importInbound(work, file) {
+  if (!file || work.outbound || work.importing || work.draft.attempted) return;
+  work.importing = true;
+  work.importStatus = {message:'正在读取 Excel…'};
+  showInboundImportStatus(work);
+  const current = () => work.root.isConnected && work.session.view === work && !work.draft.checkout;
+  try {
+    const form = new FormData();
+    form.append('file',file);
+    const imported = await work.api('/inbound/import',{method:'POST',body:form});
+    if (!current()) return;
+    const state = await work.api('/bootstrap');
+    if (!current()) return;
+    if (work.draft.items.length && work.draft.key !== imported.client_id) {
+      work.importStatus = {error:true,message:'本单已有其他物资。请先办完本单或移除已选物资，再导入 Excel。'};
+      return;
+    }
+    const data = warehouseEntryData(state);
+    const unavailable = imported.items.some(row => data.items.get(row.item_id)?.active !== true ||
+      row.locations.some(place => !data.positions.has(place.position_id)));
+    if (unavailable) {
+      work.importStatus = {error:true,message:'物资或货位资料刚刚更新，请重新导入 Excel。'};
+      return;
+    }
+    Object.assign(work,data);
+    if (work.draft.key !== imported.client_id) {
+      work.draft.key = imported.client_id;
+      work.draft.photos = {};
+      work.draft.versions = {};
+    }
+    work.draft.items = imported.items.map(row => ({...receiptItem(row.item_id),received:String(row.received),
+      allocations:row.locations.map(entry => ({locationId:entry.position_id,quantity:String(entry.quantity)})),
+    }));
+    work.importStatus = {message:`已填入 ${imported.items.length} 种物资。核对后点「下一步」拍照。`};
+    work.message = '';
+    work.noticeCode = '';
+    void saveWarehouseDraft(work.session);
+    draw(work);
+  } catch (error) {
+    if (!current()) return;
+    work.importStatus = {error:true,rows:error.detail?.rows,
+      message:error.status ? error.message : '暂时无法读取 Excel，请检查连接后重新导入。'};
+  } finally {
+    work.importing = false;
+    if (current()) showInboundImportStatus(work);
+  }
 }
 
 function numberedInput(value, attributes, min = 0) {
@@ -80,7 +158,7 @@ function locationsFor(work, item) {
   return positions.sort((a, b) => {
     const availableA = presentBalance(work, itemId, a.id) > 0;
     const availableB = presentBalance(work, itemId, b.id) > 0;
-    return Number(availableB) - Number(availableA) || a.id - b.id;
+    return Number(availableB) - Number(availableA) || a.shelf.localeCompare(b.shelf) || b.level - a.level;
   });
 }
 
@@ -269,7 +347,7 @@ function refreshCheckout(work) {
   }).length;
   const confirm = work.root.querySelector('[data-we-confirm]');
   if (!confirm) return;
-  confirm.disabled = busy || (!work.draft.attempted && (Boolean(work.draft.review.length) || ready !== required || !required));
+  confirm.disabled = busy || work.noticeCode === 'INBOUND_BATCH_POSTED' || (!work.draft.attempted && (Boolean(work.draft.review.length) || ready !== required || !required));
   confirm.textContent = busy ? '正在核对…' : work.draft.attempted ? '查询提交结果' : work.noticeCode === 'INSUFFICIENT_STOCK' ? '提交报错并保留原单' : `确认${work.outbound ? '出库' : '入库'}`;
   work.root.querySelector('[data-we-edit]').disabled = busy || work.draft.attempted;
   work.root.querySelector('[data-we-progress]').textContent = `照片已传 ${ready} / ${required}`;
@@ -300,6 +378,7 @@ function draw(work) {
       <div class="we-checkout">${groups.map(group => evidenceMarkup(work, group)).join('')}</div>
       <div class="we-footer"><button type="button" class="secondary" data-we-edit>返回修改</button><div class="we-progress-block"><span data-we-progress role="status"></span><progress data-we-progress-bar aria-label="照片上传进度" max="1" value="0"></progress></div><button type="button" class="primary" data-we-confirm></button></div>` : `
       <div class="we-entry-grid"><section class="we-lookup" aria-label="查找物资">
+        ${outbound ? '' : inboundImportMarkup()}
         <div class="we-search"><label>物资搜索 <input type="search" data-we-search value="${esc(work.query)}" placeholder="名称或常用简称" autocomplete="off"></label>
         <label>类目<select data-we-category><option value="">全部类目</option>${categories.map(category => `<option ${work.category === category ? 'selected' : ''} value="${esc(category)}">${esc(category)}</option>`).join('')}</select></label></div>
         <div class="we-results" data-we-results></div>
@@ -310,7 +389,10 @@ function draw(work) {
       <div class="we-footer"><span class="we-selected-total">${work.draft.items.length ? `已选 <strong>${work.draft.items.length}</strong> 项` : '选好物资后继续'}</span><button type="button" class="primary" data-we-next ${work.draft.items.length ? '' : 'disabled'}>下一步</button></div>`}
   </section>`;
   if (work.draft.checkout) refreshCheckout(work);
-  else renderMatches(work);
+  else {
+    renderMatches(work);
+    if (!outbound) showInboundImportStatus(work);
+  }
 }
 
 function loadChanges(work, detail) {
@@ -548,8 +630,7 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
   if (!root.isConnected || signal.aborted) return;
   const work = {
     root, outbound, api, onComplete, onBack, session, draft: session.draft, operator: state.operator,
-    items: new Map(state.items.map(item => [item.id, item])), positions: new Map(state.positions.map(position => [position.id, position])),
-    balances: new Map(state.items.flatMap(item => item.locations.map(location => [issueKey(location.position_id, item.id), location.quantity]))),
+    ...warehouseEntryData(state),
     previews: new Map(), query: '', category: '', message: '', noticeCode: '', busy: false,
   };
   session.view = work;
@@ -635,6 +716,10 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       const parent = target.closest('[data-we-item]');
       work.draft.items.find(item => item.id === Number(parent.dataset.weItem)).allocations[Number(target.dataset.weLocation)].locationId = Number(target.value);
       void saveWarehouseDraft(session);
+    } else if (target.matches('[data-we-import-file]')) {
+      const file = target.files?.[0];
+      target.value = '';
+      void importInbound(work,file);
     } else if (target.matches('[data-we-camera]')) {
       const id = target.closest('[data-we-group]').dataset.weGroup;
       const file = target.files?.[0] || target.files?.item?.(0);
@@ -656,6 +741,7 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
     const button = event.target.closest('button');
     if (!button || button.disabled) return;
     if (button.matches('[data-we-back]')) { onBack?.(); return; }
+    if (button.matches('[data-we-import]')) { root.querySelector('[data-we-import-file]').click(); return; }
     if (button.matches('[data-we-confirm]')) { void submit(work); return; }
     const groupNode = button.closest('[data-we-group]');
     if (groupNode) {
@@ -681,7 +767,14 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       const row = work.draft.items.find(entry => entry.id === id);
       if (!row.allocations.length) row.allocations.push({ locationId: 0, quantity: '' });
       focusItem = id;
-    } else if (button.matches('[data-we-remove-item]')) work.draft.items = work.draft.items.filter(row => row !== item);
+    } else if (button.matches('[data-we-remove-item]')) {
+      work.draft.items = work.draft.items.filter(row => row !== item);
+      if (!work.draft.items.length && work.draft.key.startsWith(inboundBatchPrefix)) {
+        work.draft.key = newSubmissionKey();
+        work.draft.photos = {};
+        work.importStatus = null;
+      }
+    }
     else if (button.matches('[data-we-add-allocation]')) item.allocations.push({ locationId: 0, quantity: '' });
     else if (button.matches('[data-we-remove-allocation]')) item.allocations.splice(Number(button.dataset.weRemoveAllocation), 1);
     else if (button.matches('[data-we-edit]')) work.draft.checkout = false;

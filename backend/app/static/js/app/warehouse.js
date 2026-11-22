@@ -1,5 +1,6 @@
 import {api as portalApi, json} from './api.js';
 import {esc, portalPath} from './format.js';
+import {newSubmissionKey} from './submission.js';
 import {compressWarehousePhoto} from './warehouse-drafts.js';
 import {renderWarehouseEntry} from './warehouse-entry.js';
 
@@ -18,6 +19,7 @@ const normalize = value => key(value).normalize('NFKC').toLowerCase().replace(/\
 const timeLabel = value => key(value).replace('T',' ').slice(0,16);
 const actionAttrs = (action, id = '') => `data-wh-action="${esc(action)}" data-wh-id="${esc(id)}"`;
 const button = (label, action, id = '', tone = 'plain') => `<button type="button" class="wh-button wh-button--${esc(tone)}" ${actionAttrs(action,id)}>${esc(label)}</button>`;
+const ownerShortcut = (label, action) => `<button type="button" class="wh-owner-shortcut wh-owner-shortcut--${action}" ${actionAttrs(action)}><span class="wh-owner-shortcut-icon" aria-hidden="true"></span><strong>${esc(label)}</strong><span class="wh-owner-shortcut-arrow" aria-hidden="true">›</span></button>`;
 const empty = (title, detail = '') => `<div class="wh-empty"><strong>${esc(title)}</strong>${detail ? `<p>${esc(detail)}</p>` : ''}</div>`;
 const tag = (text, tone = 'neutral') => `<span class="wh-tag wh-tag--${esc(tone)}">${esc(text)}</span>`;
 
@@ -56,6 +58,8 @@ export async function renderWarehouse(root, context = {}) {
   let revision = 0;
   let entryCleanup;
   let dialogRevision = 0;
+  let quickLocation = '';
+  let quickRequest = 0;
   const viewData = {};
   const finder = {word:'', category:'', shelf:'', location:'', item:''};
   const active = () => isCurrent() && shell.isConnected;
@@ -72,6 +76,7 @@ export async function renderWarehouse(root, context = {}) {
   const locationId = location => location.id ?? location.location_id;
   const itemId = item => item.id ?? item.item_id;
   const shelfOf = location => key(location.shelf ?? location.rack);
+  const ground = location => location?.kind === 'ground';
   const locationName = location => location?.label || `${shelfOf(location)} 架第 ${location.layer ?? location.level} 层`;
   const photoOf = location => location?.photo ?? location?.latest_photo;
   const binsOf = item => (item.locations ?? item.bins ?? []).map(row => {
@@ -111,6 +116,7 @@ export async function renderWarehouse(root, context = {}) {
 
   function heading(title, description, extras = '') {
     header.hidden = view === 'out' || view === 'in';
+    header.classList.toggle('wh-header--catalog',view === 'catalog');
     header.innerHTML = `<div class="wh-heading-text">${view === 'home' ? '' : button('‹ 物资管理','home')}<h2>${esc(title)}</h2>${description ? `<p>${esc(description)}</p>` : ''}</div>${extras ? `<div class="wh-header-actions">${extras}</div>` : ''}`;
   }
 
@@ -118,21 +124,26 @@ export async function renderWarehouse(root, context = {}) {
     header.hidden = true;
     const activeItems = catalog().filter(item => item.active !== false);
     const locationsInUse = new Set(activeItems.flatMap(item => binsOf(item).filter(entry => entry.row.quantity > 0).map(entry => key(entry.id))));
-    const shelves = [...new Set(locations().map(shelfOf))].filter(Boolean).sort();
-    const list = shelves.map(shelf => {
-      const layers = locations().filter(location => shelfOf(location) === shelf).sort((left,right) => left.level - right.level);
+    const shelves = [...new Set(locations().filter(location => !ground(location)).map(shelfOf))].filter(Boolean).sort();
+    const racks = shelves.map(shelf => {
+      const layers = locations().filter(location => shelfOf(location) === shelf).sort((left,right) => right.level - left.level);
       const used = layers.filter(layer => locationsInUse.has(key(locationId(layer)))).length;
-      return `<li class="wh-rack" aria-label="${esc(shelf)} 架，${used} 层在用，共 ${layers.length} 层">
+      return {zone:layers[0].zone, markup:`<li class="wh-rack" aria-label="${esc(shelf)} 架，${used} 层在用，共 ${layers.length} 层">
         <span class="wh-rack-label">${esc(shelf)} 架</span>
-        <span class="wh-rack-frame" aria-hidden="true">${layers.map(layer => `<i class="wh-rack-level${locationsInUse.has(key(locationId(layer))) ? ' is-stocked' : ''}"></i>`).join('')}</span>
-      </li>`;
-    }).join('');
+        <span class="wh-rack-frame">${layers.map(layer => `<button type="button" data-wh-level="${layer.level}" class="wh-rack-level${locationsInUse.has(key(locationId(layer))) ? ' is-stocked' : ''}" aria-label="${esc(locationName(layer))}" aria-controls="wh-quick-location" aria-expanded="false" ${actionAttrs('quick-location',locationId(layer))}>${layer.level}</button>`).join('')}</span>
+      </li>`};
+    });
+    const floor = locations().find(ground);
+    const layout = ['左侧','中间','右侧'].map(zone => `<div class="wh-rack-zone"><span>${zone}</span><ul class="wh-rack-list" aria-label="${zone}货架">${racks.filter(rack => rack.zone === zone).map(rack => rack.markup).join('')}</ul></div>`).join('');
     body.innerHTML = `<section class="wh-overview">
       <div class="wh-overview-main"><h2>物资管理</h2>
         <dl class="wh-overview-stats"><div><dt>物资种类</dt><dd>${fmt(activeItems.length)}</dd></div>
           <div><dt>在用层位</dt><dd>${fmt(locationsInUse.size)} <span>/ ${fmt(locations().length)}</span></dd></div></dl>
       </div>
-      ${list ? `<ul class="wh-rack-list" aria-label="各货架层位使用概况">${list}</ul>` : ''}
+      <div class="wh-layout"><div class="wh-rack-zones" aria-label="从左往右的货架布局">${layout}</div>
+        ${floor ? `<button type="button" class="wh-floor-summary" aria-controls="wh-quick-location" aria-expanded="false" ${actionAttrs('quick-location',locationId(floor))}><span>${esc(locationName(floor))}</span><span>${locationsInUse.has(key(locationId(floor))) ? '在用' : '空置'} <span aria-hidden="true">⌄</span></span></button>` : ''}
+        <section class="wh-quick-location" id="wh-quick-location" aria-label="货位快捷物资" aria-live="polite" hidden></section>
+      </div>
     </section>
     <div class="wh-home-layout"><div class="wh-module-grid" aria-label="物资管理功能">${moduleActions.map(([action,title,details]) => {
       const authorized = action === 'in' ? manager() : action === 'out' ? dispatch() : canRead();
@@ -142,10 +153,51 @@ export async function renderWarehouse(root, context = {}) {
         <span class="wh-module-description">${authorized ? details : action === 'in' ? '由仓库负责人办理' : '需要仓储操作权限'}</span>
         <span class="wh-module-arrow" aria-hidden="true">↗</span></button>`;
     }).join('')}</div>
-      <aside class="wh-owners wh-panel"><div class="wh-section-heading"><h3>仓库负责人</h3>${hr() ? `<button type="button" class="wh-icon-button wh-icon-button--accent" aria-label="添加仓库负责人" ${actionAttrs('owner-dialog')}>＋</button>` : ''}</div>
-        ${owners().length ? `<ul class="wh-owner-list">${owners().map(owner => `<li><span class="wh-owner-avatar" aria-hidden="true">${esc(Array.from(owner.name || '人')[0])}</span><div><strong>${esc(owner.name)}</strong>${owner.role ? `<small>${esc(owner.role)}</small>` : ''}</div>${hr() ? button('撤下','owner-remove',owner.id) : ''}</li>`).join('')}</ul>` : empty('尚未安排仓库负责人', hr() ? '点击加号添加。' : '')}
-        ${manager() ? `<div class="wh-owner-tools">${button('负责人待办','tasks')}${button('物资档案与库存','catalog')}</div>` : ''}
-      </aside></div>`;
+      ${ownerPanel()}</div>`;
+  }
+
+  function ownerPanel() {
+    const people = owners();
+    return `<aside class="wh-owners wh-panel" aria-labelledby="wh-owner-title">
+      <div class="wh-owner-heading"><h3 id="wh-owner-title">仓库负责人</h3>${hr() ? `<button type="button" class="wh-icon-button wh-icon-button--accent" aria-label="添加仓库负责人" ${actionAttrs('owner-dialog')}>＋</button>` : `<small>${fmt(people.length)} 人</small>`}</div>
+      ${people.length ? `<ul class="wh-owner-list">${people.map(owner => `<li><span class="wh-owner-avatar" aria-hidden="true">${esc(Array.from(owner.name || '人')[0])}</span><div class="wh-owner-identity"><strong>${esc(owner.name)}</strong>${owner.role ? `<small>${esc(owner.role)}</small>` : ''}</div>${hr() ? button('撤下','owner-remove',owner.id) : same(owner.id,operator().id) ? '<span class="wh-owner-self">本人</span>' : ''}</li>`).join('')}</ul>` : empty('尚未安排仓库负责人')}
+      ${manager() ? `<div class="wh-owner-tools">${ownerShortcut('负责人待办','tasks')}${ownerShortcut('物资档案与库存','catalog')}</div>` : ''}
+    </aside>`;
+  }
+
+  function renderQuickLocation(place, loading = false) {
+    const panel = body.querySelector('#wh-quick-location');
+    if (!panel) return;
+    for (const control of body.querySelectorAll('[data-wh-action="quick-location"]')) {
+      control.setAttribute('aria-expanded', String(same(control.dataset.whId,quickLocation)));
+    }
+    panel.hidden = !place;
+    if (!place) { panel.replaceChildren(); return; }
+    const rows = catalog().filter(item => item.active !== false).flatMap(item => {
+      const bin = (item.locations ?? []).find(row => same(row.position_id,quickLocation));
+      return bin && (bin.quantity > 0 || bin.reported) ? [{item,bin}] : [];
+    });
+    panel.innerHTML = `<div class="wh-quick-heading"><strong>${esc(locationName(place))}</strong>${button('查看详情','quick-query',quickLocation)}</div>
+      ${loading ? '<p>正在读取库存…</p>' : rows.length ? `<ul aria-label="账面余量">${rows.slice(0,4).map(({item,bin}) => `<li><span>${esc(item.name)}${item.spec ? `<small>${esc(item.spec)}</small>` : ''}${bin.reported ? tag('待核对','near') : ''}</span><strong>${esc(quantity(item,bin.quantity))}</strong></li>`).join('')}</ul>${rows.length > 4 ? `<p>共 ${fmt(rows.length)} 种物资</p>` : ''}` : '<p>此处暂无在库物资</p>'}`;
+  }
+
+  async function selectQuickLocation(id) {
+    quickLocation = same(quickLocation,id) ? '' : id;
+    const sequence = ++quickRequest;
+    const current = () => active() && view === 'home' && sequence === quickRequest;
+    tell('');
+    renderQuickLocation(locById(quickLocation),true);
+    if (!quickLocation) return;
+    try {
+      const latest = await api('/bootstrap');
+      if (!current()) return;
+      state = latest;
+      renderQuickLocation(locById(quickLocation));
+    } catch {
+      if (!current()) return;
+      renderQuickLocation(locById(quickLocation));
+      tell('库存刷新失败，快捷列表为上次读取的账面余量。','error');
+    }
   }
 
   function matches(item, term) {
@@ -157,8 +209,8 @@ export async function renderWarehouse(root, context = {}) {
   function renderQuery() {
     heading('查物资','按名称搜索，或直接查看货架各层。');
     const categories = Array.from(new Set(catalog().map(item => item.category).filter(Boolean))).sort();
-    const shelves = Array.from(new Set(locations().map(shelfOf))).filter(Boolean).sort();
-    body.innerHTML = `<div class="wh-panel wh-query-filters"><div class="wh-filter-row"><label>物资名称<input type="search" autocomplete="off" data-wh-field="query-word" placeholder="输入名称或简称" value="${esc(finder.word)}"></label><label>类目<select data-wh-field="query-category">${options([['','全部类目'], ...categories.map(category => [category,category])],finder.category)}</select></label></div><div class="wh-shelf-row" aria-label="按货架查看"><span>货架</span>${[['','全部'], ...shelves.map(shelf => [shelf,`${shelf} 架`])].map(([shelf,label]) => `<button type="button" class="wh-filter-chip" aria-pressed="${same(finder.shelf,shelf)}" ${actionAttrs('query-shelf',shelf)}>${esc(label)}</button>`).join('')}</div><div class="wh-layer-row" data-wh-query-layers></div></div><div data-wh-query-results></div>`;
+    const shelves = new Map(locations().map(place => [shelfOf(place), ground(place) ? locationName(place) : `${shelfOf(place)} 架`]));
+    body.innerHTML = `<div class="wh-panel wh-query-filters"><div class="wh-filter-row"><label>物资名称<input type="search" autocomplete="off" data-wh-field="query-word" placeholder="输入名称或简称" value="${esc(finder.word)}"></label><label>类目<select data-wh-field="query-category">${options([['','全部类目'], ...categories.map(category => [category,category])],finder.category)}</select></label></div><div class="wh-shelf-row" aria-label="按货位查看"><span>位置</span>${[['','全部'], ...shelves].map(([shelf,label]) => `<button type="button" class="wh-filter-chip" aria-pressed="${same(finder.shelf,shelf)}" ${actionAttrs('query-shelf',shelf)}>${esc(label)}</button>`).join('')}</div><div class="wh-layer-row" data-wh-query-layers></div></div><div data-wh-query-results></div>`;
     renderQueryResults();
   }
 
@@ -168,11 +220,11 @@ export async function renderWarehouse(root, context = {}) {
     if (!region || !layers) return;
     for (const chip of body.querySelectorAll('[data-wh-action="query-shelf"]')) chip.setAttribute('aria-pressed',String(same(chip.dataset.whId,finder.shelf)));
     const activeLocations = locations().filter(location => !finder.shelf || same(finder.shelf,shelfOf(location)));
-    layers.innerHTML = finder.shelf ? [['','全部层位'], ...activeLocations.map(location => [locationId(location),`第 ${location.level} 层`])].map(([id,label]) => `<button type="button" class="wh-filter-chip" aria-pressed="${same(finder.location,id)}" ${actionAttrs('query-location',id)}>${esc(label)}</button>`).join('') : '';
+    layers.innerHTML = finder.shelf && activeLocations.some(location => !ground(location)) ? [['','全部层位'], ...activeLocations.map(location => [locationId(location),`第 ${location.level} 层`])].map(([id,label]) => `<button type="button" class="wh-filter-chip" aria-pressed="${same(finder.location,id)}" ${actionAttrs('query-location',id)}>${esc(label)}</button>`).join('') : '';
     const term = normalize(finder.word);
     const results = catalog().filter(item => item.active !== false && matches(item,term) && (!finder.category || same(item.category,finder.category)) && ((!finder.shelf && !finder.location) || binsOf(item).some(entry => activeLocations.includes(entry.location) && (!finder.location || same(finder.location,entry.id))))).sort((left,right) => (normalize(right.name) === term) - (normalize(left.name) === term) || left.name.localeCompare(right.name,'zh-CN'));
     const layer = locById(finder.location);
-    region.innerHTML = `${layer ? locationPhoto(layer) : ''}<div class="wh-result-heading"><h3>物资</h3><span aria-live="polite">${results.length} 项</span></div>${results.length ? `<div class="wh-results">${results.map(item => queryItem(item,activeLocations)).join('')}</div>` : empty(term ? '未找到匹配的物资' : '当前范围内没有物资',term ? '换个关键词或清除类目后再试。' : '')}`;
+    region.innerHTML = `${layer ? locationPhoto(layer) : ''}<div class="wh-result-heading"><h3>${layer ? esc(locationName(layer)) : '物资'}</h3><span aria-live="polite">${results.length} 项</span>${layer && manager() ? button('校准数量和照片','calibrate',locationId(layer)) : ''}</div>${results.length ? `<div class="wh-results">${results.map(item => queryItem(item,activeLocations)).join('')}</div>` : empty(term ? '未找到匹配的物资' : '当前范围内没有物资',term ? '换个关键词或清除类目后再试。' : '')}`;
   }
 
   function locationPhoto(location) {
@@ -186,14 +238,17 @@ export async function renderWarehouse(root, context = {}) {
 
   function queryItem(item, activeLocations) {
     const id = itemId(item);
-    const bins = binsOf(item).filter(entry => activeLocations.includes(entry.location) && (!finder.location || same(finder.location,entry.id)));
+    const bins = binsOf(item).filter(entry => activeLocations.includes(entry.location) && (!finder.location || same(finder.location,entry.id)))
+      .sort((a,b) => shelfOf(a.location).localeCompare(shelfOf(b.location)) || b.location.level - a.location.level);
     const isOpen = same(finder.item,id) || !!finder.location;
-    return `<article class="wh-goods"><button type="button" class="wh-goods-summary" aria-expanded="${isOpen}" ${actionAttrs('query-item',id)}><span><strong>${esc(item.name)}</strong><small>${[item.specification ?? item.spec,item.category,item.unit].filter(Boolean).map(esc).join(' · ')}</small></span><span class="wh-goods-quantity"><small>总余量</small><strong>${esc(quantity(item,stockOf(item)))}</strong></span><span class="wh-goods-arrow" aria-hidden="true">${isOpen ? '⌃' : '⌄'}</span></button>${!isOpen ? '' : `<div class="wh-goods-detail">${bins.length ? bins.map(({row,id:binId,location}) => {
+    const totalLabel = finder.location ? '本货位余量' : finder.shelf ? '本货架余量' : '全仓总余量';
+    const total = finder.shelf || finder.location ? bins.reduce((sum,entry) => sum + Number(entry.row.quantity ?? 0),0) : stockOf(item);
+    return `<article class="wh-goods"><button type="button" class="wh-goods-summary" aria-expanded="${isOpen}" ${actionAttrs('query-item',id)}><span><strong>${esc(item.name)}</strong><small>${[item.specification ?? item.spec,item.category,item.unit].filter(Boolean).map(esc).join(' · ')}</small></span><span class="wh-goods-quantity"><small>${totalLabel}</small><strong>${esc(quantity(item,total))}</strong></span><span class="wh-goods-arrow" aria-hidden="true">${isOpen ? '⌃' : '⌄'}</span></button>${!isOpen ? '' : `<div class="wh-goods-detail">${bins.length ? bins.map(({row,id:binId,location}) => {
       const amount = row.quantity ?? row.stock ?? 0;
       const outbound = Number(amount) > 0 ? dispatch() ? `<button type="button" class="wh-button wh-button--primary" ${actionAttrs('out-bin',id)} data-wh-location="${esc(binId)}">去出库</button>` : '' : tag('缺货','empty');
       return `<div class="wh-bin"><div class="wh-bin-summary"><div class="wh-bin-location"><strong>${esc(locationName(location))}</strong>${row.reported ? tag('待核对','near') : ''}${location.updated_at ? `<small>库存更新 ${esc(timeLabel(location.updated_at))}</small>` : ''}</div>
         <div class="wh-bin-stock"><small>可领</small><strong>${esc(quantity(item,amount))}</strong></div>
-        <div class="wh-bin-actions">${outbound}${dispatch() ? `<button type="button" class="wh-button wh-button--plain" ${actionAttrs('report',id)} data-wh-location="${esc(binId)}">报错</button>` : ''}</div></div>${finder.location ? '' : locationPhoto(location)}</div>`;
+        <div class="wh-bin-actions">${outbound}${dispatch() ? `<button type="button" class="wh-button wh-button--plain" ${actionAttrs('report',id)} data-wh-location="${esc(binId)}">报错</button>` : ''}${manager() && !finder.location ? button('校准','calibrate',binId) : ''}</div></div>${finder.location ? '' : locationPhoto(location)}</div>`;
     }).join('') : empty('暂无可查看的货位') }</div>`}</article>`;
   }
 
@@ -311,11 +366,20 @@ export async function renderWarehouse(root, context = {}) {
   }
 
   function renderCatalog() {
-    heading('物资档案与库存','',`${button('查收发记录','history')}${button('更新货位照片','position-photo')}${button('添加物资','new-item','','primary')}`);
-    body.innerHTML = catalog().length ? `<div class="wh-results">${catalog().map(item => {
+    const items = catalog();
+    heading('物资档案与库存',`${fmt(items.length)} 种物资`,`<div class="wh-catalog-primary">
+      <a class="wh-button wh-export" href="${esc(portalPath('/api/warehouse/inventory/export.xlsx'))}" download><span aria-hidden="true">↓</span> 导出库存 Excel</a>
+      ${button('校准数量和照片','calibrate','','primary')}
+    </div><div class="wh-catalog-utilities">${button('查收发记录','history')}${button('更新货位照片','position-photo')}${button('添加物资','new-item')}</div>`);
+    body.innerHTML = items.length ? `<div class="wh-results">${items.map(item => {
       const id = itemId(item);
       const bins = binsOf(item);
-      return `<article class="wh-item-card"><div class="wh-task-title"><div><strong>${esc(item.name)}</strong><small>${[item.spec,item.category,item.unit].filter(Boolean).map(esc).join(' · ')}</small></div>${item.active === false ? tag('已停用') : ''}</div>${bins.length ? `<div class="wh-bin-pills">${bins.map(entry => `<span>${esc(locationName(entry.location))} · ${esc(quantity(item,entry.row.quantity))}</span>`).join('')}</div>` : '<p>尚未录入货位库存。</p>'}<div class="wh-row-end">${button('编辑资料','edit-item',id)}${button('期初盘点或调整','adjust',id)}</div></article>`;
+      return `<article class="wh-item-card wh-catalog-card">
+        <div class="wh-catalog-item"><h3>${esc(item.name)}</h3>${item.active === false ? tag('已停用') : ''}<small>${[item.spec,item.category].filter(Boolean).map(esc).join(' · ')}</small></div>
+        <div class="wh-catalog-places">${bins.length ? `<ul aria-label="货位余量">${bins.map(({location,row}) => `<li><span>${esc(locationName(location))}</span><strong>${esc(quantity(item,row.quantity))}</strong>${row.reported ? '<span class="wh-catalog-review">待核对</span>' : ''}</li>`).join('')}</ul>` : '<small>尚未录入货位库存</small>'}</div>
+        <div class="wh-catalog-stock"><small>账面库存</small><strong>${fmt(stockOf(item))} <span>${esc(item.unit)}</span></strong></div>
+        <div class="wh-catalog-row-actions">${button('编辑资料','edit-item',id)}${button('期初盘点或调整','adjust',id)}</div>
+      </article>`;
     }).join('')}</div>` : empty('尚无物资档案','先添加物资，再按实际货位记录期初库存。');
   }
 
@@ -340,14 +404,52 @@ export async function renderWarehouse(root, context = {}) {
     openDialog('更新货位现况照',`<form class="wh-form" data-wh-form="position-photo"><label>层位<select name="position_id" required>${options([['','请选择层位'], ...locations().map(location => [locationId(location),locationName(location)])])}</select></label><label>现场照片<input type="file" accept="image/*" capture="environment" name="file" required></label><button class="wh-button wh-button--primary">更新照片</button></form>`);
   }
 
+  async function calibrationDialog(id) {
+    if (!manager()) return;
+    const source = view;
+    await refresh();
+    if (!active() || source !== view) return;
+    const choices = locations().map(place => [locationId(place),locationName(place)]);
+    openDialog('校准数量和照片',`<form class="wh-form" data-wh-form="calibration">
+      <label>货位<select name="position_id" data-wh-field="calibration-position" required>${options([['','请选择实际货位'], ...choices],id)}</select></label>
+      <div class="wh-form" data-wh-calibration-items></div>
+      <label>最新现场照 <small>可选</small><input type="file" accept="image/*" capture="environment" name="file"></label>
+      <label>校准原因<textarea name="reason" rows="2" required maxlength="240" placeholder="例如：交班复点，按实际余量校准"></textarea></label>
+      <button class="wh-button wh-button--primary">保存校准</button></form>`);
+    const form = dialogBody.querySelector('[data-wh-form="calibration"]');
+    form.dataset.whClient = newSubmissionKey();
+    renderCalibrationItems(form, id);
+  }
+
+  function calibrationRow(item, position) {
+    const balance = binsOf(item).find(entry => same(entry.id,position.id))?.row.quantity ?? 0;
+    return `<label class="wh-observation"><span>${esc(item.name)}<small>账面 ${esc(quantity(item,balance))}</small></span>
+      <input type="number" min="0" max="1000000" step="1" inputmode="numeric" data-wh-calibration-item="${esc(itemId(item))}" aria-label="${esc(item.name)}实盘余量" placeholder="实盘余量"></label>`;
+  }
+
+  function renderCalibrationItems(form, id) {
+    const place = locById(id);
+    const host = form.querySelector('[data-wh-calibration-items]');
+    form.dataset.whVersion = place?.version ?? '';
+    host.replaceChildren();
+    if (!place) return;
+    const items = catalog().filter(item => item.active !== false);
+    const present = items.filter(item => binsOf(item).some(entry => same(entry.id,id)));
+    const presentIds = new Set(present.map(itemId));
+    const other = items.filter(item => !presentIds.has(itemId(item)));
+    host.innerHTML = `<p class="wh-annotation">只填写已清点的物资，填 0 表示现场已清空。</p>
+      <div class="wh-form" data-wh-calibration-rows>${present.map(item => calibrationRow(item,place)).join('')}</div>
+      ${other.length ? `<div class="wh-form-grid"><label>同货位其他物资<select data-wh-calibration-choice>${options(other.map(item => [itemId(item),item.name]))}</select></label>${button('加入复点','calibration-add')}</div>` : ''}`;
+  }
+
   async function renderHistory(stillHere) {
     heading('收发与调整记录','',button('物资档案与库存','catalog'));
     const report = await api('/transactions');
     if (!stillHere()) return;
-    const labels = {inbound:'入库',outbound:'出库',opening:'期初盘点',adjustment:'库存调整',correction:'单据纠错'};
+    const labels = {inbound:'入库',outbound:'出库',opening:'期初盘点',adjustment:'库存调整',correction:'单据纠错',calibration:'货位校准',photo:'更新现场照'};
     const statuses = {posted:'已入账',pending:'待核对',draft:'待确认',closed:'已关闭'};
     const rows = report.items ?? [];
-    body.innerHTML = rows.length ? `<div class="wh-results">${rows.map(row => `<article class="wh-item-card"><div class="wh-task-title"><div><strong>${labels[row.kind] || '仓储单据'} · ${esc(row.id)}</strong><small>${[row.actor_name,timeLabel(row.posted_at ?? row.created_at)].filter(Boolean).map(esc).join(' · ')}</small></div>${tag(statuses[row.status] || row.status,row.status === 'posted' ? 'healthy' : 'near')}</div><div class="wh-row-end">${button('查看单据','history-record',row.id)}</div></article>`).join('')}</div>` : empty('暂无出入库和调整记录');
+    body.innerHTML = rows.length ? `<div class="wh-results">${rows.map(row => `<article class="wh-item-card wh-history-card"><div class="wh-task-title"><div><strong>${labels[row.kind] || '仓储单据'} · ${esc(row.id)}</strong><small>${[row.actor_name,timeLabel(row.posted_at ?? row.created_at)].filter(Boolean).map(esc).join(' · ')}</small></div>${tag(statuses[row.status] || row.status,row.status === 'posted' ? 'healthy' : 'near')}</div><div class="wh-row-end">${button('查看单据','history-record',row.id)}</div></article>`).join('')}</div>` : empty('暂无出入库和调整记录');
   }
 
   async function historyDialog(id) {
@@ -391,7 +493,10 @@ export async function renderWarehouse(root, context = {}) {
     if (!active()) return;
     if (['tasks','catalog','history','in'].includes(next) && !manager()) next = 'home';
     if (next === 'out' && !dispatch() || ['query','assessment'].includes(next) && !canRead()) next = 'home';
+    const openOwnerView = view !== next && ['tasks','catalog','history'].includes(next);
     if (entryCleanup) { entryCleanup(); entryCleanup = undefined; }
+    quickLocation = '';
+    quickRequest += 1;
     closeDialog();
     view = next;
     const renderId = ++revision;
@@ -401,6 +506,10 @@ export async function renderWarehouse(root, context = {}) {
     if (next === 'query') { renderQuery(); return; }
     heading({assessment:'物资评估',tasks:'负责人待办',catalog:'物资档案与库存',history:'收发与调整记录',in:'入库',out:'出库'}[next] || '物资管理','');
     body.innerHTML = empty('正在载入');
+    if (openOwnerView) {
+      shell.closest('.app-shell')?.scrollTo(0,0);
+      window.scrollTo(0,0);
+    }
     if (next === 'assessment') return renderAssessment(stillHere);
     if (next === 'tasks') return renderTasks(stillHere);
     if (next === 'catalog') { renderCatalog(); return; }
@@ -448,8 +557,19 @@ export async function renderWarehouse(root, context = {}) {
   async function click(control) {
     const {whAction:action,whId:id,whLocation:locationIdValue} = control.dataset;
     if (['home','out','in','query','assessment','tasks','catalog','history'].includes(action)) return show(action);
+    if (action === 'quick-location' && canRead()) return selectQuickLocation(id);
+    if (action === 'quick-query' && canRead()) {
+      const place = locById(id);
+      if (!place) return;
+      Object.assign(finder,{word:'',category:'',shelf:shelfOf(place),location:id,item:''});
+      return show('query');
+    }
     if (action === 'out-bin') return show('out',{itemId:Number(id),locationId:Number(locationIdValue)});
-    if (action === 'query-shelf') { finder.shelf = id; finder.location = ''; finder.item = ''; renderQueryResults(); return; }
+    if (action === 'query-shelf') {
+      const floor = locations().find(place => ground(place) && shelfOf(place) === id);
+      finder.shelf = id; finder.location = floor ? key(locationId(floor)) : ''; finder.item = '';
+      renderQueryResults(); return;
+    }
     if (action === 'query-location') { finder.location = id; finder.item = ''; renderQueryResults(); return; }
     if (action === 'query-item') { finder.item = same(finder.item,id) ? '' : id; renderQueryResults(); body.querySelector(`[data-wh-action="query-item"][data-wh-id="${CSS.escape(id)}"]`)?.focus(); return; }
     if (action === 'close-dialog') { closeDialog(); return; }
@@ -464,6 +584,19 @@ export async function renderWarehouse(root, context = {}) {
     if (action === 'rule') { ruleDialog(id); return; }
     if (action === 'new-item' || action === 'edit-item') { itemDialog(id); return; }
     if (action === 'adjust') return adjustDialog(id);
+    if (action === 'calibrate') return calibrationDialog(id);
+    if (action === 'calibration-add') {
+      const form = control.form;
+      const choice = form.querySelector('[data-wh-calibration-choice]');
+      const item = itemById(choice.value);
+      const place = locById(form.elements.position_id.value);
+      if (item && place) {
+        form.querySelector('[data-wh-calibration-rows]').insertAdjacentHTML('beforeend',calibrationRow(item,place));
+        choice.selectedOptions[0].remove();
+        if (!choice.options.length) choice.closest('.wh-form-grid').hidden = true;
+      }
+      return;
+    }
     if (action === 'position-photo') { positionPhotoDialog(); return; }
     if (action === 'history-record') return historyDialog(id);
     if (action === 'correct-record') return correctDialog(id,locationIdValue);
@@ -509,15 +642,36 @@ export async function renderWarehouse(root, context = {}) {
       return commit('/adjustments','POST',{item_id:Number(item),position_id:positionId,quantity:Number(get('quantity')),reason:get('reason'),kind:get('kind'),version:place.version},'库存已按实盘入账。');
     }
     if (type === 'correct') return commit(`/transactions/${encodeURIComponent(id)}/correct`,'POST',{item_id:Number(item),position_id:numeric(location),quantity:Number(get('quantity')),version:numeric(form.dataset.whVersion),reason:get('reason')},'已保留原单并记录纠错。');
+    if (type === 'calibration' && manager()) {
+      const positionId = Number(get('position_id'));
+      const version = Number(form.dataset.whVersion);
+      const counted = Array.from(form.querySelectorAll('[data-wh-calibration-item]')).filter(input => input.value !== '')
+        .map(input => ({item_id:Number(input.dataset.whCalibrationItem),quantity:Number(input.value)}));
+      const file = get('file');
+      if (!counted.length && !file?.size) throw new Error('请填写实盘数量或上传现况照。');
+      if (file?.size && !form.dataset.whPhotoId) {
+        const photo = await uploadPositionPhoto(file,form.dataset.whCapturedAt);
+        form.dataset.whPhotoId = photo.id;
+      }
+      try {
+        return await commit(`/positions/${positionId}/calibration`,'POST',{
+          client_id:form.dataset.whClient, version,
+          reason:get('reason'), items:counted, photo_id:form.dataset.whPhotoId || null,
+        },'已保存货位校准。');
+      } catch (error) {
+        if (error.detail?.code !== 'STALE_POSITIONS') throw error;
+        await refresh();
+        if (form.isConnected) {
+          resetCalibrationPhoto(form);
+          renderCalibrationItems(form, positionId);
+        }
+        throw new Error('该货位刚有变动，已更新账面余量，请重新复点后保存。');
+      }
+    }
     if (type === 'position-photo') {
       const file = get('file');
       if (!file?.size) throw new Error('请先拍摄照片。');
-      const capturedAt = new Date().toISOString();
-      const captured = await compressWarehousePhoto(file);
-      const upload = new FormData();
-      upload.append('file',captured,'position.jpg');
-      upload.append('captured_at',capturedAt);
-      const photo = await api('/photos',{method:'POST',body:upload});
+      const photo = await uploadPositionPhoto(file);
       return commit(`/positions/${encodeURIComponent(get('position_id'))}/photo`,'PUT',{photo_id:photo.id},'已更新货位照片。');
     }
     if (type === 'issue-transfer') return commit(`/issues/${encodeURIComponent(id)}/transfer`,'POST',{employee_id:Number(get('employee_id'))},'已转交待办。');
@@ -529,6 +683,20 @@ export async function renderWarehouse(root, context = {}) {
       const observations = Array.from(form.querySelectorAll('[data-wh-observation]')).filter(input => input.value !== '').map(input => ({item_id:Number(input.dataset.whItem),position_id:Number(input.dataset.whPosition),quantity:Number(input.value),version:Number(input.dataset.whVersion)}));
       return commit(`/issues/${encodeURIComponent(id)}/resolve`,'POST',{reason:get('reason'),observations},'已记录复点结果并处理待办。');
     }
+  }
+
+  async function uploadPositionPhoto(file, capturedAt = new Date().toISOString()) {
+    const captured = await compressWarehousePhoto(file);
+    const upload = new FormData();
+    upload.append('file',captured,'position.jpg');
+    upload.append('captured_at',capturedAt);
+    return api('/photos',{method:'POST',body:upload});
+  }
+
+  function resetCalibrationPhoto(form) {
+    form.elements.file.value = '';
+    delete form.dataset.whPhotoId;
+    delete form.dataset.whCapturedAt;
   }
 
   shell.addEventListener('click',event => {
@@ -545,13 +713,26 @@ export async function renderWarehouse(root, context = {}) {
     const submitButton = form.querySelector('button:not([type="button"])');
     if (submitButton?.disabled) return;
     if (submitButton) submitButton.disabled = true;
-    submit(form).catch(handleError).finally(() => { if (submitButton) submitButton.disabled = false; });
+    const calibrating = form.dataset.whForm === 'calibration';
+    if (calibrating) form.inert = true;
+    submit(form).catch(handleError).finally(() => {
+      if (calibrating) form.inert = false;
+      if (submitButton) submitButton.disabled = false;
+    });
   });
   shell.addEventListener('input',event => {
     if (event.target.dataset.whField === 'query-word') { finder.word = event.target.value; finder.item = ''; renderQueryResults(); }
   });
   shell.addEventListener('change',event => {
     const field = event.target.dataset.whField;
+    if (field === 'calibration-position') {
+      resetCalibrationPhoto(event.target.form);
+      renderCalibrationItems(event.target.form,event.target.value);
+    }
+    if (event.target.matches('[name="file"]') && event.target.form?.dataset.whForm === 'calibration') {
+      delete event.target.form.dataset.whPhotoId;
+      event.target.form.dataset.whCapturedAt = new Date().toISOString();
+    }
     if (field === 'query-category') { finder.category = event.target.value; finder.item = ''; renderQueryResults(); }
     if (field === 'adjust-position') {
       const place = locById(event.target.value);

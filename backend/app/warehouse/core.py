@@ -1,23 +1,27 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.database.connection import get_db, write_transaction
+from app.excel_export_utils import content_disposition
 from app.services.attachments import run_image_work
 from app.services.audit import write_audit
 from app.v2_auth import V2User, current_user
 from app.warehouse.access import (
-    can_assign, can_be_manager, can_dispatch, eligible_manager, find_candidates, is_manager, manager_people,
+    active_owner_ids, can_assign, can_be_manager, can_dispatch, eligible_manager, find_candidates, is_manager, manager_people,
     person_data, require_access, require_assign, require_dispatch, require_manager,
 )
 from app.warehouse.media import jpeg_bytes, stage_photo
+from app.warehouse.export import inventory_workbook
+from app.warehouse.inbound_excel import MAX_FILE_BYTES, inbound_template, read_inbound_workbook
 from app.warehouse.models import WarehouseIssue, WarehouseItem, WarehouseOwner, WarehousePhoto, WarehousePosition, WarehouseTransaction, WarehouseTransactionPhoto, warehouse_now
-from app.warehouse.schemas import AdjustmentInput, CorrectionInput, IssueInput, ItemInput, LocationPhotoInput, ManagerInput, PhotoId, ResolveInput, TransactionInput
+from app.warehouse.schemas import AdjustmentInput, CalibrationInput, CorrectionInput, IssueInput, ItemInput, LocationPhotoInput, ManagerInput, PhotoId, ResolveInput, TransactionInput
 from app.warehouse.service import (
-    apply_adjustment, balances_by_item, confirm_transaction, correct_transaction, get_item, get_position, get_quantity,
+    apply_adjustment, balances_by_item, calibrate_position, confirm_transaction, correct_transaction, get_item, get_position, get_quantity,
     get_transaction_by_client, issue_data, item_data, mark_posted, new_transaction, open_issue, photo_data,
     position_data, resolve_issue, staged_photo, stamp, transaction_data, update_latest_photo,
 )
@@ -26,6 +30,7 @@ from app.warehouse.service import (
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
 DB = Annotated[Session, Depends(get_db)]
 User = Annotated[V2User, Depends(current_user)]
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def sync_inventory_alerts(db: Session, items: set[int]) -> None:
@@ -47,9 +52,41 @@ def bootstrap(db: DB, user: User):
         "permissions": {"manage_assignments": can_assign(user), "manage_warehouse": manager, "dispatch": can_dispatch(user)},
         "now": stamp(warehouse_now()),
         "managers": person_data(db, manager_people(db)),
-        "positions": [position_data(db, row) for row in db.query(WarehousePosition).order_by(WarehousePosition.id)],
+        "positions": [position_data(db, row) for row in db.query(WarehousePosition).order_by(
+            WarehousePosition.shelf, WarehousePosition.level.desc())],
         "items": [item_data(item, locations.get(item.id, [])) for item in items if manager or item.active],
     }
+
+
+@router.get("/inventory/export.xlsx")
+def export_inventory(db: DB, user: User):
+    require_manager(db, user)
+    now = warehouse_now()
+    suffix = now.strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        inventory_workbook(db, now.strftime("%Y-%m-%d %H:%M:%S")),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": content_disposition(f"warehouse_inventory_{suffix}.xlsx", f"物资库存_{suffix}.xlsx"),
+                 "Cache-Control": "private, no-store"},
+    )
+
+
+@router.get("/inbound/template.xlsx")
+def download_inbound_template(db: DB, user: User):
+    require_manager(db, user)
+    return StreamingResponse(
+        inbound_template(db), media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": content_disposition("warehouse_inbound_template.xlsx", "物资批量入库模板.xlsx"),
+                 "Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/inbound/import")
+def preview_inbound_import(db: DB, user: User, file: Annotated[UploadFile, File()]):
+    require_manager(db, user)
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400, "请选择 .xlsx 入库模板。")
+    return read_inbound_workbook(db, file.file.read(MAX_FILE_BYTES + 1))
 
 
 @router.get("/manager-candidates")
@@ -79,6 +116,8 @@ def remove_manager(employee_id: int, db: DB, user: User):
         require_assign(user)
         row = db.get(WarehouseOwner, employee_id)
         if row is not None:
+            if active_owner_ids(db) == {employee_id}:
+                raise HTTPException(409, "这是最后一位有效的仓库负责人，请先安排接任人再撤下")
             db.delete(row)
             for issue in db.query(WarehouseIssue).filter_by(status="claimed", assignee_id=employee_id):
                 issue.status = "open"
@@ -227,6 +266,19 @@ def adjust_stock(body: AdjustmentInput, db: DB, user: User):
         db.commit()
     return {"transaction_id": tx.id, "quantity": get_quantity(db, (body.item_id, body.position_id)),
             "version": get_position(db, body.position_id).version}
+
+
+@router.post("/positions/{position_id}/calibration")
+def save_calibration(position_id: int, body: CalibrationInput, db: DB, user: User):
+    with write_transaction(db):
+        require_manager(db, user)
+        tx, items = calibrate_position(db, user, position_id, body, warehouse_now())
+        if items:
+            write_audit(db, user.employee, "校准货位库存", "warehouse_transaction", tx.id,
+                        after={"position_id": position_id, "items": tx.payload["lines"], "photo_id": body.photo_id})
+        sync_inventory_alerts(db, items)
+        db.commit()
+    return transaction_data(db, tx)
 
 
 @router.post("/issues")

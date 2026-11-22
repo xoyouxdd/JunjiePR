@@ -73,18 +73,29 @@ async function main(){try{
     await page.locator('[name=start]').fill('08:00');await page.locator('[name=end]').fill('00:30');
     await page.getByRole('button',{name:'新增',exact:true}).click();
     await page.waitForFunction(()=>RT.data.day.persons.some(p=>p.name==='临时伙伴'));
+    await page.waitForFunction(()=>!RT.submitting&&!RT.modalOpen);
     const dragPid=(await board()).lines[0].posts[0].occ;
     // Keep drag events on one board render, including when polling refreshes the live view.
-    const dropPerson=(source,targetSelector)=>page.locator(source).evaluate((element,selector)=>{
-      const target=document.querySelector(selector),dataTransfer=new DataTransfer();
+    const dropPerson=(source,targetSelector)=>page.evaluate(({source,selector})=>{
+      const element=document.querySelector(source),target=document.querySelector(selector);
+      if(!element||!target)throw new Error('Drag endpoints are missing from the rendered board');
+      const dataTransfer=new DataTransfer();
       element.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer}));
+      if(!dataTransfer.getData('application/x-rotation-person'))throw new Error('Person drag did not start');
       target.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer}));
       target.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer}));
       element.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer}));
-    },targetSelector);
-    await dropPerson('[data-f-slot="A#0"] [data-f-drag="'+dragPid+'"]','[data-f-pool=rest]');
+      return {modal:document.querySelector('#rtModal h3')?.textContent,toast:document.getElementById('toast')?.textContent};
+    },{source,selector:targetSelector});
+    const [rested]=await Promise.all([
+      page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/api/rotation-board/act')&&response.request().postDataJSON()?.action==='pool'),
+      dropPerson('[data-f-slot="A#0"] [data-f-drag="'+dragPid+'"]','[data-f-pool=rest]'),
+    ]);
+    await ok(rested);
     await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='rest',dragPid);
-    await dropPerson('[data-f-pool=rest] [data-f-drag="'+dragPid+'"]','[data-f-slot="A#0"]');
+    await page.waitForFunction(()=>!RT.submitting);
+    const placement=await dropPerson('[data-f-pool=rest] [data-f-drag="'+dragPid+'"]','[data-f-slot="A#0"]');
+    assert.equal(placement.modal,'现场安排',JSON.stringify(placement));
     await page.locator('[name=place_mode]').selectOption('swap');
     const [placed]=await Promise.all([
       page.waitForResponse(response=>response.request().method()==='POST'&&response.url().endsWith('/api/rotation-board/act')&&response.request().postDataJSON()?.action==='place'),

@@ -33,16 +33,17 @@
 }
 
 .we-heading {
-  display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 7px 14px;
-  border-bottom: 1px solid var(--we-border); padding-bottom: 14px; margin: 0 0 18px;
+  display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 7px 14px;
+  margin: 0 0 18px; padding: var(--wh-subpage-padding); border: 1px solid var(--we-border);
+  border-radius: var(--wh-subpage-radius); background: linear-gradient(115deg,var(--we-tint),transparent 70%), var(--we-panel); box-shadow: var(--wh-shadow);
 }
 .we-heading h2,
 .we-card-head h4,
 .we-order-head h4,
 .we-result-page h3 { color: var(--we-ink); margin: 0; }
-#app[data-view="warehouse"] .we-heading h2 { font-size: clamp(25px, 3vw, 36px); line-height: 1.15; }
+#app[data-view="warehouse"] .we-heading h2 { font-size: clamp(22px,3.2vw,31px); line-height: 1.22; }
 .warehouse-workbench .we-back { grid-column: 1 / -1; justify-self: start; width: auto; color: var(--we-accent); background: transparent; border: 0; box-shadow: none; padding: 3px 6px; margin: 0 0 0 -6px; font-weight: 650; min-height: 34px; }
-.we-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 5px; }
+.warehouse-workbench .we-steps { margin: 0; padding: 3px; list-style: none; display: flex; flex-wrap: wrap; gap: 3px; border: 1px solid var(--we-border); border-radius: 9px; background: var(--we-panel); }
 .we-steps li { color: var(--wh-muted); font-size: .81rem; padding: 5px 9px; border-radius: 6px; white-space: nowrap; }
 .we-steps [aria-current="step"] { color: var(--we-accent); background: var(--we-tint); font-weight: 700; }
 .we-steps .is-complete::before { content: '✓'; margin-right: 4px; }
@@ -78,6 +79,15 @@
   gap: 8px 10px;
   grid-template-columns: minmax(0, 1fr) minmax(85px, .55fr);
 }
+
+.we-import { margin-bottom: 13px; padding-bottom: 11px; border-bottom: 1px solid var(--we-border); }
+.we-import-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; }
+.warehouse-workbench .we-import-actions .wh-button { min-height: 40px; padding: 6px 9px; font-size: .82rem; color: var(--we-accent); }
+.we-import-actions a { display: inline-flex; align-items: center; text-decoration: none; }
+.warehouse-workbench .we-import-actions [data-we-import] { background: var(--we-tint); }
+.we-import-status { margin-top: 8px; padding: 7px 9px; border-radius: 8px; background: var(--we-tint); color: var(--we-ink); font-size: .82rem; overflow-wrap: anywhere; }
+.we-import-status[data-error="true"] { background: var(--warn-bg,#fff3df); color: var(--warn-text,#8a4c00); }
+.we-import-status ul { max-height: 12rem; overflow: auto; padding: 4px 0 0 1.2rem; }
 
 .we-page label { color: var(--text-label, #334155); font-size: .84rem; font-weight: 650; min-width: 0; }
 .we-page label:not(.we-check-label) { display: grid; gap: 4px; }
@@ -122,6 +132,7 @@
 .we-selection .we-card-head { align-items: flex-start; }
 .we-card-head > div { min-width: 0; }
 .we-card-head h4 { overflow-wrap: anywhere; }
+.warehouse-workbench .we-page[data-direction="in"] [data-we-remove-item] { flex: none; width: auto; }
 .we-selection > .we-text-button { justify-self: start; }
 .we-page button.we-text-button,
 .we-page button.we-icon {
@@ -239,7 +250,7 @@
 
 @media (max-width: 760px) {
   .we-entry-grid { grid-template-columns: minmax(0, 1fr); }
-  .we-heading { gap: 7px 5px; }
+  .we-heading { grid-template-columns: minmax(0,1fr); justify-items: start; gap: 7px; }
   .we-footer { bottom: calc(65px + env(safe-area-inset-bottom)); }
 }
 

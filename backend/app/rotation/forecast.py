@@ -141,10 +141,12 @@ def checked_in(p):
     return p.get('batchCheckedInFor') == p['start']
 
 
-def missed_check_in(p, now):
-    return (p['start'] == SEVEN_SHIFT and attendance_candidate(p) and not checked_in(p)
-            and not p.get('sevenReplaced')
-            and now >= SEVEN_SHIFT - BATCH_LEAD_MINUTES)
+def missed_check_in(p, now, *, assigned_post=False):
+    start = p['start']
+    track_seven = start == SEVEN_SHIFT and not p.get('sevenReplaced')
+    track_relief = start == RELIEF_SHIFT and (assigned_post or p['state'] == 'onpost')
+    return ((track_seven or track_relief) and attendance_candidate(p) and not checked_in(p)
+            and now >= start - BATCH_LEAD_MINUTES)
 
 
 def morning_rest(p):

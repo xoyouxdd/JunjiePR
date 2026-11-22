@@ -3,6 +3,7 @@ import { api, json } from './api.js';
 import { setAnnouncementBadge, startAnnouncementNotifications } from './announcement-state.js';
 import { logout } from './auth.js';
 import { render } from './context.js';
+import { mountDailyWish } from './daily-wish.js';
 import { bindDialogLayer, leaveLayer } from './dialogs.js';
 import { esc } from './format.js';
 import { app, has, state, tabs } from './state.js';
@@ -275,7 +276,45 @@ function showAboutSystem(trigger){
   if(document.querySelector('[data-about-dialog]'))return;
   const overlay=document.createElement('div');
   overlay.className='modal-overlay';
-  overlay.innerHTML=`<section class="modal-card about-system" data-about-dialog role="dialog" aria-modal="true" aria-labelledby="aboutSystemTitle"><header class="about-system-heading"><h3 id="aboutSystemTitle">关于系统</h3><button type="button" class="about-system-close" data-about-close aria-label="关闭关于系统">×</button></header><div class="about-system-brand"><img src="${esc(document.querySelector('.app-brand-logo').src)}" alt="" width="62" height="62"><h2>FZ团队工作台</h2><p class="field-hint" data-about-version aria-live="polite">正在读取版本…</p></div><button type="button" class="secondary about-system-updates" data-about-updates><span>更新记录</span><span aria-hidden="true">›</span></button><dl class="about-system-credits"><div class="about-system-maintainers"><dt>建设与维护</dt><dd><span data-about-maintainers>正在读取…</span><button type="button" class="link-button about-system-edit" data-about-edit hidden>编辑名单</button></dd></div><div><dt>建议与反馈</dt><dd><span data-about-feedback>正在读取…</span></dd></div></dl><form class="about-system-editor" data-about-form hidden><label for="aboutMaintainers">建设与维护</label><textarea id="aboutMaintainers" name="maintainers" rows="2" maxlength="200" required placeholder="多个姓名可分行填写"></textarea><label for="aboutFeedback">建议与反馈</label><textarea id="aboutFeedback" name="feedback" rows="2" maxlength="200" placeholder="填写提供建议与反馈的人员姓名"></textarea><p class="field-hint">每项最多200字，可分行填写；建议与反馈可留空。</p><div class="about-system-editor-actions"><button type="submit">保存</button><button type="button" class="secondary" data-about-cancel>取消</button></div></form><p class="field-hint about-system-status" data-about-status role="status" aria-live="polite"></p></section>`;
+  overlay.innerHTML=`<section class="modal-card about-system" data-about-dialog role="dialog" aria-modal="true" aria-labelledby="aboutSystemTitle">
+    <header class="about-system-heading">
+      <h3 id="aboutSystemTitle">关于系统</h3>
+      <button type="button" class="about-system-close" data-about-close aria-label="关闭关于系统">×</button>
+    </header>
+    <div class="about-system-brand">
+      <img src="${esc(document.querySelector('.app-brand-logo').src)}" alt="" width="58" height="58">
+      <h2>FZ团队工作台</h2>
+      <p class="field-hint" data-about-version aria-live="polite">正在读取版本…</p>
+    </div>
+    <section class="about-system-editions" aria-label="版本积累">
+      <p class="about-system-edition-total" role="status"><strong data-about-edition-count>—</strong><span data-about-edition-label>个版本有记录</span></p>
+      <p class="about-system-origin">从 2026 年 7 月的试点起步</p>
+      <span class="about-system-gold-star" aria-hidden="true">✦</span>
+    </section>
+    <details class="about-system-history">
+      <summary><span>成长历程</span><span class="about-system-chevron" aria-hidden="true">›</span></summary>
+      <ol>
+        <li><strong>2026 年 7 月 · 试点起步</strong><span>开始尝试汇总月度认可与签卡明细</span></li>
+        <li><strong>认可与复核</strong><span>把登记、批复和统计放到同一个工作台</span></li>
+        <li><strong>公告与轮岗</strong><span>集中查看公告、轮岗安排和个人待办</span></li>
+        <li><strong>岗位知识库</strong><span>把景点圈的岗位经验整理成攻略</span></li>
+      </ol>
+    </details>
+    <button type="button" class="secondary about-system-updates" data-about-updates><span>更新记录</span><span aria-hidden="true">›</span></button>
+    <dl class="about-system-credits">
+      <div class="about-system-maintainers"><dt>建设与维护</dt><dd><span data-about-maintainers>正在读取…</span><button type="button" class="link-button about-system-edit" data-about-edit hidden>编辑名单</button></dd></div>
+      <div><dt>建议与反馈</dt><dd><span data-about-feedback>正在读取…</span></dd></div>
+    </dl>
+    <form class="about-system-editor" data-about-form hidden>
+      <label for="aboutMaintainers">建设与维护</label>
+      <textarea id="aboutMaintainers" name="maintainers" rows="2" maxlength="200" required placeholder="多个姓名可分行填写"></textarea>
+      <label for="aboutFeedback">建议与反馈</label>
+      <textarea id="aboutFeedback" name="feedback" rows="2" maxlength="200" placeholder="填写提供建议与反馈的人员姓名"></textarea>
+      <p class="field-hint">每项最多200字，可分行填写；建议与反馈可留空。</p>
+      <div class="about-system-editor-actions"><button type="submit">保存</button><button type="button" class="secondary" data-about-cancel>取消</button></div>
+    </form>
+    <p class="field-hint about-system-status" data-about-status role="status" aria-live="polite"></p>
+  </section>`;
   document.body.appendChild(overlay);
   const close=overlay.querySelector('[data-about-close]');
   let saving=false,credits=null;
@@ -284,7 +323,15 @@ function showAboutSystem(trigger){
   overlay.addEventListener('click',event=>{if(event.target===overlay)layer.close();});
   overlay.querySelector('[data-about-updates]').onclick=()=>{layer.close();gotoTab('changelog');};
   const version=overlay.querySelector('[data-about-version]');
-  api('/api/changelog').then(data=>{if(overlay.isConnected)version.textContent=data.app_version?`版本 ${data.app_version}`:'暂时无法读取版本';}).catch(()=>{if(overlay.isConnected)version.textContent='暂时无法读取版本';});
+  const editionCount=overlay.querySelector('[data-about-edition-count]'),editionLabel=overlay.querySelector('[data-about-edition-label]');
+  const paintVersions=(data)=>{
+    if(!overlay.isConnected)return;
+    version.textContent=data.app_version?`版本 ${data.app_version}`:'暂时无法读取版本';
+    const counted=Number.isInteger(data.version_count)&&data.version_count>=0;
+    editionCount.textContent=counted?data.version_count:'—';
+    editionLabel.textContent=counted?'个版本有记录':'暂时无法读取版本数';
+  };
+  api('/api/changelog').then(paintVersions).catch(()=>paintVersions({}));
   const names=overlay.querySelector('[data-about-maintainers]'),feedback=overlay.querySelector('[data-about-feedback]'),edit=overlay.querySelector('[data-about-edit]'),form=overlay.querySelector('[data-about-form]'),input=form.elements.maintainers,feedbackInput=form.elements.feedback,cancel=overlay.querySelector('[data-about-cancel]'),status=overlay.querySelector('[data-about-status]'),updates=overlay.querySelector('[data-about-updates]');
   const paintCredits=()=>{names.textContent=credits.maintainers;feedback.textContent=credits.feedback||'—';edit.hidden=!credits.can_edit;};
   api('/api/about-system').then(data=>{if(!overlay.isConnected)return;credits=data;paintCredits();}).catch(()=>{if(overlay.isConnected){names.textContent='名单读取失败，请重新打开';feedback.textContent='—';}});
@@ -302,8 +349,14 @@ function showAboutSystem(trigger){
 
 function renderTabs() {
   startAnnouncementNotifications(refreshActionBadge);
-  const items=menuItems();
-  if (!state.tab || (!items.some(i=>i[0]===state.tab) && !['statisticsDetail','changelog'].includes(state.tab))) state.tab=items[0]?.[0];
+  const items=menuItems(),landingTab=items[0]?.[0];
+  if (!state.tab || (!items.some(i=>i[0]===state.tab) && !['statisticsDetail','changelog'].includes(state.tab))) state.tab=landingTab;
+  const wishHost=document.getElementById('themeStory');
+  if(wishHost){
+    const onLandingPage=state.tab===landingTab;
+    wishHost.hidden=!onLandingPage;
+    if(onLandingPage)mountDailyWish(wishHost,state.me.id,{integrated:true});
+  }
   // Presentation scope only; navigation membership and permissions stay intact.
   app.dataset.view=state.tab;
   app.toggleAttribute('data-workspace-ui',!['announcements','rotationTest'].includes(state.tab));

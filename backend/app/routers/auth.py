@@ -19,7 +19,7 @@ from app.services.organization import (
 )
 from app.services.identity import role_at
 from app.services.audit import write_audit
-from app.changelog import RELEASES, visible_releases
+from app.changelog import RELEASES, recorded_version_count, visible_releases
 from app.version import APP_VERSION
 from app.security import password_policy_error, request_is_https
 from app.http_utils import client_ip
@@ -182,6 +182,7 @@ def me(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
 def changelog(user: V2User = Depends(current_user)):
     return {
         "app_version": APP_VERSION,
+        "version_count": recorded_version_count(),
         "role_code": user.role.code,
         "role_name": user.role.name,
         "releases": visible_releases(user.role_codes, user.permissions),

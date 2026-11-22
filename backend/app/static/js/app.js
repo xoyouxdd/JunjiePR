@@ -30,7 +30,6 @@ import { renderStatistics, renderStatisticsDetail, statisticsDetailContext } fro
 import { toast } from './app/toast.js';
 import { renderVideoLearning } from './app/video-learning.js';
 import { renderLearningShares } from './app/learning-shares.js';
-import { mountDailyWish } from './app/daily-wish.js';
 
 async function openWarehouse(){
   const request=beginViewRequest();
@@ -103,7 +102,6 @@ async function initializeApp(){
     if(new URLSearchParams(location.search).get('view')==='warehouse'&&state.me.warehouse_entry)state.tab='warehouse';
     if(statisticsDetailContext().get('employee_ids'))state.tab='statisticsDetail';
     applyCircleTheme();
-    mountDailyWish(document.getElementById('themeStory'),state.me.id,{integrated:true});
     installScreenWatermark();
     installPageBindHint();
     renderUserBadge();

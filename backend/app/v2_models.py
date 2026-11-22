@@ -1129,6 +1129,26 @@ class DeductionRecord(Base):
     upgrade_state: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
 
 
+class DeductionOriginalUpgrade(Base):
+    """One decision against the original deduction ID, with a before/after snapshot."""
+
+    __tablename__ = "deduction_original_upgrades"
+
+    record_id: Mapped[int] = mapped_column(ForeignKey("deduction_records.id", ondelete="CASCADE"), primary_key=True)
+    original_month: Mapped[str] = mapped_column(String(7), index=True)
+    original_level_id: Mapped[int] = mapped_column(ForeignKey("deduction_levels.id"))
+    original_level_name: Mapped[str] = mapped_column(String(30))
+    original_points: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    result_level_name: Mapped[str] = mapped_column(String(30))
+    result_points: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    decided_by: Mapped[int] = mapped_column(ForeignKey("employees.id"))
+    decided_by_name: Mapped[str] = mapped_column(String(100))
+    decided_at: Mapped[datetime] = mapped_column(DateTime)
+    mod_name: Mapped[str] = mapped_column(String(100))
+    mod_confirmed_on: Mapped[str] = mapped_column(String(10))
+    reason: Mapped[str] = mapped_column(Text)
+
+
 class DeductionMaterialJob(Base):
     """Durable image-to-PDF conversion job for a deduction record.
 

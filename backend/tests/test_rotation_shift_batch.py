@@ -371,6 +371,24 @@ def test_ordinary_shifts_use_the_check_in_window_at_any_headcount(count):
     assert p['batchResult']['start'] == 810
 
 
+@pytest.mark.parametrize('start', [420, 435])
+def test_prearranged_early_post_only_marks_unsigned_workers(start):
+    eng = fixture((1,), now=start - 15)
+    worker = eng.P['A0']
+    worker.update(state='notyet', start=start)
+
+    post_before = S.lines_view(eng, now=start - 15 - 1/60)[0]['posts'][0]
+    assert 'pendingCheckIn' not in post_before and 'missedCheckIn' not in post_before
+    assert S.lines_view(eng, now=start - 15)[0]['posts'][0]['pendingCheckIn']
+    assert S.lines_view(eng, now=start - 3)[0]['posts'][0]['missedCheckIn']
+
+    worker['batchCheckedInFor'] = start
+    for minute in (start - 15, start - 3):
+        signed_post = S.lines_view(eng, now=minute)[0]['posts'][0]
+        assert signed_post['occ'] == worker['pid']
+        assert 'pendingCheckIn' not in signed_post and 'missedCheckIn' not in signed_post
+
+
 @pytest.mark.parametrize('start', [300, 315])
 def test_0500_and_0515_can_check_in_but_enter_pending_rest(start):
     eng = fixture(now=start - 15)

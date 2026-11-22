@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from datetime import date
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 from app.date_utils import subtract_calendar_months
 from app.deduction_policy import deduction_counts_for_score, unused_statement_upgrade_filters
@@ -19,7 +19,7 @@ from app.services.scoring_policies import category
 from app.services.upgrade_recovery import upgrade_work_status_name
 
 from app.v2_models import (
-    Attraction, DeductionLevel, DeductionRecord, DeductionType,
+    Attraction, DeductionLevel, DeductionOriginalUpgrade, DeductionRecord, DeductionType,
     DeductionUpgradeRequest, Employee, StoredFile, UserAccount,
 )
 
@@ -71,6 +71,7 @@ def _open_statement_slots(db, selected_ids, levels, types):
 def declaration_payload(
     db: Session, month: str, attraction_id: int | None, level_id: int | None,
     type_id: int | None, status: str, keyword: str, *, include_upgrade_slots: bool = False,
+    allow_original_upgrade: bool = False,
 ) -> dict:
     checked_month(month)
     if status and status not in {*STATUS_LABELS.values(), "current"}:
@@ -88,14 +89,24 @@ def declaration_payload(
 
     # Approved upgrades store both the second statement and its final result.
     # The result represents the second event; retaining both would double count.
-    query = db.query(DeductionRecord).filter(DeductionRecord.deduction_month == month)
+    original_month_ids = select(DeductionOriginalUpgrade.record_id).where(DeductionOriginalUpgrade.original_month == month)
+    in_current_month = DeductionRecord.deduction_month == month
+    query = db.query(DeductionRecord).filter(or_(in_current_month, DeductionRecord.id.in_(original_month_ids)))
     if attraction_id is not None:
         query = query.filter(DeductionRecord.attraction_id_snapshot == attraction_id)
     if level_id is not None:
-        query = query.filter(DeductionRecord.deduction_level_id == level_id)
+        original_level_ids = original_month_ids.where(DeductionOriginalUpgrade.original_level_id == level_id)
+        query = query.filter(or_(
+            and_(in_current_month, DeductionRecord.deduction_level_id == level_id),
+            and_(~in_current_month, DeductionRecord.id.in_(original_level_ids)),
+        ))
     if type_id is not None:
         query = query.filter(DeductionRecord.deduction_type_id == type_id)
     needle = employee_number(keyword).casefold()
+    numbered = re.fullmatch(r"(?:声明\s*)?#([1-9][0-9]{0,17})", needle)
+    if numbered:
+        query = query.filter(DeductionRecord.id == int(numbered[1]))
+        needle = ""
     selected = query.order_by(DeductionRecord.occurred_on.desc(), DeductionRecord.id.desc()).all()
     selected = [row for row in selected
                 if (not status or (status == "current" and STATUS_LABELS.get(row.status) in {"已生效", "审核中", "待补材料"})
@@ -130,6 +141,10 @@ def declaration_payload(
     if related_ids - selected_ids:
         all_rows.update({row.id: row for row in db.query(DeductionRecord)
                          .filter(DeductionRecord.id.in_(related_ids - selected_ids)).all()})
+    original_upgrades = {
+        entry.record_id: entry for entry in db.query(DeductionOriginalUpgrade)
+        .filter(DeductionOriginalUpgrade.record_id.in_(all_rows))
+    } if all_rows else {}
     # Apply the existing monthly performance policy to each record's own month,
     # including linked sources outside the current query month. Read-only only.
     loa_record_ids = {rid for (rid,) in db.query(DeductionRecord.id).filter(
@@ -159,9 +174,13 @@ def declaration_payload(
         document_url = f"/api/files/{row.document_file_id}" if material and material.status == "active" and row.material_status == "ready" and row.upgrade_role != "result" else ""
         level = levels.get(row.deduction_level_id)
         registered_points = float(row.points)
+        original = original_upgrades.get(row.id)
+        history_only = bool(original and original.original_month == month and row.deduction_month != month)
         loa_excluded = row.id in loa_record_ids
-        actual_points = registered_points if deduction_counts_for_score(row) and not loa_excluded else 0
-        if row.status == "void":
+        actual_points = registered_points if deduction_counts_for_score(row) and not loa_excluded and not history_only else 0
+        if history_only:
+            score_status = f"已转至 {row.deduction_month} · 本月不计分"
+        elif row.status == "void":
             score_status = "已作废 · 不计分"
         elif row.status != "active":
             score_status = business_status + " · 未扣分"
@@ -173,20 +192,28 @@ def declaration_payload(
             score_status = "升级结果 · " + ("已扣分" if actual_points else "未扣分")
         else:
             score_status = "已扣分" if actual_points else "未扣分"
-        if loa_excluded:
+        if loa_excluded and not history_only:
             score_status += " · LOA当月不计分"
+        original_details = {
+            "original_month": original.original_month, "original_level": original.original_level_name,
+            "original_points": float(original.original_points), "result_level": original.result_level_name,
+            "result_points": float(original.result_points), "decided_by": original.decided_by_name,
+            "decided_at": original.decided_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "mod_name": original.mod_name, "mod_confirmed_on": original.mod_confirmed_on, "reason": original.reason,
+        } if original else None
         return {
             "id": row.id, "employee_id": row.employee_id, "employee_name": row.employee_name,
             "employee_no": row.employee_no, "attraction_id": row.attraction_id_snapshot,
             "attraction_name": attractions.get(row.attraction_id_snapshot, "未记录原景点"),
             "occurred_on": row.occurred_on, "incident_on": row.incident_on, "type_id": row.deduction_type_id,
             "type_name": row.deduction_type_name, "level_id": row.deduction_level_id,
+            "group_level_id": original.original_level_id if history_only else row.deduction_level_id,
             "level_code": level.code if level else "OTHER", "level_name": row.deduction_level_name,
             "description": row.description, "submitter_name": row.submitter_name,
             "material_uploaded_by_name": (row.material_uploaded_by_name or "").strip() or historical_uploaders.get(row.id, ""),
             "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
             "material_status": MATERIAL_LABELS.get(row.material_status, row.material_status),
-            "upgrade_status": UPGRADE_LABELS.get(row.upgrade_state or "", row.upgrade_state or "无"),
+            "upgrade_status": "已原单升级" if original else UPGRADE_LABELS.get(row.upgrade_state or "", row.upgrade_state or "无"),
             "business_status": business_status, "raw_status": row.status,
             "voided_at": row.voided_at.isoformat() if row.voided_at else None,
             "upgrade_request_id": row.upgrade_request_id or 0, "upgrade_role": row.upgrade_role, "document_url": document_url,
@@ -194,7 +221,12 @@ def declaration_payload(
             "deduction_month": row.deduction_month, "loa_excluded": loa_excluded, "score_status": score_status,
             "void_reason": row.void_reason or "", "upgrade_links": links[row.id],
             "upgrade_slot_open": row.id in open_slots,
-            "counted_in_statistics": row.id not in approved_seconds,
+            "original_upgrade": original_details, "original_month_history": history_only,
+            "can_upgrade_original": bool(
+                allow_original_upgrade and not original and not links[row.id] and not row.upgrade_request_id
+                and not row.upgrade_role and level and level.code == "STATEMENT" and row.status == "active" and document_url
+            ),
+            "counted_in_statistics": row.id not in approved_seconds and not history_only,
         }
 
     details = [present(row) for row in selected]

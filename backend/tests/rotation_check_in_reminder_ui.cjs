@@ -8,6 +8,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { chromium } = require('./support/browser-runtime.cjs');
+const { resetAndPublish } = require('./support/rotation-daily-fixture.cjs');
 
 const date = '2026-10-04';
 const password = 'daily-fixture-2026';
@@ -45,9 +46,9 @@ async function main() {
     const login = (context, employee_no, credential = password) =>
       context.request.post(base + '/api/login', { data: { employee_no, password: credential } }).then(ok);
     await login(manager, 'GSMTEST01');
-    const clock = async time => {
+    const clock = async (time, workDate = date) => {
       const url = base + '/__fixture/rotation-clock';
-      await ok(await manager.request.post(url, { data: { action: 'set', date, time: time.slice(0, 5) } }));
+      await ok(await manager.request.post(url, { data: { action: 'set', date: workDate, time: time.slice(0, 5) } }));
       const seconds = Number(time.slice(6));
       if (seconds) await ok(await manager.request.post(url, { data: { action: 'jump', minutes: seconds / 60 } }));
     };
@@ -168,8 +169,51 @@ async function main() {
     await screen.goto(base + '/rotation/screen');
     await screen.locator('#rtScreenTotals').waitFor();
     assert.equal(await screen.locator('.rt-shift-reminder').count(), 0);
+
+    const earlyClock = time => clock(time, '2026-10-06');
+    await earlyClock('06:44:00');
+    await resetAndPublish(manager.request, base, '2026-10-06', ok);
+    const readBoard = async () => (await ok(await manager.request.get(base + '/api/rotation-board/board'))).day;
+    const slots = (await readBoard()).lines.filter(line => line.active)
+      .flatMap(line => line.posts.flatMap((post, i) => post.open ? [{line: line.id, i}] : []));
+    assert(slots.length >= 4);
+    const earlyWorkers = [['CMTEST01', '07:00'], ['CMTEST02', '07:00'], ['TRTEST01', '07:15'], ['SUPTEST01', '07:15']];
+    const act = data => manager.request.post(base + '/api/rotation-board/act', {data}).then(ok);
+    for (const [i, [pid, start]] of earlyWorkers.entries()) {
+      await act({action: 'add_person', pid, start, end: '16:00'});
+      await act({action: 'place', pid, ...slots[i], place_mode: 'swap', expected_snapshot: (await readBoard()).forecastSnapshot});
+    }
+    const checkEarly = async (pid, unsignedPid, opens, cutoff) => {
+      await earlyClock(opens);
+      await board.evaluate(() => RT.load());
+      const employeePost = board.locator(`.rt-post [data-f-person="${pid}"]`);
+      const unsignedPost = board.locator(`.rt-post [data-f-person="${unsignedPid}"]`);
+      await employeePost.getByText('未签到', {exact: true}).waitFor();
+      await unsignedPost.getByText('未签到', {exact: true}).waitFor();
+      const member = await employee(pid);
+      const original = (await member.member()).person;
+      assert.equal(original.state, 'onpost');
+      await expectCount(member, 1);
+      await member.sign.click();
+      await member.banner.getByText('上班卡打了吗？').waitFor();
+      await expectCount(member, 0);
+      const signed = (await member.member()).person;
+      assert(signed.batchCheckedIn);
+      assert.deepEqual([signed.state, signed.line, signed.post], [original.state, original.line, original.post]);
+      await board.evaluate(() => RT.load());
+      await employeePost.getByText('未签到', {exact: true}).waitFor({state: 'hidden'});
+      await employeePost.waitFor();
+      assert.equal(await employeePost.getByText('已签到', {exact: true}).count(), 0);
+      await unsignedPost.getByText('未签到', {exact: true}).waitFor();
+      await earlyClock(cutoff);
+      await board.evaluate(() => RT.load());
+      await unsignedPost.getByText('未答到', {exact: true}).waitFor();
+      assert.equal(await employeePost.getByText('未答到', {exact: true}).count(), 0);
+    };
+    await checkEarly('CMTEST01', 'CMTEST02', '06:45:00', '06:57:00');
+    await checkEarly('TRTEST01', 'SUPTEST01', '07:00:00', '07:12:00');
     assert.deepEqual(errors, []);
-    console.log('Employee check-in reminder: live todo counts, failed/recovered success, both dismissals, batch assignment and screen isolation PASS');
+    console.log('Employee check-in reminder: live todo counts, batch assignment and occupied 07:00/07:15 posts with unsigned-only labels PASS');
     passed = true;
   } finally {
     if (browser) await browser.close();

@@ -11,7 +11,6 @@ import { bindUpgradeReviewActions, upgradeReviewWorkspace, bindUpgradeRecoveryAc
 import { app, has, state } from './state.js';
 import { toast } from './toast.js';
 import { mountRotationTasks } from './rotation.js';
-import { mountDailyWish } from './daily-wish.js';
 
 function actionCenterWaiting(hours){return `${Number(hours||0).toFixed(1)}小时`;}
 
@@ -120,7 +119,6 @@ async function renderActionCenter(openPane){
   const shortcuts=menuItems().filter(([id])=>!['actionCenter','password','logs','hrScores','circleHrAccounts'].includes(id)).slice(0,6);
   const side=`<aside class="panel workbench-shortcuts"><h3>常用工作</h3><div>${shortcuts.map(([id,label])=>`<button type="button" class="workbench-shortcut" data-workbench-tab="${esc(id)}">${navIcon(id)}<span>${esc(label)}</span><span aria-hidden="true">›</span></button>`).join('')}</div><div data-workbench-exports></div></aside>`;
   if(!request.write(`<div class="section-gap action-center-page"><section class="workbench-heading"><div><span class="eyebrow">${esc(state.me.role_label||state.me.role_name||'FZ工作台')}</span><h2>今日工作</h2><p>${esc(data.month)} · <strong data-action-center-total-count>${total}</strong> 项待处理<span class="workbench-updated"> · 本次已更新</span></p></div><button type="button" class="secondary" id="refreshActionCenter" title="刷新待办中心">刷新</button></section><div class="workbench-columns"><section class="panel action-center-panel"><div class="action-center-switch"><button type="button" class="primary" data-action-pane-tab="todo">待办 <span class="badge" data-action-center-todo-count>${Number(data.total||0)}</span></button>${reviewTab}</div><section class="action-center-pane" data-action-pane="todo"><div class="action-center-list" data-warehouse-priority></div><div data-formal-rotation-todo></div>${overdueReminder}<section class="action-center-list">${todoCards}</section></section>${reviewPane}</section>${side}</div></div>`))return;
-  const wishHost=document.getElementById('themeStory');if(wishHost)mountDailyWish(wishHost,state.me.id,{integrated:true});
   app.querySelectorAll('[data-workbench-tab]').forEach(button=>button.onclick=()=>{state.tab=button.dataset.workbenchTab;renderTabs();render();});
   mountExportTasks(app.querySelector('[data-workbench-exports]'));
   mountRotationTasks(app.querySelector('[data-formal-rotation-todo]'),request,()=>void render(),app.querySelector('.workbench-columns'));

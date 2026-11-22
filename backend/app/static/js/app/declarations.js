@@ -5,8 +5,9 @@ import { toast } from './toast.js';
 import { beginViewRequest, registerPageCleanup, unregisterPageCleanup } from './context.js';
 import { confirmModal, formModal } from './dialogs.js';
 import { bindFilePreviews } from './files.js';
+import { openOriginalUpgrade } from './deduction-event.js';
 import { declarationMaterialUploader, esc, monthNow, portalPath } from './format.js';
-import { app, has } from './state.js';
+import { app, has, state } from './state.js';
 
 const declarationLevelTones={STATEMENT:0,MEMO:1,WARNING_1:2,WARNING_2:3};
 let disposeDeclarationSearch=null;
@@ -31,29 +32,49 @@ function declarationAssociationButtons(link,rowId){
 }
 
 function declarationRecordCard(row,levels=[],types=[],readOnly=false){
+  const original=row.original_upgrade;
+  const originalHistory=original?`<details class="declaration-original-upgrade-log">
+    <summary>原单升级记录</summary>
+    <div class="declaration-original-upgrade-detail">
+      <div class="original-upgrade-comparison" aria-label="升级时的登记分值">
+        <div><span>原登记 · ${esc(original.original_month)}</span><strong>${esc(original.original_level)} · ${esc(original.original_points)} 分</strong></div>
+        <div class="original-upgrade-result"><span>升级结果 · ${esc(row.deduction_month)}</span><strong>${esc(original.result_level)} · ${esc(original.result_points)} 分</strong></div>
+      </div>
+      <dl>
+        <div><dt>GSM 确认</dt><dd>${esc(original.decided_by)} <time>${esc(original.decided_at)}</time></dd></div>
+        <div><dt>MOD 确认</dt><dd>${esc(original.mod_name)} <time datetime="${esc(original.mod_confirmed_on)}">${esc(original.mod_confirmed_on)}</time></dd></div>
+        <div><dt>处理说明</dt><dd>${esc(original.reason)}</dd></div>
+      </dl>
+    </div>
+  </details>`:'';
   const material=row=>row.document_url?`<button type="button" class="secondary declaration-material" data-file-preview="${esc(row.document_url)}" data-file-kind="pdf" data-file-title="${esc(row.employee_name)}的处分材料">查看材料</button> <a class="secondary declaration-material" href="${esc(portalPath(row.document_url))}" download>下载材料</a>`:'<span class="field-hint">暂无可查看材料</span>';
   const standalone=row=>!row.upgrade_request_id&&!row.upgrade_role&&!row.upgrade_links?.length;
   const admin=()=>!readOnly&&has('SYSTEM_ADMIN');
   const editable=row=>admin()&&standalone(row)&&['active','pending_material','material_failed'].includes(row.raw_status);
   const type=row=>admin()&&standalone(row)&&['active','pending_material','material_failed','void'].includes(row.raw_status)?`<select class="declaration-type-select" aria-label="修改${esc(row.employee_name)}的处分类型" data-correct-type="${row.id}">${types.filter(x=>x.active!==false||x.id===row.type_id).map(x=>`<option value="${x.id}" ${x.id===row.type_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:esc(row.type_name);
   const actions=row=>admin()&&standalone(row)&&(editable(row)||row.raw_status==='void')?`<button type="button" class="secondary declaration-status-action" data-declaration-action="${row.raw_status==='void'?'restore':'void'}" data-record-id="${row.id}">${row.raw_status==='void'?'还原':'作废'}</button>`:'';
-  const level=row=>editable(row)?`<select class="declaration-level-select" aria-label="修改${esc(row.employee_name)}的处分等级" data-correct-level="${row.id}" data-original-level="${row.level_id}">${levels.filter(x=>Object.hasOwn(declarationLevelTones,x.code)).map(x=>`<option value="${x.id}" ${x.id===row.level_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:`<span class="badge declaration-level tone-${declarationLevelTone(row.level_code)}">${esc(row.level_name)}</span>`;
+  const level=row=>editable(row)?`<select class="declaration-level-select" aria-label="修改${esc(row.employee_name)}的处分等级" data-correct-level="${row.id}" data-original-level="${row.level_id}">${levels.filter(x=>Object.hasOwn(declarationLevelTones,x.code)&&(!original||x.code!=='STATEMENT')).map(x=>`<option value="${x.id}" ${x.id===row.level_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:`<span class="badge declaration-level tone-${declarationLevelTone(row.level_code)}">${esc(row.level_name)}</span>`;
   const classification=row=>`<div class="declaration-classification"><label><span>类型</span>${type(row)}</label><label><span>等级</span>${level(row)}</label></div>`;
   const history=(row.upgrade_links||[]).filter(link=>link.status==='rejected').map(link=>
     `<div class="declaration-link-row"><span>工单 #${link.request_id} · ${esc(declarationWorkLabel(link))}</span>${declarationAssociationButtons(link,row.id)}</div>`
   ).join('');
   let reason=row.raw_status==='void'?'本条已作废，不计入绩效扣分，原记录和材料留档。':row.raw_status!=='active'?'本条尚未生效，当前不扣分。':row.upgrade_role==='source_second'?'本条是触发升级的第二次声明，不单独扣分；请查看对应备忘录或警告。':row.upgrade_role==='source_first'?(row.actual_points>0?'首次声明的扣分保留；对应备忘录或警告的扣分单独列示。':'首次声明单独计分，是否扣分按本条所属月份判断。'):row.upgrade_role==='result'?'由两张原声明升级生成，实际扣分按本条所属月份判断。':'实际扣分按本条记录所属月份及业务状态判断。';
   if(row.loa_excluded)reason+=' 本条所属月份为 LOA，不计入该月绩效，原登记分数保留。';
+  if(row.original_month_history)reason=`本单已在 ${row.deduction_month} 重新生效，原月份保留记录和材料。`;
   const points=Number.isFinite(row.actual_points)?(row.actual_points?'−'+row.actual_points:'0'):'—';
   const uploader=declarationMaterialUploader(row);
-  return `<article class="declaration-record ${row.upgrade_role==='result'?'declaration-upgrade-result':''}" data-declaration-record="${row.id}"><header class="declaration-record-heading"><div class="declaration-card-identity"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small><span class="field-hint">${esc(row.level_name)} #${row.id}</span>${declarationStatusBadge(row.business_status)}</div></header>
+  return `<article class="declaration-record ${row.upgrade_role==='result'?'declaration-upgrade-result':''}" data-declaration-record="${row.id}"><header class="declaration-record-heading"><div class="declaration-card-identity"><strong>${esc(row.employee_name)}</strong><small>${esc(row.employee_no)}</small><span class="field-hint">${esc(row.level_name)} #${row.id}</span>${declarationStatusBadge(row.business_status)}${original?'<span class="badge ok">已原单升级</span>':''}</div></header>
     <div class="declaration-record-context"><time>${row.incident_on?'生效日':'事件日期'} ${esc(row.occurred_on)}</time>${row.deduction_month?`<span>绩效月份 ${esc(row.deduction_month)}</span>`:''}</div>${classification(row)}
     <p class="declaration-description">${esc(row.description)}</p>
-    <section class="declaration-score" aria-label="本条记录计分说明"><span class="declaration-score-status">${esc(row.score_status||row.business_status)}</span><span class="declaration-performance-score">实际扣分 <strong>${points}</strong> 分</span></section>
-    <div class="declaration-operations"><div class="declaration-material-actions">${material(row)}</div>${actions(row)}</div>
+    <section class="declaration-score${row.original_month_history?' declaration-original-month-score':''}" aria-label="本条记录计分说明">
+      ${row.original_month_history?`<div class="declaration-score-summary"><strong>${esc(original.original_month)} 本月不计分</strong><small>原单与材料留档 · 生效月 ${esc(row.deduction_month)}</small></div>`:`<span class="declaration-score-status">${esc(row.score_status||row.business_status)}</span>`}
+      <span class="declaration-performance-score">实际扣分 <strong>${points}</strong> 分</span>
+    </section>
+    <div class="declaration-operations"><div class="declaration-material-actions">${material(row)}</div>${!readOnly&&row.can_upgrade_original?`<button type="button" class="secondary declaration-original-upgrade-button" data-original-upgrade="${row.id}">原单升级 <span aria-hidden="true">›</span></button>`:''}${actions(row)}</div>
+    ${originalHistory}
     ${uploader?`<p class="field-hint">${uploader}</p>`:''}
     <details class="declaration-card-details"><summary>详情${history?'及审核历史':''}</summary><div class="declaration-record-context"><span>${esc(row.attraction_name)}</span>${row.incident_on&&row.incident_on!==row.occurred_on?`<span>原事件日期 ${esc(row.incident_on)}</span>`:'' }<span>登记人：${esc(row.submitter_name)} · ${esc(row.submitted_at)}</span><span>${esc(row.material_status)}</span></div>
-    <p class="declaration-score-reason">${esc(reason)}</p><p class="declaration-registered-score">原登记分数 ${Number.isFinite(row.registered_points)?esc(row.registered_points):'—'} 分</p>
+    <p class="declaration-score-reason">${esc(reason)}</p><p class="declaration-registered-score">原登记分数 ${original?esc(original.original_points):Number.isFinite(row.registered_points)?esc(row.registered_points):'—'} 分</p>
     ${row.void_reason?`<p class="declaration-void-note">作废原因：${esc(row.void_reason)}</p>`:''}${history}</details></article>`;
 }
 
@@ -70,20 +91,24 @@ function declarationRecordDetails(row,levels,types,related,group){
         <summary class="declaration-summary"><strong>${esc(label)} #${record.id}</strong><time datetime="${esc(record.occurred_on)}">${esc(record.occurred_on)}</time></summary>
         ${declarationRecordCard(record,levels,types,true)}</details>`;
     }).join('')}</div>`:left.upgrade_slot_open?`<div class="declaration-upgrade-placeholder"><strong>等待第二张声明</strong><p>三个月内如有符合规则的第二张声明，可发起升级。</p></div>`:'';
-  return `<section class="declaration-pair" data-declaration-pair="${left.id}"><div class="declaration-original">${declarationRecordCard(left,levels,types,left.id!==row.id)}</div><aside class="declaration-upgrade-side" data-declaration-side${right?' data-default-side':' hidden'}>${right}<div data-declaration-relation-view class="declaration-relation-view" aria-live="polite" hidden></div></aside></section>`;
+  return `<section class="declaration-pair" data-declaration-pair="${left.id}"><div class="declaration-original">${declarationRecordCard(left,levels,types,left.id!==row.id||row.original_month_history)}</div><aside class="declaration-upgrade-side" data-declaration-side${right?' data-default-side':' hidden'}>${right}<div data-declaration-relation-view class="declaration-relation-view" aria-live="polite" hidden></div></aside></section>`;
 }
 
 async function renderDeclarationStatistics(){
   disposeDeclarationSearch?.();
   if(!has('DECLARATION_STATS_VIEW')){app.innerHTML='<section class="panel"><div class="error">当前账号没有声明登记统计查看权限</div></section>';return;}
   const request=beginViewRequest();
-  const initial=await api('/api/declaration-statistics?month='+encodeURIComponent(monthNow())+'&status=current');
+  const focus=state.declarationRecordFocus;
+  delete state.declarationRecordFocus;
+  const initialParams=new URLSearchParams({month:focus?.month||monthNow(),status:focus?'':'current'});
+  if(focus)initialParams.set('keyword','#'+focus.id);
+  const initial=await api('/api/declaration-statistics?'+initialParams);
   if(!request.isCurrent())return;
   const levelOptions=initial.levels.map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join('');
   const circleOptions=initial.attractions.map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join('');
   const typeOptions=initial.types.map(row=>`<option value="${row.id}">${esc(row.name)}</option>`).join('');
   const canExport=has('DECLARATION_STATS_EXPORT');
-  const defaultSearchHint='可输入部分姓名或工号，也可从候选中选择';
+  const defaultSearchHint='可输入部分姓名、工号或 #声明编号，也可从候选中选择';
   if(!request.write(`<div class="section-gap declaration-statistics-page">
     <section class="panel">
       <div class="statistics-page-heading"><h2>声明登记统计</h2><span class="access-mode ${canExport?'can-export':'read-only'}">${canExport?'可导出':'只读'}</span></div>
@@ -112,10 +137,15 @@ async function renderDeclarationStatistics(){
     <div id="declarationResults"></div>
   </div>`))return;
   const form=document.getElementById('declarationFilter'),host=document.getElementById('declarationResults');
+  if(focus){
+    form.elements.month.value=focus.month;
+    form.elements.keyword.value='#'+focus.id;
+    form.elements.status.value='';
+  }
   const isCurrent=()=>request.isCurrent()&&app.contains(form);
   const ensureCurrentEdit=()=>{if(!isCurrent()||!has('SYSTEM_ADMIN'))throw new Error('页面或账号已变化，请关闭弹窗后重新查询');};
   let sequence=0;
-  const show=data=>{
+  const show=(data,focusId)=>{
     const details=data.detail_records||data.records;
     const related=new Map([...details,...(data.related_records||[])].map(row=>[row.id,row]));
     const bindRelations=detail=>{
@@ -173,6 +203,15 @@ async function renderDeclarationStatistics(){
           if(!item.open||content.hasChildNodes())return;
           content.innerHTML=declarationRecordDetails(rows[index],data.levels,data.types,related,group);
           bindFilePreviews(content);bindLevelCorrections(content,data);bindRelations(content);
+          const upgrade=content.querySelector('[data-original-upgrade]');
+          if(upgrade)upgrade.onclick=async()=>{
+            try{
+              if(await openOriginalUpgrade(Number(upgrade.dataset.originalUpgrade),isCurrent)&&isCurrent()){
+                toast('原单已升级');
+                await load(Number(upgrade.dataset.originalUpgrade));
+              }
+            }catch(error){if(isCurrent())toast(error.message,true);}
+          };
         });
       });
     };
@@ -183,12 +222,19 @@ async function renderDeclarationStatistics(){
     const circles=displayCircles.map(circle=>{
       const key=circle.attraction_id===null?'none':String(circle.attraction_id);
       const rows=details.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===key);
-      const displayLevels=data.levels.filter(level=>rows.some(row=>row.level_id===level.id)).map(level=>({...level,count:circle.levels.find(item=>item.id===level.id)?.count||0,details:rows.filter(row=>row.level_id===level.id).length}));
+      const displayLevels=data.levels.filter(level=>rows.some(row=>(row.group_level_id??row.level_id)===level.id)).map(level=>({...level,count:circle.levels.find(item=>item.id===level.id)?.count||0,details:rows.filter(row=>(row.group_level_id??row.level_id)===level.id).length}));
       return `<section class="declaration-circle"><button type="button" class="declaration-circle-toggle" data-declaration-circle="${esc(key)}" aria-expanded="false"><strong>${esc(circle.attraction_name)}</strong><span>${circle.record_count} 条计入汇总 · ${rows.length} 条明细</span><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-circle-detail="${esc(key)}" hidden></div><div class="declaration-levels">${displayLevels.map(level=>`<div class="declaration-level-item"><button type="button" class="declaration-level-toggle tone-${declarationLevelTone(level.code)}" data-declaration-level="${esc(key)}:${level.id}" aria-expanded="false"><span>${esc(level.name)}</span><strong>${level.count} 条计入汇总 · ${level.details} 条明细</strong><span aria-hidden="true">⌄</span></button><div class="declaration-inline" data-declaration-level-detail="${esc(key)}:${level.id}" hidden></div></div>`).join('')}</div></section>`;
     }).join('')||'<div class="empty">当前筛选范围暂无声明登记记录</div>';
     host.innerHTML=`<section class="panel"><h2>月度汇总</h2><p class="statistics-scope">${esc(data.month)} · ${data.total_records} 条记录；展开景点圈或处分等级查看列表，点击单条查看内容。</p>${cards}${statuses}<div class="declaration-circle-list">${circles}</div></section>`;
     host.querySelectorAll('[data-declaration-circle]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationCircle,detail=host.querySelector(`[data-declaration-circle-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;button.setAttribute('aria-expanded',String(open));if(open)openDetails(detail,details.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===key));else detail.replaceChildren();});
-    host.querySelectorAll('[data-declaration-level]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationLevel,[circleId,levelId]=key.split(':'),detail=host.querySelector(`[data-declaration-level-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;button.setAttribute('aria-expanded',String(open));if(open)openDetails(detail,details.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===circleId&&String(row.level_id)===levelId));else detail.replaceChildren();});
+    host.querySelectorAll('[data-declaration-level]').forEach(button=>button.onclick=()=>{const key=button.dataset.declarationLevel,[circleId,levelId]=key.split(':'),detail=host.querySelector(`[data-declaration-level-detail="${key}"]`),open=detail.hidden;detail.hidden=!open;button.setAttribute('aria-expanded',String(open));if(open)openDetails(detail,details.filter(row=>(row.attraction_id===null?'none':String(row.attraction_id))===circleId&&String(row.group_level_id??row.level_id)===levelId));else detail.replaceChildren();});
+    const focused=details.find(row=>row.id===focusId);
+    if(focused){
+      const key=focused.attraction_id??'none';
+      host.querySelector(`[data-declaration-circle="${key}"]`)?.click();
+      const card=host.querySelector(`[data-declaration-list-row="${focusId}"]`);
+      if(card){card.open=true;requestAnimationFrame(()=>{if(isCurrent())card.scrollIntoView({block:'center'});});}
+    }
   };
   const bindLevelCorrections=(detail,data)=>{
     detail.querySelectorAll('[data-correct-type]').forEach(select=>select.onchange=async()=>{
@@ -263,7 +309,7 @@ async function renderDeclarationStatistics(){
   disposeDeclarationSearch=registerPageCleanup(disposeSearch);
   searchArea.addEventListener('focusout',event=>{if(!searchArea.contains(event.relatedTarget))closeSearch();});
   searchArea.addEventListener('keydown',event=>{if(event.key==='Escape'){closeSearch();search.focus();}else if(['ArrowDown','ArrowUp'].includes(event.key)){const buttons=[...choices.querySelectorAll('button')];if(!buttons.length)return;event.preventDefault();const index=buttons.indexOf(document.activeElement),next=index<0?(event.key==='ArrowDown'?0:buttons.length-1):(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length;buttons[next].focus();}});
-  const load=async()=>{if(!isCurrent())return;const id=++sequence,button=form.querySelector('button[type="submit"]');button.disabled=true;host.innerHTML='<section class="panel"><div class="empty">正在加载统计数据…</div></section>';try{const data=await api('/api/declaration-statistics?'+params());if(id===sequence&&isCurrent())show(data);}catch(error){if(id===sequence&&isCurrent())host.innerHTML=`<section class="panel"><div class="error">${esc(error.message)}</div></section>`;}finally{if(id===sequence)button.disabled=false;}};
+  const load=async(focusId)=>{if(!isCurrent())return;const id=++sequence,button=form.querySelector('button[type="submit"]');button.disabled=true;host.innerHTML='<section class="panel"><div class="empty">正在加载统计数据…</div></section>';try{const data=await api('/api/declaration-statistics?'+params());if(id===sequence&&isCurrent())show(data,focusId);}catch(error){if(id===sequence&&isCurrent())host.innerHTML=`<section class="panel"><div class="error">${esc(error.message)}</div></section>`;}finally{if(id===sequence)button.disabled=false;}};
   form.onsubmit=event=>{event.preventDefault();closeSearch();void load();};
   if(canExport)document.getElementById('declarationExport').onclick=async event=>{
     const button=event.currentTarget,filters=params();
@@ -275,7 +321,7 @@ async function renderDeclarationStatistics(){
     catch(error){if(isCurrent())toast(error.message,true);}
     finally{button.disabled=false;}
   };
-  show(initial);
+  show(initial,focus?.id);
 }
 
 export { renderDeclarationStatistics };

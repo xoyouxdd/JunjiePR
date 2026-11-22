@@ -706,15 +706,20 @@ def _read_projection_cache(db: Session, cfg: RotationConfig, row: RotationDay, n
 
 def lines_view(eng: E.Engine, *, line_id: str | None = None, now: float | None = None) -> list[dict]:
     from app.rotation.replay import lines_view as project_lines
-    from app.rotation.forecast import missed_check_in
+    from app.rotation import forecast as F
 
     lines = project_lines(eng.d)
-    if now is not None and eng.d.get('ruleVersion') == 2:
+    if now is not None and eng.d.get('ruleVersion') == 2 and eng.d['status'] == 'live':
         for line in lines:
             for post in line['posts']:
                 worker = eng.P.get(post['occ'])
-                if worker and missed_check_in(worker, now):
+                if not worker:
+                    continue
+                if F.missed_check_in(worker, now, assigned_post=True):
                     post['missedCheckIn'] = True
+                elif (worker['start'] in (F.SEVEN_SHIFT, F.RELIEF_SHIFT)
+                      and F.can_check_in(eng, worker, now) and not F.checked_in(worker)):
+                    post['pendingCheckIn'] = True
     return [line for line in lines if line_id is None or line['id'] == line_id]
 
 

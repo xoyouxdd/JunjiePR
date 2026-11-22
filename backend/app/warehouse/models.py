@@ -7,6 +7,15 @@ from app.database.connection import Base
 
 
 WAREHOUSE_TZ = timezone(timedelta(hours=8))
+GROUND_SHELF = "G"
+SHELF_ZONES = {"A": "左侧", "B": "左侧", "C": "中间", "D": "中间", "E": "右侧", "F": "右侧", GROUND_SHELF: "地面"}
+# IDs 1–9 predate the expanded layout and are referenced by balances, orders and photos.
+WAREHOUSE_LAYOUT = (
+    *((index * 3 + level, shelf, level) for index, shelf in enumerate("ABC") for level in range(1, 4)),
+    *((10 + index, shelf, 4) for index, shelf in enumerate("ABC")),
+    *((13 + index * 4 + level - 1, shelf, level) for index, shelf in enumerate("DEF") for level in range(1, 5)),
+    (25, GROUND_SHELF, 0),
+)
 
 
 def warehouse_now() -> datetime:
@@ -154,8 +163,7 @@ class WarehouseIssueLine(Base):
 
 def seed_positions(db: Session) -> None:
     existing = {key for (key,) in db.query(WarehousePosition.id).all()}
-    for index, shelf in enumerate("ABC"):
-        for level in range(1, 4):
-            key = index * 3 + level
-            if key not in existing:
-                db.add(WarehousePosition(id=key, shelf=shelf, level=level, label=f"{shelf} 架第 {level} 层"))
+    for key, shelf, level in WAREHOUSE_LAYOUT:
+        if key not in existing:
+            label = "地面临时储存区" if shelf == GROUND_SHELF else f"{shelf} 架第 {level} 层"
+            db.add(WarehousePosition(id=key, shelf=shelf, level=level, label=label))

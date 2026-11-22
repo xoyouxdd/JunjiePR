@@ -1,10 +1,12 @@
+from re import compile
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints
+from app.warehouse.models import WAREHOUSE_LAYOUT
 
 
 Id = Annotated[int, Field(gt=0)]
-PositionId = Annotated[int, Field(ge=1, le=9)]
+PositionId = Annotated[int, Field(ge=1, le=len(WAREHOUSE_LAYOUT))]
 Version = Annotated[StrictInt, Field(ge=0)]
 Quantity = Annotated[StrictInt, Field(ge=0, le=1_000_000)]
 PositiveQuantity = Annotated[StrictInt, Field(gt=0, le=1_000_000)]
@@ -12,6 +14,9 @@ PhotoId = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
 Text = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
 Reason = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 ClientId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")]
+INBOUND_BATCH_PREFIX = "inbound-import-"
+INBOUND_BATCH_KEY = compile(INBOUND_BATCH_PREFIX + r"[0-9a-f]{32}")
+EXCEL_ITEM_COLUMNS = ("物资名称", "规格", "货位")
 
 
 class Document(BaseModel):
@@ -62,7 +67,7 @@ class DiscrepancyInput(Document):
 class TransactionInput(Document):
     client_id: ClientId
     kind: Literal["outbound", "inbound"]
-    position_versions: dict[PositionId, Version] = Field(default_factory=dict, max_length=9)
+    position_versions: dict[PositionId, Version] = Field(default_factory=dict, max_length=len(WAREHOUSE_LAYOUT))
     lines: list[TxLine] = Field(default_factory=list, max_length=250)
     receipts: list[Receipt] = Field(default_factory=list, max_length=250)
     photos: list[Attachment] = Field(default_factory=list, max_length=250)
@@ -90,6 +95,19 @@ class ResolveInput(Document):
 class AdjustmentInput(Observation):
     reason: Reason
     kind: Literal["opening", "adjustment"] = "adjustment"
+
+
+class CalibrationItem(Document):
+    item_id: Id
+    quantity: Quantity
+
+
+class CalibrationInput(Document):
+    client_id: ClientId
+    version: Version
+    reason: Reason
+    items: list[CalibrationItem] = Field(default_factory=list, max_length=250)
+    photo_id: PhotoId | None = None
 
 
 class CorrectionInput(Document):

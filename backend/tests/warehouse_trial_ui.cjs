@@ -109,12 +109,29 @@ async function main() {
     };
 
     await open(owner);
-    assert.equal(await owner.page.locator('.wh-overview .wh-rack').count(), 3);
+    assert.equal(await owner.page.locator('.wh-overview .wh-rack').count(), 6);
+    assert.deepEqual(await owner.page.locator('.wh-rack').first().locator('[data-wh-level]').allTextContents(),['4','3','2','1']);
+    await owner.page.locator('.wh-floor-summary').getByText('地面临时储存区').waitFor();
     for (const width of [320,390,1280]) {
       await owner.page.setViewportSize({width,height:900});
       assert(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'workspace overflow at ' + width);
+      const firstLayer = owner.page.getByRole('button',{name:'A 架第 1 层',exact:true});
+      const quick = owner.page.getByRole('region',{name:'货位快捷物资'});
+      await firstLayer.click();
+      assert.equal(await firstLayer.getAttribute('aria-expanded'),'true');
+      await quick.getByText('厕所卡',{exact:true}).waitFor();
+      await quick.getByText('6 箱',{exact:true}).waitFor();
+      assert.equal(await quick.getByRole('listitem').count(),2);
+      assert(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'quick inventory overflow at ' + width);
       await owner.page.screenshot({path:path.join(artifacts,'home-' + width + '.png'),fullPage:true});
+      await firstLayer.click();
+      await quick.waitFor({state:'hidden'});
     }
+    await owner.page.locator('.wh-floor-summary').click();
+    await owner.page.getByText('此处暂无在库物资',{exact:true}).waitFor();
+    await owner.page.getByRole('region',{name:'货位快捷物资'}).getByRole('button',{name:'查看详情'}).click();
+    await owner.page.getByRole('heading',{name:'地面临时储存区'}).waitFor();
+    await owner.page.getByRole('button',{name:'‹ 物资管理'}).click();
     await owner.page.setViewportSize({width:390,height:844});
     await owner.page.locator('.wh-module[data-wh-action="in"]').click();
     await owner.page.locator('[data-we-back]').click();
@@ -305,6 +322,26 @@ async function main() {
     assert(storedPhoto.ok());
     const storedSize = (await storedPhoto.body()).length;
     assert(storedSize <= 256 * 1024);
+    await owner.page.locator('[data-wh-action="calibrate"]').click();
+    await owner.page.locator('dialog [name=position_id]').selectOption('25');
+    await owner.page.locator('[data-wh-calibration-choice]').selectOption(String(first));
+    await owner.page.getByRole('button',{name:'加入复点',exact:true}).click();
+    await owner.page.locator('[data-wh-calibration-item="' + first + '"]').fill('2');
+    await owner.page.locator('dialog [name=file]').setInputFiles({name:'ground.jpg',mimeType:'image/jpeg',buffer:photo});
+    await owner.page.locator('dialog [name=reason]').fill('地面区复点');
+    await owner.page.getByRole('button',{name:'保存校准',exact:true}).click();
+    await owner.page.getByText('已保存货位校准。',{exact:true}).waitFor();
+    const pendingDownload = owner.page.waitForEvent('download');
+    await owner.page.getByRole('link',{name:'导出库存 Excel'}).click();
+    const workbook = await pendingDownload;
+    assert.match(workbook.suggestedFilename(),/\.xlsx$/);
+    assert.equal(fs.readFileSync(await workbook.path()).subarray(0,2).toString(),'PK');
+    await open(owner,'query');
+    await owner.page.getByRole('button',{name:'地面临时储存区',exact:true}).click();
+    await owner.page.getByText('地面临时储存区现场照片',{exact:true}).waitFor();
+    await owner.page.locator('.wh-goods-quantity').getByText('2 箱',{exact:true}).waitFor();
+    await owner.page.locator('.wh-bin-stock').getByText('2 箱',{exact:true}).waitFor();
+    await owner.page.screenshot({path:path.join(artifacts,'ground-390.png'),fullPage:true});
     assert.deepEqual(errors,[]);
     process.stdout.write('PASS warehouse UI: assignment, inbound and direct use, outbound background photo resume and stale check, query/discrepancy transfer, alert cycle, responsive 320/390/1280.\n');
     process.stdout.write('Manual shelf photo bytes: original ' + largePhoto.length + ', browser ' + uploadedPhoto.size + ', storage ' + storedSize + '.\n');

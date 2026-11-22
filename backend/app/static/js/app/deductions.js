@@ -10,6 +10,7 @@ import { renderTabs } from './navigation.js';
 import { opt } from './records.js';
 import { has, state } from './state.js';
 import { clearSubmissionKey, requireSubmittedDate, submissionData } from './submission.js';
+import { checkDeductionEvent, showExistingDeductionEvent } from './deduction-event.js';
 import { toast } from './toast.js';
 
 async function handlePendingMaterialConflict(error,page=captureViewContext()){const detail=error?.detail,record=detail?.code==='PENDING_MATERIAL_EXISTS'?detail.record:null;if(!record?.id)return false;if(!page.isCurrent()){toast(detail.message||error.message,true);return true;}const go=await confirmModal('已有待补材料记录',`<p>${esc(detail.message||'请先补充已有记录的材料。')}</p><p><strong>已有记录：</strong>${esc(record.employee_name)} · ${esc(record.occurred_on)} · ${esc(record.deduction_type)} · ${esc(record.deduction_level)}</p><p>补齐材料并处理完成后，才可继续登记下一条。</p>`,'去补充材料');if(go&&page.isCurrent()){state.pendingMaterialFocusId=Number(record.id);state.tab='entries';renderTabs();await render();}return true;}
@@ -47,7 +48,7 @@ function bindDeductionTypePicker(select){
   select.addEventListener('change',sync);const resetPicker=()=>queueMicrotask(()=>{close();sync();});select.form.addEventListener('reset',resetPicker);select._disposeTypePicker=()=>{document.removeEventListener('click',outside);select.removeEventListener('change',sync);select.form?.removeEventListener('reset',resetPicker);picker.before(select);picker.remove();select.classList.remove('recognizer-native-select');select.removeAttribute('aria-hidden');select.removeAttribute('tabindex');};sync();
 }
 
-function deductionForm(targetScope='frontline'){const supervisorScope=targetScope==='supervisor';const levels=has('DEDUCTION_ALL')||supervisorScope?state.options.deduction_levels:state.options.deduction_levels.filter(x=>x.code==='STATEMENT'),types=state.options.deduction_types||[];return `<section class="panel"><h2>${supervisorScope?'主管扣分登记':'扣分登记'}</h2><p>${supervisorScope?'按姓名或员工号搜索主管；可登记全部等级。':'按姓名或员工号搜索CM/TR'}；未上传材料时可先登记为待补充，材料就绪后才扣分。</p><form id="deductionForm" class="form-stack" enctype="multipart/form-data">${employeePicker('被扣分员工（必选）','deductionEmployee','deduction','输入姓名或工号查找全部在职CM/TR','',supervisorScope?'supervisor':'')}<div class="grid two deduction-classification-fields"><label>扣分类型<select name="deduction_type_id" id="deductionTypeSelect" aria-describedby="deductionUpgradeHint">${opt(types,'id',deductionUpgradeOptionName)}</select><span id="deductionUpgradeHint" class="field-hint" aria-live="polite"></span></label><label>扣分等级<select name="deduction_level_id" id="deductionLevelSelect">${levels.map(x=>`<option value="${x.id}" data-code="${esc(x.code)}">${esc(`${x.name} · ${fmt(x.points)}分`)}</option>`).join('')}</select></label></div><label>事件日期<input name="occurred_on" id="deductionOccurredOn" type="date" value="${today()}" required><span id="deductionEffectiveDateHint" class="field-hint" aria-live="polite" hidden>备忘录和警告以系统登记当天为生效日，计入登记当月。这里仍可填写原事件日期。</span></label><div id="deductionRepeatWarning" class="repeat-warning" hidden></div><details class="form-more"><summary>更多选项</summary><label>事件说明<textarea name="description" required></textarea></label>${deductionMaterialPickerMarkup()}</details><div id="deductionMaterialState" aria-live="polite"></div><div class="form-sticky-actions"><button id="deductionSubmit" class="danger">提交扣分登记</button></div></form></section>`;}
+function deductionForm(targetScope='frontline'){const supervisorScope=targetScope==='supervisor';const levels=has('DEDUCTION_ALL')||supervisorScope?state.options.deduction_levels:state.options.deduction_levels.filter(x=>x.code==='STATEMENT'),types=state.options.deduction_types||[];return `<section class="panel"><h2>${supervisorScope?'主管扣分登记':'扣分登记'}</h2><p>${supervisorScope?'按姓名或员工号搜索主管；可登记全部等级。':'按姓名或员工号搜索CM/TR'}；未上传材料时可先登记为待补充，材料就绪后才扣分。</p><form id="deductionForm" class="form-stack" enctype="multipart/form-data">${employeePicker('被扣分员工（必选）','deductionEmployee','deduction','输入姓名或工号查找全部在职CM/TR','',supervisorScope?'supervisor':'')}<div class="grid two deduction-classification-fields"><label>扣分类型<select name="deduction_type_id" id="deductionTypeSelect" aria-describedby="deductionUpgradeHint">${opt(types,'id',deductionUpgradeOptionName)}</select><span id="deductionUpgradeHint" class="field-hint" aria-live="polite"></span></label><label>扣分等级<select name="deduction_level_id" id="deductionLevelSelect">${levels.map(x=>`<option value="${x.id}" data-code="${esc(x.code)}">${esc(`${x.name} · ${fmt(x.points)}分`)}</option>`).join('')}</select></label></div><label>事件日期<input name="occurred_on" id="deductionOccurredOn" type="date" value="${today()}" required><span id="deductionEffectiveDateHint" class="field-hint" aria-live="polite" hidden>备忘录和警告以系统登记当天为生效日，计入登记当月。这里仍可填写原事件日期。</span></label><div id="deductionRepeatWarning" class="repeat-warning" hidden></div><details class="form-more"><summary>更多选项</summary><label>已有原声明编号（选填）<input name="original_statement_id" inputmode="numeric" pattern="#?[1-9][0-9]{0,17}" maxlength="19" placeholder="例如 #210"><span class="field-hint">同一事件已有声明时，填写原编号查看原单。</span></label><label>事件说明<textarea name="description" required></textarea></label>${deductionMaterialPickerMarkup()}</details><div id="deductionMaterialState" aria-live="polite"></div><div class="form-sticky-actions"><button id="deductionSubmit" class="danger">提交扣分登记</button></div></form></section>`;}
 
 function bindDeductionUpgradeHint(){
  const form=document.getElementById('deductionForm'),select=document.getElementById('deductionTypeSelect'),hint=document.getElementById('deductionUpgradeHint');if(!form||!select||!hint)return;
@@ -68,9 +69,11 @@ function bindDeductionV2244(){
   form.onsubmit=async event=>{
     event.preventDefault();
     if(!requireEmployeeSelection(form)||form.dataset.submitting==='true')return;
+    form.dataset.submitting='true';submit.disabled=true;
     try{
       const data=submissionData(form),occurredOn=form.querySelector('[name=occurred_on]'),direct=has('DEDUCTION_DIRECT')&&!has('DEDUCTION_ALL'),materialMode=material.appendTo(data);
       requireSubmittedDate(data,occurredOn,'事件日期');
+      if(!await checkDeductionEvent(data,page)||!page.isCurrent())return;
       if(!supervisorTarget&&(direct||has('DEDUCTION_ALL'))&&materialMode&&String(data.get('deduction_level_id'))===String(state.options.deduction_levels.find(x=>x.code==='STATEMENT')?.id)){
         const preview=await api('/api/deduction-upgrades/preview?'+new URLSearchParams({employee_id:data.get('employee_id'),deduction_type_id:data.get('deduction_type_id'),occurred_on:data.get('occurred_on')}));
         if(!page.isCurrent())return;
@@ -79,7 +82,6 @@ function bindDeductionV2244(){
           const reviewerId=await selectModal('可升级声明工单',`<p>该员工三个月内已有同类声明，将进入升级审核。</p><p><strong>历史声明：</strong>${esc(first.occurred_on)} · ${esc(first.deduction_type)} · ${esc(first.description)}</p><p>仅两张声明参与升级，经理确认实际开具的备忘录或一级警告。</p><p>提交后本次声明不可撤回、不可作废；本次不计分，等待审核结果。</p><label>审核经理（GSM）</label>`,(preview.reviewers||[]).map(x=>({id:x.id,label:`${x.name} · ${x.employee_no} · ${x.role_name}`})),'提交工单',{defaultValue:preview.default_reviewer_id||''});
           if(!reviewerId)return;
           data.set('reviewer_id',reviewerId);
-          form.dataset.submitting='true';submit.disabled=true;
           const out=await api('/api/deduction-upgrades',{method:'POST',body:data});
           clearSubmissionKey(form);form.reset();material.reset();if(!page.isCurrent()){toast('声明已登记');return;}
           if(out.processing)showDeductionMaterialState(stateBox,out.record);
@@ -88,11 +90,14 @@ function bindDeductionV2244(){
         }
       }
       if(!await confirmModal('确认提交声明',materialMode==='photos'?'确认提交照片材料？PDF生成成功后才会正式扣分。':materialMode==='pdf'?'确认提交PDF材料？系统会后台优化后生效。':'未上传材料：将创建待补充记录，TA主管、主管、TA GSM和GSM均可补充；在材料就绪前不扣分。是否继续？','确认提交'))return;
-      form.dataset.submitting='true';submit.disabled=true;
       const out=await api('/api/deductions',{method:'POST',body:data});clearSubmissionKey(form);form.reset();material.reset();if(!page.isCurrent()){toast('声明已登记');return;}
       if(out.record?.material_status==='processing')showDeductionMaterialState(stateBox,out.record);
       if(!showPerformanceRegistrationFeedback('deduction',out)){if(out.record?.material_status==='processing')toast('扣分登记已提交，材料正在后台处理。');else if(out.record?.material_status==='missing'){await confirmModal('声明已登记', '<p>该声明尚未上传材料，已登记为“待补充材料”。</p><p><strong>暂不扣分。</strong>请在“待办”或“我的登记记录”中点击“补充材料”完成上传。</p>', '我知道了');}else toast('扣分已生效');}
-    }catch(error){if(!(await handlePendingMaterialConflict(error,page)))toast(error.message,true)}finally{delete form.dataset.submitting;submit.disabled=false;}
+    }catch(error){
+      const detail=error?.detail;
+      if(detail?.code==='SAME_DEDUCTION_EVENT'&&detail.record&&page.isCurrent())await showExistingDeductionEvent(detail.record,page);
+      else if(!(await handlePendingMaterialConflict(error,page)))toast(error.message,true);
+    }finally{delete form.dataset.submitting;submit.disabled=false;}
   };
 }
 

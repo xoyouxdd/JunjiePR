@@ -23,6 +23,7 @@ from app.services.declaration_statistics import (
 from app.v2_auth import V2User, current_user, require_permissions
 from app.database.connection import get_db
 from app.services.audit import write_audit
+from app.services.original_deduction_upgrade import can_upgrade_original
 from app.v2_watermark import watermark_workbook
 from app.http_utils import client_ip
 
@@ -46,7 +47,7 @@ def get_declaration_statistics(
 ):
     return declaration_payload(
         db, month or date.today().strftime("%Y-%m"), attraction_id, level_id, type_id, status, keyword,
-        include_upgrade_slots=True,
+        include_upgrade_slots=True, allow_original_upgrade=can_upgrade_original(db, user),
     )
 
 

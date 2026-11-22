@@ -12,18 +12,23 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from sqlalchemy import or_, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
 from app.v2_auth import V2User, current_user, load_user_identity, require_permissions
 from app.deduction_policy import (
     ACTING_GSM_DEDUCTION_SCOPE, SUPERVISOR_DEDUCTION_SCOPE, can_review_statement_upgrade, checked_upgrade_reviewer,
 )
 from app.role_constants import FRONTLINE_CODES
 from app.database.connection import FILE_DIR, get_db
-from app.v2_models import Attraction, DeductionLevel, DeductionFollowUp, DeductionMaterialJob, DeductionUpgradeNoticeDismissal, DeductionUpgradeRequest, DeductionUpgradeTransfer, DeductionRecord, DeductionType, Employee, Role, StoredFile, UserAccount
+from app.v2_models import Attraction, DeductionLevel, DeductionFollowUp, DeductionMaterialJob, DeductionOriginalUpgrade, DeductionUpgradeNoticeDismissal, DeductionUpgradeRequest, DeductionUpgradeTransfer, DeductionRecord, DeductionType, Employee, Role, StoredFile, UserAccount
 from app.role_constants import LEADER_CODES
 from app.services.organization import current_group_for_employee
 from app.services.identity import duty_code_at, scoring_category
 from app.upload_storage import remove_upload_file
 from app.services.audit import DEDUCTION_MATERIAL_SUPPLEMENT_ACTION, write_audit
+from app.services.original_deduction_upgrade import (
+    check_original_upgrade, checked_original_reference, deduction_event_check, event_record_summary,
+    original_upgrade_preview, related_pair_work, reject_original_reference, verify_deduction_event_check,
+)
 from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
 from app.date_utils import add_calendar_months, parse_iso_date, subtract_calendar_months
 from app.deduction_policy import (
@@ -61,6 +66,15 @@ from app.material_policy import pending_material_conflict, raise_pending_materia
 from app.organization_queries import search_employee_targets
 
 router = APIRouter()
+MAX_STATEMENT_REFERENCE = 10**18 - 1
+
+
+class OriginalUpgradeSubmission(BaseModel):
+    level_id: int = Field(gt=0, strict=True)
+    confirmation: str = Field(min_length=64, max_length=64)
+    mod_name: str = Field(max_length=100)
+    mod_confirmed_on: str = Field(max_length=10)
+    reason: str = Field(max_length=500)
 
 
 def ensure_repeat_follow_up(
@@ -224,6 +238,19 @@ def resolve_deduction_target(db: Session, user: V2User, employee_id: int, occurr
     raise HTTPException(403, "没有扣分权限")
 
 
+@router.get("/deductions/event-check")
+def check_deduction_event(
+    employee_id: int, occurred_on: str, original_statement_id: int | None = Query(None, gt=0, le=MAX_STATEMENT_REFERENCE),
+    db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DECLARATION_STATS_VIEW")),
+):
+    day = parse_iso_date(occurred_on, "事件日期")
+    resolve_deduction_target(db, user, employee_id, day.isoformat())
+    if original_statement_id is not None:
+        row = checked_original_reference(db, employee_id, original_statement_id)
+        return {"same_original": True, "records": [event_record_summary(row)]}
+    return {"same_original": False, **deduction_event_check(db, employee_id, day.isoformat())}
+
+
 @router.get("/deduction-targets")
 def deduction_targets(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
     if not ({"DEDUCTION_ALL", "DEDUCTION_DIRECT"} & user.permissions):
@@ -269,12 +296,16 @@ async def create_deduction(
     occurred_on: str = Form(...),
     description: str = Form(...),
     repeat_confirmed: bool = Form(False),
+    original_statement_id: int | None = Form(None, gt=0, le=MAX_STATEMENT_REFERENCE),
+    different_event_reason: str = Form("", max_length=500),
+    event_confirmation: str | None = Form(None, min_length=64, max_length=64),
     idempotency_key: str | None = Form(None),
     document: UploadFile | None = File(None),
     document_images: list[UploadFile] | None = File(None),
     db: Session = Depends(get_db),
     user: V2User = Depends(current_user),
 ):
+    different_event_reason = different_event_reason.strip()
     request_key = normalize_request_key(idempotency_key)
     payload_digest = submission_payload_digest(
         {
@@ -284,6 +315,8 @@ async def create_deduction(
             "occurred_on": occurred_on.strip(),
             "description": description.strip(),
             "repeat_confirmed": bool(repeat_confirmed),
+            **({"original_statement_id": original_statement_id} if original_statement_id is not None else {}),
+            **({"different_event_reason": different_event_reason} if different_event_reason else {}),
         }
     )
     duplicate_row = existing_submission(db, user.id, "deduction", request_key, DeductionRecord, payload_digest)
@@ -291,6 +324,7 @@ async def create_deduction(
         return {"ok": True, "record": deduction_payload(duplicate_row), "duplicate": True}
     parse_iso_date(occurred_on, "事件日期")
     target, target_role, scope = resolve_deduction_target(db, user, employee_id, occurred_on)
+    reject_original_reference(db, target.id, original_statement_id)
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.active or not target_circle.employee_circle:
         raise HTTPException(400, "被扣分员工未配置有效景点圈")
@@ -365,6 +399,8 @@ async def create_deduction(
             file_row = create_pdf_placeholder(db, user.id)
             file_row.original_filename = "待补充声明材料.pdf"
             file_row.status = "pending_material"
+        # Staging has acquired SQLite's write lock. Recheck in the same transaction as the deduction.
+        verify_deduction_event_check(db, target.id, occurred_on, event_confirmation, different_event_reason)
         group = current_group_for_employee(db, target.id)
         row = DeductionRecord(
             employee_id=target.id,
@@ -417,6 +453,8 @@ async def create_deduction(
                 follow_up.issued_at = datetime.now()
         remember_submission(db, user.id, "deduction", request_key, row.id, payload_digest)
         audit_after = deduction_payload(row)
+        if different_event_reason:
+            audit_after["different_event_reason"] = different_event_reason
         if repeat_context["has_repeat"]:
             audit_after["repeat_warning_acknowledged"] = True
             audit_after["repeat_reference_ids"] = [item["id"] for item in repeat_context["previous_records"]]
@@ -482,6 +520,9 @@ async def create_deduction_upgrade(
     occurred_on: str = Form(...),
     description: str = Form(...),
     reviewer_id: int = Form(...),
+    original_statement_id: int | None = Form(None, gt=0, le=MAX_STATEMENT_REFERENCE),
+    different_event_reason: str = Form("", max_length=500),
+    event_confirmation: str | None = Form(None, min_length=64, max_length=64),
     document: UploadFile | None = File(None),
     document_images: list[UploadFile] | None = File(None),
     db: Session = Depends(get_db),
@@ -495,6 +536,9 @@ async def create_deduction_upgrade(
         raise HTTPException(400, "事件说明必填")
     target, target_role = ensure_enabled_frontline_target(db, employee_id, "扣分")
     ensure_scoped_hr_employee(db, user, target)
+    reject_original_reference(db, target.id, original_statement_id)
+    different_event_reason = different_event_reason.strip()
+    event_context = {"different_event_reason": different_event_reason} if different_event_reason else {}
     target_circle = db.get(Attraction, target.attraction_id) if target.attraction_id else None
     if not target_circle or not target_circle.active or not target_circle.employee_circle:
         raise HTTPException(400, "被扣分员工未配置有效景点圈")
@@ -525,7 +569,9 @@ async def create_deduction_upgrade(
         raise HTTPException(409, "三个月内不存在可升级的同类声明，请按普通声明登记")
     claimed = db.execute(
         update(DeductionRecord)
-        .where(DeductionRecord.id == first.id, DeductionRecord.status == "active", or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"))
+        .where(DeductionRecord.id == first.id, DeductionRecord.status == "active",
+               DeductionRecord.deduction_level_id == statement.id,
+               or_(DeductionRecord.upgrade_state.is_(None), DeductionRecord.upgrade_state == "eligible"))
         .values(upgrade_state="material_processing" if photo_mode else "pending", upgrade_role="source_first")
         .execution_options(synchronize_session=False)
     )
@@ -533,6 +579,7 @@ async def create_deduction_upgrade(
         db.rollback()
         raise HTTPException(409, "该历史声明已被其他工单使用，请刷新后重试")
     try:
+        verify_deduction_event_check(db, target.id, occurred_on, event_confirmation, different_event_reason)
         reviewer = checked_upgrade_reviewer(db, reviewer_id)
         probe = DeductionRecord(employee_id=target.id, deduction_type_id=deduction_type.id, occurred_on=occurred_on,
             scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)))
@@ -579,7 +626,7 @@ async def create_deduction_upgrade(
             db.add(work); db.flush()
             first.upgrade_request_id = second.upgrade_request_id = work.id
             queue_photo_material_job(db, second, file_row, source_rows, mode="upgrade_pdf_compress" if needs_pdf_processing else "upgrade", reviewer_id=reviewer.id, first_deduction_id=first.id)
-            write_audit(db, user.employee, "提交声明升级材料", "deduction", second.id, after={"first_deduction_id": first.id, "reviewer": reviewer.name, "material_status": "processing"}, ip_address=client_ip(request))
+            write_audit(db, user.employee, "提交声明升级材料", "deduction", second.id, after={"first_deduction_id": first.id, "reviewer": reviewer.name, "material_status": "processing", **event_context}, ip_address=client_ip(request))
             db.commit()
             invalidate_data_caches()
             return {"ok": True, "processing": True, "record": deduction_payload(second)}
@@ -592,7 +639,7 @@ async def create_deduction_upgrade(
         db.flush()
         first.upgrade_request_id = row.id
         second.upgrade_request_id = row.id
-        write_audit(db, user.employee, "提交声明升级工单", "deduction_upgrade", row.id, after={"first_deduction_id": first.id, "second_deduction_id": second.id, "reviewer": reviewer.name}, ip_address=client_ip(request))
+        write_audit(db, user.employee, "提交声明升级工单", "deduction_upgrade", row.id, after={"first_deduction_id": first.id, "second_deduction_id": second.id, "reviewer": reviewer.name, **event_context}, ip_address=client_ip(request))
         db.commit()
         invalidate_data_caches()
         return {"ok": True, "request": deduction_upgrade_payload(db, row)}
@@ -1128,6 +1175,8 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
     original = db.get(DeductionLevel, row.deduction_level_id)
     if not level or level.code not in allowed or not original or original.code not in allowed:
         raise HTTPException(400, "处分级别无效")
+    if level.code == "STATEMENT" and db.get(DeductionOriginalUpgrade, row.id):
+        raise HTTPException(409, "原单升级已按确认月份生效，此处不能改回声明")
     reason = str(payload.get("reason") or "").strip()
     if not reason or len(reason) > 500:
         raise HTTPException(400, "请填写500字以内的修改原因")
@@ -1145,11 +1194,7 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
 
 
 def _standalone_correction(db, row, action):
-    linked = db.query(DeductionUpgradeRequest.id).filter(or_(
-        DeductionUpgradeRequest.first_deduction_id == row.id,
-        DeductionUpgradeRequest.second_deduction_id == row.id,
-        DeductionUpgradeRequest.result_deduction_id == row.id)).first()
-    if row.upgrade_request_id or row.upgrade_role or linked:
+    if row.upgrade_request_id or row.upgrade_role or related_pair_work(db, row.id):
         raise HTTPException(400, "升级工单关联记录请通过原升级流程处理")
     employee = db.get(Employee, row.employee_id)
     ensure_month_open(db, row.deduction_month,
@@ -1161,6 +1206,66 @@ def _correction_reason(payload):
     if not reason or len(reason) > 500:
         raise HTTPException(400, "请填写500字以内的操作原因")
     return reason
+
+
+@router.get("/deductions/{record_id}/original-upgrade")
+def preview_original_upgrade(
+    record_id: int, db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
+    effective_day = datetime.now().date()
+    row = check_original_upgrade(db, user, record_id, effective_day)
+    preview = original_upgrade_preview(db, row, effective_day)
+    return {**preview, "confirmation": submission_payload_digest(preview)}
+
+
+@router.post("/deductions/{record_id}/original-upgrade")
+def commit_original_upgrade(
+    record_id: int, payload: OriginalUpgradeSubmission, request: Request,
+    db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
+    mod_name, reason = payload.mod_name.strip(), payload.reason.strip()
+    if not mod_name or not reason:
+        raise HTTPException(400, "请填写MOD确认人和处理说明")
+    mod_day = parse_iso_date(payload.mod_confirmed_on, "MOD确认日期")
+    try:
+        user = lock_upgrade_write(db, user)
+        decided_at = datetime.now()
+        effective_day = decided_at.date()
+        row = check_original_upgrade(db, user, record_id, effective_day)
+        preview = original_upgrade_preview(db, row, effective_day)
+        if payload.confirmation != submission_payload_digest(preview):
+            raise HTTPException(409, "记录或计分日期已变化，请刷新后重新核对")
+        if not (parse_iso_date(preview["record"]["incident_on"]) <= mod_day <= effective_day):
+            raise HTTPException(400, "MOD确认日期须在原事件日期与本次生效日之间")
+        options = {item["id"] for item in preview["levels"]}
+        if payload.level_id not in options:
+            raise HTTPException(400, "请选择有效的备忘录或警告级别")
+        level = db.get(DeductionLevel, payload.level_id)
+        points = scoring_config.stored_deduction_points(db, row, level)
+        before = {**deduction_payload(row), "deduction_month": row.deduction_month}
+        db.add(DeductionOriginalUpgrade(
+            record_id=row.id, original_month=row.deduction_month, original_level_id=row.deduction_level_id,
+            original_level_name=row.deduction_level_name, original_points=row.points,
+            result_level_name=level.name, result_points=points, decided_by=user.id, decided_by_name=user.name,
+            decided_at=decided_at, mod_name=mod_name, mod_confirmed_on=mod_day.isoformat(), reason=reason,
+        ))
+        row.incident_on = row.incident_on or row.occurred_on
+        row.occurred_on = preview["effective_on"]
+        row.deduction_month = preview["effective_month"]
+        row.deduction_level_id = level.id
+        row.deduction_level_name = level.name
+        row.points = points
+        write_audit(db, user.employee, "原单升级", "deduction", row.id, before=before, after={
+            **deduction_payload(row), "deduction_month": row.deduction_month,
+            "incident_on": row.incident_on, "mod_name": mod_name, "mod_confirmed_on": mod_day.isoformat(),
+        }, reason=reason, ip_address=client_ip(request))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    invalidate_data_caches()
+    return {"ok": True, "record_id": record_id, "effective_on": preview["effective_on"],
+            "effective_month": preview["effective_month"]}
 
 
 @router.patch("/deductions/{record_id}/type")
