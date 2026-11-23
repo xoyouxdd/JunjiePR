@@ -49,7 +49,9 @@ def test_admin_corrects_only_standalone_open_record_level() -> None:
             db.add(row); db.commit(); rid=row.id; circle=employee.attraction_id; fid=file.id
         url=f'/api/deductions/{rid}/level'
         body={'level_id':levels['MEMO'],'expected_level_id':levels['STATEMENT'],'reason':'更正登记级别'}
-        for account in ('GSMTEST01','SUPTEST01','CMTEST01'):
+        login(client, 'GSMTEST01')
+        assert client.patch(url, json=body).status_code == 409  # A formal GSM must confirm the current preview.
+        for account in ('SUPTEST01','CMTEST01'):
             login(client,account)
             assert client.patch(url,json=body).status_code==403
         login(client,'HR01','HR123')

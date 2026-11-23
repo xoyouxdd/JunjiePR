@@ -160,12 +160,14 @@ async function main() {
     }
 
     const board = await manager.newPage();
+    board.on('pageerror', error => errors.push(error.message));
     await board.goto(base + '/rotation-board');
     await board.locator('.rt-board').waitFor();
     assert.equal(await board.locator('.rt-shift-reminder').count(), 0);
     const display = await browser.newContext();
     await login(display, '6666666', '1243');
     const screen = await display.newPage();
+    screen.on('pageerror', error => errors.push(error.message));
     await screen.goto(base + '/rotation/screen');
     await screen.locator('#rtScreenTotals').waitFor();
     assert.equal(await screen.locator('.rt-shift-reminder').count(), 0);
@@ -183,7 +185,9 @@ async function main() {
       await act({action: 'add_person', pid, start, end: '16:00'});
       await act({action: 'place', pid, ...slots[i], place_mode: 'swap', expected_snapshot: (await readBoard()).forecastSnapshot});
     }
-    const checkEarly = async (pid, unsignedPid, opens, cutoff) => {
+    const positions = day => day.lines.map(line => [line.id, line.sortAt, line.previousSortAt,
+      line.posts.map(post => [post.name, post.occ])]);
+    const checkEarly = async (pid, unsignedPid, opens, cutoff, correctionSource) => {
       await earlyClock(opens);
       await board.evaluate(() => RT.load());
       const employeePost = board.locator(`.rt-post [data-f-person="${pid}"]`);
@@ -205,15 +209,47 @@ async function main() {
       await employeePost.waitFor();
       assert.equal(await employeePost.getByText('已签到', {exact: true}).count(), 0);
       await unsignedPost.getByText('未签到', {exact: true}).waitFor();
+      const unsignedMember = await employee(unsignedPid);
+      const memberCorrection = unsignedMember.page.getByRole('button', {name: '未答到', exact: true});
+      assert.equal(await memberCorrection.count(), 0);
       await earlyClock(cutoff);
       await board.evaluate(() => RT.load());
-      await unsignedPost.getByText('未答到', {exact: true}).waitFor();
-      assert.equal(await employeePost.getByText('未答到', {exact: true}).count(), 0);
+      const boardCorrection = board.locator(`[data-f-correct-check-in="${unsignedPid}"]`);
+      const screenCorrection = screen.locator(`[data-f-correct-check-in="${unsignedPid}"]`);
+      await boardCorrection.waitFor();
+      await screenCorrection.waitFor();
+      await memberCorrection.waitFor();
+      assert.equal(await employeePost.locator('..').getByText('未答到', {exact: true}).count(), 0);
+      const before = await readBoard();
+      const waiting = (await unsignedMember.member()).person;
+      const token = waiting.confirmationTokens.correct_check_in;
+      const correction = {action: 'correct_check_in', pid: unsignedPid, confirmation_token: token};
+      const wrongPerson = await member.context.request.post(base + '/api/rotation-board/me/act', {data: correction});
+      assert.equal(wrongPerson.status(), 403);
+      await boardCorrection.click();
+      await board.getByRole('button', {name: '取消', exact: true}).click();
+      await boardCorrection.waitFor();
+      const [button, page] = correctionSource === 'member'
+        ? [memberCorrection, unsignedMember.page] : [screenCorrection, screen];
+      await button.click();
+      await page.getByRole('button', {name: '确认已到', exact: true}).click();
+      await memberCorrection.waitFor({state: 'hidden'});
+      await screenCorrection.waitFor({state: 'hidden'});
+      await boardCorrection.waitFor({state: 'hidden'});
+      const corrected = await unsignedMember.member();
+      assert.equal(corrected.person.missedCheckIn, false);
+      assert.equal(corrected.person.batchCheckedIn, false);
+      assert.equal(corrected.confirmations.find(receipt => receipt.action === 'correct_check_in')?.source, correctionSource);
+      assert.equal(await unsignedMember.banner.isVisible(), false);
+      await expectCount(unsignedMember, 0);
+      assert.deepEqual(positions(await readBoard()), positions(before));
+      assert.equal((await act(correction)).duplicate, true);
+      await unsignedMember.context.close();
     };
-    await checkEarly('CMTEST01', 'CMTEST02', '06:45:00', '06:57:00');
-    await checkEarly('TRTEST01', 'SUPTEST01', '07:00:00', '07:12:00');
+    await checkEarly('CMTEST01', 'CMTEST02', '06:45:00', '06:57:00', 'member');
+    await checkEarly('TRTEST01', 'SUPTEST01', '07:00:00', '07:12:00', 'screen');
     assert.deepEqual(errors, []);
-    console.log('Employee check-in reminder: live todo counts, batch assignment and occupied 07:00/07:15 posts with unsigned-only labels PASS');
+    console.log('Employee check-in reminder: live todo counts, batch assignment, 07:00/07:15 corrections from employee and screen PASS');
     passed = true;
   } finally {
     if (browser) await browser.close();

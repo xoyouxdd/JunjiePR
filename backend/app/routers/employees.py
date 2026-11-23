@@ -107,7 +107,8 @@ def supervisor_targets(db: Session, user: V2User, usage: str, keyword: str, attr
         raise HTTPException(403, "没有为主管登记的权限")
     if not keyword.strip():
         return {"items": [], "total": 0, "limit": max(1, min(limit, 50)), "search_scope": "全部景点圈在职主管（请输入姓名或员工号）"}
-    result = search_employee_targets(db, keyword=keyword, attraction_id=attraction_id, limit=200, role_codes=("SUPERVISOR",))
+    result = search_employee_targets(db, keyword=keyword, attraction_id=attraction_id, limit=200,
+                                     role_codes=("SUPERVISOR",), include_intern=usage == "deduction")
     duties = duties_at_bulk(db, [row["id"] for row in result["items"]])
     items = []
     for row in result["items"]:
@@ -207,6 +208,7 @@ def employee_targets(
         keyword=keyword,
         attraction_id=attraction_id,
         limit=max(1, min(limit, 50)),
+        include_intern=usage == "deduction",
     )
     result["search_scope"] = "全部景点圈在职CM/TR（请输入姓名或员工号）" if global_target_search else "本景点圈在职CM/TR"
     return result

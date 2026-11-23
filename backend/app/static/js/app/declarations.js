@@ -6,7 +6,7 @@ import { beginViewRequest, registerPageCleanup, unregisterPageCleanup } from './
 import { confirmModal, formModal } from './dialogs.js';
 import { bindFilePreviews } from './files.js';
 import { openOriginalUpgrade } from './deduction-event.js';
-import { declarationMaterialUploader, esc, monthNow, portalPath } from './format.js';
+import { declarationMaterialUploader, deductionLevelLabel, esc, fmt, monthNow, portalPath } from './format.js';
 import { app, has, state } from './state.js';
 
 const declarationLevelTones={STATEMENT:0,MEMO:1,WARNING_1:2,WARNING_2:3};
@@ -52,8 +52,8 @@ function declarationRecordCard(row,levels=[],types=[],readOnly=false){
   const admin=()=>!readOnly&&has('SYSTEM_ADMIN');
   const editable=row=>admin()&&standalone(row)&&['active','pending_material','material_failed'].includes(row.raw_status);
   const type=row=>admin()&&standalone(row)&&['active','pending_material','material_failed','void'].includes(row.raw_status)?`<select class="declaration-type-select" aria-label="修改${esc(row.employee_name)}的处分类型" data-correct-type="${row.id}">${types.filter(x=>x.active!==false||x.id===row.type_id).map(x=>`<option value="${x.id}" ${x.id===row.type_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:esc(row.type_name);
-  const actions=row=>admin()&&standalone(row)&&(editable(row)||row.raw_status==='void')?`<button type="button" class="secondary declaration-status-action" data-declaration-action="${row.raw_status==='void'?'restore':'void'}" data-record-id="${row.id}">${row.raw_status==='void'?'还原':'作废'}</button>`:'';
-  const level=row=>editable(row)?`<select class="declaration-level-select" aria-label="修改${esc(row.employee_name)}的处分等级" data-correct-level="${row.id}" data-original-level="${row.level_id}">${levels.filter(x=>Object.hasOwn(declarationLevelTones,x.code)&&(!original||x.code!=='STATEMENT')).map(x=>`<option value="${x.id}" ${x.id===row.level_id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:`<span class="badge declaration-level tone-${declarationLevelTone(row.level_code)}">${esc(row.level_name)}</span>`;
+  const actions=row=>!readOnly&&standalone(row)&&((admin()&&(editable(row)||row.raw_status==='void'))||row.can_gsm_correct)?`<button type="button" class="secondary declaration-status-action" data-declaration-action="${row.raw_status==='void'?'restore':'void'}" data-record-id="${row.id}">${row.raw_status==='void'?'还原':'作废'}</button>`:'';
+  const level=row=>editable(row)?`<select class="declaration-level-select" aria-label="修改${esc(row.employee_name)}的处分等级" data-correct-level="${row.id}" data-original-level="${row.level_id}">${levels.filter(x=>Object.hasOwn(declarationLevelTones,x.code)&&(!original||x.code!=='STATEMENT')).map(x=>`<option value="${x.id}" ${x.id===row.level_id?'selected':''}>${esc(deductionLevelLabel(x,row.is_intern))}${row.is_intern?` · ${fmt(x.points)} 分`:``}</option>`).join('')}</select>`:`<span class="badge declaration-level tone-${declarationLevelTone(row.level_code)}">${esc(row.level_name)}</span>`;
   const classification=row=>`<div class="declaration-classification"><label><span>类型</span>${type(row)}</label><label><span>等级</span>${level(row)}</label></div>`;
   const history=(row.upgrade_links||[]).filter(link=>link.status==='rejected').map(link=>
     `<div class="declaration-link-row"><span>工单 #${link.request_id} · ${esc(declarationWorkLabel(link))}</span>${declarationAssociationButtons(link,row.id)}</div>`
@@ -70,7 +70,11 @@ function declarationRecordCard(row,levels=[],types=[],readOnly=false){
       ${row.original_month_history?`<div class="declaration-score-summary"><strong>${esc(original.original_month)} 本月不计分</strong><small>原单与材料留档 · 生效月 ${esc(row.deduction_month)}</small></div>`:`<span class="declaration-score-status">${esc(row.score_status||row.business_status)}</span>`}
       <span class="declaration-performance-score">实际扣分 <strong>${points}</strong> 分</span>
     </section>
-    <div class="declaration-operations"><div class="declaration-material-actions">${material(row)}</div>${!readOnly&&row.can_upgrade_original?`<button type="button" class="secondary declaration-original-upgrade-button" data-original-upgrade="${row.id}">原单升级 <span aria-hidden="true">›</span></button>`:''}${actions(row)}</div>
+    <div class="declaration-operations"><div class="declaration-material-actions">${material(row)}</div>
+      ${!readOnly&&row.can_upgrade_original?`<button type="button" class="secondary declaration-original-upgrade-button" data-original-upgrade="${row.id}">原单升级 <span aria-hidden="true">›</span></button>`:''}
+      ${!readOnly&&row.can_gsm_correct&&row.raw_status!=='void'?`<button type="button" class="secondary" data-gsm-correct-level="${row.id}">更正扣分</button>`:''}
+      ${actions(row)}
+    </div>
     ${originalHistory}
     ${uploader?`<p class="field-hint">${uploader}</p>`:''}
     <details class="declaration-card-details"><summary>详情${history?'及审核历史':''}</summary><div class="declaration-record-context"><span>${esc(row.attraction_name)}</span>${row.incident_on&&row.incident_on!==row.occurred_on?`<span>原事件日期 ${esc(row.incident_on)}</span>`:'' }<span>登记人：${esc(row.submitter_name)} · ${esc(row.submitted_at)}</span><span>${esc(row.material_status)}</span></div>
@@ -249,11 +253,56 @@ async function renderDeclarationStatistics(){
     });
     detail.querySelectorAll('[data-declaration-action]').forEach(button=>button.onclick=async()=>{
       const row=(data.detail_records||data.records).find(x=>x.id===Number(button.dataset.recordId)),action=button.dataset.declarationAction,label=action==='restore'?'还原':'作废';
-      const saved=await formModal(label+'记录',`<p>${esc(row.employee_name)} · ${esc(row.employee_no)} · ${esc(row.type_name)} · ${esc(row.level_name)}</p><p>${action==='restore'?'恢复作废前业务状态，原已生效记录恢复计分。':'作废后该记录退出计分，保留历史记录和材料。'}已月结及升级工单关联记录不能在此操作。</p>`, '<label>操作原因<textarea name="reason" maxlength="500" required></textarea></label>','确认'+label,{lockWhileSubmitting:true,onSubmit:async f=>{
-        ensureCurrentEdit();
+      let check;
+      if(action==='restore'){
+        try{check=await api('/api/deductions/'+row.id+'/correction-preview?action=restore');}
+        catch(error){if(isCurrent())toast(error.message,true);return;}
+        if(!isCurrent())return;
+      }
+      const candidates=check?.records||[];
+      const sameDay=candidates.length?`<p>该员工同日还有其他记录，请按编号核对原单与材料。</p>
+        <ul class="deduction-event-matches">${candidates.map(item=>`<li><strong>#${esc(item.id)} · ${esc(item.incident_on)} · ${esc(item.type_name)} · ${esc(item.level_name)}</strong><p>${esc(item.description)}</p></li>`).join('')}</ul>
+        <label>不同事件的说明<textarea name="different_event_reason" maxlength="500" required></textarea></label>`:'';
+      const saved=await formModal(label+'记录',`<p>${esc(row.employee_name)} · ${esc(row.employee_no)} · ${esc(row.type_name)} · ${esc(row.level_name)}</p><p>${action==='restore'?'恢复作废前状态，并按原计分月份核算。':'作废后该记录退出计分，保留历史记录和材料。'}</p>`,
+        sameDay+'<label>操作原因<textarea name="reason" maxlength="500" required></textarea></label>','确认'+label,{lockWhileSubmitting:true,onSubmit:async f=>{
+        if(!isCurrent()||!row.can_gsm_correct&&!has('SYSTEM_ADMIN'))throw new Error('页面或账号已变化，请重新查询');
         const reason=f.elements.reason.value.trim();if(!reason)throw new Error('请填写操作原因');
-        await api('/api/deductions/'+row.id+'/'+action,json('POST',{reason,expected_status:row.raw_status,expected_voided_at:row.voided_at,expected_type_id:row.type_id,expected_level_id:row.level_id}));
+        const differentEventReason=f.elements.different_event_reason?.value.trim();
+        if(candidates.length&&!differentEventReason)throw new Error('请确认并填写不同事件的说明');
+        await api('/api/deductions/'+row.id+'/'+action,json('POST',{
+          reason,expected_status:row.raw_status,expected_voided_at:row.voided_at,expected_type_id:row.type_id,expected_level_id:row.level_id,
+          ...(candidates.length?{different_event_reason:differentEventReason,event_confirmation:check.confirmation}:{}),
+        }));
       }});if(saved&&request.isCurrent())await load();
+    });
+
+    detail.querySelectorAll('[data-gsm-correct-level]').forEach(button=>button.onclick=async()=>{
+      const id=Number(button.dataset.gsmCorrectLevel);
+      try{
+        const preview=await api('/api/deductions/'+id+'/correction-preview?action=level');
+        if(!isCurrent())return;
+        const levels=preview.levels.filter(level=>level.id!==preview.level_id);
+        const saved=await formModal(`更正扣分 · #${id}`,`计分月份 ${esc(preview.month)} · 当前 ${esc(preview.level_name)}`,`
+          <label>更正后的处分<select name="level_id" required><option value="">请选择</option>${levels.map(level=>`<option value="${level.id}">${esc(level.name)} · ${fmt(level.points)} 分</option>`).join('')}</select></label>
+          <p class="field-hint" data-correction-points aria-live="polite">当前实际扣分 ${fmt(preview.actual_points)} 分</p>
+          <label>更正原因<textarea name="reason" maxlength="500" required></textarea></label>
+        `,'确认更正',{lockWhileSubmitting:true,onReady:form=>{
+          const select=form.elements.level_id,points=form.querySelector('[data-correction-points]');
+          select.onchange=()=>{
+            const selected=levels.find(level=>level.id===Number(select.value));
+            points.textContent=`当前实际扣分 ${fmt(preview.actual_points)} 分`+(selected?` → 更正后 ${fmt(selected.actual_points)} 分`:'');
+          };
+        },onSubmit:async form=>{
+          if(!isCurrent())throw new Error('页面或账号已变化，请重新查询');
+          const reason=form.elements.reason.value.trim(),levelId=Number(form.elements.level_id.value);
+          if(!levels.some(level=>level.id===levelId)||!reason)throw new Error('请选择级别并填写更正原因');
+          await api('/api/deductions/'+id+'/level',json('PATCH',{
+            level_id:levelId,reason,confirmation:preview.confirmation,
+            expected_level_id:preview.level_id,expected_type_id:preview.type_id,expected_status:preview.status,
+          }));
+        }});
+        if(saved&&request.isCurrent())await load(id);
+      }catch(error){if(isCurrent())toast(error.message,true);}
     });
 
     detail.querySelectorAll('[data-correct-level]').forEach(select=>select.onchange=async()=>{
@@ -261,7 +310,7 @@ async function renderDeclarationStatistics(){
       select.value=String(row.level_id);
       if(levelId===row.level_id)return;
       const target=data.levels.find(x=>x.id===levelId);
-      const saved=await formModal('修改处分级别',`<p>${esc(row.employee_name)} · ${esc(row.employee_no)} · ${esc(row.occurred_on)}</p><p>${esc(row.level_name)} → ${esc(target.name)}</p><p>该记录的扣分同步按新级别更新，原登记内容与材料保留。</p>`, '<label>修改原因<textarea name="reason" maxlength="500" required></textarea></label>','确认修改',{lockWhileSubmitting:true,onSubmit:async f=>{
+      const saved=await formModal('修改处分级别',`<p>${esc(row.employee_name)} · ${esc(row.employee_no)} · ${esc(row.occurred_on)}</p><p>${esc(row.level_name)} → ${esc(deductionLevelLabel(target,row.is_intern))}</p><p>该记录的扣分同步按新级别更新，原登记内容与材料保留。</p>`, '<label>修改原因<textarea name="reason" maxlength="500" required></textarea></label>','确认修改',{lockWhileSubmitting:true,onSubmit:async f=>{
         ensureCurrentEdit();
         const reason=f.elements.reason.value.trim();if(!reason)throw new Error('请填写修改原因');
         await api('/api/deductions/'+row.id+'/level',json('PATCH',{level_id:levelId,expected_level_id:row.level_id,expected_type_id:row.type_id,expected_status:row.raw_status,reason}));

@@ -5,6 +5,7 @@ import hashlib
 import fitz
 import pytest
 from test_monthly_self_ranks import system
+from app.deduction_materials import create_pdf_placeholder
 from app.routers import deductions, declaration_statistics
 from app.v2_models import DeductionRecord, DeductionType, DeductionLevel, StoredFile, AuditLog, MonthClosure, ScoringPolicy
 from app.v2_auth import V2User
@@ -103,8 +104,9 @@ def test_invalid_type_edit_never_writes(setup,field,value):
 
 @pytest.mark.parametrize('state,material',[('active','ready'),('pending_material','missing'),('material_failed','failed')])
 def test_void_restore_preserves_original_state_and_material(setup,state,material):
-    db,client,_,_,_,_,row,_,add,*_=setup
-    row=add(state,material=material)
+    db,client,_,_,_,_,row,*_=setup
+    row.status, row.material_status = state, material
+    db.commit()
     assert call(client,row,'void',dict(reason='复查作废',expected_status=state)).status_code==200
     db.refresh(row);assert deduction_payload(row)['actual_points']==0
     restore=restore_body(row)
@@ -256,6 +258,8 @@ def test_category_void_restore_summary_export_and_related_absence_stay_consisten
     db,client,holder,admin,_,types,row,body,add,person,file=setup
     holder['user'].permissions.add('DECLARATION_STATS_VIEW')
     pending=add('pending_material',material='missing')
+    pending.occurred_on='2026-11-02'
+    pending.document_file_id=create_pdf_placeholder(db, admin.id).id
     leave=SickLeaveRecord(employee_id=person.id,attendance_month='2026-11',leave_start_date='2026-11-01',leave_end_date='2026-11-01',leave_days=Decimal('1'),charged_days=Decimal('1'),proof_file_id=file.id,leave_type='病假',import_source='manual',is_violation=True,violation_deduction_id=row.id,note='original leave',status='active',submitted_by=admin.id,submitted_by_name=admin.name)
     db.add(leave);db.commit();leave_id=leave.id
     before={col.name:getattr(leave,col.name) for col in SickLeaveRecord.__table__.columns}

@@ -24,19 +24,28 @@ from app.role_constants import LEADER_CODES
 from app.services.organization import current_group_for_employee
 from app.services.identity import duty_code_at, scoring_category
 from app.upload_storage import remove_upload_file
-from app.services.audit import DEDUCTION_MATERIAL_SUPPLEMENT_ACTION, write_audit
+from app.services.audit import DEDUCTION_MATERIAL_SUPPLEMENT_ACTION, DEDUCTION_RESTORE_ACTION, write_audit
 from app.services.original_deduction_upgrade import (
-    check_original_upgrade, checked_original_reference, deduction_event_check, event_record_summary,
-    original_upgrade_preview, related_pair_work, reject_original_reference, verify_deduction_event_check,
+    can_upgrade_original, check_original_upgrade, checked_original_reference, deduction_event_check,
+    ensure_deduction_months_open, event_record_summary, original_upgrade_preview, related_pair_work,
+    reject_original_reference, require_gsm_standalone_correction, restore_event_check, verify_deduction_event_check,
 )
-from app.deduction_materials import PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, queue_photo_material_job, stage_pdf_material, stage_photo_materials
+from app.services.attendance import loa_excludes_month
+from app.deduction_materials import (
+    PDF_HIGH_QUALITY_OPTIMIZATION_THRESHOLD, create_pdf_placeholder, duplicate_deduction_material_id,
+    queue_photo_material_job, stage_pdf_material, stage_photo_materials,
+)
 from app.date_utils import add_calendar_months, parse_iso_date, subtract_calendar_months
 from app.deduction_policy import (
     DECISION_DATED_ISSUER_CODES,
     DECISION_DATED_LEVEL_CODES,
     DEDUCTION_LEVEL_ORDER,
+    GSM_CORRECTION_LEVEL_CODES,
     REPEAT_CONTROLLED_DEDUCTION_CODES,
     direct_only_deduction_user,
+    deduction_counts_for_score,
+    deduction_level_label,
+    is_intern,
     ensure_deduction_type_allowed,
     statement_upgrade_candidate,
     statement_upgrade_reviewer_options,
@@ -207,6 +216,7 @@ def deduction_upgrade_payload(db: Session, row: DeductionUpgradeRequest, *, incl
         "resolved_by_name": row.resolved_by_name or "",
         "resolved_at": row.resolved_at.strftime("%Y-%m-%d %H:%M:%S") if row.resolved_at else "",
         "result_level": result.deduction_level_name if result else "",
+        "is_intern": bool(second and is_intern(second.employee_type_snapshot)),
         "result_points": float(result.points) if result else 0,
         "transfers": [{"from_name": item.from_reviewer_name, "to_name": item.to_reviewer_name, "reason": item.reason, "created_at": item.created_at.strftime("%Y-%m-%d %H:%M:%S")} for item in transfer_rows],
     }
@@ -407,12 +417,13 @@ async def create_deduction(
             employee_no=target.employee_no,
             employee_name=target.name,
             employee_role_snapshot=target_role.name,
+            employee_type_snapshot=target.employee_type,
             employee_group_id_snapshot=group.id if group else None,
             attraction_id_snapshot=target.attraction_id,
             deduction_type_id=deduction_type.id,
             deduction_type_name=scoring_config.category(db,'deduction','all',deduction_type.code,occurred_on).get('name',deduction_type.name),
             deduction_level_id=level.id,
-            deduction_level_name=level.name,
+            deduction_level_name=deduction_level_label(level, target.employee_type),
             points=scoring_config.deduction_points(db, deduction_type, level, occurred_on),
             scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)),
             occurred_on=effective_on,
@@ -434,8 +445,17 @@ async def create_deduction(
         )
         db.add(row)
         db.flush()
-        if row.status == "active" and scoring_config.validate_material_repeat(db, row) and not repeat_confirmed:
-            raise HTTPException(409, "同类处分记录已变化，请刷新后确认重复处分及升级级别")
+        if row.status == "active":
+            duplicate_id = duplicate_deduction_material_id(db, row, file_row, active_restored_only=True)
+            if duplicate_id is not None:
+                existing = db.get(DeductionRecord, duplicate_id)
+                raise HTTPException(409, {
+                    "code": "SAME_DEDUCTION_EVENT",
+                    "message": "同一份材料已用于还原后的有效记录，请打开原单处理。",
+                    "record": event_record_summary(existing),
+                })
+            if scoring_config.validate_material_repeat(db, row) and not repeat_confirmed:
+                raise HTTPException(409, "同类处分记录已变化，请刷新后确认重复处分及升级级别")
         if photo_mode or needs_pdf_processing:
             queue_photo_material_job(db, row, file_row, source_rows, mode="pdf_compress" if needs_pdf_processing else "deduction")
         elif level.code != "STATEMENT" and row.status == "active":
@@ -606,7 +626,8 @@ async def create_deduction_upgrade(
         group = current_group_for_employee(db, target.id)
         second = DeductionRecord(
         employee_id=target.id, employee_no=target.employee_no, employee_name=target.name,
-        employee_role_snapshot=target_role.name, employee_group_id_snapshot=group.id if group else None,
+        employee_role_snapshot=target_role.name, employee_type_snapshot=target.employee_type,
+        employee_group_id_snapshot=group.id if group else None,
         attraction_id_snapshot=target.attraction_id, deduction_type_id=deduction_type.id,
         deduction_type_name=scoring_config.category(db,'deduction','all',deduction_type.code,occurred_on).get('name',deduction_type.name), deduction_level_id=statement.id,
         deduction_level_name=statement.name, points=Decimal("0"), scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, deduction_type, occurred_on)), occurred_on=occurred_on,
@@ -832,6 +853,14 @@ def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, 
                 raise HTTPException(409, "所选处分等级已停用，请刷新后重选")
             if effective_on[:7] != second.deduction_month:
                 ensure_month_open(db, effective_on[:7], second.attraction_id_snapshot, "开具声明升级处分")
+            material = db.get(StoredFile, second.document_file_id)
+            duplicate_id = duplicate_deduction_material_id(db, second, material, active_restored_only=True)
+            if duplicate_id is not None:
+                raise HTTPException(409, {
+                    "code": "UPGRADE_DUPLICATE_RESTORED_MATERIAL",
+                    "message": f"第二张声明材料已用于还原后的有效记录 #{duplicate_id}，不能再次计分",
+                    "record_id": duplicate_id,
+                })
         claimed = db.execute(
             update(DeductionUpgradeRequest)
             .where(DeductionUpgradeRequest.id == row.id, DeductionUpgradeRequest.status == "pending")
@@ -852,9 +881,11 @@ def resolve_deduction_upgrade(request_id: int, payload: dict, request: Request, 
             db.flush()
             result = DeductionRecord(
                 employee_id=second.employee_id, employee_no=second.employee_no, employee_name=second.employee_name,
-                employee_role_snapshot=second.employee_role_snapshot, employee_group_id_snapshot=second.employee_group_id_snapshot,
+                employee_role_snapshot=second.employee_role_snapshot, employee_type_snapshot=second.employee_type_snapshot,
+                employee_group_id_snapshot=second.employee_group_id_snapshot,
                 attraction_id_snapshot=second.attraction_id_snapshot, deduction_type_id=second.deduction_type_id,
-                deduction_type_name=second.deduction_type_name, deduction_level_id=level.id, deduction_level_name=level.name,
+                deduction_type_name=second.deduction_type_name, deduction_level_id=level.id,
+                deduction_level_name=deduction_level_label(level, second.employee_type_snapshot),
                 points=scoring_config.stored_deduction_points(db, second, level), scoring_policy_json=second.scoring_policy_json,
                 occurred_on=effective_on, incident_on=second.occurred_on, deduction_month=effective_on[:7],
                 description=note, document_file_id=placeholder.id, submitted_at=decided_at,
@@ -1144,24 +1175,20 @@ async def retry_deduction_material(
 @router.patch("/deductions/{record_id}/level")
 def correct_deduction_level(record_id: int, payload: dict, request: Request,
                             db: Session = Depends(get_db),
-                            user: V2User = Depends(require_permissions("SYSTEM_ADMIN"))):
+                            user: V2User = Depends(current_user)):
     """Correct a standalone record without replaying entry/upgrade workflows."""
     db.execute(text("BEGIN IMMEDIATE"))
+    admin = "SYSTEM_ADMIN" in user.permissions
+    if not admin and not _formal_correction_operator(db, user):
+        raise HTTPException(403, "仅正式GSM或最高管理员可以更正扣分")
     row = db.get(DeductionRecord, record_id)
     if not row:
         raise HTTPException(404, "扣分记录不存在")
+    if not admin:
+        require_gsm_standalone_correction(db, row, user)
     if row.status not in {"active", "pending_material", "material_failed"}:
         raise HTTPException(400, "当前记录状态不可修改级别")
-    linked = db.query(DeductionUpgradeRequest.id).filter(or_(
-        DeductionUpgradeRequest.first_deduction_id == row.id,
-        DeductionUpgradeRequest.second_deduction_id == row.id,
-        DeductionUpgradeRequest.result_deduction_id == row.id,
-    )).first()
-    if row.upgrade_request_id or row.upgrade_role or linked:
-        raise HTTPException(400, "升级工单关联记录请通过原升级流程处理")
-    employee = db.get(Employee, row.employee_id)
-    ensure_month_open(db, row.deduction_month,
-                      row.attraction_id_snapshot or (employee.attraction_id if employee else None), "修改处分级别")
+    _standalone_correction(db, row, "修改处分级别")
     level_id, expected = payload.get("level_id"), payload.get("expected_level_id")
     if type(level_id) is not int or type(expected) is not int:
         raise HTTPException(400, "请选择有效处分级别并刷新原记录")
@@ -1175,6 +1202,12 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
     original = db.get(DeductionLevel, row.deduction_level_id)
     if not level or level.code not in allowed or not original or original.code not in allowed:
         raise HTTPException(400, "处分级别无效")
+    if not admin:
+        if not level.active or level.code not in GSM_CORRECTION_LEVEL_CODES:
+            raise HTTPException(403, "正式GSM仅可更正为声明、备忘录或一级警告")
+        preview = _level_correction_preview(db, row)
+        if payload.get("confirmation") != submission_payload_digest(preview):
+            raise HTTPException(409, "记录或计分结果已变化，请重新打开弹窗核对")
     if level.code == "STATEMENT" and db.get(DeductionOriginalUpgrade, row.id):
         raise HTTPException(409, "原单升级已按确认月份生效，此处不能改回声明")
     reason = str(payload.get("reason") or "").strip()
@@ -1183,7 +1216,9 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
     if row.deduction_level_id == level.id:
         return {"ok": True}
     before = deduction_payload(row)
-    row.deduction_level_id, row.deduction_level_name, row.points = level.id, level.name, scoring_config.stored_deduction_points(db, row, level)
+    row.deduction_level_id = level.id
+    row.deduction_level_name = deduction_level_label(level, row.employee_type_snapshot)
+    row.points = scoring_config.stored_deduction_points(db, row, level)
     if row.status == 'active':
         scoring_config.validate_material_repeat(db, row)
     write_audit(db, user.employee, "修改处分级别", "deduction", row.id,
@@ -1196,9 +1231,51 @@ def correct_deduction_level(record_id: int, payload: dict, request: Request,
 def _standalone_correction(db, row, action):
     if row.upgrade_request_id or row.upgrade_role or related_pair_work(db, row.id):
         raise HTTPException(400, "升级工单关联记录请通过原升级流程处理")
-    employee = db.get(Employee, row.employee_id)
-    ensure_month_open(db, row.deduction_month,
-                      row.attraction_id_snapshot or (employee.attraction_id if employee else None), action)
+    ensure_deduction_months_open(db, row, (row.deduction_month,), action)
+
+
+def _formal_correction_operator(db: Session, user: V2User) -> bool:
+    return bool(user.account and can_upgrade_original(db, user)
+                and can_upgrade_original(db, reload_upgrade_operator(db, user.id, user.account.id)))
+
+
+def _level_correction_preview(db: Session, row: DeductionRecord) -> dict:
+    counts = deduction_counts_for_score(row) and not loa_excludes_month(db, row.employee_id, row.deduction_month)
+    levels = db.query(DeductionLevel).filter(
+        DeductionLevel.active.is_(True), DeductionLevel.code.in_(GSM_CORRECTION_LEVEL_CODES),
+    ).order_by(DeductionLevel.points, DeductionLevel.id).all()
+    options = []
+    for level in levels:
+        points = float(scoring_config.stored_deduction_points(db, row, level))
+        options.append({"id": level.id, "name": deduction_level_label(level, row.employee_type_snapshot),
+                        "points": points, "actual_points": points if counts else 0})
+    return {
+        "id": row.id, "level_id": row.deduction_level_id, "level_name": row.deduction_level_name,
+        "type_id": row.deduction_type_id, "status": row.status, "month": row.deduction_month,
+        "actual_points": float(row.points) if counts else 0, "levels": options,
+    }
+
+
+@router.get("/deductions/{record_id}/correction-preview")
+def preview_deduction_correction(
+    record_id: int, action: str, db: Session = Depends(get_db), user: V2User = Depends(current_user),
+):
+    admin = "SYSTEM_ADMIN" in user.permissions
+    if not admin and not can_upgrade_original(db, user):
+        raise HTTPException(403, "仅正式GSM或最高管理员可以更正扣分")
+    row = db.get(DeductionRecord, record_id)
+    if not row:
+        raise HTTPException(404, "扣分记录不存在")
+    if not admin:
+        require_gsm_standalone_correction(db, row, user)
+    if action == "level" and row.status in {"active", "pending_material", "material_failed"}:
+        _standalone_correction(db, row, "修改处分级别")
+        preview = _level_correction_preview(db, row)
+        return {**preview, "confirmation": submission_payload_digest(preview)}
+    if action == "restore" and row.status == "void":
+        _standalone_correction(db, row, "还原扣分")
+        return restore_event_check(db, row)
+    raise HTTPException(409, "该记录当前不可执行此操作，请刷新核对")
 
 
 def _correction_reason(payload):
@@ -1246,14 +1323,15 @@ def commit_original_upgrade(
         db.add(DeductionOriginalUpgrade(
             record_id=row.id, original_month=row.deduction_month, original_level_id=row.deduction_level_id,
             original_level_name=row.deduction_level_name, original_points=row.points,
-            result_level_name=level.name, result_points=points, decided_by=user.id, decided_by_name=user.name,
+            result_level_name=deduction_level_label(level, row.employee_type_snapshot),
+            result_points=points, decided_by=user.id, decided_by_name=user.name,
             decided_at=decided_at, mod_name=mod_name, mod_confirmed_on=mod_day.isoformat(), reason=reason,
         ))
         row.incident_on = row.incident_on or row.occurred_on
         row.occurred_on = preview["effective_on"]
         row.deduction_month = preview["effective_month"]
         row.deduction_level_id = level.id
-        row.deduction_level_name = level.name
+        row.deduction_level_name = deduction_level_label(level, row.employee_type_snapshot)
         row.points = points
         write_audit(db, user.employee, "原单升级", "deduction", row.id, before=before, after={
             **deduction_payload(row), "deduction_month": row.deduction_month,
@@ -1313,11 +1391,16 @@ def correct_deduction_type(record_id: int, payload: dict, request: Request,
 @router.post("/deductions/{record_id}/restore")
 def restore_deduction(record_id: int, payload: dict, request: Request,
                       db: Session = Depends(get_db),
-                      user: V2User = Depends(require_permissions("SYSTEM_ADMIN"))):
+                      user: V2User = Depends(current_user)):
     db.execute(text("BEGIN IMMEDIATE"))
+    admin = "SYSTEM_ADMIN" in user.permissions
+    if not admin and not _formal_correction_operator(db, user):
+        raise HTTPException(403, "仅正式GSM或最高管理员可以还原扣分")
     row = db.get(DeductionRecord, record_id)
     if not row:
         raise HTTPException(404, "扣分记录不存在")
+    if not admin:
+        require_gsm_standalone_correction(db, row, user)
     _standalone_correction(db, row, "还原扣分")
     if row.status != 'void':
         raise HTTPException(409, "记录状态已变化，请刷新后核对")
@@ -1332,6 +1415,11 @@ def restore_deduction(record_id: int, payload: dict, request: Request,
         raise HTTPException(400, "缺少可核实的作废前状态，不能直接还原")
     if row.material_status == 'processing':
         raise HTTPException(409, "材料正在处理中，请完成后再还原")
+    checked = restore_event_check(db, row)
+    distinct_reason = str(payload.get("different_event_reason") or "").strip()
+    if checked["records"] and (payload.get("event_confirmation") != checked["confirmation"]
+                               or not distinct_reason or len(distinct_reason) > 500):
+        raise HTTPException(409, "该员工同日已有其他记录，请重新打开弹窗核对并填写不同事件说明")
     if previous == 'active':
         material = db.get(StoredFile, row.document_file_id)
         if row.material_status != 'ready' or not material or material.status != 'active':
@@ -1352,8 +1440,9 @@ def restore_deduction(record_id: int, payload: dict, request: Request,
     row.voided_from_status = None
     row.voided_by = row.voided_by_name = row.voided_by_role_code = row.voided_by_role_name = None
     row.void_permission_scope_snapshot = row.voided_at = row.void_reason = None
-    write_audit(db, user.employee, "还原扣分", "deduction", row.id,
-                before=before, after=deduction_payload(row), reason=reason, ip_address=client_ip(request))
+    write_audit(db, user.employee, DEDUCTION_RESTORE_ACTION, "deduction", row.id,
+                before=before, after={**deduction_payload(row), **({"different_event_reason": distinct_reason} if checked["records"] else {})},
+                reason=reason, ip_address=client_ip(request))
     db.commit()
     invalidate_data_caches()
     return {"ok": True}
@@ -1365,8 +1454,15 @@ def void_deduction(record_id: int, payload: dict, request: Request, db: Session 
     row = db.get(DeductionRecord, record_id)
     if not row:
         raise HTTPException(404, "扣分记录不存在")
-    if row.submitter_id != user.id and "SYSTEM_ADMIN" not in user.permissions:
-        raise HTTPException(403, "只有原登记人或管理员可以作废")
+    if "SYSTEM_ADMIN" not in user.permissions:
+        if row.submitter_id != user.id:
+            if not _formal_correction_operator(db, user):
+                raise HTTPException(403, "只有原登记人、正式GSM或最高管理员可以作废")
+            require_gsm_standalone_correction(db, row, user)
+        elif row.employee_id == user.id and can_upgrade_original(db, user):
+            require_gsm_standalone_correction(db, row, user)
+        elif db.get(DeductionOriginalUpgrade, row.id):
+            raise HTTPException(409, "该记录已原单升级，不能通过普通更正操作")
     _standalone_correction(db, row, "作废扣分")
     if payload.get('expected_status') is not None and payload['expected_status'] != row.status:
         raise HTTPException(409, "记录状态已变化，请刷新后核对")
@@ -1375,8 +1471,6 @@ def void_deduction(record_id: int, payload: dict, request: Request, db: Session 
             raise HTTPException(409, "处分类型或等级已变化，请刷新后核对")
     if row.status not in {"active", "pending_material", "material_failed"}:
         raise HTTPException(400, "记录已经作废")
-    employee = db.get(Employee, row.employee_id)
-    ensure_month_open(db, row.deduction_month, row.attraction_id_snapshot or (employee.attraction_id if employee else None), "作废扣分")
     reason = str(payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "作废原因必填")

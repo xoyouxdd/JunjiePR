@@ -30,6 +30,7 @@ function renderWho() {
 function renderClockBar() {}
 
 function renderTabs() {
+  syncRotationContacts(tab === 'board' && !personalRotation && me.capabilities.rotation_contacts);
   if (!isManager()) { $tabs.hidden = true; return; }
   $tabs.hidden = false;
   $tabs.innerHTML = TABS.filter(([id])=>me.capabilities.can_manage||id==='board').map(([id, label]) => `<button type="button" class="${id === tab ? 'active' : ''}" data-tab="${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</button>`).join('');
@@ -423,6 +424,7 @@ function bindRoster() {
 // ---------------------------------------------------------------- 记录
 
 const EVENT_NAME = {
+  batch_check_in:'班前签到',correct_check_in:'补记已到',
   draft_fill_spares: '补齐备用岗位',draft_line:'预排线路启停',
   workflow_checkpoint:'操作恢复点',workflow_restore:'恢复线路上一步',rename_post:'岗位改名',hold101:'101定岗',resume101:'取消101定岗',task_timeout:'任务超时',task_transfer:'任务转接',task_refresh:'任务刷新',
   force_place:'强制安排上岗',entry_group:'整组上岗',entry_ready:'本人确认到位',entry_solo:'调整单人上岗',entry_adjust:'调整协同组合',entry_return:'本人到场重新领取安排',

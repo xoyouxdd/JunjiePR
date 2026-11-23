@@ -171,7 +171,7 @@ def notices(eng, now):
     for p in eng.P.values():
         state = p['state']
         a = p.get('assign')
-        if F.can_check_in(eng, p, now) and not F.checked_in(p):
+        if F.can_check_in(eng, p, now) and not F.attendance_recorded(p):
             out[(p['pid'], 'step')] = ('batch_check_in', '请确认已到', '请在班前三分钟截止前签到。')
         if p.get('batchResult'):
             result = batch_result_view(p['batchResult'])
@@ -233,9 +233,13 @@ def person_view(eng, p, now):
                and now + F.EPS >= (p.get('assign') or {}).get('notBefore', 0)
                and now < F.deadline(eng, p, now, (p.get('assign') or {}).get('notBefore', 0)))
     actions = ['arrive'] if p['state'] in F.WAITING_TO_REST else ['depart'] if task else []
-    check_in = F.can_check_in(eng, p, now) and not F.checked_in(p)
+    check_in = F.can_check_in(eng, p, now) and not F.attendance_recorded(p)
     if check_in:
         actions.append('batch_check_in')
+    correct_check_in = (eng.d['status'] == 'live' and F.missed_check_in(p, now, assigned_post=True)
+                        and (L is not None or eng.find_post(p['pid'])[0] is not None))
+    if correct_check_in:
+        actions.append('correct_check_in')
     flags = [flag for flag in p.get('flags', []) if flag not in ('推7点', '7点岗')]
     if F.seven_target(p):
         flags.append('7点岗')
@@ -261,6 +265,7 @@ def person_view(eng, p, now):
             'previewAssign': deepcopy(preview), 'upcomingShift': upcoming,
             'awaitingShiftEntry': eng.d['status'] == 'live' and F.awaiting_shift_entry(p),
             'canBatchCheckIn': check_in,
+            'canCorrectCheckIn': correct_check_in,
             'batchCheckInDeadline': p['start'] - F.BATCH_LEAD_MINUTES if check_in else None,
             'batchCheckedIn': F.checked_in(p), 'arrivalOutcome': None,
             'missedCheckIn': eng.d['status'] == 'live' and F.missed_check_in(p, now),
@@ -331,18 +336,32 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
     if getattr(actor, 'kind', None) == 'screen' and act not in S.SCREEN_ACTIONS:
         raise ActionError('休息室大屏只可确认去休息或去轮岗')
     if getattr(actor, 'kind', None) == 'member':
-        if act not in {'arrive', 'depart', 'batch_check_in'} or actor.member_employee_no != pid:
+        if act not in S.SCREEN_ACTIONS or actor.member_employee_no != pid:
             raise ActionError('只能确认本人轮岗')
     token = body.get('confirmation_token')
-    if act in {'arrive', 'depart', 'batch_check_in'}:
+    if act in S.SCREEN_ACTIONS:
         p = eng.person(pid)
         if not isinstance(token, str) or token != F.token(eng, p, act):
             raise S.ConfirmationConflict('人员状态已变化，请刷新后重新确认')
+    if act == 'correct_check_in':
+        line, index = eng.find_post(pid)
+        if line is None or not F.missed_check_in(p, now, assigned_post=True):
+            raise S.ConfirmationConflict('此人当前没有可补记的在岗未答到记录')
+        post = line['posts'][index]['name']
+        p['batchCheckInCorrectionFor'] = p['start']
+        eng.h.log('correct_check_in', actor, pid, line['id'], post, {'start': p['start']})
+        receipt = {'pid': pid, 'action': act, 'status': 'executed', 'token': token,
+                   'minute': now, 'date': eng.d['date'], 'state': p['state'],
+                   'source': getattr(actor, 'kind', 'manager'), 'line': line['id'], 'post': post}
+        eng.d.setdefault('confirmations', {})[token] = receipt
+        S.sync_notices(db, row.attraction_id, eng.d, eng, now)
+        S.save_day(db, row, eng.d)
+        return {'ok': True, 'executed': True, 'result': receipt}
     before = H.snapshot(eng.d)
     before['existingSegmentIds'] = H.existing_segment_ids(db, eng, now)
     result = {'ok': True, 'executed': True}
     if act == 'batch_check_in':
-        if not F.can_check_in(eng, p, now) or F.checked_in(p):
+        if not F.can_check_in(eng, p, now) or F.attendance_recorded(p):
             raise ActionError('当前不在本班次签到时间内')
         p['batchCheckedInFor'] = p['start']
         eng.h.log('batch_check_in', actor, pid, None, None, {'start': p['start']})
@@ -423,6 +442,7 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         p.update(start=start, end=end)
         eng.__dict__.pop('_forecast_shift_counts', None)
         p.pop('batchCheckedInFor', None)
+        p.pop('batchCheckInCorrectionFor', None)
         p['confirmationSequence'] = p.get('confirmationSequence', 0) + 1
         if p['state'] in {'rest', 'meal', 'ready'} and start > F.readiness(p):
             p['readyAt'] = start

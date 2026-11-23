@@ -423,6 +423,7 @@ def edit(db,attraction_id,actor,work_date,body):
             p.update(start=start, end=end)
         elif operation in ('sick', 'away', 'back'):
             p['initialPool'] = {'sick': 'sick', 'away': 'away', 'back': 'rest'}[operation]
+            p.pop('initialPoolRemaining', None)
             for kind in ('crew', 'seven'):
                 state['plan'][kind] = {key: value for key, value in state['plan'][kind].items() if value != pid}
             state['plan']['push7'] = [value for value in state['plan']['push7'] if value != pid]

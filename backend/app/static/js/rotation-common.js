@@ -128,7 +128,7 @@ function outsideKind(p){
   return p.state==='away'||p.initialPool==='away'?'出圈':null;
 }
 async function rtApi(path, options = {}) {
-  const {timeoutMs=12000,...fetchOptions}=options;
+  const {timeoutMs=12000,preserveBoardOnForbidden=false,...fetchOptions}=options;
   let res;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -150,7 +150,7 @@ async function rtApi(path, options = {}) {
     throw new Error('请重新进入轮岗');
   }
   if (!res.ok) {
-    if(formalRotation&&res.status===403){RT.data=null;const host=document.getElementById('rtApp');if(host)host.innerHTML='<section class="panel"><p role="alert">当前权限不允许执行此操作，请返回工作台或重新打开轮岗看板。</p></section>';}
+    if(formalRotation&&res.status===403&&!preserveBoardOnForbidden){RT.data=null;const host=document.getElementById('rtApp');if(host)host.innerHTML='<section class="panel"><p role="alert">当前权限不允许执行此操作，请返回工作台或重新打开轮岗看板。</p></section>';}
     const detail = body.detail;
     const error = new Error(typeof detail === 'string' ? detail : (detail && detail.message) || '操作失败，请稍后重试');
     error.status = res.status;

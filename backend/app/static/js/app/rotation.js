@@ -268,7 +268,7 @@ function mountRotationTasks(host,request,onComplete,reminderAnchor=host){
       const action=needsArrival?'arrive':!autoMorning&&a&&((['assigned','forecast'].includes(p.task?.status)&&['rest','meal','ready'].includes(p.state))||(p.state==='ready'&&p.canDepart))?'depart':null;
       const waiting=p.scheduledRestStart!==null&&p.scheduledRestStart!==undefined;
       const status=p.timeoutCase?'同线关联任务待负责人核实，暂不计确认超时':p.timeoutPending?'等待前序完成后更新任务，暂不计确认超时':waiting?`班次未开始 · ${hm(p.scheduledRestStart)}开始休息`:['rest','meal'].includes(p.state)?`${p.state==='meal'?'吃饭':'休息'}至 ${hm(p.readyAt)} · 剩 ${Math.max(0,Math.ceil((p.readyAt??data.clock.minute)-data.clock.minute))} 分钟`:p.state==='heading'?`前往 ${esc(a?.line||'')} 线，预计${hm(p.arriveAt)}到岗`:p.state==='onpost'?`已确认安排 · ${esc(p.line)}线 · ${esc(p.post)}`:p.state==='ready'&&!action?'等待上岗时间':action==='arrive'?'待确认休息／吃饭':p.state==='done'?'当日轮岗已结束':p.state==='exception'?'上岗超时，等待大屏、主管、TR或经理人工安排':'请留意当日轮岗安排';
-      const result=data.confirmations?.find(r=>!['reversed','superseded'].includes(r.status)
+      const result=data.confirmations?.find(r=>r.action!=='correct_check_in'&&!['reversed','superseded'].includes(r.status)
         &&(r.action!=='batch_check_in'||(p.upcomingShift&&p.batchCheckedIn)));
       const confirmation=personalConfirmation(p,action,data,pending,result);
       host.innerHTML=confirmation?scopeHtml+confirmation:`${scopeHtml}<section class="panel rt-personal-task"><div class="record-line"><h3>${action==='arrive'?'回休息室确认':action==='depart'?'上岗前确认':'我的轮岗'}</h3><a class="secondary" href="${portalPath('/rotation-board')}">当日看板</a></div><div class="rt-personal-identity"><strong>${esc(p.name)}</strong><span>${personalShift(p)}</span></div><p>${status}</p>${action==='arrive'?'<p class="rt-confirm-reminder">到达休息室后再确认，餐休从确认时开始计时。</p>':action==='depart'?'<p class="rt-confirm-reminder">看清本次任务，确认后前往指定岗位执行。</p>':''}${p.postHold?`<p role="status">持续定岗 · ${hm(p.postHold.since)}起 · ${esc(p.postHold.reason)}，手动取消或在当天轮岗结束时自动解除。</p>`:''}${a?`<p>安排：${esc(a.line)}线 · ${esc(a.entryPost||'入口岗位')}，${hm(a.departAt)}出发${a.targetName?' · 替换'+esc(a.targetName):''}</p>`:''}${a?`<p class="field-hint">${a.blocked?'安排失效，待主管核对':p.assignmentLocked?('本轮任务已派发'):'预计安排 · 整轮正式派发前可能调整'}；餐休结束后才可确认，以出发前最新任务为准。</p>`:''}${action==='arrive'&&p.mealOptions?.canChoose?'<fieldset><legend>本次选择</legend><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="rest" checked>休息</label><label class="checkbox-row"><input type="radio" name="formalRotationMeal" value="meal">吃饭</label></fieldset>':''}${action==='arrive'&&p.mealOptions?.forced?'<p>已到饭点，本次按原规则安排吃饭。</p>':''}${pending?'<p role="status">上次提交结果待核对，可刷新或使用原步骤重试。</p><button type="button" class="primary" data-rotation-retry>重试本次确认</button>':action?`<button type="button" class="primary" data-rotation-task="${action}">${action==='batch_check_in'?'已到':action==='depart'?'确认去上岗':'确认已到休息室'}</button>`:''}${result?`<p class="field-hint">最近安排生效：${hm(result.minute)} · ${personalReceipt(result)}</p>`:''}${taskLine(a||p.state==='onpost'?data.line:null,p.pid)}</section>`;
@@ -279,6 +279,10 @@ function mountRotationTasks(host,request,onComplete,reminderAnchor=host){
       host.querySelector('[data-rotation-task]')?.addEventListener('click',()=>submit(action));
       bindScope();
       const panel=host.querySelector('.rt-personal-task');
+      if(p.canCorrectCheckIn&&!pending){
+        panel.querySelector('.rt-personal-identity')?.insertAdjacentHTML('beforeend','<button type="button" class="rt-badge rt-missed-attendance" data-rotation-correct-check-in title="补记已到">未答到</button>');
+        panel.querySelector('[data-rotation-correct-check-in]')?.addEventListener('click',()=>submit('correct_check_in'));
+      }
       if(p.morningRest)panel.insertAdjacentHTML('afterbegin',`<p><strong>07:30 上岗</strong> · ${autoMorning?'系统将在 07:27 安排岗位':'休息结束后请本人确认上岗'}</p>`);
       if(p.mealEligible&&!p.ate)panel.querySelector('.rt-personal-identity')?.insertAdjacentHTML('beforeend','<span class="rt-badge meal">未休饭</span>');
       if(action==='arrive'&&p.mealOptions?.reserveText)panel.querySelector('.rt-personal-identity')?.insertAdjacentHTML('afterend',`<p class="field-hint">${esc(p.mealOptions.reserveText)}。基础用餐条件及强制饭点沿用现有规则。</p>`);
@@ -354,6 +358,8 @@ function mountRotationTasks(host,request,onComplete,reminderAnchor=host){
     }});
     try{
       const a=p.assign;
+      if(action==='correct_check_in'&&!retry
+          &&!await confirmModal('补记已到','<p>确认本人已到？</p>','确认已到'))return;
       if(action==='depart'){
         const watch=p.task&&watchConfirmation((container,next)=>{
           const comparison=container.querySelector('[data-departure-comparison]');
@@ -409,7 +415,7 @@ function mountRotationTasks(host,request,onComplete,reminderAnchor=host){
       if(out.executed||out.duplicate)rememberPunch(date,body);
       save(null);completed=true;
       updateReminder();
-      toast(action==='batch_check_in'?'已签到':out.duplicate?'本次已确认，无需重复操作':'轮岗已确认，正在同步看板');
+      toast(action==='correct_check_in'?'已补记已到':action==='batch_check_in'?'已签到':out.duplicate?'本次已确认，无需重复操作':'轮岗已确认，正在同步看板');
     }catch(error){if(error.status&&error.status<500)save(null);toast(error.message||'提交结果待核对，请勿重复确认',true);}
     finally{busy=false;if(current()){await load(false,{syncBadge:false});await refreshActionBadge();if(completed&&current())onComplete?.();}}
   }

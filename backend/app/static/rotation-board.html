@@ -7,25 +7,37 @@
   <meta name="format-detection" content="telephone=no">
   <title>轮岗看板 · FZ TEAM WORKBENCH</title>
   <link rel="stylesheet" href="static/css/style.css?v=__STATIC_CACHE_VERSION__">
-  <link rel="stylesheet" href="static/css/rotation.css?v=__STATIC_CACHE_VERSION__">
+  <link rel="stylesheet" href="static/css/rotation.css?v=__STATIC_CACHE_VERSION__-contacts">
 </head>
 <body class="rotation-page" data-formal-rotation>
   <header class="rt-top">
-    <div class="rt-title"><strong>轮岗看板</strong><small class="rt-brand-en" lang="en">FZ TEAM WORKBENCH</small></div>
+    <div class="rt-title">
+      <strong>轮岗看板</strong><small class="rt-brand-en" lang="en">FZ TEAM WORKBENCH</small>
+      <button type="button" id="rtContactsTrigger" class="rt-contacts-trigger" aria-expanded="false" aria-controls="rtContacts" hidden>轮岗联络</button>
+    </div>
     <div class="rt-who" id="rtWho"></div>
     <div class="rt-clock" id="rtClock" aria-live="off"></div>
     <span class="rt-sync" id="rtSync" role="status">正在连接</span>
     <button type="button" class="ghost rt-switch" id="rtSwitch">返回工作台</button>
     <div class="rt-rotation-totals rt-board-totals" id="rtBoardTotals" hidden></div>
+    <section id="rtContacts" class="rt-contacts" aria-labelledby="rtContactsTitle" hidden>
+      <header>
+        <div><h2 id="rtContactsTitle">轮岗联络人</h2><p>热力追踪 · 培训师 TR</p></div>
+        <button type="button" class="secondary" data-contacts-close aria-label="关闭轮岗联络">×</button>
+      </header>
+      <div id="rtContactsContent"></div>
+      <p id="rtContactsStatus" role="status"></p>
+    </section>
   </header>
   <section class="rt-clockbar" id="rtClockBar" hidden></section>
   <nav class="rt-tabs" id="rtTabs" aria-label="轮岗功能" hidden></nav>
   <main class="rt-main" id="rtApp"><section class="empty">正在加载…</section></main>
   <div id="rtModal"></div>
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
-  <script src="static/js/rotation-common.js?v=__STATIC_CACHE_VERSION__"></script>
+  <script src="static/js/rotation-common.js?v=__STATIC_CACHE_VERSION__-contacts"></script>
   <script src="static/js/rotation-workflow.js?v=__STATIC_CACHE_VERSION__"></script>
-  <script src="static/js/rotation-forecast.js?v=__STATIC_CACHE_VERSION__"></script>
-  <script src="static/js/rotation.js?v=__STATIC_CACHE_VERSION__"></script>
+  <script src="static/js/rotation-forecast.js?v=__STATIC_CACHE_VERSION__-attendance-correction"></script>
+  <script src="static/js/rotation-contacts.js?v=__STATIC_CACHE_VERSION__-contacts"></script>
+  <script src="static/js/rotation.js?v=__STATIC_CACHE_VERSION__-contacts"></script>
 </body>
 </html>

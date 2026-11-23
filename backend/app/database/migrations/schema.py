@@ -4,6 +4,12 @@ from __future__ import annotations
 from sqlalchemy import text
 
 
+def ensure_deduction_employee_type_snapshot(db) -> None:
+    columns = {row[1] for row in db.execute(text("PRAGMA table_info(deduction_records)"))}
+    if columns and "employee_type_snapshot" not in columns:
+        db.execute(text("ALTER TABLE deduction_records ADD COLUMN employee_type_snapshot VARCHAR(80)"))
+
+
 def ensure_deduction_incident_date(db) -> None:
     columns = {row[1] for row in db.execute(text("PRAGMA table_info(deduction_records)"))}
     if columns and "incident_on" not in columns:

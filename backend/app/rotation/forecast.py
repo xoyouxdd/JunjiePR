@@ -141,11 +141,15 @@ def checked_in(p):
     return p.get('batchCheckedInFor') == p['start']
 
 
+def attendance_recorded(p):
+    return checked_in(p) or p.get('batchCheckInCorrectionFor') == p['start']
+
+
 def missed_check_in(p, now, *, assigned_post=False):
     start = p['start']
     track_seven = start == SEVEN_SHIFT and not p.get('sevenReplaced')
     track_relief = start == RELIEF_SHIFT and (assigned_post or p['state'] == 'onpost')
-    return ((track_seven or track_relief) and attendance_candidate(p) and not checked_in(p)
+    return ((track_seven or track_relief) and attendance_candidate(p) and not attendance_recorded(p)
             and now >= start - BATCH_LEAD_MINUTES)
 
 
@@ -402,7 +406,7 @@ def shift_previews(eng, now):
     previews, expected_ready = {}, {}
     for p in upcoming:
         pid, start = p['pid'], p['start']
-        if start in EARLY_PENDING_SHIFTS:
+        if start in EARLY_PENDING_SHIFTS or p.get('initialPool') in ('pending', 'meal'):
             continue
         if p.get('initialPool') != 'rest' and pid in seats:
             line, i, post = eng.plan_post(seats[pid])
@@ -411,7 +415,7 @@ def shift_previews(eng, now):
                 continue
         delay = eng.S['breakMin'] if eng.opening_rest_candidate(p, opening_relief if start == 435 else None) else 0
         if p.get('initialPool') == 'rest':
-            delay = 15
+            delay = p.get('initialPoolRemaining', 15)
         expected_ready[pid] = start + delay
     if not expected_ready:
         return previews
@@ -699,6 +703,7 @@ def restore(p, now):
     p['manualPaused'] = False
     p['role'] = 'rotation'
     p.pop('initialPool', None)
+    p.pop('initialPoolRemaining', None)
     p.pop('requestedExit', None)
 
 
@@ -737,6 +742,15 @@ def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, a
             raise ActionError('当前不满足吃饭条件或轮岗储备不足，继续原休息')
     if destination == 'meal' and p.get('ate') and not repeat_meal:
         raise ActionError('此人已进过吃饭区，是否继续？')
+    duration = None
+    if destination in ('rest', 'meal'):
+        duration = float(remaining) if remaining is not None else eng.S['mealMin' if destination == 'meal' else 'breakMin']
+        if not math.isfinite(duration) or not 0 <= duration <= 24 * 60:
+            raise ActionError('剩余时间须在0至1440分钟内')
+    start_with_shift = (not automatic and p['start'] in (SEVEN_SHIFT, RELIEF_SHIFT)
+                        and now < p['start'] and destination in ('pending', 'rest', 'meal'))
+    if start_with_shift and destination == 'rest' and p['start'] == RELIEF_SHIFT and remaining is None:
+        duration = MORNING_REST_END - RELIEF_SHIFT
     old_exception = p.pop('exception', None)
     if not automatic:
         cancel_active_absences(eng, p, now, actor)
@@ -744,10 +758,14 @@ def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, a
     restore(p, now)
     p['confirmationSequence'] = p.get('confirmationSequence', 0) + 1
     p.update(state=destination, away=None, readyAt=None, breakStart=None, breakKind=None, timeoutAt=None)
-    if destination in ('rest', 'meal'):
-        duration = float(remaining) if remaining is not None else eng.S['mealMin' if destination == 'meal' else 'breakMin']
-        if not math.isfinite(duration) or not 0 <= duration <= 24 * 60:
-            raise ActionError('剩余时间须在0至1440分钟内')
+    if start_with_shift:
+        # A pre-shift move changes the starting pool, as in daily preparation.
+        p.update(state='notyet', initialPool=destination, initialPoolRemaining=duration, manualRestored=False)
+        p.pop('manualRestoredAt', None)
+        for kind in ('crew', 'seven'):
+            eng.d['plan'][kind] = {key: worker for key, worker in eng.d['plan'][kind].items() if worker != pid}
+        eng.d['plan']['push7'] = [worker for worker in eng.d['plan']['push7'] if worker != pid]
+    elif duration is not None:
         p.update(readyAt=now + duration, breakStart=break_start,
                  breakKind=destination, arriveAnchor=break_start)
         save_boarding_deadline(p, p['readyAt'] + BOARDING_TIMEOUT_MINUTES)
@@ -758,6 +776,8 @@ def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, a
     elif destination == 'other':
         p['manualPaused'] = True
     detail = {'pool': destination, 'remaining': remaining, 'endedException': old_exception}
+    if start_with_shift:
+        detail['scheduledAt'] = p['start']
     if credited_rest is not None:
         detail['credited_rest'] = credited_rest
     eng.h.log('pool_move', actor, pid, None, None, detail)
@@ -1158,11 +1178,13 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch, batch_targ
             p.pop('manualRestoredAt', None)
         if p['state'] == 'notyet' and now >= p['start'] and not p.get('manualPaused'):
             initial = p.pop('initialPool', None)
+            deferred_move = 'initialPoolRemaining' in p
+            remaining = p.pop('initialPoolRemaining', 15 if initial == 'rest' else None)
             if initial:
                 if initial == 'sick':
                     p.update(state='sick', manualPaused=True)
                 else:
-                    pool(eng, p['pid'], initial, now, 'system', remaining=15 if initial == 'rest' else None)
+                    pool(eng, p['pid'], initial, p['start'] if deferred_move else now, 'system', remaining=remaining)
                 continue
             if p['start'] in EARLY_PENDING_SHIFTS and p['role'] in ('rotation', 'op'):
                 release_reserved_seat(eng, p, seats, seven)
@@ -1435,6 +1457,6 @@ def manual_place(eng, pid, lid, i, mode, now, actor, *, update_sort_time=False):
 def token(eng, p, action):
     value = [eng.d.get('confirmationEpoch'), eng.d['date'], p['pid'], action,
              p.get('confirmationSequence', 0), p['state'], p.get('readyAt')]
-    if action == 'batch_check_in':
+    if action in ('batch_check_in', 'correct_check_in'):
         value.append(p['start'])
     return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()

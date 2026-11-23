@@ -266,7 +266,8 @@ async def create_sick_leave(
             awaiting_material = not violation_photo_mode and not violation_pdf_mode
             violation = DeductionRecord(
                 employee_id=target.id, employee_no=target.employee_no, employee_name=target.name,
-                employee_role_snapshot=target_role.name, employee_group_id_snapshot=group.id if group else None,
+                employee_role_snapshot=target_role.name, employee_type_snapshot=target.employee_type,
+                employee_group_id_snapshot=group.id if group else None,
                 attraction_id_snapshot=target.attraction_id, deduction_type_id=violation_type.id,
                 deduction_type_name=violation_type.name, deduction_level_id=statement.id,
                 deduction_level_name=statement.name, points=Decimal('0') if first_statement else scoring_config.deduction_points(db, violation_type, statement, leave_start_date), scoring_policy_json=scoring_config.dump(scoring_config.deduction_snapshot(db, violation_type, leave_start_date)), occurred_on=leave_start_date,

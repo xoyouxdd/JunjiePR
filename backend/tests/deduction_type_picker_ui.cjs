@@ -12,11 +12,18 @@ const {routeFrontend} = require('./support/frontend-page.cjs');
       <link rel="stylesheet" href="/static/css/workspace-ui.css">
       <main id="app" data-workspace-ui style="padding:20px;max-width:800px"></main><div id="tabs"></div><div id="toast"></div>`;
     await page.goto(await routeFrontend(page,{html}));
+    await page.route('**/api/employee-targets?*', route=>route.fulfill({json:{
+      items:[{id:17,employee_no:'DEMO17',name:'样例实习生',role_name:'CM',is_intern:true}],total:1,
+    }}));
     await page.evaluate(async () => {
       const {state}=await import('/static/js/app/state.js');
       const {deductionForm,bindDeductionUpgradeHint}=await import('/static/js/app/deductions.js');
+      const {bindEmployeeSearches}=await import('/static/js/app/employee-picker.js');
       state.me={role_code:'GSM',permissions:['DEDUCTION_ALL']};
-      state.options={deduction_levels:[{id:1,code:'STATEMENT',name:'声明',points:1},{id:2,code:'MEMO',name:'备忘录',points:3}],deduction_types:[
+      state.options={deduction_levels:[
+        {id:1,code:'STATEMENT',name:'声明',points:1},{id:2,code:'MEMO',name:'备忘录',points:3},
+        {id:3,code:'WARNING_1',name:'一级警告',points:5}
+      ],deduction_types:[
         {id:11,name:'考勤-早打卡',code:'ATT_EARLY_CLOCK',repeat_check:true},
         {id:12,name:'考勤-迟到30分钟内',code:'ATT_LATE_WITHIN_30',repeat_check:true},
         {id:13,name:'安全',code:'SAFETY',repeat_check:false},
@@ -24,6 +31,7 @@ const {routeFrontend} = require('./support/frontend-page.cjs');
       ]};
       document.getElementById('app').innerHTML=deductionForm();
       bindDeductionUpgradeHint();
+      bindEmployeeSearches(document.getElementById('app'));
       window.typeChanges=0;
       document.getElementById('deductionTypeSelect').addEventListener('change',()=>window.typeChanges++);
     });
@@ -31,6 +39,12 @@ const {routeFrontend} = require('./support/frontend-page.cjs');
     const menu = page.locator('#deductionTypeMenu');
     const note = trigger.locator('.deduction-upgrade-note');
     const levelSelect = page.locator('#deductionLevelSelect');
+    await page.locator('[data-employee-search]').fill('DEMO17');
+    await page.getByRole('button',{name:/样例实习生/}).click();
+    assert.equal(await levelSelect.locator('option[value="2"]').textContent(),'备忘录 · 3.00分');
+    assert.equal(await levelSelect.locator('option[value="3"]').textContent(),'备忘录（参考全职一级警告） · 5.00分');
+    await page.getByRole('button',{name:'重新选择'}).click();
+    assert.equal(await levelSelect.locator('option[value="3"]').textContent(),'一级警告 · 5.00分');
     await levelSelect.selectOption('2');
     assert.match(await trigger.innerText(), /考勤-早打卡.*考勤异常3个月内第2次触发升级/s);
     const styles = await note.evaluate(node => ({ size: parseFloat(getComputedStyle(node).fontSize), color: getComputedStyle(node).color, parent: parseFloat(getComputedStyle(node.parentElement).fontSize) }));

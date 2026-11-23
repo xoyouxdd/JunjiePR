@@ -48,6 +48,12 @@ function memberHomeMonthLabel(month){
 
 const fmt = n => {const value=Number(n||0);return (Math.abs(value)<0.005?0:value).toFixed(2);};
 
+export function deductionLevelLabel(level, isIntern){
+  if(isIntern&&level.code==='MEMO')return '备忘录';
+  if(isIntern&&level.code==='WARNING_1')return '备忘录（参考全职一级警告）';
+  return level.name;
+}
+
 function recognitionScoreText(r){const original=fmt(r.fraction);if(r.status==='confirmed'){const credited=fmt(r.credited_fraction ?? r.fraction);if(credited!==original)return `计入${credited}分（原始${original}）`;return `${credited}分`;}return `${original}分`;}
 
 function recognitionScoreNote(r){return r.monthly_cap_reason?`<small>${esc(r.monthly_cap_reason)}</small>`:'';}

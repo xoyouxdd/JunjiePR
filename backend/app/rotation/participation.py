@@ -42,7 +42,7 @@ def roster_metadata(db,aid,day,upload_id=None):
 
 
 @contextmanager
-def _formal(db):
+def formal_scope(db):
     previous=db.info.get('rotation_formal')
     db.info['rotation_formal']=True
     try:yield
@@ -52,7 +52,7 @@ def _formal(db):
 
 
 def contexts(db,no,day=None):
-    with _formal(db):
+    with formal_scope(db):
         return _contexts(db,no,day)
 
 
@@ -91,7 +91,7 @@ def pending_formal_steps(db, employee_no, home_attraction_id):
     """Count committed tasks using the same formal workday and clock as the personal board."""
     from app.rotation import forecast as F, service as S
     from app.rotation.namespace import FORMAL_TABLES
-    with _formal(db):
+    with formal_scope(db):
         aids = {choice['id'] for choice in _contexts(db, employee_no)}
         if home_attraction_id:
             aids.add(home_attraction_id)
@@ -106,7 +106,7 @@ def pending_formal_steps(db, employee_no, home_attraction_id):
             person = state.get('persons', {}).get(employee_no)
             if state.get('ruleVersion') != 2 or not person:
                 continue
-            if F.can_check_in_for_day(state, person, minute) and not F.checked_in(person):
+            if F.can_check_in_for_day(state, person, minute) and not F.attendance_recorded(person):
                 count += 1
                 continue
             assignment = person.get('assign')
@@ -121,7 +121,7 @@ def pending_formal_steps(db, employee_no, home_attraction_id):
 
 
 def personal_scope(db,user,selected=None):
-    choices=contexts(db,user.employee.employee_no)
+    choices=contexts(db,user.employee.employee_no,getattr(user,'rotation_work_day',None))
     home=user.employee.attraction_id
     if not choices and not user.rotation_temporary and home:
         circle=db.get(Attraction,home)

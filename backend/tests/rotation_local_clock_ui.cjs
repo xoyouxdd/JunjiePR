@@ -27,6 +27,13 @@ async function main(){try{
     await page.getByRole('button',{name:'应用时间',exact:true}).click();
     await page.waitForFunction(()=>RT.data?.clock.minute===450.2&&RT.data.clock.paused);
     assert.match(await page.locator('#localSimulationBadge').innerText(),/本地模拟时间.*已暂停.*×1/);
+    const anonymous=await browser.newContext({viewport:{width:390,height:844}});
+    const signIn=await anonymous.newPage();
+    await signIn.goto(base+'/login');
+    const loginBadge=signIn.locator('#localSimulationBadge');
+    await loginBadge.filter({hasText:'2026-11-05 07:30:12 · 已暂停'}).waitFor();
+    assert.equal(await signIn.locator('#rtClockBar').count(),0);
+    assert(await signIn.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     // Updating the board must not replace a partially edited clock input.
     await page.locator('#lcTime').fill('07:40:23');await page.evaluate(()=>RT.load());
     assert.equal(await page.locator('#lcTime').inputValue(),'07:40:23');
@@ -45,6 +52,8 @@ async function main(){try{
     for(const pid of ids){await post({action:'pool',pid,pool:'rest'});await post({action:'break_time',pid,remaining:1});}
     await page.evaluate(()=>RT.load());await page.getByRole('button',{name:'快进1分钟',exact:true}).click();
     await page.waitForFunction(()=>RT.data.clock.minute===451.2);
+    await loginBadge.filter({hasText:'2026-11-05 07:31:12 · 已暂停'}).waitFor();
+    await anonymous.close();
     for(const pid of ids)assert.equal((await state()).day.persons.find(p=>p.pid===pid).state,'rest');
     // A real personal page confirms only itself; the other person remains unexecuted.
     const member=await browser.newContext({viewport:{width:390,height:844}});
@@ -83,8 +92,11 @@ async function main(){try{
     await page.getByRole('button',{name:'确认清理并从初始班表开始',exact:true}).click();
     assert.equal((await state()).clock.minute,461.2);
     await page.locator('[name=confirm_date]').fill('2026-11-05');
-    await page.getByRole('button',{name:'确认清理并从初始班表开始',exact:true}).click();
-    await page.waitForFunction(()=>RT.data?.clock.minute===240&&RT.data.clock.paused);
+    await Promise.all([
+      page.waitForEvent('framenavigated',frame=>frame===page.mainFrame()),
+      page.getByRole('button',{name:'确认清理并从初始班表开始',exact:true}).click(),
+    ]);
+    await page.waitForFunction(()=>typeof RT!=='undefined'&&RT.data?.clock.minute===240&&RT.data.clock.paused);
     // Calendar and working date remain distinct over midnight until the actual final shift.
     await page.locator('#lcDate').fill('2026-11-05');await page.locator('#lcTime').fill('23:59:12');
     await page.getByRole('button',{name:'应用时间',exact:true}).click();await page.waitForFunction(()=>RT.data.clock.minute===1439.2);

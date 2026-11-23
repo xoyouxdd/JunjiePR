@@ -45,9 +45,11 @@ def get_declaration_statistics(
     type_id: int | None = None, status: str = "", keyword: str = "",
     db: Session = Depends(get_db), user: V2User = Depends(require_permissions("DECLARATION_STATS_VIEW")),
 ):
+    formal_gsm = can_upgrade_original(db, user)
     return declaration_payload(
         db, month or date.today().strftime("%Y-%m"), attraction_id, level_id, type_id, status, keyword,
-        include_upgrade_slots=True, allow_original_upgrade=can_upgrade_original(db, user),
+        include_upgrade_slots=True, allow_original_upgrade=formal_gsm,
+        gsm_correction_operator_id=user.id if formal_gsm else None,
     )
 
 

@@ -22,12 +22,11 @@ async function forecastSend(body){
 }
 function forecastRoutes(task){return `<ul>${(task?.routes||[]).map(r=>`<li>${esc(r.name)}：${esc(r.from)} → ${esc(r.to)}</li>`).join('')}</ul>`;}
 function forecastOverdue(p,n,screen=false){
-  if(!p.canDepart&&p.state!=='exception')return '';
+  if(p.state==='exception')return '<span class="rt-forecast-overdue">已超时</span>';
+  if(!p.canDepart)return '';
   // The deadline includes closed-line pauses and delayed openings.
-  const timing=p.state==='exception'?p.exception:p.task;
-  const deadline=timing?.deadlineAt,windowMinutes=timing?.timeoutWindowMinutes??3;
+  const deadline=p.task?.deadlineAt,windowMinutes=p.task?.timeoutWindowMinutes??3;
   if(screen){
-    if(p.state==='exception')return '<span class="rt-forecast-overdue">已超时</span>';
     return Number.isFinite(deadline)?`<span class="rt-screen-countdown" data-screen-deadline="${deadline}"></span>`:'';
   }
   const start=Number.isFinite(deadline)?deadline-windowMinutes:p.readyAt;
@@ -45,11 +44,14 @@ function forecastLineCard(L,n,ops){
     const who=p?.name||(addTime?`${addTime} 加岗`:post.openingStatus?'等待接替':'空岗');
     const status=post.openExpired?'加岗已失效':adding?(post.openingStatus?'准备加岗':'待加'):post.prearranged||p?.state==='notyet'?'预排':post.open?(p?'在岗':'空岗'):'未开岗';
     const label=editPosts?`<button type="button" class="rt-pn" draggable="true" data-f-post="${esc(L.id)}#${i}" data-f-post-key="${esc(post.key)}" aria-label="${esc(post.name)}，双击改名，拖拽交换岗位" title="双击改名，拖拽交换岗位">${esc(post.name)}</button>`:`<span class="rt-pn">${esc(post.name)}</span>`;
-    const attendanceBadge=post.missedCheckIn||p?.missedCheckIn
+    const canCorrect=(manage||screen)&&!RT.data?.day?.readOnly&&post.missedCheckIn&&p?.canCorrectCheckIn;
+    const attendanceBadge=(post.missedCheckIn||p?.missedCheckIn)&&!canCorrect
       ?'<small class="rt-badge rt-missed-attendance">未答到</small>'
       :post.pendingCheckIn?'<small class="rt-badge prep">未签到</small>':'';
-    const checkIn=manage&&p?.canBatchCheckIn&&(p.state==='onpost'||post.pendingCheckIn)?`<button type="button" class="secondary rt-post-check-in" data-f-check-in="${esc(p.pid)}">已到</button>`:'';
-    const statusTag=screen&&status===who&&!checkIn?'':`<span class="rt-mins${status==='在岗'?' rt-post-staffed':''}">${status}${checkIn}</span>`;
+    const checkIn=canCorrect
+      ?`<button type="button" class="rt-badge rt-missed-attendance rt-post-check-in" data-f-correct-check-in="${esc(p.pid)}" title="补记已到">未答到</button>`
+      :manage&&p?.canBatchCheckIn&&(p.state==='onpost'||post.pendingCheckIn)?`<button type="button" class="secondary rt-post-check-in" data-f-check-in="${esc(p.pid)}">已到</button>`:'';
+    const statusTag=screen&&status===who&&!checkIn?'':`<span class="rt-mins${status==='在岗'&&!checkIn?' rt-post-staffed':''}">${status}${checkIn}</span>`;
     return `<div class="rt-post${post.open?'':' closed'}${adding?' pending-add':''}${p?.preparing?' prep':''}${p?.state==='onpost'&&p.batchOnPost!=null?' rt-batch-on-post':''}" data-f-slot="${esc(L.id)}#${i}" data-f-slot-key="${esc(post.key)}">${label}<${personTag}${manage?' type="button"':''} class="rt-who-name"${manage&&p?' data-f-person="'+esc(p.pid)+'"':''}${drag}>${esc(who)}${p&&addTime?`<span class="rt-badge prep">待加 ${esc(addTime)}</span>`:''}${p?.state==='onpost'?rotationPostEntryTime(p):''}${rotationPostShiftEnd(p)}${rotationSevenBadge(p,p?.state==='notyet'&&p.start===420)}${attendanceBadge}${rotationMealBadge(p)}${p?.preparing?'<span class="rt-badge prep">'+preparingText(p.preparing)+'</span>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</${personTag}>${statusTag}</div>`;
   }).join('')}</div>`;
 }
@@ -106,7 +108,7 @@ function forecastPoolCard(p,key,n,{manage=false,screen=false}={}){
   const a=upcoming?p.previewAssign:p.assign,route=upcoming?a:p.task;
   const mealTail=p.breakKind==='meal_rest'?'饭后休息 · ':'';
   const returnRest=plannedReturnRestLabel(p);
-  const detail=screen&&ready?'':outsideKind(p)==='病假'?esc(sickLeaveLabel(p)):key==='away'?esc(p.away?.reason||'出圈'):returnRest?esc(returnRest):upcoming?`准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-n))} 分钟`:p.awaitingShiftEntry?(ready?'准备上班 · 已到班':'准备上班 · 已到班，等待安排'):p.exception?`原预计 ${esc(p.exception.assignment?.line||'')} · ${forecastClock(p.exception.allowedAt)}可上岗 · ${forecastClock(p.exception.at)}超时`:rest?`${mealTail}${Math.max(0,Math.ceil((p.readyAt??n)-n))}分钟 · ${forecastClock(p.readyAt)}可上岗`:p.state==='notyet'?`${forecastClock(p.start)}到班`:p.state==='done'?'已下班':'';
+  const detail=screen&&ready?'':outsideKind(p)==='病假'?esc(sickLeaveLabel(p)):key==='away'?esc(p.away?.reason||'出圈'):returnRest?esc(returnRest):upcoming?`准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-n))} 分钟`:p.awaitingShiftEntry?(ready?'准备上班 · 已到班':'准备上班 · 已到班，等待安排'):p.exception?`原预计 ${esc(p.exception.assignment?.line||'')} · ${forecastClock(p.exception.allowedAt)}可上岗 · ${forecastClock(p.exception.at)}进异常池`:rest?`${mealTail}${Math.max(0,Math.ceil((p.readyAt??n)-n))}分钟 · ${forecastClock(p.readyAt)}可上岗`:p.state==='notyet'?`${forecastClock(p.start)}到班`:p.state==='done'?'已下班':'';
   return `<div class="rt-chip${ready?' rt-can-board':''}"${manage?' draggable="true" data-f-drag="'+esc(p.pid)+'"':''}><div class="rt-forecast-person-head"><${personTag}${manage?' type="button"':''} class="rt-forecast-name"${manage?' data-f-person="'+esc(p.pid)+'"':''}>${rotationName(p)}</${personTag}>${rotationSevenBadge(p,p.state==='notyet'&&p.start===420)}${p.missedCheckIn?'<small class="rt-badge rt-missed-attendance">未答到</small>':''}${rotationMealBadge(p)}${forecastOverdue(p,n,screen)}</div>${detail?`<span class="rt-sub">${detail}</span>`:''}${confirm&&p.canBatchCheckIn?`<button type="button" class="primary" data-f-check-in="${esc(p.pid)}">已到</button>`:upcoming&&p.batchCheckedIn?'<span class="rt-sub">已签到</span>':''}${a?`<span class="rt-go">预计 ${esc(a.line)}${a.why?' · '+esc(a.why):''}${a.batchSize>1?' · 同分钟预计'+a.batchSize+'人':''}</span>`:''}${route?.routes?.length?`<details class="rt-forecast-detail"${screen?` data-screen-detail="route:${esc(p.pid)}"`:''}><summary>预计路线</summary>${forecastRoutes(route)}</details>`:''}${confirm&&ready?`<button type="button" class="primary" data-f-board="${esc(p.pid)}">${screen?'确认去轮岗':'可上岗'}</button>`:''}${confirm&&['pending','walkback','op'].includes(p.state)?`<button type="button" class="primary" data-f-arrive="${esc(p.pid)}">${screen?'去休息':'确认休息／吃饭'}</button>`:''}</div>`;
 }
 
@@ -400,7 +402,7 @@ function forecastAdd(){
 }
 document.addEventListener('click',event=>{
   if(!forecastActive())return;
-  const target=event.target.closest('[data-f-board],[data-f-check-in],[data-f-arrive],[data-f-person],[data-f-head],[data-f-add]');
+  const target=event.target.closest('[data-f-board],[data-f-check-in],[data-f-correct-check-in],[data-f-arrive],[data-f-person],[data-f-head],[data-f-add]');
   if(!target)return;event.preventDefault();event.stopImmediatePropagation();
   if(target.hasAttribute('data-f-board'))forecastConfirm(personOf(target.dataset.fBoard));
   else if(target.hasAttribute('data-f-check-in')){
@@ -409,6 +411,13 @@ document.addEventListener('click',event=>{
       target.disabled=true;
       void forecastRun({action:'batch_check_in',pid:p.pid,confirmation_token:p.confirmationTokens.batch_check_in})
         .finally(()=>{target.disabled=false;});
+    }
+  }
+  else if(target.hasAttribute('data-f-correct-check-in')){
+    const p=personOf(target.dataset.fCorrectCheckIn);
+    if(p?.canCorrectCheckIn){
+      const body={action:'correct_check_in',pid:p.pid,confirmation_token:p.confirmationTokens.correct_check_in};
+      confirmBox('补记已到',`<p>确认 ${esc(p.name)} 已到？</p>`,'确认已到',()=>forecastRun(body));
     }
   }
   else if(target.hasAttribute('data-f-arrive'))forecastArrive(personOf(target.dataset.fArrive));

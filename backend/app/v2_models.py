@@ -1080,6 +1080,7 @@ class DeductionRecord(Base):
     employee_no: Mapped[str] = mapped_column(String(50), index=True)
     employee_name: Mapped[str] = mapped_column(String(100), index=True)
     employee_role_snapshot: Mapped[str] = mapped_column(String(30))
+    employee_type_snapshot: Mapped[str | None] = mapped_column(String(80), nullable=True)
     employee_group_id_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     attraction_id_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     deduction_type_id: Mapped[int] = mapped_column(ForeignKey("deduction_types.id"))

@@ -2887,7 +2887,7 @@ body.rotation-personal-only .rt-line{margin-top:12px;}
   .declaration-statistics-page .declaration-workflow { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
   .declaration-statistics-page .declaration-registration { gap: 4px; }
   .declaration-statistics-page .declaration-registration strong { font-size: var(--fs-sm); }
-  .declaration-statistics-page .declaration-operations { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .declaration-statistics-page .declaration-operations { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
   .declaration-statistics-page .declaration-material-actions .declaration-material,
   .declaration-statistics-page .declaration-status-action { min-height: 44px; display: inline-flex; align-items: center; }
 }

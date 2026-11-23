@@ -7,7 +7,8 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.deduction_policy import DECISION_DATED_LEVEL_CODES
+from app.deduction_materials import duplicate_deduction_material_id
+from app.deduction_policy import DECISION_DATED_LEVEL_CODES, GSM_CORRECTION_LEVEL_CODES, deduction_level_label
 from app.idempotency import submission_payload_digest
 from app.month_closure import ensure_month_open
 from app.services.attendance import loa_excludes_month
@@ -34,6 +35,33 @@ def related_pair_work(db: Session, record_id: int) -> bool:
         DeductionUpgradeRequest.second_deduction_id == record_id,
         DeductionUpgradeRequest.result_deduction_id == record_id,
     )).first() is not None
+
+
+def require_gsm_standalone_correction(db: Session, row: DeductionRecord, user: V2User) -> None:
+    if row.employee_id == user.id:
+        raise HTTPException(403, "正式GSM不能更正、作废或还原本人的扣分记录")
+    level = db.get(DeductionLevel, row.deduction_level_id)
+    if not level or level.code not in GSM_CORRECTION_LEVEL_CODES:
+        raise HTTPException(403, "正式GSM仅可更正声明、备忘录或一级警告")
+    if db.get(DeductionOriginalUpgrade, row.id):
+        raise HTTPException(409, "该记录已原单升级，不能通过普通更正操作")
+
+
+def restore_event_check(db: Session, row: DeductionRecord) -> dict:
+    if row.voided_at is None:
+        raise HTTPException(409, "缺少可核实的作废时间，不能直接还原")
+    incident = row.incident_on or row.occurred_on
+    material = db.get(StoredFile, row.document_file_id)
+    duplicate_id = duplicate_deduction_material_id(db, row, material)
+    if duplicate_id is not None:
+        raise HTTPException(409, f"同一事件已有记录 #{duplicate_id}，不能还原这条作废记录")
+    matches = db.query(DeductionRecord).filter(
+        DeductionRecord.id != row.id, DeductionRecord.employee_id == row.employee_id,
+        DeductionRecord.status != "void",
+        func.coalesce(DeductionRecord.incident_on, DeductionRecord.occurred_on) == incident,
+    ).order_by(DeductionRecord.id).all()
+    records = [event_record_summary(candidate) for candidate in matches]
+    return {"records": records, "confirmation": submission_payload_digest({"id": row.id, "records": records})}
 
 
 def event_record_summary(row: DeductionRecord) -> dict:
@@ -102,19 +130,23 @@ def check_original_upgrade(db: Session, user: V2User, record_id: int, effective_
     effective_on = effective_day.isoformat()
     if effective_on < (row.incident_on or row.occurred_on):
         raise HTTPException(400, "生效日不得早于原事件日期")
+    ensure_deduction_months_open(db, row, (row.deduction_month, effective_on[:7]), "原单升级")
+    return row
+
+
+def ensure_deduction_months_open(db: Session, row: DeductionRecord, months: tuple[str, ...], operation: str) -> None:
     employee = db.get(Employee, row.employee_id)
     current_circle = employee.attraction_id if employee else None
     record_circle = row.attraction_id_snapshot or current_circle
-    months = tuple(dict.fromkeys((row.deduction_month, effective_on[:7])))
+    months = tuple(dict.fromkeys(months))
     score_circles = dict(db.query(EmployeeMonthOrganizationSnapshot.score_month, EmployeeMonthOrganizationSnapshot.attraction_id)
                          .filter_by(employee_id=row.employee_id)
                          .filter(EmployeeMonthOrganizationSnapshot.score_month.in_(months)).all())
     for month in months:
-        ensure_month_open(db, month, record_circle, "原单升级")
+        ensure_month_open(db, month, record_circle, operation)
         score_circle = score_circles.get(month, current_circle)
         if score_circle is not None and score_circle != record_circle:
-            ensure_month_open(db, month, score_circle, "原单升级")
-    return row
+            ensure_month_open(db, month, score_circle, operation)
 
 
 def original_upgrade_preview(db: Session, row: DeductionRecord, effective_day: date) -> dict:
@@ -127,7 +159,8 @@ def original_upgrade_preview(db: Session, row: DeductionRecord, effective_day: d
     options = []
     for level in levels:
         points = float(stored_deduction_points(db, row, level))
-        options.append({"id": level.id, "name": level.name, "points": points, "actual_points": 0 if excluded else points})
+        options.append({"id": level.id, "name": deduction_level_label(level, row.employee_type_snapshot),
+                        "points": points, "actual_points": 0 if excluded else points})
     return {
         "record": event_record_summary(row),
         "original_points": 0 if loa_excludes_month(db, row.employee_id, row.deduction_month) else float(row.points),

@@ -1,10 +1,10 @@
 """UI/API adapters around the existing rotation clock and engine, local process only."""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.rotation import service as S
 from app.rotation import forecast_service as F
 from app.rotation.engine import rotation_end
 from app.rotation.namespace import tables_for
+from app.rotation.participation import formal_scope
 from app.routers import rotation_board as B
 from local_tools.rotation_clock.guard import require_local
 
@@ -147,7 +148,26 @@ def install(app):
         return {**clock, **calendar_fields(clock)}
     S.clock_payload = local_payload
 
+    def temporary_clock(db, attraction_id):
+        with formal_scope(db):
+            cfg = S.load_config(db, attraction_id, read_only=True)
+            if S.clock_state(cfg).get('mode') != 'sim':
+                return None
+            work_day, minute = S.clock_now(cfg)
+            return datetime.fromisoformat(work_day) + timedelta(minutes=minute), work_day
+
+    app.state.rotation_temporary_clock = temporary_clock
+
     router = APIRouter(prefix='/__local/rotation-clock', include_in_schema=False)
+    @router.get('/login-state')
+    def read_login_clock(response: Response, db: Session = Depends(B.formal_db)):
+        require_local()
+        # Before login, show the primary board's clock. Reading it must not advance rotation.
+        cfg = S.load_config(db, B.rotation_attraction_id(db), read_only=True)
+        clock = S.clock_payload(cfg)
+        response.headers['Cache-Control'] = 'no-store'
+        return {'clock': {key: clock[key] for key in ('mode', 'date', 'minute', 'paused', 'speed')}}
+
     @router.get('/state')
     def read_clock(attraction_id: int | None = None, db: Session = Depends(B.formal_db), user=Depends(B.staff)):
         require_local()
@@ -156,6 +176,9 @@ def install(app):
             aid=B.board_attraction_id(db,user)
         else:
             aid, _ = personal_scope(db, user, attraction_id)
+        if user.rotation_temporary:
+            cfg = S.load_config(db, aid, read_only=True)
+            return {'clock': S.clock_payload(cfg), 'attraction_id': aid}
         with S.transaction(db):
             cfg = S.load_config(db, aid)
             _advance(db, cfg)
@@ -182,7 +205,9 @@ def install(app):
         response = render(path)
         if path.suffix == '.html':
             html = response.body.decode('utf-8').replace('</head>', '<link rel="stylesheet" href="/__local/rotation-clock/assets/clock.css"></head>')
-            html = html.replace('</body>', '<script src="/__local/rotation-clock/assets/clock.js"></script></body>')
+            login_clock = ' data-local-login-clock' if path.name == 'login.html' else ''
+            script = f'<script src="/__local/rotation-clock/assets/clock.js"{login_clock}></script>'
+            html = html.replace('</body>', script + '</body>')
             headers = dict(response.headers)
             headers.pop('content-length', None)
             return HTMLResponse(html, headers=headers)

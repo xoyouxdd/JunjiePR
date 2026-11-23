@@ -12,12 +12,13 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
-from sqlalchemy import and_, or_, tuple_, update
+from sqlalchemy import String, and_, cast, or_, select, tuple_, update
 import fitz
 
 from app.background_worker import BackgroundWorker
 from app.database.connection import FILE_DIR, SessionLocal
 from app.deduction_policy import statement_upgrade_reviewer
+from app.services.audit import DEDUCTION_RESTORE_ACTION
 from app.v2_models import AuditLog, DeductionFollowUp, DeductionMaterialJob, DeductionRecord, DeductionUpgradeRequest, StoredFile
 
 logger = logging.getLogger("junjiepr.materials")
@@ -384,6 +385,42 @@ def _source_ids(job: DeductionMaterialJob) -> list[int]:
         return []
 
 
+def _deduction_material_fingerprints(db, deduction: DeductionRecord, material: StoredFile | None) -> set[tuple[str, ...]]:
+    """Keep the upload comparable after its worker creates a different PDF."""
+    fingerprints = {(material.sha256,)} if material and material.file_size > 0 else set()
+    job = db.get(DeductionMaterialJob, deduction.material_job_id) if deduction.material_job_id else None
+    if job and job.output_file_id == deduction.document_file_id and job.status in {"queued", "processing", "succeeded"}:
+        sources = [db.get(StoredFile, key) for key in _source_ids(job)]
+        if sources and all(source and source.file_size > 0 for source in sources):
+            fingerprints.add(tuple(sorted(source.sha256 for source in sources)))
+    return fingerprints
+
+
+def duplicate_deduction_material_id(db, deduction: DeductionRecord, material: StoredFile | None, *,
+                                   active_restored_only: bool = False) -> int | None:
+    fingerprints = _deduction_material_fingerprints(db, deduction, material)
+    if not fingerprints:
+        return None
+    single_file_hashes = [files[0] for files in fingerprints if len(files) == 1]
+    candidates = db.query(DeductionRecord, StoredFile).outerjoin(StoredFile, StoredFile.id == DeductionRecord.document_file_id).filter(
+        DeductionRecord.employee_id == deduction.employee_id, DeductionRecord.id != deduction.id,
+        # The generated file can differ from the original upload.
+        or_(StoredFile.sha256.in_(single_file_hashes), DeductionRecord.material_job_id.is_not(None)),
+    )
+    if active_restored_only:
+        restored = select(AuditLog.id).where(
+            AuditLog.entity_type == "deduction", AuditLog.action == DEDUCTION_RESTORE_ACTION,
+            AuditLog.entity_id == cast(DeductionRecord.id, String),
+        ).exists()
+        candidates = candidates.filter(DeductionRecord.status == "active", restored)
+    else:
+        candidates = candidates.filter(DeductionRecord.status != "void")
+    for candidate, candidate_file in candidates.order_by(DeductionRecord.id):
+        if fingerprints.intersection(_deduction_material_fingerprints(db, candidate, candidate_file)):
+            return candidate.id
+    return None
+
+
 def _discard_failed_sources(db, job: DeductionMaterialJob) -> None:
     """Mark failed source rows in the same transaction. Files are unlinked after commit."""
     for source_id in _source_ids(job):
@@ -592,6 +629,9 @@ def _apply_success_result(db, job: DeductionMaterialJob, output: StoredFile, ded
     if job.mode in {"upgrade", "upgrade_pdf_compress"}:
         _finalize_upgrade(db, job, deduction)
     else:
+        duplicate_id = duplicate_deduction_material_id(db, deduction, output, active_restored_only=True)
+        if duplicate_id is not None:
+            raise MaterialError("duplicate_event_material", f"同一份材料已用于还原后的有效记录 #{duplicate_id}，本条未计分")
         from app.services.scoring_policies import validate_material_repeat
         try:
             validate_material_repeat(db, deduction)

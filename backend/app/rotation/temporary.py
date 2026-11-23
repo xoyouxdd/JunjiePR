@@ -132,15 +132,23 @@ def provision_member(db, attraction_id, no, name, until, passwords):
                                password_hash=passwords[no], valid_until=until, enabled=True))
 
 
+def _simulated_clock(db, request, member):
+    app = request.scope.get('app')
+    read_clock = getattr(getattr(app, 'state', None), 'rotation_temporary_clock', None)
+    return read_clock(db, member.attraction_id) if read_clock else None
+
+
 def login(db, request, response, member, password):
     from app.rotation.participation import contexts, account_issues
     now=datetime.now()
+    simulated = _simulated_clock(db, request, member)
+    eligibility_now, work_day = simulated or (now, now.date().isoformat())
     employee=db.query(Employee).filter_by(employee_no=member.employee_no).first()
     issues,account=account_issues(db,employee) if employee else ([],None)
-    assigned=contexts(db,member.employee_no)
+    assigned=contexts(db,member.employee_no,work_day)
     # Existing abnormal accounts authenticate with their existing credentials;
     # absent accounts use the rotation-only credential. Never enable a workbench account.
-    if member.valid_until<=now or not assigned or (employee and not issues):
+    if member.valid_until<=eligibility_now or not assigned or (employee and not issues):
         raise HTTPException(401,'临时轮岗账号已失效，请联系主管核对班表')
     if not employee and (not member.enabled or member.adopted_at):raise HTTPException(401,'轮岗账号不可用')
     if account and account.locked_until and account.locked_until>now:raise HTTPException(423,'登录失败次数过多，请稍后再试')
@@ -155,7 +163,10 @@ def login(db, request, response, member, password):
         raise HTTPException(401,'账号或密码/PIN不正确')
     member.failed_attempts=0;member.locked_until=None
     raw=new_session_token()
-    db.add(TemporarySession(member_id=member.id,token_hash=token_hash(raw),expires_at=min(now+timedelta(hours=12),member.valid_until)))
+    expires_at = now + timedelta(hours=12)
+    if simulated is None:
+        expires_at = min(expires_at, member.valid_until)
+    db.add(TemporarySession(member_id=member.id,token_hash=token_hash(raw),expires_at=expires_at))
     db.commit()
     response.delete_cookie('rc_v2_session',secure=request_is_https(request),httponly=True,samesite='lax')
     for cookie in ('rc_rotation_account','rc_rotation_adjust'):
@@ -170,21 +181,27 @@ def current(db, request):
     session=db.query(TemporarySession).filter_by(token_hash=token_hash(raw)).first() if raw else None
     member=db.get(TemporaryMember,session.member_id) if session else None
     now=datetime.now()
-    if not session or session.expires_at<=now or not member or member.valid_until<=now:
+    if not session or session.expires_at<=now or not member:
+        raise HTTPException(401,'请重新登录')
+    simulated = _simulated_clock(db, request, member)
+    eligibility_now, work_day = simulated or (now, now.date().isoformat())
+    if member.valid_until<=eligibility_now:
         raise HTTPException(401,'请重新登录')
     employee=db.query(Employee).filter_by(employee_no=member.employee_no).first()
     issues,_=account_issues(db,employee) if employee else ([],None)
     if employee and not issues:raise HTTPException(401,'账号已更新，请重新登录')
     if not employee and (member.adopted_at or not member.enabled):raise HTTPException(401,'请重新登录')
-    choices=contexts(db,member.employee_no)
+    choices=contexts(db,member.employee_no,work_day)
     if not choices or employee and not any(c['metadata'].get('issues') for c in choices):
         raise HTTPException(401,'当日轮岗授权已结束')
     allowed={('GET','/api/me'),('GET','/api/rotation-board/me'),('POST','/api/rotation-board/me/act'),
              ('GET','/api/rotation-board/confirmation')}
+    if simulated is not None:
+        allowed.add(('GET', '/__local/rotation-clock/state'))
     if (request.method,request.url.path) not in allowed: raise HTTPException(403,'此账号仅可使用本人轮岗待办')
     circle=db.get(Attraction,choices[0]['id'])
     if not circle or not circle.active or not circle.employee_circle: raise HTTPException(403,'景点圈不可用')
-    return SimpleNamespace(id=-member.id,name=employee.name if employee else member.name,rotation_temporary=True,rotation_identity_temporary=not bool(employee),role_codes=set(),
+    return SimpleNamespace(id=-member.id,name=employee.name if employee else member.name,rotation_temporary=True,rotation_identity_temporary=not bool(employee),rotation_work_day=work_day,role_codes=set(),
         display_role_name='轮岗人员',employee=SimpleNamespace(id=employee.id if employee else None,employee_no=member.employee_no,
         name=employee.name if employee else member.name,attraction_id=circle.id,attraction=circle),permissions=set())
 

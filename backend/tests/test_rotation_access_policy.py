@@ -13,7 +13,7 @@ from app.rotation.access import ACCOUNT_COOKIE, KIND_SCREEN, RotationActor
 from app.rotation.models import RotationAccount, RotationAccountSession
 from app.routers import rotation_screen
 from app.v2_crypto import new_session_token, token_hash
-from app.v2_models import Attraction, Employee, ManagementScope
+from app.v2_models import Attraction, Employee, EmployeeRoleAssignment, ManagementScope, Role
 
 
 @pytest.fixture
@@ -56,10 +56,68 @@ def test_base_gsm_from_another_circle_can_manage_screen_when_assigned_heat_pursu
             who = ok(client.get('/api/rotation-board/whoami'))
             assert who['capabilities']['screen_account_admin']
             assert ok(client.get('/api/rotation-screen/accounts'))['items']
+            assert ok(client.get('/api/rotation-board/contacts'))['can_edit']
         finally:
             with SessionLocal() as db:
                 db.query(ManagementScope).filter_by(id=scope_id).delete()
                 db.commit()
+
+
+def test_rotation_contacts_follow_tr_roles_and_require_scoped_gsm():
+    endpoint = '/api/rotation-board/contacts'
+    work_date = date.today().isoformat()
+    with SessionLocal() as db:
+        heat = db.query(Attraction).filter_by(name='热力追踪').one()
+        cm = db.query(Role).filter_by(code='CM').one()
+        tr = db.query(Role).filter_by(code='TR').one()
+        new_trainer = Employee(employee_no='9710900', name='联络测试培训师', attraction_id=heat.id,
+                               is_active=True, hired_on=work_date)
+        db.add(new_trainer)
+        db.flush()
+        aid, trainer_id, cm_id = heat.id, new_trainer.id, cm.id
+        assignment = EmployeeRoleAssignment(employee_id=trainer_id, role_id=tr.id, starts_on=work_date)
+        db.add(assignment)
+        db.flush()
+        assignment_id = assignment.id
+        db.info['rotation_formal'] = True
+        cfg = S.load_config(db, aid)
+        prior = cfg.settings_json
+        db.commit()
+    try:
+        with TestClient(app) as client:
+            assert client.get(endpoint).status_code == 401
+            login(client, '9710040')
+            before = ok(client.get(endpoint))
+            assert before['can_edit']
+            assert trainer_id in {item['id'] for item in before['items']}
+            assert '正式模拟TR1' not in {item['name'] for item in before['items']}
+            order = [item['id'] for item in reversed(before['items'])]
+            payload = {'order': order, 'pinned': [trainer_id], 'revision': before['revision']}
+            for no in ('9710000', '9710010', '9710020', '9710041', '9710050'):
+                with TestClient(app) as reader:
+                    login(reader, no)
+                    assert not ok(reader.get(endpoint))['can_edit']
+                    assert reader.put(endpoint, json=payload).status_code == 403
+            assert client.put(endpoint, json={**payload, 'order': order + [trainer_id]}).status_code == 400
+            saved = ok(client.put(endpoint, json=payload))
+            assert saved['items'][0] == {'id': trainer_id, 'name': '联络测试培训师', 'pinned': True}
+            assert saved == ok(client.get(endpoint))
+            assert client.put(endpoint, json=payload).status_code == 409
+            ok(client.put('/api/rotation-board/config', json={'settings': {'breakMin': 18}}))
+            assert saved == ok(client.get(endpoint))
+            with SessionLocal() as db:
+                db.get(EmployeeRoleAssignment, assignment_id).role_id = cm_id
+                db.commit()
+            refreshed = ok(client.get(endpoint))
+            assert trainer_id not in {item['id'] for item in refreshed['items']}
+            assert client.put(endpoint, json={**payload, 'revision': saved['revision']}).status_code == 409
+    finally:
+        with SessionLocal() as db:
+            db.info['rotation_formal'] = True
+            S.load_config(db, aid).settings_json = prior
+            db.delete(db.get(EmployeeRoleAssignment, assignment_id))
+            db.delete(db.get(Employee, trainer_id))
+            db.commit()
 
 
 @pytest.mark.parametrize('index',range(2,6))

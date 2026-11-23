@@ -63,7 +63,7 @@ def act(payload: dict, db: Session = Depends(get_db), actor: RotationActor = Dep
     if not isinstance(action, str):
         raise HTTPException(400, "操作类型必须是字符串")
     if action not in service.SCREEN_ACTIONS:
-        raise HTTPException(403, "大屏只能确认班前已到、去休息或去轮岗")
+        raise HTTPException(403, "大屏只能确认已到、去休息或去轮岗")
     if not payload.get("confirmation_token"):
         raise HTTPException(400, "请刷新后重新确认")
     body = {key: value for key, value in payload.items() if key in _ACTION_FIELDS}

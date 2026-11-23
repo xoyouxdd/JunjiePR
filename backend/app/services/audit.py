@@ -15,6 +15,7 @@ from app.v2_models import (
 
 AUDIT_EMPLOYEE_ENTITY_TYPES = {"employee", "employee_group", "employee_loa", "employee_login_archive", "employee_number_change"}
 DEDUCTION_MATERIAL_SUPPLEMENT_ACTION = "补充扣分材料"
+DEDUCTION_RESTORE_ACTION = "还原扣分"
 
 
 def historical_material_uploaders(db: Session, record_ids: Iterable[int]) -> dict[int, str]:

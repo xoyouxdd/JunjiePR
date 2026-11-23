@@ -2,6 +2,7 @@
 // This file is served only by the local launcher, outside application static assets.
 (() => {
   const endpoint='/__local/rotation-clock';
+  const loginPage=Boolean(document.currentScript?.hasAttribute('data-local-login-clock'));
   let busy=false,latest=null,latestAt=Date.now();
   const badge=document.createElement('span');
   badge.id='localSimulationBadge';badge.className='local-clock-status';badge.setAttribute('role','status');
@@ -18,7 +19,9 @@
       const seconds=Math.floor(minute*60+1e-6)%86400,pad=value=>String(value).padStart(2,'0');
       stamp=`${simulated.toISOString().slice(0,10)} ${pad(Math.floor(seconds/3600))}:${pad(Math.floor(seconds/60)%60)}:${pad(seconds%60)}`;
     }
-    badge.textContent=c?.mode==='sim'?`本地模拟时间 ${stamp} · ${c.paused?'已暂停':'运行中'} · ×${c.speed}`:'独立本地测试 · 尚未应用模拟时间';
+    const label=c?.mode==='sim'?`本地模拟时间 ${stamp} · ${c.paused?'已暂停':'运行中'} · ×${c.speed}`
+      :loginPage&&!c?'独立本地测试 · 等待同步模拟时间':'独立本地测试 · 尚未应用模拟时间';
+    if(badge.textContent!==label)badge.textContent=label;
     const toggle=document.querySelector('[data-local-clock="toggle"]');
     if(toggle){toggle.textContent=c?.paused?'继续':'暂停';toggle.disabled=busy||c?.mode!=='sim';}
     document.querySelectorAll('[data-local-clock="jump"],#lcSpeed').forEach(el=>el.disabled=busy||c?.mode!=='sim');
@@ -87,13 +90,15 @@
   }
   if(typeof RT==='undefined'){
     let polling=false;
+    const personalHost=()=>document.querySelector('[data-formal-rotation-todo],#rotationPersonalTasks');
     const poll=async()=>{
       if(polling)return;
-      const host=document.querySelector('[data-formal-rotation-todo]');if(host?.dataset.scopeLoading)return;
+      const host=personalHost();if(host?.dataset.scopeLoading)return;
       const circle=host?.dataset.rotationCircle;polling=true;
       try{
-        const response=await fetch(endpoint+'/state'+(circle?'?attraction_id='+encodeURIComponent(circle):''),{credentials:'same-origin'});
-        if(response.ok&&circle===document.querySelector('[data-formal-rotation-todo]')?.dataset.rotationCircle){latest=(await response.json()).clock;latestAt=Date.now();}
+        const statePath=loginPage?'/login-state':'/state'+(circle?'?attraction_id='+encodeURIComponent(circle):'');
+        const response=await fetch(endpoint+statePath,{credentials:'same-origin'});
+        if(response.ok&&circle===personalHost()?.dataset.rotationCircle){latest=(await response.json()).clock;latestAt=Date.now();}
       }catch{}finally{polling=false;}
       status();
     };

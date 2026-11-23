@@ -402,6 +402,34 @@ def test_0500_and_0515_can_check_in_but_enter_pending_rest(start):
     assert worker['state'] == 'pending' and not worker.get('batchResult')
 
 
+@pytest.mark.parametrize(('shift', 'pool', 'duration'), [
+    (420, 'rest', 15), (435, 'rest', 15), (435, 'pending', None), (435, 'meal', 45),
+])
+def test_early_prearranged_pool_move_keeps_original_shift(shift, pool, duration):
+    moved_at = 241 + 2/60
+    eng = fixture((2,), now=moved_at)
+    worker = eng.P['A0']
+    worker['start'] = shift
+    eng.d['plan']['crew']['A#0'] = worker['pid']
+
+    F.pool(eng, worker['pid'], pool, moved_at, 'test')
+    assert worker['state'] == 'notyet' and worker['initialPool'] == pool
+    assert worker['start'] == shift and worker['readyAt'] is None
+    assert worker['pid'] not in eng.d['plan']['crew'].values()
+    for minute in (moved_at + 16, shift - 1/60):
+        F.tick(eng, minute)
+        assert worker['state'] == 'notyet' and not worker.get('assign') and not worker.get('exception')
+    assert F.can_check_in(eng, worker, shift - 15)
+    F.tick(eng, shift)
+    assert worker['state'] == pool
+    if duration is None:
+        assert worker['readyAt'] is None
+    else:
+        assert worker['breakStart'] == shift
+        assert worker['readyAt'] == shift + duration
+        assert F.deadline(eng, worker, shift) == shift + duration + 1
+
+
 @pytest.mark.parametrize('start', [360, 390, 420, 430, 435])
 def test_shifts_at_or_before_0715_are_not_dispatched_three_minutes_early(start):
     eng = fixture(now=start - 15)

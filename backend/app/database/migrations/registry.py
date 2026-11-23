@@ -10,6 +10,7 @@ from app.database.migrations.upgrade_repair import ensure_rejected_upgrade_claim
 
 from app.database.migrations.schema import (
     ensure_deduction_incident_date,
+    ensure_deduction_employee_type_snapshot,
     ensure_scoring_policy_snapshots,
     ensure_about_system_credit_columns,
     ensure_month_rank_comment_column,
@@ -87,6 +88,7 @@ MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-11-rotation-six-posts', ensure_rotation_six_posts),
     ('2026-11-rejected-upgrade-claim-release', ensure_rejected_upgrade_claim_release),
     ('2026-11-deduction-incident-date', ensure_deduction_incident_date),
+    ('2026-11-deduction-employee-type-snapshot', ensure_deduction_employee_type_snapshot),
 )
 SCHEMA_MIGRATION_STEPS = [(key, runner.__name__) for key, runner in MIGRATION_RUNNERS]
 

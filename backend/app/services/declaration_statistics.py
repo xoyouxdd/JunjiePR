@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 from app.date_utils import subtract_calendar_months
-from app.deduction_policy import deduction_counts_for_score, unused_statement_upgrade_filters
+from app.deduction_policy import GSM_CORRECTION_LEVEL_CODES, deduction_counts_for_score, is_intern, unused_statement_upgrade_filters
 from app.role_constants import FRONTLINE_CODES
 from app.score_policy import loa_month_exclusion
 from app.services.audit import historical_material_uploaders
@@ -71,7 +71,7 @@ def _open_statement_slots(db, selected_ids, levels, types):
 def declaration_payload(
     db: Session, month: str, attraction_id: int | None, level_id: int | None,
     type_id: int | None, status: str, keyword: str, *, include_upgrade_slots: bool = False,
-    allow_original_upgrade: bool = False,
+    allow_original_upgrade: bool = False, gsm_correction_operator_id: int | None = None,
 ) -> dict:
     checked_month(month)
     if status and status not in {*STATUS_LABELS.values(), "current"}:
@@ -209,6 +209,7 @@ def declaration_payload(
             "type_name": row.deduction_type_name, "level_id": row.deduction_level_id,
             "group_level_id": original.original_level_id if history_only else row.deduction_level_id,
             "level_code": level.code if level else "OTHER", "level_name": row.deduction_level_name,
+            "is_intern": is_intern(row.employee_type_snapshot),
             "description": row.description, "submitter_name": row.submitter_name,
             "material_uploaded_by_name": (row.material_uploaded_by_name or "").strip() or historical_uploaders.get(row.id, ""),
             "submitted_at": row.submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -222,6 +223,12 @@ def declaration_payload(
             "void_reason": row.void_reason or "", "upgrade_links": links[row.id],
             "upgrade_slot_open": row.id in open_slots,
             "original_upgrade": original_details, "original_month_history": history_only,
+            "can_gsm_correct": bool(
+                gsm_correction_operator_id is not None and row.employee_id != gsm_correction_operator_id
+                and not original and not links[row.id] and not row.upgrade_request_id
+                and not row.upgrade_role and level and level.code in GSM_CORRECTION_LEVEL_CODES
+                and row.status in {"active", "pending_material", "material_failed", "void"}
+            ),
             "can_upgrade_original": bool(
                 allow_original_upgrade and not original and not links[row.id] and not row.upgrade_request_id
                 and not row.upgrade_role and level and level.code == "STATEMENT" and row.status == "active" and document_url

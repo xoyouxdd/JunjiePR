@@ -39,9 +39,14 @@ async function main(){try{
     // A paused-closure allowance must come from the adjusted deadline rather
     // than counting all wall time since the original break ended.
     assert.match(await page.evaluate(()=>forecastOverdue({canDepart:true,state:'rest',readyAt:600,task:{deadlineAt:631,timeoutWindowMinutes:1}},630.5)),/超时0分30秒/);
-    assert.match(await page.evaluate(()=>forecastOverdue({state:'exception',readyAt:600,exception:{deadlineAt:603}},603)),/超时3分00秒/);
+    const exceptionBadges=await page.evaluate(()=>{
+      const person={state:'exception',readyAt:600,exception:{deadlineAt:601,timeoutWindowMinutes:1}};
+      return [forecastOverdue(person,601),forecastOverdue(person,780)];
+    });
+    assert.match(exceptionBadges[0],/已超时/);assert.equal(exceptionBadges[1],exceptionBadges[0]);
     await clock({action:'jump',minutes:16/60});await page.evaluate(()=>RT.load());
-    assert.equal((await board()).persons.find(p=>p.pid===ids[0]).state,'exception');assert.equal(await elapsed(ids[0]).innerText(),'超时1分00秒');
+    assert.equal((await board()).persons.find(p=>p.pid===ids[0]).state,'exception');assert.equal(await elapsed(ids[0]).innerText(),'已超时');
+    await page.locator('[data-f-pool=exception] [data-f-person="'+ids[0]+'"]').locator('../..').getByText(/07:16:00进异常池/).waitFor();
     assert.equal(await page.locator('[data-f-board="'+ids[0]+'"]').count(),0);
     await post({action:'break_time',pid:ids[1],remaining:5});await page.evaluate(()=>RT.load());assert.equal(await elapsed(ids[1]).count(),0);
     // Midnight keeps elapsed minutes, not a negative clock subtraction.

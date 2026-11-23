@@ -1,4 +1,8 @@
 [
+  {"version": "2026.11.24.1", "date": "2026-11-24", "status": "candidate", "items": [
+    {"summary": "轮岗联系人与签到更正", "detail": "轮岗看板新增热力追踪培训师名单，具备资格的 GSM 可排序和置顶。完善补记签到、超时显示和本地模拟时钟。", "audiences": ["all"]},
+    {"summary": "声明更正与还原核对", "detail": "正式 GSM 可按权限更正、作废和还原符合条件的记录。提交前核对分值和重复事件，保留员工类型快照。", "audiences": ["all"], "permissions": ["DECLARATION_STATS_VIEW"]}
+  ]},
   {"version": "2026.11.23.1", "date": "2026-11-23", "status": "candidate", "items": [
     {"summary": "今日小祝福与版本记录更新", "detail": "调整今日小祝福入口，关于系统显示累计版本数，并完善轮岗签到提醒和上岗安排。", "audiences": ["all"]},
     {"summary": "声明事件核对与原单升级", "detail": "登记时核对同一事件。具备资格的正式 GSM 可办理原单升级，记录保留关联和生效月份。", "audiences": ["all"], "permissions": ["DECLARATION_STATS_VIEW"]},

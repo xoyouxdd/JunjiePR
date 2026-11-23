@@ -357,6 +357,68 @@ def test_control_requires_manager_but_personal_clock_is_readable():
         assert ok(member.get('/__local/rotation-clock/state'))['clock']['localSimulation']
 
 
+def test_login_clock_reads_primary_board_without_changing_rotation(manager):
+    clock(manager, 'set', date=DAY, time='07:30:12')
+    before = board(manager)
+    with TestClient(app) as anonymous:
+        response = anonymous.get('/__local/rotation-clock/login-state')
+        assert response.headers['cache-control'] == 'no-store'
+        wanted = {key: before['clock'][key] for key in ('mode', 'date', 'minute', 'paused', 'speed')}
+        assert ok(response) == {'clock': wanted}
+        assert anonymous.get('/__local/rotation-clock/state').status_code == 401
+    after = board(manager)
+    assert after['day']['forecastSnapshot'] == before['day']['forecastSnapshot']
+    assert after['clock']['minute'] == before['clock']['minute']
+
+
+def test_temporary_account_uses_simulated_workday_and_real_session_expiry(manager, monkeypatch):
+    from datetime import datetime, timedelta
+    from app.rotation import temporary
+
+    class RealClock(datetime):
+        @classmethod
+        def now(cls):
+            return datetime.fromisoformat(DAY) + timedelta(days=30)
+
+    monkeypatch.setattr(temporary, 'datetime', RealClock)
+    clock(manager, 'set', date=DAY, time='06:55:35')
+    member_no = '9730618'
+    worker = {'pid': member_no, 'name': '临时早班测试', 'start': '07:00', 'end': '16:00'}
+    preview = ok(manager.post('/api/rotation-board/people-preview', json=worker))
+    act(manager, action='add_person', temporary=True, expected_identity=preview['digest'], **worker)
+
+    with TestClient(app) as employee, TestClient(app) as visitor:
+        payload = {'employee_no': member_no, 'password': '0618'}
+        assert ok(employee.post('/api/login', json=payload))['rotation_temporary']
+        assert ok(employee.get('/api/me'))['employee_no'] == member_no
+        board_view = ok(employee.get('/api/rotation-board/me'))
+        assert board_view['clock']['date'] == DAY
+        assert board_view['person']['canBatchCheckIn']
+        member_clock = ok(employee.get('/__local/rotation-clock/state'))['clock']
+        assert member_clock['calendarTime'] == '06:55:35'
+        assert employee.post('/__local/rotation-clock', json={'action': 'jump', 'minutes': 1}).status_code == 403
+        clock(manager, 'set', date=DAY, time='06:55:45')
+        assert ok(employee.get('/__local/rotation-clock/state'))['clock']['calendarTime'] == '06:55:45'
+        assert ok(visitor.get('/__local/rotation-clock/login-state'))['clock']['minute'] == pytest.approx(415.75)
+        with SessionLocal() as db:
+            member = db.query(temporary.TemporaryMember).filter_by(employee_no=member_no).one()
+            assert member.valid_until < RealClock.now()
+            session = db.query(temporary.TemporarySession).filter_by(member_id=member.id).one()
+            assert session.expires_at == RealClock.now() + timedelta(hours=12)
+            member.valid_until = datetime.fromisoformat(DAY + 'T06:56:00')
+            db.commit()
+        clock(manager, 'set', date=DAY, time='06:56:00')
+        assert employee.get('/api/me').status_code == 401
+        assert visitor.post('/api/login', json=payload).status_code == 401
+
+        clock(manager, 'set', date=DAY, time='06:55:35')
+        with SessionLocal() as db:
+            session = db.query(temporary.TemporarySession).join(temporary.TemporaryMember).filter_by(employee_no=member_no).one()
+            session.expires_at = RealClock.now()
+            db.commit()
+        assert employee.get('/api/me').status_code == 401
+
+
 def test_personal_clock_follows_authorized_roster_circle_instead_of_hr_home(manager):
     from app.v2_models import Employee, Attraction
     clock(manager, 'set', date=DAY, time='07:30:12')

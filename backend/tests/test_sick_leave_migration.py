@@ -17,6 +17,7 @@ from app.database.migrations import (
     ensure_sick_leave_import_columns,
     ensure_sick_leave_record_indexes,
 )
+from app.database.migrations.schema import ensure_deduction_employee_type_snapshot
 from app import v2_models  # noqa: E402,F401
 
 
@@ -212,11 +213,12 @@ def test_index_repair_precedes_appended_employment_history_step() -> None:
     rotation_posts = ('2026-11-rotation-five-posts', 'ensure_rotation_five_posts')
     scoring_snapshots = ('2026-11-scoring-policy-snapshots', 'ensure_scoring_policy_snapshots')
     rotation_six_posts = ('2026-11-rotation-six-posts', 'ensure_rotation_six_posts')
-    assert SCHEMA_MIGRATION_STEPS[-10:] == [
+    assert SCHEMA_MIGRATION_STEPS[-11:] == [
         repair, employment, employee_type, learning_categories,
         about_system, rotation_posts, scoring_snapshots, rotation_six_posts,
         ("2026-11-rejected-upgrade-claim-release", "ensure_rejected_upgrade_claim_release"),
         ("2026-11-deduction-incident-date", "ensure_deduction_incident_date"),
+        ("2026-11-deduction-employee-type-snapshot", "ensure_deduction_employee_type_snapshot"),
     ]
     assert SCHEMA_MIGRATION_STEPS.count(repair) == 1
     assert SCHEMA_MIGRATION_STEPS.count(employment) == 1
@@ -225,6 +227,19 @@ def test_index_repair_precedes_appended_employment_history_step() -> None:
     assert SCHEMA_MIGRATION_STEPS.count(about_system) == 1
     assert SCHEMA_MIGRATION_STEPS.count(rotation_posts) == 1
     assert SCHEMA_MIGRATION_STEPS.count(scoring_snapshots) == 1
+
+
+def test_intern_snapshot_migration_leaves_old_records_unclassified() -> None:
+    engine = create_engine("sqlite://")
+    try:
+        with engine.begin() as db:
+            db.execute(text("CREATE TABLE deduction_records (id INTEGER PRIMARY KEY, deduction_level_name TEXT)"))
+            db.execute(text("INSERT INTO deduction_records VALUES (1, '一级警告')"))
+            ensure_deduction_employee_type_snapshot(db)
+            ensure_deduction_employee_type_snapshot(db)
+            assert db.execute(text("SELECT deduction_level_name, employee_type_snapshot FROM deduction_records")).one() == ("一级警告", None)
+    finally:
+        engine.dispose()
 
 
 def test_fresh_database_has_all_model_and_composite_indexes(tmp_path: Path) -> None:

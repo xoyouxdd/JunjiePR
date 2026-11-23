@@ -49,6 +49,7 @@ class ConfirmationConflict(ActionError):
 
 
 LEGACY_READ_ONLY = '旧版轮岗记录仅供查看，无法继续确认或调整'
+ROTATION_CONTACTS_SETTING = 'rotationContacts'
 
 
 class Runtime:
@@ -718,7 +719,7 @@ def lines_view(eng: E.Engine, *, line_id: str | None = None, now: float | None =
                 if F.missed_check_in(worker, now, assigned_post=True):
                     post['missedCheckIn'] = True
                 elif (worker['start'] in (F.SEVEN_SHIFT, F.RELIEF_SHIFT)
-                      and F.can_check_in(eng, worker, now) and not F.checked_in(worker)):
+                      and F.can_check_in(eng, worker, now) and not F.attendance_recorded(worker)):
                     post['pendingCheckIn'] = True
     return [line for line in lines if line_id is None or line['id'] == line_id]
 
@@ -959,7 +960,7 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
         raise ActionError("只能查看自己的确认结果")
     return {"confirmed": bool(result) and result.get('status') not in ('reversed','superseded'), "result": result}
 
-SCREEN_ACTIONS = {"arrive", "depart", "batch_check_in"}
+SCREEN_ACTIONS = {"arrive", "depart", "batch_check_in", "correct_check_in"}
 LIVE_ACTIONS = SCREEN_ACTIONS | {
     "post", "line", "away", "back", "leave", "set_close", "add_person", "plan_place", "move",
     "post_order", "post_hold", "rename_post", "hold101", "restore_line", "pool", "break_time",
@@ -1377,6 +1378,10 @@ def update_config(cfg: RotationConfig, lines, settings, employee_id: int | None)
                     raise ActionError('用餐工时门槛至少为390分钟')
         if merged['mealReserveMinPeople'] < 1:
             raise ActionError('允许自选吃饭所需的储备人数至少为1人')
-        cfg.settings_json = _dumps({k: v for k, v in merged.items() if v != E.DEFAULT_SETTINGS.get(k)})
+        saved = {k: v for k, v in merged.items() if v != E.DEFAULT_SETTINGS.get(k)}
+        prior = json.loads(cfg.settings_json or '{}')
+        if ROTATION_CONTACTS_SETTING in prior:
+            saved[ROTATION_CONTACTS_SETTING] = prior[ROTATION_CONTACTS_SETTING]
+        cfg.settings_json = _dumps(saved)
     cfg.updated_by_id = employee_id
     cfg.updated_at = datetime.now()

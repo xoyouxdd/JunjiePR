@@ -63,6 +63,7 @@ def search_employee_targets(
     attraction_id: int | None = None,
     limit: int = 30,
     role_codes: tuple[str, ...] = ("CM", "TR"),
+    include_intern: bool = False,
 ) -> dict:
     """Return active, enabled targets of the given base roles in one bounded SQLite query."""
     if not role_codes or not set(role_codes) <= SCORED_BASE_CODES:
@@ -103,7 +104,7 @@ def search_employee_targets(
                   AND gm.starts_on <= :today
                   AND (gm.ends_on IS NULL OR gm.ends_on >= :today)
             )
-            SELECT e.id, e.employee_no, e.name,
+            SELECT e.id, e.employee_no, e.name, e.employee_type,
                    r.code AS role_code, r.name AS role_name,
                    e.attraction_id, COALESCE(a.name, '') AS attraction_name,
                    wg.id AS group_id, COALESCE(wg.name, '') AS group_name,
@@ -144,6 +145,7 @@ def search_employee_targets(
                 "id": row["id"],
                 "employee_no": row["employee_no"],
                 "name": row["name"],
+                **({"is_intern": (row["employee_type"] or "").strip().casefold() == "intern"} if include_intern else {}),
                 "role_code": row["role_code"],
                 "role_name": row["role_name"],
                 "attraction_id": row["attraction_id"],

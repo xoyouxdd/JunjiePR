@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.v2_auth import V2User, current_user
 from app.database.connection import SessionLocal, get_db
 from app.v2_models import Employee
+from app.rotation import contacts
 from app.rotation import service as S
 from app.rotation import daily as D
 from app.rotation import forecast as F
@@ -48,13 +49,14 @@ ROLES = MANAGERS | {'CM', 'TR'}
 
 def capabilities(user, db=None):
     if user.rotation_temporary:
-        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings','screen_account_admin'),False)
+        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings','screen_account_admin','rotation_contacts'),False)
     codes = set(user.role_codes)
     manage = bool(codes & MANAGERS)
     local_tr = 'TR' in codes and getattr(user.employee.attraction, 'name', None) == ROTATION_ATTRACTION_NAME
     return {'can_operate': manage or local_tr, 'can_manage': manage,
             'can_records': manage, 'can_settings': manage,
-            'screen_account_admin': db is not None and can_manage_screen_accounts(db, user)}
+            'screen_account_admin': db is not None and can_manage_screen_accounts(db, user),
+            'rotation_contacts': bool(codes & ROLES)}
 
 
 def board_attraction_id(db, user):
@@ -145,6 +147,33 @@ def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     return data
 
 
+@router.get('/contacts')
+def rotation_contacts(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
+    if not capabilities(user)['rotation_contacts']:
+        raise HTTPException(403, '当前身份无法查看轮岗联系人')
+    db.rollback()
+    db.connection().exec_driver_sql('BEGIN')
+    try:
+        aid = rotation_attraction_id(db)
+        cfg = S.load_config(db, aid, read_only=True)
+        return contacts.directory(db, aid, cfg, editable=contacts.can_edit(db, aid, user))
+    finally:
+        db.rollback()
+
+
+@router.put('/contacts')
+def update_rotation_contacts(payload: contacts.ContactOrder, db: Session = Depends(formal_db),
+                             user: V2User = Depends(staff)):
+    if user.rotation_temporary or user.base_role.code != 'GSM':
+        raise HTTPException(403, '只有负责热力追踪的 GSM 可以编辑轮岗联系人')
+    with S.transaction(db):
+        reserve_writer(db)
+        aid = rotation_attraction_id(db)
+        if not contacts.can_edit(db, aid, user):
+            raise HTTPException(403, '只有负责热力追踪的 GSM 可以编辑轮岗联系人')
+        return call(contacts.save_order, db, aid, S.load_config(db, aid), payload, user.id)
+
+
 @router.get('/me')
 def me(attraction_id: int | None = None, db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     from app.rotation.participation import personal_scope
@@ -173,7 +202,9 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
         raise HTTPException(403,'个人待办只能确认本人到位，不能整组代确认')
     if employee_number(payload.get('pid',user.employee.employee_no)) != user.employee.employee_no:
         raise HTTPException(403, '只能确认本人待办')
-    if payload.get('action') not in ('arrive','depart','batch_check_in'): raise HTTPException(403, '只可确认本人轮岗待办')
+    action = payload.get('action')
+    if not isinstance(action, str) or action not in S.SCREEN_ACTIONS:
+        raise HTTPException(403, '只可确认本人轮岗待办')
     if not payload.get('confirmation_token'): raise HTTPException(400, '请刷新待办后重新确认')
     with runtime_for(db).lock:
         try:
@@ -196,7 +227,8 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
 def act(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(operator)):
     if not capabilities(user)['can_manage'] and payload.get('action') in ('set_close',):
         raise HTTPException(403, '此操作需要主管或经理权限')
-    if payload.get('action') in ('arrive','depart','batch_check_in') and not payload.get('confirmation_token'):
+    action = payload.get('action')
+    if isinstance(action, str) and action in S.SCREEN_ACTIONS and not payload.get('confirmation_token'):
         raise HTTPException(400, '请刷新看板后重新确认')
     if payload.get('action') in ('post','move','post_order') and not payload.get('expected_snapshot'):
         raise HTTPException(400,'请先预览当日调整影响')

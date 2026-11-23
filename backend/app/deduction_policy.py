@@ -58,6 +58,7 @@ DEDUCTION_TYPE_ORDER = (
 
 
 DEDUCTION_LEVEL_ORDER = {"STATEMENT": 1, "MEMO": 2, "WARNING_1": 3, "WARNING_2": 4}
+GSM_CORRECTION_LEVEL_CODES = {"STATEMENT", "MEMO", "WARNING_1"}
 DECISION_DATED_LEVEL_CODES = {"MEMO", "WARNING_1", "WARNING_2"}
 DECISION_DATED_ISSUER_CODES = GSM_CODES | {"AM", "OM"}
 
@@ -70,6 +71,19 @@ UPGRADE_REVIEWER_CODES = {"GSM"}
 
 SUPERVISOR_DEDUCTION_SCOPE = "主管（全部等级）"
 ACTING_GSM_DEDUCTION_SCOPE = "代理TA GSM的主管（全部等级）"
+
+
+def is_intern(employee_type: str | None) -> bool:
+    return (employee_type or "").strip().lower() == "intern"
+
+
+def deduction_level_label(level: DeductionLevel, employee_type: str | None) -> str:
+    if is_intern(employee_type):
+        if level.code == "MEMO":
+            return "备忘录"
+        if level.code == "WARNING_1":
+            return "备忘录（参考全职一级警告）"
+    return level.name
 
 
 def upgrade_type_codes(code: str) -> frozenset[str]:
