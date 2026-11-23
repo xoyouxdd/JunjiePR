@@ -929,6 +929,7 @@
 | `points` | NUMERIC(10,2) | 否 | |
 | `occurred_on` | VARCHAR(10) | 否 | 处分生效日期，旧记录沿用原日期 |
 | `incident_on` | VARCHAR(10) | 是 | 与生效日分开保存的原事件日期 |
+| `employee_type_snapshot` | VARCHAR(80) | 是 | 登记时员工类型，旧记录迁移后保留 NULL |
 | `deduction_month` | VARCHAR(7) | 否 | 生效日期归属月份 |
 | `description` | TEXT | 否 | |
 | `document_file_id` | INTEGER | 否 | FK → `stored_files.id` |
