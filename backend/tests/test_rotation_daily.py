@@ -137,7 +137,14 @@ def test_moving_prescheduled_sick_person_clears_the_pending_sick_marker(rotation
         S.do_live_action(db, rotation.attraction_id, '测试', {'action': 'pool', 'pid': '1', 'pool': 'rest'})
         day = S.board_payload(db, rotation.attraction_id)['day']
         p = next(p for p in day['persons'] if p['pid'] == '1')
-        assert p['state'] == 'rest' and 'initialPool' not in p
+        assert (p['state'], p['initialPool'], p['readyAt']) == ('notyet', 'rest', None)
+        with S.transaction(db):
+            S.set_sim_clock(S.load_config(db, rotation.attraction_id), DAY, 435, paused=True)
+        S.tick_attraction(rotation.attraction_id)
+        day = S.board_payload(db, rotation.attraction_id)['day']
+        p = next(p for p in day['persons'] if p['pid'] == '1')
+        assert (p['state'], p['breakStart'], p['readyAt']) == ('rest', 435, 450)
+        assert 'initialPool' not in p
 
 
 def prepare(rotation):

@@ -38,8 +38,8 @@
 .rt-switch { min-height: 36px; font-size: var(--fs-base); }
 
 /* The contact entry uses either the top-bar gap or the brand's existing second line. */
-.rt-has-contacts:not(.rt-contacts-in-gap) .rt-title { position:relative; }
-.rt-has-contacts:not(.rt-contacts-in-gap) .rt-brand-en { visibility:hidden; }
+.rt-has-contacts .rt-title { position:relative; }
+.rt-has-contacts .rt-brand-en { visibility:hidden; }
 .rt-top .rt-contacts-trigger {
   position:absolute; inset-inline-start:0; bottom:-3px; display:inline-flex; align-items:center; gap:5px;
   min-height:20px; padding:0 7px; border:1px solid transparent; border-radius:var(--radius-sm);
@@ -49,15 +49,22 @@
   content:""; width:6px; height:6px; border-right:1px solid currentColor; border-bottom:1px solid currentColor;
   transform:translateY(-2px) rotate(45deg);
 }
-.rt-contacts-in-gap .rt-contacts-trigger {
-  inset-inline-start:var(--rt-contacts-trigger-x); top:var(--rt-contacts-trigger-y); bottom:auto;
-  min-height:32px; transform:translateY(-50%); border-color:#55728e; background:#1b334c;
+@media (min-width: 761px) {
+  .rt-has-contacts.rt-contacts-in-gap .rt-title { position:static; }
+  .rt-has-contacts.rt-contacts-in-gap .rt-brand-en { visibility:visible; }
+  .rt-contacts-in-gap .rt-contacts-trigger {
+    inset-inline-start:min(var(--rt-contacts-trigger-x), calc(100% - 9em));
+    top:var(--rt-contacts-trigger-y); bottom:auto; min-height:32px;
+    transform:translateY(-50%); border-color:#55728e; background:#1b334c;
+  }
 }
 .rt-top .rt-contacts-trigger[aria-expanded="true"] { background:#315475; }
 .rt-top .rt-contacts-trigger[aria-expanded="true"]::after { transform:translateY(1px) rotate(225deg); }
 .rt-top .rt-contacts-trigger:focus-visible { outline:2px solid var(--text-on-dark); outline-offset:2px; }
 .rt-contacts {
-  position:absolute; z-index:1; inset-inline-start:var(--rt-contacts-panel-x, 12px); top:calc(100% + 6px);
+  position:absolute; z-index:1;
+  inset-inline-start:min(var(--rt-contacts-panel-x, 12px), max(12px, calc(100% - 366px)));
+  top:calc(100% + 6px);
   width:min(354px, calc(100% - 24px)); max-height:min(65dvh, 32rem); overflow:auto; padding:12px;
   color:var(--text); background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-lg);
   box-shadow:var(--shadow-overlay);

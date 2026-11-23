@@ -32,6 +32,7 @@ async function main(){try{
     await signIn.goto(base+'/login');
     const loginBadge=signIn.locator('#localSimulationBadge');
     await loginBadge.filter({hasText:'2026-11-05 07:30:12 · 已暂停'}).waitFor();
+    assert(!(await anonymous.cookies(base)).some(cookie=>cookie.name==='rc_v2_session'));
     assert.equal(await signIn.locator('#rtClockBar').count(),0);
     assert(await signIn.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     // Updating the board must not replace a partially edited clock input.
@@ -53,7 +54,7 @@ async function main(){try{
     await page.evaluate(()=>RT.load());await page.getByRole('button',{name:'快进1分钟',exact:true}).click();
     await page.waitForFunction(()=>RT.data.clock.minute===451.2);
     await loginBadge.filter({hasText:'2026-11-05 07:31:12 · 已暂停'}).waitFor();
-    await anonymous.close();
+    assert(!(await anonymous.cookies(base)).some(cookie=>cookie.name==='rc_v2_session'));
     for(const pid of ids)assert.equal((await state()).day.persons.find(p=>p.pid===pid).state,'rest');
     // A real personal page confirms only itself; the other person remains unexecuted.
     const member=await browser.newContext({viewport:{width:390,height:844}});
@@ -109,7 +110,7 @@ async function main(){try{
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'overflow at '+width);
     }
     await page.setViewportSize({width:1680,height:1000});await page.screenshot({path:path.join(report,engine+'.png')});
-    assert.deepEqual(errors,[]);await member.close();await screen.close();await context.close();await browser.close();browser=null;
+    assert.deepEqual(errors,[]);await anonymous.close();await member.close();await screen.close();await context.close();await browser.close();browser=null;
     console.log(engine+': local controls, seconds, pause/speed/jump, personal/screen synchronization, independent confirmation, timeout, double reset, midnight and responsive widths PASS');
   }
 }finally{if(browser)await browser.close();if(server&&server.exitCode===null){server.kill();await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(report,'server.log'),log);}}

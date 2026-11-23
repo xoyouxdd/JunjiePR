@@ -45,7 +45,15 @@ let server,browser;
     await page.locator('#rosterForm [type=submit]').click();await page.locator('#rtModal [data-ok]').click();const uploadedResponse=await uploaded;assert(uploadedResponse.ok(),await uploadedResponse.text());await page.locator('#rtModal [data-ok]').waitFor({state:'detached'});
     await page.locator('[data-tab=board]').click();await page.locator('.rt-board').waitFor();
     assert(!(await page.locator('#rtApp').innerText()).includes('（临时）'));
-    for(const width of [320,390,430,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,name+' board overflow '+width);}
+    for(const width of [320,390,430,768,1440]){
+      await page.setViewportSize({width,height:900});
+      const layout=await page.evaluate(()=>{
+        const viewport=document.documentElement.clientWidth, documentWidth=document.documentElement.scrollWidth;
+        const outside=documentWidth>innerWidth+1 ? [...document.querySelectorAll('body *')].filter(el=>el.getBoundingClientRect().right>viewport+1).slice(0,12).map(el=>[el.tagName,el.id,String(el.className),Math.round(el.getBoundingClientRect().right)]) : [];
+        return {innerWidth, viewport, documentWidth, outside};
+      });
+      assert(layout.documentWidth<=layout.innerWidth+1,name+' board overflow '+width+' '+JSON.stringify(layout));
+    }
     await page.locator('[data-tab=records]').click();await page.locator('#logLoad').click();await page.locator('#rtApp').getByText('合成临时成员（临时）',{exact:true}).first().waitFor();
     if(shots){await page.setViewportSize({width:1440,height:900});await page.screenshot({path:path.join(shots,name+'-manager-records.png')});}
     assert.deepEqual(errors,[]);console.log(name+': actual suffix login, personal-only page, logout, manager roster preview/upload, plain board names, responsive widths passed');
