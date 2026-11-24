@@ -1,6 +1,7 @@
 [
   {"version": "2026.11.24.2", "date": "2026-11-24", "status": "candidate", "items": [
-    {"summary": "物资调拨与货位照片待办", "detail": "物资管理增加货位调拨、单项入库预览及名称联想。待补货位照进入待办，交班时提示仍未补拍的货位。符合清理条件的旧货位照片仅保留记录。", "audiences": ["all"]}
+    {"summary": "物资调拨与货位照片待办", "detail": "具备物资收发资格的人员可报告照片问题并补拍。仓库负责人可办理货位调拨和单项入库，查看交班补照待办。符合清理条件的旧货位照片保留历史记录。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]},
+    {"summary": "仓库负责人交接补照待办", "detail": "撤下原负责人时，未完成的货位补照任务交给仍在任的负责人。", "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]}
   ]},
   {"version": "2026.11.24.1", "date": "2026-11-24", "status": "candidate", "items": [
     {"summary": "轮岗联系人与签到更正", "detail": "轮岗看板新增热力追踪培训师名单，负责热力追踪的正式 GSM 可排序和置顶。完善已在岗人员的签到补记和超时显示。", "audiences": ["all"]},

@@ -21,6 +21,7 @@ from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
 CURRENT_RELEASE_NOTE = "物资调拨与货位照片待办"
+WAREHOUSE_ADMIN_RELEASE_NOTE = "仓库负责人交接补照待办"
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:
@@ -103,11 +104,11 @@ def test_changelog_filters_by_role() -> None:
     assert "全局月结" not in cm_text
     assert "全局月结" in admin_text
     assert "POC" in gsm_text
-    assert cm[0]["current"] is True
+    assert all(release["version"] != APP_VERSION for release in cm)
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert [item["summary"] for item in cm[0]["items"]] == [CURRENT_RELEASE_NOTE]
+    assert CURRENT_RELEASE_NOTE not in cm_text
     assert [item["summary"] for release in cm if release["version"] == "2026.11.10.1" for item in release["items"]] == ["个人积点卡"]
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
@@ -121,8 +122,10 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
     assert [item["summary"] for item in admin[0]["items"]] == [
-        CURRENT_RELEASE_NOTE,
+        WAREHOUSE_ADMIN_RELEASE_NOTE,
     ]
+    assert all(release["version"] != APP_VERSION for release in visible_releases("SYSTEM_ADMIN", set()))
+    assert all(release["version"] != APP_VERSION for release in visible_releases("HR_CIRCLE", {"SYSTEM_ADMIN"}))
     assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [
         CURRENT_RELEASE_NOTE,
     ]
@@ -178,41 +181,30 @@ def test_changelog_count_is_shared_and_deduplicated(monkeypatch) -> None:
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
     with TestClient(app) as client:
-        # Current items are filtered by base/acting role and permissions.
-        login(client, "CMTEST01")
-        cm = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in cm['release']['items']] == [CURRENT_RELEASE_NOTE]
-        assert cm['read'] is False
-        assert client.post('/api/changelog/announcement/read',json={'version':APP_VERSION}).status_code == 200
-        client.post("/api/logout")
-        login(client, "TRTEST01")
-        tr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in tr['release']['items']] == [CURRENT_RELEASE_NOTE]
-        assert tr['read'] is False
-        client.post("/api/logout")
-        login(client, "HR01", "HR123")
-        hr = client.get("/api/changelog/announcement").json()
-        assert [item['summary'] for item in hr['release']['items']] == [
-            CURRENT_RELEASE_NOTE,
-        ]
-        assert hr['read'] is False
-        client.post("/api/logout")
-        login(client, "TRTEST01")
+        for employee_no in ("CMTEST01", "TRTEST01"):
+            login(client, employee_no)
+            assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
+            assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 404
+            client.post("/api/logout")
+
+        login(client, "GSMTEST01")
         first = client.get("/api/changelog/announcement").json()
         history = client.get("/api/changelog").json()["releases"]
         assert first["read"] is False
         assert first["release"]["version"] == APP_VERSION
         assert "content_version" not in first["release"]
         assert first["release"]["items"] == history[0]["items"]
+        assert [item["summary"] for item in first["release"]["items"]] == [CURRENT_RELEASE_NOTE]
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.get("/api/changelog/announcement").json()["read"] is True
-        client.post('/api/logout');login(client,'TRTEST01')
-        assert client.get('/api/changelog/announcement').json()['read'] is True
-        client.post('/api/logout');login(client,'GSMTEST01')
-        gsm = client.get("/api/changelog/announcement").json()
-        assert [item["summary"] for item in gsm["release"]["items"]] == [
-            CURRENT_RELEASE_NOTE,
-        ]
+        client.post("/api/logout")
+        login(client, "GSMTEST01")
+        assert client.get("/api/changelog/announcement").json()["read"] is True
+        client.post("/api/logout")
+        login(client, "HR01", "HR123")
+        admin = client.get("/api/changelog/announcement").json()
+        assert admin["read"] is False
+        assert [item["summary"] for item in admin["release"]["items"]] == [WAREHOUSE_ADMIN_RELEASE_NOTE]
 
 
 def test_import_skip_note_requires_hr_role_and_manage_permission():

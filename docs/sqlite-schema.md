@@ -907,7 +907,7 @@
 
 等级另有 `points NUMERIC(10,2)`。
 
-原单升级在 `deduction_original_upgrades` 按 `record_id` 保存原归属月、原等级和原分值、结果等级和分值、处理人、MOD 确认信息及原因。原扣分记录在同一事务更新，沿用原编号。仓库启动补齐 25 个标准货位中的缺项，保留已有位置及编号。
+原单升级在 `deduction_original_upgrades` 按 `record_id` 保存原归属月、原等级和原分值、结果等级和分值、处理人、MOD 确认信息及原因。原扣分记录在同一事务更新，沿用原编号。仓库启动补齐 25 个标准货位中的缺项，保留已有位置及编号。`warehouse_position_photo_tasks` 按货位保存补照状态及对应库存版本，`warehouse_position_photo_revisions` 保存历次现场照和清理时间，`warehouse_position_photo_reuses` 保存重复上传的关联信息。
 
 ### `deduction_records`
 
