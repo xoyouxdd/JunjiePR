@@ -949,3 +949,62 @@ def test_duplicate_photo_does_not_count_as_replacement_or_close_a_new_report(tri
         "photo_id": picture(picker, "green"), "version": task["version"], "requested_at": task["requested_at"],
     })
     assert repeated.status_code == 409 and get(picker, "/photo-tasks")["items"] == [task]
+
+
+def test_shared_shelf_receipt_photo_move_and_zero_stock_archive(trial):
+    clients, _, _, _ = trial
+    owner, picker = clients["owner"], clients["picker"]
+    item = add_item(owner, "移位验收物资")
+    neighbor = add_item(owner, "留在原货位", 5, 1)
+    photo = picture(owner, "pink")
+    received = post(owner, "/transactions", {
+        "client_id": "receipt-picture-only", "kind": "inbound",
+        "receipts": [{"item_id": item, "received": 3, "expected_unit": "箱"}],
+        "lines": [line(item, 1, 3)], "photos": [{"photo_id": photo, "item_id": item}],
+    })
+    snapshot = get(picker, "/bootstrap")
+    assert next(row for row in snapshot["positions"] if row["id"] == 1)["photo"] is None
+    current = item_stock(picker, item)
+    assert current["receipt_photo"]["id"] == photo and current["receipt_photo"]["transaction_id"] == received["id"]
+    assert picker.get(current["receipt_photo"]["url"]).status_code == 200
+
+    assert_json(owner.put(PREFIX + f"/assessment/{item}", json={"minimum": 3, "yellow_upper": 4}))
+    assert item_stock(owner, item)["stock_level"] == "healthy"
+    assert not warehouse_tasks(owner)
+    revisions = versions(owner, 1, 4)
+    post(owner, "/moves", {"client_id": "shared-shelf-move", "item_id": item, "from_position_id": 1,
+                           "to_position_id": 4, "quantity": 3, "from_version": revisions[1], "to_version": revisions[4]})
+    moved = item_stock(owner, item)
+    assert moved["total"] == 3 and moved["receipt_photo"]["id"] == photo
+    assert {row["position_id"]: row["quantity"] for row in moved["locations"]} == {1: 0, 4: 3}
+    assert item_stock(owner, neighbor)["total"] == 5
+
+    archive = PREFIX + f"/items/{item}/archive"
+    own = {"employee_no": "SUPTEST01"}
+    assert picker.post(archive, json=own).status_code == 403
+    assert owner.post(archive, json={"employee_no": "GSMTEST01"}).status_code == 422
+    assert owner.post(archive, json=own).status_code == 409
+    post(picker, "/transactions", outbound(picker, "take-one-from-moved", [line(item, 4, 1)], [4]))
+    assert item_stock(owner, item)["stock_level"] == "low"
+    low, = get(owner, "/alerts")["items"]
+    post(picker, "/transactions", outbound(picker, "empty-moved-item", [line(item, 4, 2)], [4]))
+    empty, = get(owner, "/alerts")["items"]
+    assert low["id"] == empty["id"] and item_stock(owner, item)["stock_level"] == "empty"
+    issue = post(picker, "/issues", {"item_id": item, "position_id": 4, "reason": "mismatch"})
+    assert owner.post(archive, json=own).status_code == 409
+    post(owner, f"/issues/{issue['id']}/claim", {})
+    post(owner, f"/issues/{issue['id']}/resolve", {"reason": "复核已结清"})
+    old_route = owner.put(PREFIX + f"/items/{item}", json={"name": "移位验收物资", "unit": "箱", "active": False})
+    assert old_route.status_code == 409
+    assert not assert_json(owner.post(archive, json=own))["active"]
+    assert get(owner, "/alerts")["items"] == []
+    assert all(row["id"] != item for row in get(picker, "/bootstrap")["items"])
+    assert get(owner, f"/transactions/{received['id']}")["photos"][0]["id"] == photo
+    archived = next(row for row in get(owner, "/assessment?include_archived=true")["items"] if row["item_id"] == item)
+    assert not archived["active"] and archived["usage_today"] == 3
+    stale_edit = assert_json(owner.put(PREFIX + f"/items/{item}", json={"name": "移位验收物资", "unit": "箱", "active": True}))
+    assert not stale_edit["active"]
+    restore = PREFIX + f"/items/{item}/restore"
+    assert picker.post(restore).status_code == 403
+    assert assert_json(owner.post(restore))["active"]
+    assert item_stock(picker, item)["stock_level"] == "empty"

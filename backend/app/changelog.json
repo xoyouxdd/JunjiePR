@@ -1,4 +1,7 @@
 [
+  {"version": "2026.11.25.1", "date": "2026-11-25", "status": "candidate", "items": [
+    {"summary": "共享货架与物资归档", "detail": "共享货架集中显示库存、入库照片和货位。仓库负责人可输入本人员工号归档零库存物资，保留领用记录，也可恢复使用。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]}
+  ]},
   {"version": "2026.11.24.2", "date": "2026-11-24", "status": "candidate", "items": [
     {"summary": "物资调拨与货位照片待办", "detail": "具备物资收发资格的人员可报告照片问题并补拍。仓库负责人可办理货位调拨和单项入库，查看交班补照待办。符合清理条件的旧货位照片保留历史记录。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]},
     {"summary": "仓库负责人交接补照待办", "detail": "撤下原负责人时，未完成的货位补照任务交给仍在任的负责人。", "audiences": ["SYSTEM_ADMIN"], "permissions": ["SYSTEM_ADMIN"]}

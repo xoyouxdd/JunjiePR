@@ -38,6 +38,10 @@ class ItemInput(Document):
     active: bool = True
 
 
+class ArchiveItemInput(Document):
+    employee_no: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
+
+
 class TxLine(Document):
     item_id: OrderItemId
     position_id: PositionId

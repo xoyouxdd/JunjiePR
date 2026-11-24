@@ -84,7 +84,7 @@ def stock_level(stock: int, setting: WarehouseThreshold | None) -> str:
         return "unset"
     if stock < setting.minimum:
         return "low"
-    return "near" if stock <= (setting.yellow_upper or setting.minimum) else "healthy"
+    return "healthy"
 
 
 def sync_alerts(db: Session, item_ids) -> None:
@@ -182,12 +182,13 @@ def _settings_payload(setting) -> dict:
     )}
 
 
-def assessment_payload(db: Session, now: datetime | None = None) -> dict:
+def assessment_payload(db: Session, now: datetime | None = None, *, include_archived: bool = False) -> dict:
     now = now or warehouse_now()
     today = now.date()
     from_30 = today - timedelta(days=30)
     from_7 = today - timedelta(days=7)
-    items = db.query(WarehouseItem).filter(WarehouseItem.active.is_(True)).order_by(WarehouseItem.name, WarehouseItem.id).all()
+    query = db.query(WarehouseItem).order_by(WarehouseItem.name, WarehouseItem.id)
+    items = query.all() if include_archived else query.filter(WarehouseItem.active.is_(True)).all()
     ids = {row.id for row in items}
     stock = _totals(db, ids)
     settings = {row.item_id: row for row in db.query(WarehouseThreshold).filter(WarehouseThreshold.item_id.in_(ids))}
@@ -229,7 +230,7 @@ def assessment_payload(db: Session, now: datetime | None = None) -> dict:
             current, tracked, out_days, item.id in reviewed, usage_30, setting,
         )
         rows.append({
-            "item_id": item.id, "name": item.name, "spec": item.spec, "unit": item.unit, "stock": current,
+            "item_id": item.id, "name": item.name, "spec": item.spec, "unit": item.unit, "stock": current, "active": item.active,
             "level": stock_level(current, setting) if item.opened_at else "unset", "days_tracked": tracked,
             "days_out_of_stock": out_days, "under_review": item.id in reviewed, "usage_7": usage_7, "usage_30": usage_30,
             "direct_7": direct_7, "direct_30": direct_30, "usage_today": daily_rows[today][0],
@@ -271,9 +272,11 @@ def _alerts_payload(db: Session) -> dict:
 
 
 @router.get("/assessment")
-def get_assessment(db: Session = Depends(get_db), user: V2User = Depends(current_user)):
+def get_assessment(db: Session = Depends(get_db), user: V2User = Depends(current_user), include_archived: bool = False):
     require_access(user)
-    return assessment_payload(db)
+    if include_archived:
+        require_manager(db, user)
+    return assessment_payload(db, include_archived=include_archived)
 
 
 @router.put("/assessment/{item_id}")

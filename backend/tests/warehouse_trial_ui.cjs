@@ -115,7 +115,7 @@ async function main() {
     for (const width of [320,390,1280]) {
       await owner.page.setViewportSize({width,height:900});
       assert(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'workspace overflow at ' + width);
-      const firstLayer = owner.page.getByRole('button',{name:'A 架第 1 层',exact:true});
+      const firstLayer = owner.page.locator('.wh-rack-level[data-wh-id="1"]');
       const quick = owner.page.getByRole('region',{name:'货位快捷物资'});
       await firstLayer.click();
       assert.equal(await firstLayer.getAttribute('aria-expanded'),'true');
@@ -188,6 +188,10 @@ async function main() {
     await owner.page.getByRole('heading',{name:'入库已确认'}).waitFor();
     await owner.page.locator('[data-we-complete]').click();
     assert.equal((await state()).items.find(row => row.id === first).total,13);
+    await owner.page.locator('.wh-rack-level[data-wh-id="3"]').click();
+    const quickReceipt = owner.page.getByRole('region',{name:'货位快捷物资'});
+    await quickReceipt.getByText('暂无整层照',{exact:true}).waitFor();
+    await quickReceipt.getByRole('img',{name:'厕所卡最近入库照'}).waitFor();
 
     await open(picker,'out');
     await selectItem(picker.page,first,'WC卡',1,2);
@@ -238,12 +242,15 @@ async function main() {
 
     await picker.page.locator('.wh-module[data-wh-action="query"]').click();
     await picker.page.locator('[data-wh-field="query-word"]').fill('WC卡');
-    await picker.page.locator('[data-wh-action="query-item"][data-wh-id="' + first + '"]').click();
+    const match = picker.page.locator('[data-wh-action="query-item"][data-wh-id="' + first + '"]');
+    if (await match.getAttribute('aria-expanded') !== 'true') await match.click();
     await picker.page.locator('.wh-bin').first().waitFor();
     assert.equal(await picker.page.locator('.wh-bin').count(),2);
     await picker.page.getByText('A 架第 1 层现场照片',{exact:true}).waitFor();
     await picker.page.screenshot({path:path.join(artifacts,'query-390.png'),fullPage:true});
-    await picker.page.locator('[data-wh-action="report"][data-wh-location="1"]').click();
+    const reportAction = picker.page.locator('[data-wh-action="report"][data-wh-location="1"]');
+    await picker.page.locator('.wh-bin').filter({has:reportAction}).getByText('更多',{exact:true}).click();
+    await reportAction.click();
     await picker.page.locator('[name=observed_quantity]').fill('4');
     await picker.page.getByRole('button',{name:'提交报错',exact:true}).click();
     await picker.page.getByText('待核对',{exact:true}).waitFor();
@@ -268,15 +275,21 @@ async function main() {
     await open(owner,'assessment');
     await owner.page.locator('.wh-usage summary').filter({hasText:'厕所卡'}).click();
     await owner.page.locator('[data-wh-action="rule"][data-wh-id="' + first + '"]').click();
-    for (const [field,value] of Object.entries({minimum:3,yellow_upper:5,lead_days:4,safety_days:2,target_days:14})) {
+    await owner.page.getByText('补货估算',{exact:true}).click();
+    for (const [field,value] of Object.entries({minimum:3,lead_days:4,safety_days:2,target_days:14})) {
       await owner.page.locator('dialog [name="' + field + '"]').fill(String(value));
     }
     await owner.page.getByRole('button',{name:'保存设置',exact:true}).click();
     await owner.page.getByText('已保存评估设置。',{exact:true}).waitFor();
     await setStock(first,1,1);
     await setStock(first,3,0);
+    await open(owner);
+    const firstStockSlot = owner.page.locator('.wh-rack-level[data-wh-id="1"]');
+    assert.equal(await firstStockSlot.getAttribute('data-stock-level'),'low');
+    await firstStockSlot.click();
+    await owner.page.getByRole('region',{name:'货位快捷物资'}).getByText(/全仓 1 箱 · 最低 3 箱/).waitFor();
     await open(owner,'assessment');
-    await owner.page.locator('.wh-assessment-row--low').getByText('低库存',{exact:true}).waitFor();
+    await owner.page.locator('.wh-assessment-row--low').getByText('缺少',{exact:true}).waitFor();
     await owner.page.screenshot({path:path.join(artifacts,'assessment-390.png'),fullPage:true});
     await setStock(first,1,0);
     await owner.page.goto(base + '/?view=actionCenter');
@@ -287,7 +300,7 @@ async function main() {
 
     await open(owner);
     await owner.page.locator('[data-wh-action="catalog"]').click();
-    await owner.page.locator('[data-wh-action="position-photo"]').click();
+    await owner.page.locator('[data-wh-action="calibrate"]').click();
     const largePhoto = Buffer.from(await owner.page.evaluate(() => {
       const canvas = Object.assign(document.createElement('canvas'), {width:1600,height:1100});
       const drawing = canvas.getContext('2d');
@@ -315,7 +328,7 @@ async function main() {
     });
     await owner.page.locator('dialog [name=position_id]').selectOption('7');
     await owner.page.locator('dialog [name=file]').setInputFiles({name:'detailed.png',mimeType:'image/png',buffer:largePhoto});
-    await owner.page.getByRole('button',{name:'更新照片',exact:true}).click();
+    await owner.page.getByRole('button',{name:'保存校准',exact:true}).click();
     await owner.page.getByText('已更新货位照片。',{exact:true}).waitFor();
     const uploadedPhoto = await owner.page.evaluate(() => window.warehousePhotoUpload);
     assert(largePhoto.length > 1024 * 1024 && uploadedPhoto.size <= 500 * 1024 && uploadedPhoto.type === 'image/jpeg');
@@ -339,10 +352,9 @@ async function main() {
     assert.match(workbook.suggestedFilename(),/\.xlsx$/);
     assert.equal(fs.readFileSync(await workbook.path()).subarray(0,2).toString(),'PK');
     await open(owner,'query');
-    await owner.page.getByRole('button',{name:'地面临时储存区',exact:true}).click();
+    await owner.page.locator('[data-wh-field="query-shelf"]').selectOption('G');
     await owner.page.getByText('地面临时储存区现场照片',{exact:true}).waitFor();
-    await owner.page.locator('.wh-goods-quantity').getByText('2 箱',{exact:true}).waitFor();
-    await owner.page.locator('.wh-bin-stock').getByText('2 箱',{exact:true}).waitFor();
+    await owner.page.locator('.wh-bin-stock').filter({hasText:'2 箱'}).waitFor();
     await owner.page.screenshot({path:path.join(artifacts,'ground-390.png'),fullPage:true});
 
     const batchWorkbook = await owner.request.get(base + prefix + '/inbound/template.xlsx');
@@ -380,8 +392,8 @@ async function main() {
     assert.equal((await state()).items.find(row => row.id === first).locations.find(row => row.position_id === 4).quantity,3);
 
     await open(picker,'query');
-    await picker.page.getByRole('button',{name:'B 架',exact:true}).click();
-    await picker.page.getByRole('button',{name:'第 1 层',exact:true}).click();
+    await picker.page.locator('[data-wh-field="query-shelf"]').selectOption('B');
+    await picker.page.locator('[data-wh-field="query-location"]').selectOption('4');
     await picker.page.getByRole('button',{name:'照片报错',exact:true}).click();
     await picker.page.locator('dialog [name=note]').fill('货位标识不清楚');
     await picker.page.getByRole('button',{name:'提交报错',exact:true}).click();
@@ -433,7 +445,7 @@ async function main() {
     await owner.page.locator('[data-we-confirm]').click();
     await owner.page.getByRole('heading',{name:'入库已确认'}).waitFor();
     await owner.page.locator('[data-we-complete]').click();
-    const quickShelf = owner.page.getByRole('button',{name:'B 架第 2 层',exact:true});
+    const quickShelf = owner.page.locator('.wh-rack-level[data-wh-id="5"]');
     const quickPhoto = owner.page.getByRole('region',{name:'货位快捷物资'});
     await quickShelf.click();
     await quickPhoto.getByText('等候时间卡',{exact:true}).waitFor();
@@ -507,6 +519,52 @@ async function main() {
     assert.equal((await state()).items.find(row => row.id === unitItem.id).total,0);
     await owner.page.locator('[data-we-edit]').click();
     assert.equal(await owner.page.locator('[data-we-item="' + unitItem.id + '"] [data-we-field="received"]').inputValue(),'3');
+
+    const movedItem = await item('移位测试带',[],14,2);
+    const stays = await item('原位保留物资',[],14,4);
+    await open(owner);
+    const rackSlot = (page,id) => page.locator('.wh-rack-level[data-wh-id="' + id + '"]');
+    await rackSlot(owner.page,14).click();
+    const quickRegion = owner.page.getByRole('region',{name:'货位快捷物资'});
+    const movedRow = quickRegion.getByRole('listitem').filter({hasText:'移位测试带'});
+    await movedRow.getByText('更多',{exact:true}).click();
+    await movedRow.getByRole('button',{name:'移位',exact:true}).click();
+    assert.equal(await owner.page.locator('dialog [name=from]').inputValue(),'14');
+    await owner.page.locator('dialog [name=to]').selectOption('19');
+    await owner.page.locator('dialog [name=quantity]').fill('2');
+    await owner.page.getByRole('button',{name:'确认移位',exact:true}).click();
+    await movedRow.waitFor({state:'detached'});
+    await quickRegion.getByText('原位保留物资',{exact:true}).waitFor();
+    assert.equal((await state()).items.find(row => row.id === stays).total,4);
+
+    await json(await owner.request.put(base + prefix + '/assessment/' + movedItem,{data:{minimum:2}}));
+    await open(owner);
+    const dest = rackSlot(owner.page,19);
+    assert.equal(await dest.getAttribute('data-stock-level'),'healthy');
+    await dest.click();
+    await quickRegion.getByText('移位测试带',{exact:true}).waitFor();
+    await quickRegion.getByRole('button',{name:'去出库',exact:true}).click();
+    await owner.page.locator('[data-we-item="' + movedItem + '"] [data-we-allocation="0"]').fill('1');
+    await owner.page.locator('[data-we-next]').click();
+    await attach(owner.page,19);
+    await uploaded(owner.page,19);
+    await owner.page.locator('[data-we-confirm]').click();
+    await owner.page.getByRole('heading',{name:'出库已确认'}).waitFor();
+    await owner.page.locator('[data-we-complete]').click();
+    await dest.waitFor();
+    assert.equal(await dest.getAttribute('data-stock-level'),'low');
+    assert((await json(await owner.request.get(base + '/api/action-center'))).items.some(row => row.type === 'warehouse_followup'));
+
+    await owner.page.locator('[data-wh-action="catalog"]').click();
+    await owner.page.locator('[data-wh-action="archive-item"][data-wh-id="' + unitItem.id + '"]').click();
+    await owner.page.locator('dialog [name=employee_no]').fill('TATEST01');
+    await owner.page.getByRole('button',{name:'确认归档',exact:true}).click();
+    await owner.page.getByText('请输入当前登录账号本人的员工号',{exact:true}).waitFor();
+    await owner.page.locator('dialog [name=employee_no]').fill('SUPTEST01');
+    await owner.page.getByRole('button',{name:'确认归档',exact:true}).click();
+    await owner.page.getByText('已归档物资。',{exact:true}).waitFor();
+    await owner.page.locator('details.wh-archived > summary').click();
+    await owner.page.locator('details.wh-archived').getByRole('heading',{name:'纸杯',exact:true}).waitFor();
     assert.deepEqual(errors,[]);
     process.stdout.write('PASS warehouse UI: assignment, inbound and direct use, outbound background photo resume and stale check, deferred Excel photos and photo reports, query/discrepancy transfer, alert cycle, responsive 320/390/1280.\n');
     process.stdout.write('Manual shelf photo bytes: original ' + largePhoto.length + ', browser ' + uploadedPhoto.size + ', storage ' + storedSize + '.\n');

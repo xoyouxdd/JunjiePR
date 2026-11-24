@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.database.connection import get_db, write_transaction
+from app.employee_numbers import employee_number
 from app.excel_export_utils import content_disposition
 from app.services.attachments import run_image_work
 from app.services.audit import write_audit
@@ -23,10 +24,10 @@ from app.warehouse.models import (
     WarehouseIssue, WarehouseItem, WarehouseOwner, WarehousePhoto, WarehousePosition, WarehousePositionPhotoReuse,
     WarehousePositionPhotoTask, WarehouseTransaction, WarehouseTransactionPhoto, warehouse_now,
 )
-from app.warehouse.schemas import AdjustmentInput, CalibrationInput, CorrectionInput, IssueInput, ItemInput, LocationMoveInput, LocationPhotoInput, LocationPhotoReportInput, LocationPhotoTaskInput, ManagerInput, PhotoId, ResolveInput, SingleInboundInput, TransactionInput
+from app.warehouse.schemas import AdjustmentInput, ArchiveItemInput, CalibrationInput, CorrectionInput, IssueInput, ItemInput, LocationMoveInput, LocationPhotoInput, LocationPhotoReportInput, LocationPhotoTaskInput, ManagerInput, PhotoId, ResolveInput, SingleInboundInput, TransactionInput
 from app.warehouse.service import (
     apply_adjustment, balances_by_item, calibrate_position, confirm_transaction, correct_transaction, get_item, get_position, get_quantity,
-    get_transaction_by_client, issue_data, item_data, mark_posted, move_stock, new_transaction, open_issue, photo_data,
+    get_transaction_by_client, issue_data, item_data, latest_receipt_photos, mark_posted, move_stock, new_transaction, open_issue, photo_data,
     position_data, resolve_issue, save_current_location_photo, staged_photo, stamp, transaction_data, update_latest_photo,
 )
 
@@ -47,12 +48,28 @@ def sync_inventory_alerts(db: Session, items: set[int]) -> None:
 
 @router.get("/bootstrap")
 def bootstrap(db: DB, user: User):
+    from app.warehouse.assessment import WarehouseThreshold, stock_level
+
     require_access(user)
     # Keep each position's balance, physical photo and pending state in the same read snapshot.
     with db.begin_nested():
         manager = is_manager(db, user)
         locations = balances_by_item(db)
-        items = db.query(WarehouseItem).order_by(WarehouseItem.category, WarehouseItem.name, WarehouseItem.spec).all()
+        catalog = db.query(WarehouseItem).order_by(WarehouseItem.category, WarehouseItem.name, WarehouseItem.spec)
+        items = catalog.all() if manager else catalog.filter(WarehouseItem.active.is_(True)).all()
+        active_ids = {item.id for item in items if item.active}
+        recent_photos = latest_receipt_photos(db, active_ids)
+        settings = {row.item_id: row for row in db.query(WarehouseThreshold).filter(WarehouseThreshold.item_id.in_(active_ids))}
+        item_rows = []
+        for item in items:
+            data = item_data(item, locations.get(item.id, []))
+            rule = settings.get(item.id)
+            data.update(
+                stock_level=stock_level(data["total"], rule) if item.active and item.opened_at else "unset",
+                minimum=rule.minimum if rule is not None else None,
+                receipt_photo=recent_photos.get(item.id),
+            )
+            item_rows.append(data)
         pending_photos = {task.position_id for task in open_photo_tasks(db)}
         return {
             "operator": {"id": user.id, "name": user.name},
@@ -62,7 +79,7 @@ def bootstrap(db: DB, user: User):
             "managers": person_data(db, manager_people(db)),
             "positions": [{**position_data(db, row), "needs_photo": row.id in pending_photos} for row in db.query(WarehousePosition).order_by(
                 WarehousePosition.shelf, WarehousePosition.level.desc())],
-            "items": [item_data(item, locations.get(item.id, [])) for item in items if manager or item.active],
+            "items": item_rows,
         }
 
 
@@ -165,10 +182,46 @@ def edit_item(item_id: int, body: ItemInput, db: DB, user: User):
     with write_transaction(db):
         require_manager(db, user)
         previous = get_item(db, item_id)
+        if previous.active and not body.active:
+            raise HTTPException(409, "请使用归档操作并确认本人的员工号")
         before = item_data(previous, [])
-        item = save_item(db, body, previous)
-        write_audit(db, user.employee, "更新仓库物资", "warehouse_item", item.id, before=before, after=body.model_dump())
+        update = body.model_copy(update={"active": previous.active})
+        item = save_item(db, update, previous)
+        write_audit(db, user.employee, "更新仓库物资", "warehouse_item", item.id, before=before, after=update.model_dump())
         sync_inventory_alerts(db, {item_id})
+        db.commit()
+    return item_data(item, balances_by_item(db).get(item_id, []))
+
+
+@router.post("/items/{item_id}/archive")
+def archive_item(item_id: int, body: ArchiveItemInput, db: DB, user: User):
+    from app.warehouse.service import save_item
+
+    with write_transaction(db):
+        require_manager(db, user)
+        if employee_number(body.employee_no).casefold() != employee_number(user.employee.employee_no).casefold():
+            raise HTTPException(422, "请输入当前登录账号本人的员工号")
+        item = get_item(db, item_id)
+        if item.active:
+            before = item_data(item, [])
+            update = ItemInput(name=item.name, spec=item.spec, category=item.category, unit=item.unit,
+                               aliases=item.aliases, active=False)
+            save_item(db, update, item)
+            write_audit(db, user.employee, "归档仓库物资", "warehouse_item", item.id, before=before, after=item_data(item, []))
+            sync_inventory_alerts(db, {item.id})
+        db.commit()
+    return item_data(item, balances_by_item(db).get(item_id, []))
+
+
+@router.post("/items/{item_id}/restore")
+def restore_item(item_id: int, db: DB, user: User):
+    with write_transaction(db):
+        require_manager(db, user)
+        item = get_item(db, item_id)
+        if not item.active:
+            item.active = True
+            write_audit(db, user.employee, "恢复仓库物资", "warehouse_item", item.id, after=item_data(item, []))
+            sync_inventory_alerts(db, {item.id})
         db.commit()
     return item_data(item, balances_by_item(db).get(item_id, []))
 

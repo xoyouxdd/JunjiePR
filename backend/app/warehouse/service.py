@@ -6,6 +6,7 @@ from unicodedata import normalize
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.json_digest import canonical_json
@@ -285,6 +286,24 @@ def tx_photos(db: Session, tx_id: int) -> list[dict]:
             row.update(url=None, cleared_at=stamp(cleared_at))
         rows.append(row)
     return rows
+
+
+def latest_receipt_photos(db: Session, item_ids: set[int]) -> dict[int, dict]:
+    if not item_ids:
+        return {}
+    link, order = WarehouseTransactionPhoto, WarehouseTransaction
+    cleared = WarehousePositionPhotoRevision
+    ranked = db.query(
+        link.item_id, link.photo_id, order.id.label("transaction_id"), order.posted_at,
+        func.row_number().over(partition_by=link.item_id, order_by=(order.posted_at.desc(), order.id.desc())).label("rank"),
+    ).select_from(link).join(order, order.id == link.transaction_id).outerjoin(cleared, cleared.photo_id == link.photo_id).filter(
+        link.item_id.in_(item_ids), order.kind == "inbound", order.status == "posted", cleared.cleared_at.is_(None),
+    ).subquery()
+    rows = db.query(ranked.c.item_id, WarehousePhoto, ranked.c.transaction_id, ranked.c.posted_at).join(
+        WarehousePhoto, WarehousePhoto.id == ranked.c.photo_id,
+    ).filter(ranked.c.rank == 1)
+    return {item_id: {**photo_data(photo), "transaction_id": transaction_id, "posted_at": stamp(posted_at)}
+            for item_id, photo, transaction_id, posted_at in rows}
 
 
 def transaction_data(db: Session, tx: WarehouseTransaction, *, detail: bool = True) -> dict:
@@ -668,7 +687,7 @@ def calibrate_position(db: Session, user: V2User, position_id: int, body: Calibr
         balance = db.get(WarehouseBalance, (item_id, position_id))
         current = balance.quantity if balance else 0
         changed |= balance is None or target != current
-        add_movement(db, tx, item_id, position_id, "adjustment", target - current, now)
+        add_movement(db, tx, item_id, position_id, "opening" if balance is None else "adjustment", target - current, now)
     if changed:
         touch_positions(db, {position_id}, now)
     if photo:
