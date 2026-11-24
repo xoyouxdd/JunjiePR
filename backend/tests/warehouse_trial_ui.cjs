@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
-const {spawn} = require('node:child_process');
+const {spawn,spawnSync} = require('node:child_process');
 const {chromium} = require('./support/browser-runtime.cjs');
 
 const backend = path.resolve(__dirname, '..');
@@ -228,6 +228,8 @@ async function main() {
     assert.equal(await picker.page.locator('[data-we-reviewed]:visible').count(),1);
     await picker.page.screenshot({path:path.join(artifacts,'outbound-recheck-390.png'),fullPage:true});
     await group(picker.page,1).locator('[data-we-reviewed]').click();
+    await attach(picker.page,1);
+    await uploaded(picker.page,1);
     const before = (await state()).items.find(row => row.id === first).total;
     await picker.page.locator('[data-we-confirm]').click();
     await picker.page.getByRole('heading',{name:'出库已确认'}).waitFor();
@@ -342,8 +344,171 @@ async function main() {
     await owner.page.locator('.wh-goods-quantity').getByText('2 箱',{exact:true}).waitFor();
     await owner.page.locator('.wh-bin-stock').getByText('2 箱',{exact:true}).waitFor();
     await owner.page.screenshot({path:path.join(artifacts,'ground-390.png'),fullPage:true});
+
+    const batchWorkbook = await owner.request.get(base + prefix + '/inbound/template.xlsx');
+    assert(batchWorkbook.ok());
+    const receiptFile = path.join(process.env.TEMP,'warehouse-deferred-receipt.xlsx');
+    fs.writeFileSync(receiptFile,await batchWorkbook.body());
+    const fillWorkbook = spawnSync(path.join(backend,'.venv/Scripts/python.exe'),['-X','utf8','-c',
+      'import sys; from openpyxl import load_workbook; p=sys.argv[1]; w=load_workbook(p); w.active["A4"]="\u5395\u6240\u5361"; w.active["B4"]="B1"; w.active["C4"]=3; w.save(p)',
+      receiptFile], {cwd:backend,windowsHide:true});
+    assert.equal(fillWorkbook.status,0,fillWorkbook.stderr?.toString());
+    await open(owner,'in');
+    await owner.page.locator('[data-we-import-file]').setInputFiles(receiptFile);
+    await owner.page.locator('[data-we-next]:enabled').click();
+    const deferred = owner.page.locator('[data-we-defer-photos]');
+    assert(await deferred.isChecked());
+    await owner.page.getByText('B 架第 1 层',{exact:true}).last().waitFor();
+    await deferred.uncheck();
+    await owner.page.locator('[data-we-camera]').waitFor({state:'attached'});
+    assert(await owner.page.locator('[data-we-confirm]').isDisabled());
+    await deferred.check();
+    await owner.page.locator('[data-we-confirm]').click();
+    await owner.page.getByText('1 个货位已列入补照待办',{exact:true}).waitFor();
+
+    await owner.page.goto(base + '/?view=actionCenter');
+    await owner.page.locator('[data-action-type=warehouse_photo_followup]').click();
+    await owner.page.getByRole('heading',{name:'负责人待办'}).waitFor();
+    await owner.page.locator('[data-wh-action=photo-complete][data-wh-id="4"]').waitFor();
+    await open(picker);
+    await picker.page.getByRole('button',{name:'货位待补照',exact:true}).click();
+    await picker.page.locator('[data-wh-action=photo-complete][data-wh-id="4"]').click();
+    await picker.page.locator('dialog [name=file]').setInputFiles({name:'shelf.jpg',mimeType:'image/jpeg',buffer:photo});
+    await picker.page.getByRole('button',{name:'保存现场照',exact:true}).click();
+    await picker.page.getByText('现场照已更新，补照待办已完成。',{exact:true}).waitFor();
+    await picker.page.getByText('暂无待补照货位',{exact:true}).waitFor();
+    assert.equal((await state()).items.find(row => row.id === first).locations.find(row => row.position_id === 4).quantity,3);
+
+    await open(picker,'query');
+    await picker.page.getByRole('button',{name:'B 架',exact:true}).click();
+    await picker.page.getByRole('button',{name:'第 1 层',exact:true}).click();
+    await picker.page.getByRole('button',{name:'照片报错',exact:true}).click();
+    await picker.page.locator('dialog [name=note]').fill('货位标识不清楚');
+    await picker.page.getByRole('button',{name:'提交报错',exact:true}).click();
+    await picker.page.getByText('待补最新现场照',{exact:true}).waitFor();
+    assert((await state()).positions.find(row => row.id === 4).needs_photo);
+    fs.unlinkSync(receiptFile);
+
+    await picker.page.getByRole('button',{name:'照片报错',exact:true}).click();
+    await picker.page.locator('dialog [name=note]').fill('补充：实际拍的是相邻层');
+    await picker.page.getByRole('button',{name:'提交报错',exact:true}).click();
+    await picker.page.getByText('已报告，仓库负责人可在待办跟进。',{exact:true}).waitFor();
+    await open(owner);
+    await owner.page.getByRole('button',{name:'负责人待办',exact:true}).click();
+    const feedback = owner.page.getByRole('list',{name:'照片报错记录'});
+    await feedback.getByText('货位标识不清楚',{exact:true}).waitFor();
+    await feedback.getByText('补充：实际拍的是相邻层',{exact:true}).waitFor();
+
+    const staleFile = path.join(process.env.TEMP,'old-shelf-file.jpg');
+    fs.writeFileSync(staleFile,photo);
+    const staleTime = new Date('2026-01-15T04:00:00Z');
+    fs.utimesSync(staleFile,staleTime,staleTime);
+    const copiedExifFile = path.join(process.env.TEMP,'copied-shelf-exif.jpg');
+    const createImage = spawnSync(path.join(backend,'.venv/Scripts/python.exe'),['-X','utf8','-c',
+      'import sys; from PIL import Image; e=Image.Exif(); e[34665]={36867:"2026:01:15 12:00:00",36881:"+08:00"}; Image.new("RGB",(640,480),"tan").save(sys.argv[1],exif=e)',
+      copiedExifFile],{cwd:backend,windowsHide:true});
+    assert.equal(createImage.status,0,createImage.stderr?.toString());
+    await picker.page.getByRole('button',{name:'补拍',exact:true}).click();
+    const originalShelfPhoto = (await state()).positions.find(row => row.id === 4).photo.id;
+    for (const filename of [staleFile,copiedExifFile]) {
+      await picker.page.locator('dialog [name=file]').setInputFiles(filename);
+      const [rejected] = await Promise.all([
+        picker.page.waitForResponse(resp => resp.url().endsWith('/positions/4/photo-task') && resp.request().method() === 'PUT'),
+        picker.page.getByRole('button',{name:'保存现场照',exact:true}).click(),
+      ]);
+      assert.equal(rejected.status(),409);
+    }
+    const stillPending = (await state()).positions.find(row => row.id === 4);
+    assert(stillPending.needs_photo && stillPending.photo.id === originalShelfPhoto);
+    await picker.page.locator('dialog [name=file]').setInputFiles({name:'new-shelf.png',mimeType:'image/png',buffer:largePhoto});
+    await picker.page.getByRole('button',{name:'保存现场照',exact:true}).click();
+    await picker.page.getByText('现场照已更新，补照待办已完成。',{exact:true}).waitFor();
+
+    await open(owner,'in');
+    await selectItem(owner.page,third,'等候卡',5,1,1);
+    await owner.page.locator('[data-we-next]').click();
+    await group(owner.page,third).locator('[data-we-photo-location]').selectOption('5');
+    await attach(owner.page,third);
+    await uploaded(owner.page,third);
+    await owner.page.locator('[data-we-confirm]').click();
+    await owner.page.getByRole('heading',{name:'入库已确认'}).waitFor();
+    await owner.page.locator('[data-we-complete]').click();
+    const quickShelf = owner.page.getByRole('button',{name:'B 架第 2 层',exact:true});
+    const quickPhoto = owner.page.getByRole('region',{name:'货位快捷物资'});
+    await quickShelf.click();
+    await quickPhoto.getByText('等候时间卡',{exact:true}).waitFor();
+    await quickPhoto.getByText(/更新于/).waitFor();
+    const thumbnail = quickPhoto.getByRole('img',{name:'B 架第 2 层现场照片'});
+    await thumbnail.waitFor();
+    await owner.page.waitForFunction(() => document.querySelector('#wh-quick-location img')?.naturalWidth);
+    assert(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    const fullPhotoOpened = owner.context.waitForEvent('page');
+    await quickPhoto.getByRole('link',{name:'B 架第 2 层现场照片'}).click();
+    const fullPhoto = await fullPhotoOpened;
+    await fullPhoto.locator('img').waitFor();
+    await fullPhoto.close();
+    await open(owner,'in');
+    await selectItem(owner.page,third,'等候卡',6,1,1);
+    await owner.page.locator('[data-we-next]').click();
+    await group(owner.page,third).locator('[data-we-photo-location]').selectOption('6');
+    await group(owner.page,third).locator('[data-we-camera]').setInputFiles(staleFile);
+    await uploaded(owner.page,third);
+    await owner.page.locator('[data-we-confirm]').click();
+    await owner.page.getByText('1 个货位已列入补照待办',{exact:true}).waitFor();
+    const newShelf = (await state()).positions.find(row => row.id === 6);
+    assert(newShelf.needs_photo && !newShelf.photo);
+
+    await open(owner,'in');
+    await selectItem(owner.page,first,'WC卡',9,1,1);
+    await selectItem(owner.page,secondItem,'回卡',9,1,1);
+    await selectItem(owner.page,third,'等候卡',8,1,1);
+    await owner.page.locator('[data-we-next]').click();
+    const earlyPhoto = path.join(process.env.TEMP,'before-quantity-edit.jpg');
+    fs.writeFileSync(earlyPhoto,photo);
+    await group(owner.page,first).locator('[data-we-photo-location]').selectOption('9');
+    await group(owner.page,first).locator('[data-we-camera]').setInputFiles(earlyPhoto);
+    await uploaded(owner.page,first);
+    await attach(owner.page,secondItem);
+    await uploaded(owner.page,secondItem);
+    await group(owner.page,third).locator('[data-we-photo-location]').selectOption('8');
+    await attach(owner.page,third);
+    await uploaded(owner.page,third);
+    await owner.page.locator('[data-we-edit]').click();
+    const revisedItem = owner.page.locator('[data-we-item="' + secondItem + '"]');
+    await revisedItem.locator('[data-we-field="received"]').fill('2');
+    await revisedItem.locator('[data-we-allocation="0"]').fill('2');
+    await owner.page.locator('[data-we-next]').click();
+    await uploaded(owner.page,first);
+    await uploaded(owner.page,third);
+    await group(owner.page,secondItem).locator('[data-we-photo-status][data-state=missing]').waitFor();
+    await attach(owner.page,secondItem);
+    await uploaded(owner.page,secondItem);
+    await owner.page.locator('[data-we-confirm]').click();
+    await owner.page.getByText('1 个货位已列入补照待办',{exact:true}).waitFor();
+    const adjusted = (await state()).positions;
+    assert(adjusted.find(row => row.id === 9).needs_photo && !adjusted.find(row => row.id === 9).photo);
+    assert(adjusted.find(row => row.id === 8).photo && !adjusted.find(row => row.id === 8).needs_photo);
+
+    const unitItem = await json(await owner.request.post(base + prefix + '/items',{data:{name:'纸杯',unit:'箱'}}));
+    const unitTemplate = await owner.request.get(base + prefix + '/inbound/template.xlsx');
+    assert(unitTemplate.ok());
+    const unitWorkbook = path.join(process.env.TEMP,'changed-unit.xlsx');
+    fs.writeFileSync(unitWorkbook,await unitTemplate.body());
+    const fillUnit = spawnSync(path.join(backend,'.venv/Scripts/python.exe'),['-X','utf8','-c',
+      'import sys; from openpyxl import load_workbook; p=sys.argv[1]; w=load_workbook(p); w.active["A4"]="\u7eb8\u676f"; w.active["B4"]="A4"; w.active["C4"]=3; w.save(p)',
+      unitWorkbook],{cwd:backend,windowsHide:true});
+    assert.equal(fillUnit.status,0,fillUnit.stderr?.toString());
+    await open(owner,'in');
+    await owner.page.locator('[data-we-import-file]').setInputFiles(unitWorkbook);
+    await owner.page.locator('[data-we-next]:enabled').click();
+    await json(await peer.request.put(base + prefix + '/items/' + unitItem.id,{data:{name:'纸杯',unit:'个'}}));
+    await owner.page.locator('[data-we-confirm]').click();
+    await owner.page.getByText(/单位由箱改为个/).waitFor();
+    assert.equal((await state()).items.find(row => row.id === unitItem.id).total,0);
+    await owner.page.locator('[data-we-edit]').click();
+    assert.equal(await owner.page.locator('[data-we-item="' + unitItem.id + '"] [data-we-field="received"]').inputValue(),'3');
     assert.deepEqual(errors,[]);
-    process.stdout.write('PASS warehouse UI: assignment, inbound and direct use, outbound background photo resume and stale check, query/discrepancy transfer, alert cycle, responsive 320/390/1280.\n');
+    process.stdout.write('PASS warehouse UI: assignment, inbound and direct use, outbound background photo resume and stale check, deferred Excel photos and photo reports, query/discrepancy transfer, alert cycle, responsive 320/390/1280.\n');
     process.stdout.write('Manual shelf photo bytes: original ' + largePhoto.length + ', browser ' + uploadedPhoto.size + ', storage ' + storedSize + '.\n');
   } catch (error) {
     process.stderr.write(log.slice(-6500) + '\n');

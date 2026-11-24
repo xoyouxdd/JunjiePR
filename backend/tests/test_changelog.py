@@ -20,7 +20,7 @@ from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-CURRENT_RELEASE_NOTE = "轮岗联系人与签到更正"
+CURRENT_RELEASE_NOTE = "物资调拨与货位照片待办"
 
 
 def login(client: TestClient, account: str, password: str = "1234") -> None:
@@ -121,7 +121,7 @@ def test_changelog_filters_by_role() -> None:
     assert "新增HR月报制作与PPTX导出" in admin_text
     assert admin[0]["current"] is True
     assert [item["summary"] for item in admin[0]["items"]] == [
-        CURRENT_RELEASE_NOTE, "声明更正与还原核对",
+        CURRENT_RELEASE_NOTE,
     ]
     assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [
         CURRENT_RELEASE_NOTE,
@@ -193,7 +193,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         login(client, "HR01", "HR123")
         hr = client.get("/api/changelog/announcement").json()
         assert [item['summary'] for item in hr['release']['items']] == [
-            CURRENT_RELEASE_NOTE, "声明更正与还原核对",
+            CURRENT_RELEASE_NOTE,
         ]
         assert hr['read'] is False
         client.post("/api/logout")
@@ -211,7 +211,7 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         client.post('/api/logout');login(client,'GSMTEST01')
         gsm = client.get("/api/changelog/announcement").json()
         assert [item["summary"] for item in gsm["release"]["items"]] == [
-            CURRENT_RELEASE_NOTE, "声明更正与还原核对",
+            CURRENT_RELEASE_NOTE,
         ]
 
 

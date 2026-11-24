@@ -1,7 +1,7 @@
 from re import compile
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictInt, StringConstraints
 from app.warehouse.models import WAREHOUSE_LAYOUT
 
 
@@ -16,7 +16,9 @@ Reason = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, m
 ClientId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")]
 INBOUND_BATCH_PREFIX = "inbound-import-"
 INBOUND_BATCH_KEY = compile(INBOUND_BATCH_PREFIX + r"[0-9a-f]{32}")
-EXCEL_ITEM_COLUMNS = ("物资名称", "规格", "货位")
+EXCEL_ITEM_COLUMNS = ("物资名称", "货位")
+NewItemId = Annotated[int, Field(ge=-250, le=-1)]
+OrderItemId = Id | NewItemId
 
 
 class Document(BaseModel):
@@ -37,24 +39,27 @@ class ItemInput(Document):
 
 
 class TxLine(Document):
-    item_id: Id
+    item_id: OrderItemId
     position_id: PositionId
     quantity: PositiveQuantity
 
 
 class Receipt(Document):
-    item_id: Id
+    item_id: OrderItemId
     received: PositiveQuantity
     damaged: Quantity = 0
     direct_quantity: Quantity = 0
     direct_destination: Text = ""
     note: Text = ""
+    expected_unit: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)] | None = None
 
 
 class Attachment(Document):
     photo_id: PhotoId
     position_id: PositionId | None = None
-    item_id: Id | None = None
+    item_id: OrderItemId | None = None
+    started_at: AwareDatetime | None = None
+    position_started_at: AwareDatetime | None = None
 
 
 class DiscrepancyInput(Document):
@@ -64,15 +69,33 @@ class DiscrepancyInput(Document):
     note: Text = ""
 
 
+class NewInboundItem(Document):
+    item_id: NewItemId
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    spec: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] = ""
+    unit: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)] = "件"
+
+
+class SingleInboundInput(Document):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    position_id: PositionId
+    quantity: PositiveQuantity
+    item_id: Id | None = None
+    confirm_new: bool = False
+
+
 class TransactionInput(Document):
     client_id: ClientId
     kind: Literal["outbound", "inbound"]
     position_versions: dict[PositionId, Version] = Field(default_factory=dict, max_length=len(WAREHOUSE_LAYOUT))
     lines: list[TxLine] = Field(default_factory=list, max_length=250)
     receipts: list[Receipt] = Field(default_factory=list, max_length=250)
+    new_items: list[NewInboundItem] = Field(default_factory=list, max_length=250)
     photos: list[Attachment] = Field(default_factory=list, max_length=250)
     discrepancies: list[DiscrepancyInput] = Field(default_factory=list, max_length=250)
     hold_if_insufficient: bool = False
+    defer_location_photos: bool = False
+    photo_started_at: AwareDatetime | None = None
 
 
 class IssueInput(DiscrepancyInput):
@@ -95,6 +118,7 @@ class ResolveInput(Document):
 class AdjustmentInput(Observation):
     reason: Reason
     kind: Literal["opening", "adjustment"] = "adjustment"
+    defer_location_photo: bool = False
 
 
 class CalibrationItem(Document):
@@ -120,3 +144,23 @@ class CorrectionInput(Document):
 
 class LocationPhotoInput(Document):
     photo_id: PhotoId
+
+
+class LocationPhotoTaskInput(LocationPhotoInput):
+    version: Version
+    requested_at: Annotated[str, StringConstraints(max_length=40)]
+
+
+class LocationPhotoReportInput(Document):
+    photo_id: PhotoId
+    note: Text = ""
+
+
+class LocationMoveInput(Document):
+    client_id: ClientId
+    item_id: Id
+    from_position_id: PositionId
+    to_position_id: PositionId
+    quantity: PositiveQuantity
+    from_version: Version
+    to_version: Version

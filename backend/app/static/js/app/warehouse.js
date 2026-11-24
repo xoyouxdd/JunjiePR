@@ -1,8 +1,9 @@
 import {api as portalApi, json} from './api.js';
 import {esc, portalPath} from './format.js';
 import {newSubmissionKey} from './submission.js';
-import {compressWarehousePhoto} from './warehouse-drafts.js';
+import {compressWarehousePhoto,warehousePhotoTime} from './warehouse-drafts.js';
 import {renderWarehouseEntry} from './warehouse-entry.js';
+import {warehouseMatches, warehouseSuggestionButtons} from './warehouse-search.js';
 
 const moduleActions = [
   ['out', '出库', '选取货层位，按层拍照'],
@@ -61,7 +62,7 @@ export async function renderWarehouse(root, context = {}) {
   let quickLocation = '';
   let quickRequest = 0;
   const viewData = {};
-  const finder = {word:'', category:'', shelf:'', location:'', item:''};
+  const finder = {word:'', category:'', shelf:'', location:'', item:'', selected:''};
   const active = () => isCurrent() && shell.isConnected;
   const manager = () => Boolean(state?.permissions?.manage_warehouse);
   const hr = () => Boolean(state?.permissions?.manage_assignments);
@@ -161,7 +162,8 @@ export async function renderWarehouse(root, context = {}) {
     return `<aside class="wh-owners wh-panel" aria-labelledby="wh-owner-title">
       <div class="wh-owner-heading"><h3 id="wh-owner-title">仓库负责人</h3>${hr() ? `<button type="button" class="wh-icon-button wh-icon-button--accent" aria-label="添加仓库负责人" ${actionAttrs('owner-dialog')}>＋</button>` : `<small>${fmt(people.length)} 人</small>`}</div>
       ${people.length ? `<ul class="wh-owner-list">${people.map(owner => `<li><span class="wh-owner-avatar" aria-hidden="true">${esc(Array.from(owner.name || '人')[0])}</span><div class="wh-owner-identity"><strong>${esc(owner.name)}</strong>${owner.role ? `<small>${esc(owner.role)}</small>` : ''}</div>${hr() ? button('撤下','owner-remove',owner.id) : same(owner.id,operator().id) ? '<span class="wh-owner-self">本人</span>' : ''}</li>`).join('')}</ul>` : empty('尚未安排仓库负责人')}
-      ${manager() ? `<div class="wh-owner-tools">${ownerShortcut('负责人待办','tasks')}${ownerShortcut('物资档案与库存','catalog')}</div>` : ''}
+      ${manager() ? `<div class="wh-owner-tools">${ownerShortcut('负责人待办','tasks')}${ownerShortcut('物资档案与库存','catalog')}</div>`
+        : dispatch() && state.photo_task_count ? `<div class="wh-owner-tools">${ownerShortcut('货位待补照','tasks')}</div>` : ''}
     </aside>`;
   }
 
@@ -178,6 +180,7 @@ export async function renderWarehouse(root, context = {}) {
       return bin && (bin.quantity > 0 || bin.reported) ? [{item,bin}] : [];
     });
     panel.innerHTML = `<div class="wh-quick-heading"><strong>${esc(locationName(place))}</strong>${button('查看详情','quick-query',quickLocation)}</div>
+      ${loading ? '' : locationPhoto(place,true) || '<p>暂无现场照</p>'}
       ${loading ? '<p>正在读取库存…</p>' : rows.length ? `<ul aria-label="账面余量">${rows.slice(0,4).map(({item,bin}) => `<li><span>${esc(item.name)}${item.spec ? `<small>${esc(item.spec)}</small>` : ''}${bin.reported ? tag('待核对','near') : ''}</span><strong>${esc(quantity(item,bin.quantity))}</strong></li>`).join('')}</ul>${rows.length > 4 ? `<p>共 ${fmt(rows.length)} 种物资</p>` : ''}` : '<p>此处暂无在库物资</p>'}`;
   }
 
@@ -200,17 +203,11 @@ export async function renderWarehouse(root, context = {}) {
     }
   }
 
-  function matches(item, term) {
-    if (!term) return true;
-    const words = [item.name, item.specification ?? item.spec, item.code, ...(Array.isArray(item.aliases) ? item.aliases : key(item.aliases).split(/[、,，]/))];
-    return words.some(word => normalize(word).includes(term));
-  }
-
   function renderQuery() {
     heading('查物资','按名称搜索，或直接查看货架各层。');
     const categories = Array.from(new Set(catalog().map(item => item.category).filter(Boolean))).sort();
     const shelves = new Map(locations().map(place => [shelfOf(place), ground(place) ? locationName(place) : `${shelfOf(place)} 架`]));
-    body.innerHTML = `<div class="wh-panel wh-query-filters"><div class="wh-filter-row"><label>物资名称<input type="search" autocomplete="off" data-wh-field="query-word" placeholder="输入名称或简称" value="${esc(finder.word)}"></label><label>类目<select data-wh-field="query-category">${options([['','全部类目'], ...categories.map(category => [category,category])],finder.category)}</select></label></div><div class="wh-shelf-row" aria-label="按货位查看"><span>位置</span>${[['','全部'], ...shelves].map(([shelf,label]) => `<button type="button" class="wh-filter-chip" aria-pressed="${same(finder.shelf,shelf)}" ${actionAttrs('query-shelf',shelf)}>${esc(label)}</button>`).join('')}</div><div class="wh-layer-row" data-wh-query-layers></div></div><div data-wh-query-results></div>`;
+    body.innerHTML = `<div class="wh-panel wh-query-filters"><div class="wh-filter-row"><div class="wh-query-name"><label>物资名称<input type="search" autocomplete="off" data-wh-field="query-word" placeholder="名称或关键词，如 卡" value="${esc(finder.word)}"></label><div class="wh-name-options" data-wh-query-options role="group" aria-label="已有物资建议" hidden></div></div><label>类目<select data-wh-field="query-category">${options([['','全部类目'], ...categories.map(category => [category,category])],finder.category)}</select></label></div><div class="wh-shelf-row" aria-label="按货位查看"><span>位置</span>${[['','全部'], ...shelves].map(([shelf,label]) => `<button type="button" class="wh-filter-chip" aria-pressed="${same(finder.shelf,shelf)}" ${actionAttrs('query-shelf',shelf)}>${esc(label)}</button>`).join('')}</div><div class="wh-layer-row" data-wh-query-layers></div></div><div data-wh-query-results></div>`;
     renderQueryResults();
   }
 
@@ -222,18 +219,27 @@ export async function renderWarehouse(root, context = {}) {
     const activeLocations = locations().filter(location => !finder.shelf || same(finder.shelf,shelfOf(location)));
     layers.innerHTML = finder.shelf && activeLocations.some(location => !ground(location)) ? [['','全部层位'], ...activeLocations.map(location => [locationId(location),`第 ${location.level} 层`])].map(([id,label]) => `<button type="button" class="wh-filter-chip" aria-pressed="${same(finder.location,id)}" ${actionAttrs('query-location',id)}>${esc(label)}</button>`).join('') : '';
     const term = normalize(finder.word);
-    const results = catalog().filter(item => item.active !== false && matches(item,term) && (!finder.category || same(item.category,finder.category)) && ((!finder.shelf && !finder.location) || binsOf(item).some(entry => activeLocations.includes(entry.location) && (!finder.location || same(finder.location,entry.id))))).sort((left,right) => (normalize(right.name) === term) - (normalize(left.name) === term) || left.name.localeCompare(right.name,'zh-CN'));
+    const results = warehouseMatches(catalog(),finder.word,finder.category).filter(item =>
+      (!finder.selected || same(itemId(item),finder.selected)) && ((!finder.shelf && !finder.location) ||
+      binsOf(item).some(entry => activeLocations.includes(entry.location) && (!finder.location || same(finder.location,entry.id)))));
+    const suggestions = body.querySelector('[data-wh-query-options]');
+    suggestions.hidden = !term || Boolean(finder.selected) || !results.length;
+    suggestions.innerHTML = suggestions.hidden ? '' : warehouseSuggestionButtons(results,'data-wh-query-pick');
     const layer = locById(finder.location);
     region.innerHTML = `${layer ? locationPhoto(layer) : ''}<div class="wh-result-heading"><h3>${layer ? esc(locationName(layer)) : '物资'}</h3><span aria-live="polite">${results.length} 项</span>${layer && manager() ? button('校准数量和照片','calibrate',locationId(layer)) : ''}</div>${results.length ? `<div class="wh-results">${results.map(item => queryItem(item,activeLocations)).join('')}</div>` : empty(term ? '未找到匹配的物资' : '当前范围内没有物资',term ? '换个关键词或清除类目后再试。' : '')}`;
   }
 
-  function locationPhoto(location) {
+  function locationPhoto(location, quick = false) {
     const photo = photoOf(location);
     const image = photoMarkup(photo,`${locationName(location)}现场照片`);
-    if (!image) return '';
+    if (!image && !location.needs_photo) return '';
     const photoTime = photo?.updated_at ?? photo?.captured_at;
     const stale = photo?.stale;
-    return `<div class="wh-location-photo"><div><strong>${esc(locationName(location))}现场照片</strong>${stale ? tag('拍照后库存有变动','near') : ''}<small>${[photo?.updated_by,timeLabel(photoTime)].filter(Boolean).map(esc).join(' · ')}</small>${photo?.transaction_id ? `<small>关联单据 ${esc(photo.transaction_id)}</small>` : ''}</div>${image}</div>`;
+    const actions = !quick && dispatch() ? [
+      location.needs_photo ? button('补拍','photo-complete',locationId(location)) : '',
+      photo?.id ? button('照片报错','photo-report',locationId(location)) : '',
+    ].join('') : '';
+    return `<div class="wh-location-photo"><div><strong>${quick ? '现场照片' : `${esc(locationName(location))}现场照片`}</strong>${location.needs_photo ? tag('待补最新现场照','near') : stale ? tag('拍照后库存有变动','near') : ''}${photoTime ? `<small>更新于 <time datetime="${esc(photoTime)}">${esc(timeLabel(photoTime))}</time>${photo?.updated_by ? ` · ${esc(photo.updated_by)}` : ''}</small>` : ''}${!quick && photo?.transaction_id ? `<small>关联单据 ${esc(photo.transaction_id)}</small>` : ''}${actions}</div>${image}</div>`;
   }
 
   function queryItem(item, activeLocations) {
@@ -256,11 +262,18 @@ export async function renderWarehouse(root, context = {}) {
     if (hr()) openDialog('添加仓库负责人','<form class="wh-form" data-wh-form="owner-search"><label>姓名或员工号<input type="search" name="query" autocomplete="off" required placeholder="输入姓名或员工号"></label><button class="wh-button wh-button--primary">搜索</button></form><div class="wh-person-results" data-wh-owner-results aria-live="polite"></div>');
   }
 
+  function photoReportDialog(id) {
+    const place = locById(id);
+    const photo = photoOf(place);
+    if (!dispatch() || !photo?.id) return;
+    openDialog(`照片报错 · ${locationName(place)}`,`<form class="wh-form" data-wh-form="photo-report" data-wh-location="${esc(id)}" data-wh-photo="${esc(photo.id)}"><label>说明<textarea name="note" rows="2" maxlength="240" placeholder="例如：拍错了层位"></textarea></label><button class="wh-button wh-button--primary">提交报错</button></form>`);
+  }
+
   function reportDialog(itemIdValue, locationIdValue) {
     const item = itemById(itemIdValue);
     const location = locById(locationIdValue);
     if (!dispatch() || !item || !location) return;
-    openDialog('报告货位差异',`<form class="wh-form" data-wh-form="report" data-wh-item="${esc(itemIdValue)}" data-wh-location="${esc(locationIdValue)}"><p>${esc(item.name)} · ${esc(locationName(location))}</p><label>问题<select name="reason"><option value="misplaced">位置不符</option><option value="missing">找不到货</option><option value="mismatch">数量不符</option><option value="map">图上位置有误</option></select></label><label>实见数量（如已清点）<input type="number" min="0" inputmode="numeric" step="1" name="observed_quantity"></label><label>说明<textarea name="note" rows="2" maxlength="240"></textarea></label><button class="wh-button wh-button--primary">提交报错</button></form>`);
+    openDialog('报告货位差异',`<form class="wh-form" data-wh-form="report" data-wh-item="${esc(itemIdValue)}" data-wh-location="${esc(locationIdValue)}" data-wh-photo="${esc(photoOf(location)?.id)}"><p>${esc(item.name)} · ${esc(locationName(location))}</p><label>问题<select name="reason"><option value="misplaced">位置不符</option><option value="missing">找不到货</option><option value="mismatch">数量不符</option><option value="map">图上位置有误</option>${photoOf(location) ? '<option value="photo">现场照不清楚或拍错</option>' : ''}</select></label><label>实见数量（如已清点）<input type="number" min="0" inputmode="numeric" step="1" name="observed_quantity"></label><label>说明<textarea name="note" rows="2" maxlength="240"></textarea></label><button class="wh-button wh-button--primary">提交报错</button></form>`);
   }
 
   async function renderAssessment(stillHere) {
@@ -302,15 +315,34 @@ export async function renderWarehouse(root, context = {}) {
   }
 
   async function renderTasks(stillHere) {
-    heading('负责人待办','');
-    const [issues,alerts] = await Promise.all([api('/issues'),api('/alerts')]);
+    heading(manager() ? '负责人待办' : '货位待补照','');
+    const [issues,alerts,photos] = await Promise.all([manager() ? api('/issues') : {},manager() ? api('/alerts') : {},api('/photo-tasks')]);
     if (!stillHere()) return;
     viewData.issues = issues.items ?? [];
     viewData.alerts = alerts.items ?? [];
     const outstanding = viewData.issues.filter(issue => issue.status !== 'closed');
     const completed = viewData.issues.filter(issue => issue.status === 'closed');
-    body.innerHTML = `<section class="wh-task-section"><div class="wh-section-heading"><h3>货位异常</h3><span>${outstanding.length} 项待处理</span></div>${outstanding.length ? `<div class="wh-results">${outstanding.map(issueCard).join('')}</div>` : empty('暂无货位异常待办')}</section><section class="wh-task-section"><div class="wh-section-heading"><h3>库存预警</h3><span>${viewData.alerts.length} 项</span></div>${viewData.alerts.length ? `<div class="wh-results">${viewData.alerts.map(alertCard).join('')}</div>` : empty('暂无库存强提醒')}</section>${completed.length ? `<section class="wh-task-section"><div class="wh-section-heading"><h3>最近处理</h3></div><div class="wh-results">${completed.slice(0,10).map(issueCard).join('')}</div></section>` : ''}`;
+    const photoCards = (photos.items ?? []).map(task => {
+      const reports = task.reports ?? [];
+      const feedback = reports.length ? `<ul class="wh-photo-reports" aria-label="照片报错记录">${reports.map(report =>
+        `<li><p>${esc(report.note || '报告现场照片有误')}</p><small>${esc(report.reporter_name)} · ${esc(timeLabel(report.reported_at))}</small></li>`
+      ).join('')}</ul>` : '';
+      return `<article class="wh-task-card"><div class="wh-task-title"><div><strong>${esc(locationName(locById(task.position_id)))}</strong><small>${task.owner_name ? `跟进人 ${esc(task.owner_name)} · ` : ''}${esc(timeLabel(task.requested_at))}</small></div>${manager() && task.handover_due ? tag('交班待跟进','near') : ''}</div>${feedback}<div class="wh-row-end">${button('补拍整层','photo-complete',task.position_id,'primary')}</div></article>`;
+    });
+    const photoSection = `<section class="wh-task-section"><div class="wh-section-heading"><h3>补拍货位现场照</h3><span>${photoCards.length} 个货位</span></div>${photoCards.length ? `<div class="wh-results">${photoCards.join('')}</div>` : empty('暂无待补照货位')}</section>`;
+    body.innerHTML = photoSection + (manager() ? `<section class="wh-task-section"><div class="wh-section-heading"><h3>货位异常</h3><span>${outstanding.length} 项待处理</span></div>${outstanding.length ? `<div class="wh-results">${outstanding.map(issueCard).join('')}</div>` : empty('暂无货位异常待办')}</section><section class="wh-task-section"><div class="wh-section-heading"><h3>库存预警</h3><span>${viewData.alerts.length} 项</span></div>${viewData.alerts.length ? `<div class="wh-results">${viewData.alerts.map(alertCard).join('')}</div>` : empty('暂无库存强提醒')}</section>${completed.length ? `<section class="wh-task-section"><div class="wh-section-heading"><h3>最近处理</h3></div><div class="wh-results">${completed.slice(0,10).map(issueCard).join('')}</div></section>` : ''}` : '');
     if (openTaskId) body.querySelector('[aria-current="true"]')?.scrollIntoView({block:'nearest'});
+  }
+
+  async function photoTaskDialog(id) {
+    const place = locById(id);
+    if (!dispatch() || !place) return;
+    const currentView = revision;
+    const result = await api('/photo-tasks');
+    if (!active() || revision !== currentView) return;
+    const task = result.items.find(row => same(row.position_id,id));
+    if (!task) { await refresh(); if (active() && revision === currentView) await show(view); return; }
+    openDialog(`补拍 · ${locationName(place)}`,`<form class="wh-form" data-wh-form="photo-task" data-wh-id="${esc(id)}" data-wh-version="${task.version}" data-wh-requested="${esc(task.requested_at)}"><p>拍清货位标识和整层现况。</p><label>现场照片<input type="file" accept="image/*" capture="environment" name="file" required></label><button class="wh-button wh-button--primary">保存现场照</button></form>`);
   }
 
   function issueCard(issue) {
@@ -318,7 +350,7 @@ export async function renderWarehouse(root, context = {}) {
     const mine = same(issue.assignee_id,operator().id);
     const progress = status === 'closed' ? '已处理' : status === 'claimed' ? `${assignee_name || '负责人'}处理中` : '待接手';
     const controls = status === 'open' ? button('接手处理','issue-claim',id,'primary') : status === 'claimed' && mine ? `${button('复点并处理','issue-resolve',id,'primary')}${button('转交','issue-transfer',id)}` : '';
-    return `<article class="wh-task-card" ${same(openTaskId,id) ? 'aria-current="true"' : ''}><div class="wh-task-title"><div><strong>${esc(issue.title || '货位异常')}</strong><small>${[reporter_name,timeLabel(opened_at),transaction_id ? `单据 ${transaction_id}` : ''].filter(Boolean).map(esc).join(' · ')}</small></div>${tag(progress,status === 'open' ? 'low' : status === 'closed' ? 'healthy' : 'near')}</div>${transaction_status === 'pending' ? '<p class="wh-annotation">实物已取走，原出库待补记。</p>' : ''}<div class="wh-task-lines">${(issue.lines ?? []).map(line => { const item = itemById(line.item_id); const place = locById(line.position_id); const seen = line.observed_quantity == null ? '' : ` · 实见 ${quantity(item,line.observed_quantity)}`; return `<span>${esc(item?.name || '物资')} · ${esc(place ? locationName(place) : '货位')} · 账面 ${esc(quantity(item,line.book_quantity))}${esc(seen)}</span>`; }).join('')}</div>${issue.note ? `<p>${esc(issue.note)}</p>` : ''}${issue.resolution ? `<p>${esc(issue.resolution)}</p>` : ''}${issue.photo_id ? photoMarkup(`/api/warehouse/photos/${issue.photo_id}`,'报告现场照片') : ''}${controls ? `<div class="wh-row-end">${controls}</div>` : ''}</article>`;
+    return `<article class="wh-task-card" ${same(openTaskId,id) ? 'aria-current="true"' : ''}><div class="wh-task-title"><div><strong>${esc(issue.title || '货位异常')}</strong><small>${[reporter_name,timeLabel(opened_at),transaction_id ? `单据 ${transaction_id}` : ''].filter(Boolean).map(esc).join(' · ')}</small></div>${tag(progress,status === 'open' ? 'low' : status === 'closed' ? 'healthy' : 'near')}</div>${transaction_status === 'pending' ? '<p class="wh-annotation">实物已取走，原出库待补记。</p>' : ''}<div class="wh-task-lines">${(issue.lines ?? []).map(line => { const item = itemById(line.item_id); const place = locById(line.position_id); const seen = line.observed_quantity == null ? '' : ` · 实见 ${quantity(item,line.observed_quantity)}`; return `<span>${esc(item?.name || '物资')} · ${esc(place ? locationName(place) : '货位')} · 账面 ${esc(quantity(item,line.book_quantity))}${esc(seen)}</span>`; }).join('')}</div>${issue.note ? `<p>${esc(issue.note)}</p>` : ''}${issue.resolution ? `<p>${esc(issue.resolution)}</p>` : ''}${issue.photo_cleared ? '<small>照片已按保留规则清理</small>' : issue.photo_id ? photoMarkup(`/api/warehouse/photos/${issue.photo_id}`,'报告现场照片') : ''}${controls ? `<div class="wh-row-end">${controls}</div>` : ''}</article>`;
   }
 
   function alertCard(alert) {
@@ -378,7 +410,7 @@ export async function renderWarehouse(root, context = {}) {
         <div class="wh-catalog-item"><h3>${esc(item.name)}</h3>${item.active === false ? tag('已停用') : ''}<small>${[item.spec,item.category].filter(Boolean).map(esc).join(' · ')}</small></div>
         <div class="wh-catalog-places">${bins.length ? `<ul aria-label="货位余量">${bins.map(({location,row}) => `<li><span>${esc(locationName(location))}</span><strong>${esc(quantity(item,row.quantity))}</strong>${row.reported ? '<span class="wh-catalog-review">待核对</span>' : ''}</li>`).join('')}</ul>` : '<small>尚未录入货位库存</small>'}</div>
         <div class="wh-catalog-stock"><small>账面库存</small><strong>${fmt(stockOf(item))} <span>${esc(item.unit)}</span></strong></div>
-        <div class="wh-catalog-row-actions">${button('编辑资料','edit-item',id)}${button('期初盘点或调整','adjust',id)}</div>
+        <div class="wh-catalog-row-actions">${button('编辑资料','edit-item',id)}${button('期初盘点或调整','adjust',id)}${item.active !== false && bins.some(({row}) => row.quantity > 0) ? button('移位','move',id) : ''}</div>
       </article>`;
     }).join('')}</div>` : empty('尚无物资档案','先添加物资，再按实际货位记录期初库存。');
   }
@@ -399,6 +431,23 @@ export async function renderWarehouse(root, context = {}) {
     openDialog(`库存盘点 · ${item.name}`,`<form class="wh-form" data-wh-form="adjust" data-wh-item="${esc(id)}"><label>层位<select name="position_id" data-wh-field="adjust-position" required>${options([['','请选择层位'], ...positionOptions])}</select></label><div class="wh-annotation" data-wh-adjust-current hidden></div><label>类型<select name="kind"><option value="opening">期初盘点</option><option value="adjustment">库存调整</option></select></label><label>实盘余量（${esc(item.unit)}）<input type="number" name="quantity" min="0" step="1" inputmode="numeric" required></label><label>原因<textarea name="reason" rows="2" maxlength="240" required></textarea></label><button class="wh-button wh-button--primary">确认入账</button></form>`);
   }
 
+  async function moveDialog(id) {
+    if (!manager()) return;
+    await refresh();
+    if (!active() || view !== 'catalog') return;
+    const item = itemById(id);
+    if (!item) return;
+    const stocked = binsOf(item).filter(({row}) => row.quantity > 0);
+    if (!stocked.length) return;
+    openDialog(`移位 · ${item.name}`,`<form class="wh-form" data-wh-form="move" data-wh-item="${esc(id)}">
+      <p>物资实际移到新货位后登记。原货位和新货位会各生成一条补照待办。</p>
+      <label>从<select name="from" required>${options([['','请选择原货位'], ...stocked.map(({id:binId,location,row}) => [binId,`${locationName(location)} · ${quantity(item,row.quantity)}`])])}</select></label>
+      <label>到<select name="to" required>${options([['','请选择实际移入货位'], ...locations().map(place => [locationId(place),locationName(place)])])}</select></label>
+      <label>移位数量（${esc(item.unit)}）<input type="number" min="1" max="1000000" step="1" inputmode="numeric" name="quantity" required></label>
+      <button class="wh-button wh-button--primary">确认移位</button></form>`);
+    dialogBody.querySelector('[data-wh-form="move"]').dataset.whClient = newSubmissionKey();
+  }
+
   function positionPhotoDialog() {
     if (!manager()) return;
     openDialog('更新货位现况照',`<form class="wh-form" data-wh-form="position-photo"><label>层位<select name="position_id" required>${options([['','请选择层位'], ...locations().map(location => [locationId(location),locationName(location)])])}</select></label><label>现场照片<input type="file" accept="image/*" capture="environment" name="file" required></label><button class="wh-button wh-button--primary">更新照片</button></form>`);
@@ -413,7 +462,7 @@ export async function renderWarehouse(root, context = {}) {
     openDialog('校准数量和照片',`<form class="wh-form" data-wh-form="calibration">
       <label>货位<select name="position_id" data-wh-field="calibration-position" required>${options([['','请选择实际货位'], ...choices],id)}</select></label>
       <div class="wh-form" data-wh-calibration-items></div>
-      <label>最新现场照 <small>可选</small><input type="file" accept="image/*" capture="environment" name="file"></label>
+      <label>最新现场照 <small>可选</small><input type="file" accept="image/*" capture="environment" name="file"></label><p class="wh-annotation">只登记实盘余量时，系统会生成该货位的补照待办。</p>
       <label>校准原因<textarea name="reason" rows="2" required maxlength="240" placeholder="例如：交班复点，按实际余量校准"></textarea></label>
       <button class="wh-button wh-button--primary">保存校准</button></form>`);
     const form = dialogBody.querySelector('[data-wh-form="calibration"]');
@@ -446,7 +495,7 @@ export async function renderWarehouse(root, context = {}) {
     heading('收发与调整记录','',button('物资档案与库存','catalog'));
     const report = await api('/transactions');
     if (!stillHere()) return;
-    const labels = {inbound:'入库',outbound:'出库',opening:'期初盘点',adjustment:'库存调整',correction:'单据纠错',calibration:'货位校准',photo:'更新现场照'};
+    const labels = {inbound:'入库',outbound:'出库',opening:'期初盘点',adjustment:'库存调整',correction:'单据纠错',calibration:'货位校准',photo:'更新现场照',move:'货位移位'};
     const statuses = {posted:'已入账',pending:'待核对',draft:'待确认',closed:'已关闭'};
     const rows = report.items ?? [];
     body.innerHTML = rows.length ? `<div class="wh-results">${rows.map(row => `<article class="wh-item-card wh-history-card"><div class="wh-task-title"><div><strong>${labels[row.kind] || '仓储单据'} · ${esc(row.id)}</strong><small>${[row.actor_name,timeLabel(row.posted_at ?? row.created_at)].filter(Boolean).map(esc).join(' · ')}</small></div>${tag(statuses[row.status] || row.status,row.status === 'posted' ? 'healthy' : 'near')}</div><div class="wh-row-end">${button('查看单据','history-record',row.id)}</div></article>`).join('')}</div>` : empty('暂无出入库和调整记录');
@@ -476,7 +525,13 @@ export async function renderWarehouse(root, context = {}) {
       const canCorrect = row.status === 'posted' && ['inbound','outbound'].includes(row.kind) && (lines.includes(line) || line.direct_quantity);
       return `<div class="wh-history-line"><div><strong>${esc(item?.name ?? line.item_name ?? '物资')}</strong><small>${details.map(esc).join(' · ')}</small></div>${canCorrect ? `<button type="button" class="wh-button wh-button--plain" ${actionAttrs('correct-record',line.item_id)} data-wh-location="${esc(line.position_id ?? '')}">${lines.includes(line) ? '纠正数量' : '纠正直用量'}</button>` : ''}</div>`;
     });
-    openDialog(`单据 · ${row.id}`,`<p>${[row.actor_name,timeLabel(row.posted_at ?? row.created_at)].filter(Boolean).map(esc).join(' · ')}</p>${row.reason ? `<p>${esc(row.reason)}</p>` : ''}${row.related_id ? `<p>关联原单 ${esc(row.related_id)}</p>` : ''}<div class="wh-transaction-lines">${grouped.join('')}</div>${photos.length ? `<div class="wh-transaction-photos">${photos.map(photo => photoMarkup(photo,'本单照片')).join('')}</div>` : ''}`);
+    const evidence = photos.map(photo => {
+      if (!photo.cleared_at) return photoMarkup(photo,'本单照片');
+      const place = locById(photo.position_id);
+      const details = [place ? locationName(place) : '',photo.updated_by,timeLabel(photo.captured_at)].filter(Boolean);
+      return `<div class="wh-cleared-photo"><strong>照片已按保留规则清理</strong><small>${details.map(esc).join(' · ')}</small></div>`;
+    }).join('');
+    openDialog(`单据 · ${row.id}`,`<p>${[row.actor_name,timeLabel(row.posted_at ?? row.created_at)].filter(Boolean).map(esc).join(' · ')}</p>${row.reason ? `<p>${esc(row.reason)}</p>` : ''}${row.related_id ? `<p>关联原单 ${esc(row.related_id)}</p>` : ''}<div class="wh-transaction-lines">${grouped.join('')}</div>${photos.length ? `<div class="wh-transaction-photos">${evidence}</div>` : ''}`);
   }
 
   async function correctDialog(itemValue, placeValue) {
@@ -491,7 +546,8 @@ export async function renderWarehouse(root, context = {}) {
 
   async function show(next, prefill) {
     if (!active()) return;
-    if (['tasks','catalog','history','in'].includes(next) && !manager()) next = 'home';
+    if (['catalog','history','in'].includes(next) && !manager()) next = 'home';
+    if (next === 'tasks' && !dispatch()) next = 'home';
     if (next === 'out' && !dispatch() || ['query','assessment'].includes(next) && !canRead()) next = 'home';
     const openOwnerView = view !== next && ['tasks','catalog','history'].includes(next);
     if (entryCleanup) { entryCleanup(); entryCleanup = undefined; }
@@ -504,7 +560,7 @@ export async function renderWarehouse(root, context = {}) {
     tell('');
     if (next === 'home') { renderHome(); return; }
     if (next === 'query') { renderQuery(); return; }
-    heading({assessment:'物资评估',tasks:'负责人待办',catalog:'物资档案与库存',history:'收发与调整记录',in:'入库',out:'出库'}[next] || '物资管理','');
+    heading({assessment:'物资评估',tasks:manager() ? '负责人待办' : '货位待补照',catalog:'物资档案与库存',history:'收发与调整记录',in:'入库',out:'出库'}[next] || '物资管理','');
     body.innerHTML = empty('正在载入');
     if (openOwnerView) {
       shell.closest('.app-shell')?.scrollTo(0,0);
@@ -523,7 +579,7 @@ export async function renderWarehouse(root, context = {}) {
         await refresh();
         if (!stillHere()) return;
         await show('home');
-        tell(result?.status === 'pending' ? `已提交差异待办，原出库单 ${result.id} 待核对。` : result?.id ? `已确认单据 ${result.id}` : '单据已提交。');
+        tell(result?.status === 'pending' ? `已提交差异待办，原出库单 ${result.id} 待核对。` : result?.deferred_photo_positions?.length ? `已确认${next === 'out' ? '出库' : '入库'}，${result.deferred_photo_positions.length} 个货位待补照。` : result?.id ? `已确认单据 ${result.id}` : '单据已提交。');
         changed();
       }});
       if (typeof clean === 'function') {
@@ -544,13 +600,13 @@ export async function renderWarehouse(root, context = {}) {
   }
 
   async function commit(path, method, payload, message) {
-    await api(path,payload === undefined ? {method} : json(method,payload));
+    const result = await api(path,payload === undefined ? {method} : json(method,payload));
     if (!active()) return;
     const current = view;
     await refresh();
     if (!active() || view !== current) return;
     await show(current);
-    tell(message);
+    tell(typeof message === 'function' ? message(result) : message);
     changed();
   }
 
@@ -561,7 +617,7 @@ export async function renderWarehouse(root, context = {}) {
     if (action === 'quick-query' && canRead()) {
       const place = locById(id);
       if (!place) return;
-      Object.assign(finder,{word:'',category:'',shelf:shelfOf(place),location:id,item:''});
+      Object.assign(finder,{word:'',category:'',shelf:shelfOf(place),location:id,item:'',selected:''});
       return show('query');
     }
     if (action === 'out-bin') return show('out',{itemId:Number(id),locationId:Number(locationIdValue)});
@@ -581,6 +637,9 @@ export async function renderWarehouse(root, context = {}) {
       return;
     }
     if (action === 'report') { reportDialog(id,locationIdValue); return; }
+    if (action === 'photo-report') return photoReportDialog(id);
+    if (action === 'photo-complete') return photoTaskDialog(id);
+    if (action === 'move') return moveDialog(id);
     if (action === 'rule') { ruleDialog(id); return; }
     if (action === 'new-item' || action === 'edit-item') { itemDialog(id); return; }
     if (action === 'adjust') return adjustDialog(id);
@@ -626,6 +685,9 @@ export async function renderWarehouse(root, context = {}) {
       return;
     }
     if (type === 'owner-remove') return commit(`/managers/${encodeURIComponent(id)}`,'DELETE',undefined,'已撤下仓库负责人。');
+    if (type === 'photo-report' || type === 'report' && get('reason') === 'photo') {
+      return commit(`/positions/${encodeURIComponent(location)}/photo-task/report`,'POST',{photo_id:form.dataset.whPhoto,note:get('note')},'已报告，仓库负责人可在待办跟进。');
+    }
     if (type === 'report') return commit('/issues','POST',{item_id:Number(item),position_id:Number(location),reason:get('reason'),observed_quantity:numeric(get('observed_quantity')),note:get('note')},'已报告，仓库负责人将收到待办。');
     if (type === 'rule') {
       const values = Object.fromEntries(['minimum','yellow_upper','lead_days','safety_days','target_days'].map(name => [name,numeric(get(name))]));
@@ -639,7 +701,14 @@ export async function renderWarehouse(root, context = {}) {
       const positionId = Number(get('position_id'));
       const place = locById(positionId);
       if (!place) throw new Error('请选择层位。');
-      return commit('/adjustments','POST',{item_id:Number(item),position_id:positionId,quantity:Number(get('quantity')),reason:get('reason'),kind:get('kind'),version:place.version},'库存已按实盘入账。');
+      return commit('/adjustments','POST',{item_id:Number(item),position_id:positionId,quantity:Number(get('quantity')),reason:get('reason'),kind:get('kind'),version:place.version,defer_location_photo:true},'库存已按实盘入账。');
+    }
+    if (type === 'move' && manager()) {
+      const from = locById(get('from'));
+      const to = locById(get('to'));
+      if (!from || !to || same(from.id,to.id)) throw new Error('请选择不同的原货位和实际移入货位。');
+      return commit('/moves','POST',{client_id:form.dataset.whClient,item_id:Number(item),from_position_id:from.id,to_position_id:to.id,
+        from_version:from.version,to_version:to.version,quantity:Number(get('quantity'))},'移位已登记，两个货位待补照。');
     }
     if (type === 'correct') return commit(`/transactions/${encodeURIComponent(id)}/correct`,'POST',{item_id:Number(item),position_id:numeric(location),quantity:Number(get('quantity')),version:numeric(form.dataset.whVersion),reason:get('reason')},'已保留原单并记录纠错。');
     if (type === 'calibration' && manager()) {
@@ -650,7 +719,7 @@ export async function renderWarehouse(root, context = {}) {
       const file = get('file');
       if (!counted.length && !file?.size) throw new Error('请填写实盘数量或上传现况照。');
       if (file?.size && !form.dataset.whPhotoId) {
-        const photo = await uploadPositionPhoto(file,form.dataset.whCapturedAt);
+        const photo = await uploadPositionPhoto(file);
         form.dataset.whPhotoId = photo.id;
       }
       try {
@@ -668,11 +737,23 @@ export async function renderWarehouse(root, context = {}) {
         throw new Error('该货位刚有变动，已更新账面余量，请重新复点后保存。');
       }
     }
+    if (type === 'photo-task') {
+      const file = get('file');
+      if (!file?.size) throw new Error('请先拍摄照片。');
+      if (!form.dataset.whPhotoId) {
+        const photo = await uploadPositionPhoto(file);
+        form.dataset.whPhotoId = photo.id;
+      }
+      return commit(`/positions/${encodeURIComponent(id)}/photo-task`,'PUT',{
+        photo_id:form.dataset.whPhotoId,version:Number(form.dataset.whVersion),requested_at:form.dataset.whRequested,
+      },'现场照已更新，补照待办已完成。');
+    }
     if (type === 'position-photo') {
       const file = get('file');
       if (!file?.size) throw new Error('请先拍摄照片。');
       const photo = await uploadPositionPhoto(file);
-      return commit(`/positions/${encodeURIComponent(get('position_id'))}/photo`,'PUT',{photo_id:photo.id},'已更新货位照片。');
+      return commit(`/positions/${encodeURIComponent(get('position_id'))}/photo`,'PUT',{photo_id:photo.id},
+        result => result.photo_reused ? '照片相同，已沿用当前现场照。' : '已更新货位照片。');
     }
     if (type === 'issue-transfer') return commit(`/issues/${encodeURIComponent(id)}/transfer`,'POST',{employee_id:Number(get('employee_id'))},'已转交待办。');
     if (type === 'alert-transfer') {
@@ -685,8 +766,8 @@ export async function renderWarehouse(root, context = {}) {
     }
   }
 
-  async function uploadPositionPhoto(file, capturedAt = new Date().toISOString()) {
-    const captured = await compressWarehousePhoto(file);
+  async function uploadPositionPhoto(file) {
+    const [captured,capturedAt] = await Promise.all([compressWarehousePhoto(file),warehousePhotoTime(file)]);
     const upload = new FormData();
     upload.append('file',captured,'position.jpg');
     upload.append('captured_at',capturedAt);
@@ -696,10 +777,21 @@ export async function renderWarehouse(root, context = {}) {
   function resetCalibrationPhoto(form) {
     form.elements.file.value = '';
     delete form.dataset.whPhotoId;
-    delete form.dataset.whCapturedAt;
   }
 
   shell.addEventListener('click',event => {
+    const suggested = event.target.closest('[data-wh-query-pick]');
+    if (suggested && view === 'query') {
+      const id = suggested.dataset.whQueryPick;
+      const item = itemById(id);
+      if (!item) return;
+      finder.word = item.name;
+      finder.selected = finder.item = id;
+      body.querySelector('[data-wh-field="query-word"]').value = item.name;
+      renderQueryResults();
+      body.querySelector(`[data-wh-action="query-item"][data-wh-id="${CSS.escape(id)}"]`)?.focus();
+      return;
+    }
     const control = event.target.closest('[data-wh-action]');
     if (!control || control.disabled) return;
     control.disabled = true;
@@ -721,7 +813,7 @@ export async function renderWarehouse(root, context = {}) {
     });
   });
   shell.addEventListener('input',event => {
-    if (event.target.dataset.whField === 'query-word') { finder.word = event.target.value; finder.item = ''; renderQueryResults(); }
+    if (event.target.dataset.whField === 'query-word') { finder.word = event.target.value; finder.item = finder.selected = ''; renderQueryResults(); }
   });
   shell.addEventListener('change',event => {
     const field = event.target.dataset.whField;
@@ -729,9 +821,8 @@ export async function renderWarehouse(root, context = {}) {
       resetCalibrationPhoto(event.target.form);
       renderCalibrationItems(event.target.form,event.target.value);
     }
-    if (event.target.matches('[name="file"]') && event.target.form?.dataset.whForm === 'calibration') {
+    if (event.target.matches('[name="file"]') && ['calibration','photo-task','position-photo'].includes(event.target.form?.dataset.whForm)) {
       delete event.target.form.dataset.whPhotoId;
-      event.target.form.dataset.whCapturedAt = new Date().toISOString();
     }
     if (field === 'query-category') { finder.category = event.target.value; finder.item = ''; renderQueryResults(); }
     if (field === 'adjust-position') {

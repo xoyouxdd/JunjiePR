@@ -16,14 +16,18 @@ from app.warehouse.access import (
     person_data, require_access, require_assign, require_dispatch, require_manager,
 )
 from app.warehouse.media import jpeg_bytes, stage_photo
+from app.warehouse.photo_tasks import PHOTO_REPORT_ACTION, open_photo_tasks, photo_task_list, release_owner_photo_tasks, request_location_photo
 from app.warehouse.export import inventory_workbook
-from app.warehouse.inbound_excel import MAX_FILE_BYTES, inbound_template, read_inbound_workbook
-from app.warehouse.models import WarehouseIssue, WarehouseItem, WarehouseOwner, WarehousePhoto, WarehousePosition, WarehouseTransaction, WarehouseTransactionPhoto, warehouse_now
-from app.warehouse.schemas import AdjustmentInput, CalibrationInput, CorrectionInput, IssueInput, ItemInput, LocationPhotoInput, ManagerInput, PhotoId, ResolveInput, TransactionInput
+from app.warehouse.inbound_excel import MAX_FILE_BYTES, inbound_template, read_inbound_workbook, single_inbound_preview
+from app.warehouse.models import (
+    WarehouseIssue, WarehouseItem, WarehouseOwner, WarehousePhoto, WarehousePosition, WarehousePositionPhotoReuse,
+    WarehousePositionPhotoTask, WarehouseTransaction, WarehouseTransactionPhoto, warehouse_now,
+)
+from app.warehouse.schemas import AdjustmentInput, CalibrationInput, CorrectionInput, IssueInput, ItemInput, LocationMoveInput, LocationPhotoInput, LocationPhotoReportInput, LocationPhotoTaskInput, ManagerInput, PhotoId, ResolveInput, SingleInboundInput, TransactionInput
 from app.warehouse.service import (
     apply_adjustment, balances_by_item, calibrate_position, confirm_transaction, correct_transaction, get_item, get_position, get_quantity,
-    get_transaction_by_client, issue_data, item_data, mark_posted, new_transaction, open_issue, photo_data,
-    position_data, resolve_issue, staged_photo, stamp, transaction_data, update_latest_photo,
+    get_transaction_by_client, issue_data, item_data, mark_posted, move_stock, new_transaction, open_issue, photo_data,
+    position_data, resolve_issue, save_current_location_photo, staged_photo, stamp, transaction_data, update_latest_photo,
 )
 
 
@@ -44,18 +48,22 @@ def sync_inventory_alerts(db: Session, items: set[int]) -> None:
 @router.get("/bootstrap")
 def bootstrap(db: DB, user: User):
     require_access(user)
-    manager = is_manager(db, user)
-    locations = balances_by_item(db)
-    items = db.query(WarehouseItem).order_by(WarehouseItem.category, WarehouseItem.name, WarehouseItem.spec).all()
-    return {
-        "operator": {"id": user.id, "name": user.name},
-        "permissions": {"manage_assignments": can_assign(user), "manage_warehouse": manager, "dispatch": can_dispatch(user)},
-        "now": stamp(warehouse_now()),
-        "managers": person_data(db, manager_people(db)),
-        "positions": [position_data(db, row) for row in db.query(WarehousePosition).order_by(
-            WarehousePosition.shelf, WarehousePosition.level.desc())],
-        "items": [item_data(item, locations.get(item.id, [])) for item in items if manager or item.active],
-    }
+    # Keep each position's balance, physical photo and pending state in the same read snapshot.
+    with db.begin_nested():
+        manager = is_manager(db, user)
+        locations = balances_by_item(db)
+        items = db.query(WarehouseItem).order_by(WarehouseItem.category, WarehouseItem.name, WarehouseItem.spec).all()
+        pending_photos = {task.position_id for task in open_photo_tasks(db)}
+        return {
+            "operator": {"id": user.id, "name": user.name},
+            "permissions": {"manage_assignments": can_assign(user), "manage_warehouse": manager, "dispatch": can_dispatch(user)},
+            "photo_task_count": len(pending_photos) if can_dispatch(user) else 0,
+            "now": stamp(warehouse_now()),
+            "managers": person_data(db, manager_people(db)),
+            "positions": [{**position_data(db, row), "needs_photo": row.id in pending_photos} for row in db.query(WarehousePosition).order_by(
+                WarehousePosition.shelf, WarehousePosition.level.desc())],
+            "items": [item_data(item, locations.get(item.id, [])) for item in items if manager or item.active],
+        }
 
 
 @router.get("/inventory/export.xlsx")
@@ -89,6 +97,12 @@ def preview_inbound_import(db: DB, user: User, file: Annotated[UploadFile, File(
     return read_inbound_workbook(db, file.file.read(MAX_FILE_BYTES + 1))
 
 
+@router.post("/inbound/single")
+def preview_single_inbound(body: SingleInboundInput, db: DB, user: User):
+    require_manager(db, user)
+    return single_inbound_preview(db, body)
+
+
 @router.get("/manager-candidates")
 def manager_candidates(db: DB, user: User, q: Annotated[str, Query(max_length=100)] = ""):
     require_assign(user)
@@ -116,13 +130,17 @@ def remove_manager(employee_id: int, db: DB, user: User):
         require_assign(user)
         row = db.get(WarehouseOwner, employee_id)
         if row is not None:
-            if active_owner_ids(db) == {employee_id}:
+            active = active_owner_ids(db)
+            eligible = active - {employee_id}
+            if active == {employee_id}:
                 raise HTTPException(409, "这是最后一位有效的仓库负责人，请先安排接任人再撤下")
             db.delete(row)
             for issue in db.query(WarehouseIssue).filter_by(status="claimed", assignee_id=employee_id):
                 issue.status = "open"
                 issue.assignee_id = None
             release_owner_alerts(db, employee_id)
+            if eligible:
+                release_owner_photo_tasks(db, employee_id, min(eligible))
             write_audit(db, user.employee, "撤下仓库负责人", "warehouse_owner", employee_id)
         db.commit()
     return {"managers": person_data(db, manager_people(db))}
@@ -183,7 +201,10 @@ def read_photo(photo_id: PhotoId, db: DB, user: User):
                                              WarehouseTransaction.status == "posted").first())
         if not can_read:
             raise HTTPException(404, "照片不存在")
-    return Response(row.content, media_type="image/jpeg", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+    content = row.content
+    if not content:
+        raise HTTPException(410, "照片已按保留规则清理")
+    return Response(content, media_type="image/jpeg", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.put("/positions/{position_id}/photo")
@@ -192,15 +213,95 @@ def replace_location_photo(position_id: int, body: LocationPhotoInput, db: DB, u
         require_manager(db, user)
         now = warehouse_now()
         position = get_position(db, position_id)
-        photo = staged_photo(db, body.photo_id, user)
+        reuse = db.get(WarehousePositionPhotoReuse, body.photo_id)
+        if reuse is not None:
+            if reuse.position_id != position_id or reuse.owner_id != user.id:
+                raise HTTPException(409, "照片已在其他货位或账号的操作中使用，请重拍后上传")
+            data = position_data(db, position)
+            db.commit()
+            return {**data, "photo_reused": True}
+        previous = db.get(WarehousePhoto, position.latest_photo_id) if position.latest_photo_id else None
+        same_upload = previous is not None and body.photo_id == previous.id and previous.owner_id == user.id
+        photo = previous if same_upload and position.latest_photo_version == position.version else staged_photo(db, body.photo_id, user)
+        if previous and position.latest_photo_version == position.version and previous.content == photo.content:
+            if not same_upload:
+                db.add(WarehousePositionPhotoReuse(photo_id=photo.id, position_id=position_id, owner_id=user.id))
+                db.delete(photo)
+            data = position_data(db, position)
+            db.commit()
+            return {**data, "photo_reused": True}
         tx = new_transaction(db, user, "photo", now, reason="更新货位现况照")
         mark_posted(tx, user, now)
         photo.attached_at = now
         db.add(WarehouseTransactionPhoto(transaction_id=tx.id, photo_id=photo.id, position_id=position_id))
-        fresh = position.updated_at is None or photo.captured_at >= position.updated_at
-        update_latest_photo(db, position, photo, now, transaction_id=tx.id, fresh=fresh)
+        save_current_location_photo(db, position, photo, now, tx.id, position.updated_at)
         db.commit()
     return position_data(db, position)
+
+
+@router.get("/photo-tasks")
+def list_photo_tasks(db: DB, user: User):
+    require_dispatch(user)
+    return {"items": photo_task_list(db, include_reports=is_manager(db, user))}
+
+
+@router.put("/positions/{position_id}/photo-task")
+def complete_photo_task(position_id: int, body: LocationPhotoTaskInput, db: DB, user: User):
+    with write_transaction(db):
+        require_dispatch(user)
+        position = get_position(db, position_id)
+        task = db.get(WarehousePositionPhotoTask, position_id)
+        if task is not None and task.closed_by_id == user.id and task.photo_id == body.photo_id:
+            return position_data(db, position)
+        if task is None or task.closed_at is not None:
+            raise HTTPException(409, "此货位补照待办已结束，请刷新查看")
+        if body.version != position.version or body.requested_at != task.requested_at.isoformat():
+            raise HTTPException(409, "货位或待办已更新，请重新打开并拍摄最新现场")
+        photo = staged_photo(db, body.photo_id, user)
+        cutoff = max(task.requested_at, position.updated_at or task.requested_at)
+        if photo.captured_at < cutoff:
+            raise HTTPException(409, "照片早于该货位最新变化，请拍摄现在的货位")
+        now = warehouse_now()
+        tx = new_transaction(db, user, "photo", now, reason="补拍货位现况照")
+        mark_posted(tx, user, now)
+        photo.attached_at = now
+        db.add(WarehouseTransactionPhoto(transaction_id=tx.id, photo_id=photo.id, position_id=position_id))
+        update_latest_photo(db, position, photo, now, transaction_id=tx.id)
+        if task.closed_at is None:
+            raise HTTPException(409, "照片与当前现场照相同或早于现有记录，请重新拍摄现在的货位")
+        db.commit()
+    return position_data(db, position)
+
+
+@router.post("/positions/{position_id}/photo-task/report")
+def report_position_photo(position_id: int, body: LocationPhotoReportInput, db: DB, user: User):
+    with write_transaction(db):
+        require_dispatch(user)
+        position = get_position(db, position_id)
+        if body.photo_id != position.latest_photo_id:
+            raise HTTPException(409, "货位现场照刚刚更新，请刷新后核对")
+        task = db.get(WarehousePositionPhotoTask, position_id)
+        now = warehouse_now()
+        if task is None or task.closed_at is not None:
+            old_photo = db.get(WarehousePhoto, body.photo_id)
+            owners = active_owner_ids(db)
+            prior_owner = old_photo.owner_id if old_photo is not None else None
+            owner = user.id if user.id in owners else prior_owner if prior_owner in owners else min(owners, default=None)
+            task = request_location_photo(db, position, now, owner, position.latest_photo_transaction_id)
+        task.photo_id = body.photo_id
+        write_audit(db, user.employee, PHOTO_REPORT_ACTION, "warehouse_position", position_id,
+                    after={"photo_id": body.photo_id, "note": body.note, "reported_at": stamp(now)})
+        db.commit()
+    return {"ok": True}
+
+
+@router.post("/moves")
+def move_inventory(body: LocationMoveInput, db: DB, user: User):
+    with write_transaction(db):
+        require_manager(db, user)
+        tx = move_stock(db, user, body, warehouse_now())
+        db.commit()
+    return transaction_data(db, tx)
 
 
 @router.post("/transactions")

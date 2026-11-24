@@ -208,6 +208,13 @@ body:has(#app[data-view="warehouse"]) :is(#themeStory,#pageHeading) { display: n
 .warehouse-workbench :is(input:not([type="checkbox"]), select, textarea) { min-width: 0; width: 100%; color: var(--wh-ink); background: var(--wh-panel); border: 1px solid var(--wh-divider); border-radius: 9px; padding: 8px 10px; box-sizing: border-box; }
 .wh-filter-row label, .wh-form label { color: var(--wh-ink); font-size: .91rem; }
 .wh-filter-row label { display: grid; gap: 4px; font-weight: 650; }
+.wh-filter-row { align-items: start; }
+.wh-name-options { display: grid; gap: 4px; max-height: 13rem; overflow: auto; margin-top: 5px; padding: 5px; border: 1px solid var(--wh-divider); border-radius: 9px; background: var(--wh-soft); }
+.warehouse-workbench .wh-name-option { width: 100%; min-height: 40px; margin: 0; padding: 5px 8px; text-align: left; white-space: normal; border: 1px solid var(--wh-divider); border-radius: 7px; color: var(--wh-ink); background: var(--wh-panel); box-shadow: none; cursor: pointer; }
+.warehouse-workbench .wh-name-option:hover { border-color: var(--wh-accent); background: var(--wh-accent-soft); }
+.wh-name-option :is(strong,small) { display: block; }
+.wh-name-option small { font-size: .75rem; }
+.wh-name-hint { color: var(--wh-muted); font-size: .8rem; }
 .warehouse-workbench .wh-filter-row :is(input,select) { min-height: 46px; background: var(--wh-soft); }
 .wh-shelf-row, .wh-layer-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .wh-shelf-row > span { margin-right: 5px; color: var(--wh-muted); font-size: .88rem; }
@@ -236,6 +243,9 @@ body:has(#app[data-view="warehouse"]) :is(#themeStory,#pageHeading) { display: n
 .wh-bin .wh-location-photo { margin-bottom: 0; }
 .wh-location-photo :is(strong,small) { display: block; }
 .wh-location-photo .wh-tag { margin: 4px 0; }
+.wh-quick-location .wh-location-photo { margin: 5px 0; border-color: #bfe9ed44; background: #0b3148; }
+.wh-quick-location .wh-location-photo .wh-tag { white-space: normal; }
+.wh-cleared-photo { display: grid; gap: 4px; background: var(--wh-soft); border-radius: 8px; padding: 9px; }
 .wh-photo { display: block; max-width: 180px; border-radius: 8px; overflow: hidden; background: var(--wh-soft); }
 .wh-photo img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; }
 .wh-alert-section, .wh-evaluation-section, .wh-task-section { display: grid; gap: 9px; }
@@ -281,6 +291,10 @@ body:has(#app[data-view="warehouse"]) :is(#themeStory,#pageHeading) { display: n
 .wh-task-card[aria-current="true"] { outline: 2px solid var(--wh-accent); }
 .wh-task-lines, .wh-transaction-lines { display: grid; gap: 5px; color: var(--wh-muted); font-size: .86rem; }
 .wh-task-card .wh-photo { max-width: 150px; }
+.wh-photo-reports { display: grid; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.wh-photo-reports li { border-inline-start: 2px solid var(--wh-divider); padding-inline-start: 9px; overflow-wrap: anywhere; }
+.wh-photo-reports li p { margin: 0; font-size: .87rem; }
+.wh-photo-reports li small { color: var(--wh-muted); }
 .wh-transaction-photos { display: flex; gap: 8px; flex-wrap: wrap; }
 .wh-dialog { width: min(520px,calc(100% - 24px)); max-height: calc(100vh - 24px); overflow: auto; box-sizing: border-box; color: var(--wh-ink); background: var(--wh-panel); border: 1px solid var(--wh-divider); border-radius: 15px; padding: clamp(13px,3vw,20px); box-shadow: 0 18px 58px #10203338; }
 .wh-dialog::backdrop { background: #1020337a; }

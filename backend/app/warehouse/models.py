@@ -7,6 +7,7 @@ from app.database.connection import Base
 
 
 WAREHOUSE_TZ = timezone(timedelta(hours=8))
+UNKNOWN_PHOTO_TIME = datetime.min
 GROUND_SHELF = "G"
 SHELF_ZONES = {"A": "左侧", "B": "左侧", "C": "中间", "D": "中间", "E": "右侧", "F": "右侧", GROUND_SHELF: "地面"}
 # IDs 1–9 predate the expanded layout and are referenced by balances, orders and photos.
@@ -110,6 +111,38 @@ class WarehouseTransactionPhoto(Base):
     photo_id: Mapped[str] = mapped_column(ForeignKey("warehouse_photos.id"), primary_key=True)
     position_id: Mapped[int | None] = mapped_column(ForeignKey("warehouse_positions.id"))
     item_id: Mapped[int | None] = mapped_column(ForeignKey("warehouse_items.id"))
+
+
+class WarehousePositionPhotoRevision(Base):
+    __tablename__ = "warehouse_position_photo_revisions"
+
+    position_id: Mapped[int] = mapped_column(ForeignKey("warehouse_positions.id"), primary_key=True)
+    number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    photo_id: Mapped[str] = mapped_column(ForeignKey("warehouse_photos.id"), unique=True)
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class WarehousePositionPhotoReuse(Base):
+    __tablename__ = "warehouse_position_photo_reuses"
+
+    # Retain the upload identifier after its redundant image data is removed.
+    photo_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    position_id: Mapped[int] = mapped_column(ForeignKey("warehouse_positions.id"))
+    owner_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"))
+
+
+class WarehousePositionPhotoTask(Base):
+    __tablename__ = "warehouse_position_photo_tasks"
+
+    position_id: Mapped[int] = mapped_column(ForeignKey("warehouse_positions.id"), primary_key=True)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"))
+    target_version: Mapped[int] = mapped_column(Integer)
+    opened_at: Mapped[datetime] = mapped_column(DateTime)
+    requested_at: Mapped[datetime] = mapped_column(DateTime)
+    source_transaction_id: Mapped[int | None] = mapped_column(ForeignKey("warehouse_transactions.id"))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    closed_by_id: Mapped[int | None] = mapped_column(ForeignKey("employees.id"))
+    photo_id: Mapped[str | None] = mapped_column(ForeignKey("warehouse_photos.id"))
 
 
 class WarehouseMovement(Base):

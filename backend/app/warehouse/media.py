@@ -7,7 +7,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from app.v2_auth import V2User
-from app.warehouse.models import WAREHOUSE_TZ, WarehousePhoto, warehouse_now
+from app.warehouse.models import UNKNOWN_PHOTO_TIME, WAREHOUSE_TZ, WarehousePhoto, warehouse_now
 
 
 MAX_UPLOAD = 12 * 1024 * 1024
@@ -18,6 +18,8 @@ JPEG_PROFILES = ((1440, (79, 72, 65)), (1280, (76, 69, 62)), (1120, (72, 65, 57)
 
 
 def captured_at(value: str, now: datetime) -> datetime:
+    if value == "unknown":
+        return UNKNOWN_PHOTO_TIME
     if not value:
         return now
     try:

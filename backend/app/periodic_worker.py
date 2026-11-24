@@ -29,6 +29,13 @@ def _deliver_announcements():
         db.commit()
 
 
+def _clear_warehouse_photos():
+    from app.warehouse.photo_retention import clear_old_location_photos
+
+    with SessionLocal() as db:
+        clear_old_location_photos(db)
+
+
 def _run_periodic(stop, tasks, clock=monotonic):
     started = clock()
     deadlines = [started + delay for _, _, delay in tasks]
@@ -55,6 +62,7 @@ def _run(stop):
         (_expire_internship_accounts, 60, 0),
         (process_due, 5, 5),
         (_deliver_announcements, 60, 60),
+        (_clear_warehouse_photos, 3600, 60),
     ))
 
 

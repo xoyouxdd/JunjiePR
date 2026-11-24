@@ -1,12 +1,12 @@
 import { esc, portalPath } from './format.js';
 import { json } from './api.js';
 import { newSubmissionKey } from './submission.js';
-import { clearWarehouseDraft, compressWarehousePhoto, saveWarehouseDraft, warehouseDraft } from './warehouse-drafts.js';
+import { clearWarehouseDraft, compressWarehousePhoto, saveWarehouseDraft, warehouseDraft, warehousePhotoTime } from './warehouse-drafts.js';
+import { exactWarehouseName, receivingSuggestions, warehouseMatches, warehouseSuggestionButtons } from './warehouse-search.js';
 
 const quantity = value => Number(value) || 0;
 const mounted = new WeakMap();
 const inboundBatchPrefix = 'inbound-import-';
-const matchKey = value => String(value || '').normalize('NFKC').toLowerCase().replace(/[\s·_-]+/g, '');
 const timeFormat = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Shanghai',
 });
@@ -14,22 +14,9 @@ const formatTime = value => timeFormat.format(value
   ? new Date(/[zZ]|[+-]\d\d:\d\d$/.test(value) ? value : `${value}+08:00`)
   : new Date());
 
-function lookupItems(source, query, category) {
-  const keyword = matchKey(query);
-  return source.filter(item => item.active !== false && (!category || item.category === category))
-    .map(item => {
-      const terms = [item.name, item.spec, ...(item.aliases || [])].map(matchKey);
-      const rank = !keyword || terms.includes(keyword) ? 0 : terms.some(term => term.startsWith(keyword)) ? 1 : terms.some(term => term.includes(keyword)) ? 2 : -1;
-      return { item, rank };
-    })
-    .filter(result => result.rank >= 0)
-    .sort((a, b) => a.rank - b.rank || a.item.name.localeCompare(b.item.name, 'zh-CN'))
-    .map(result => result.item);
-}
-
-function receiptItem(id, locationId) {
+function receiptItem(id, locationId, expectedUnit) {
   return {
-    id, received: '', damaged: '', direct: '', destination: '', note: '',
+    id, expectedUnit, received: '', damaged: '', direct: '', destination: '', note: '',
     allocations: locationId ? [{ locationId, quantity: '' }] : [],
   };
 }
@@ -42,13 +29,43 @@ function warehouseEntryData(state) {
   };
 }
 
-function inboundImportMarkup() {
+function inboundImportMarkup(work) {
   return `<div class="we-import"><div class="we-import-actions">
     <a class="wh-button" href="${esc(portalPath('/api/warehouse/inbound/template.xlsx'))}" download>下载 Excel 模板</a>
     <button type="button" class="wh-button" data-we-import>导入 Excel</button>
-    <input type="file" data-we-import-file accept=".xlsx" hidden></div>
+    <input type="file" data-we-import-file accept=".xlsx" hidden>
+    <button type="button" class="wh-button" data-we-single-toggle aria-expanded="${Boolean(work.singleOpen)}">单项录入</button></div>
+    <form class="we-single" data-we-single ${work.singleOpen ? '' : 'hidden'}>
+      <label>物资名称<input name="name" maxlength="100" required autocomplete="off" value="${esc(work.items.get(work.singleItemId)?.name || '')}" placeholder="输入名称或关键词，如 卡"></label>
+      <div class="wh-name-options we-single-options" data-we-single-options role="group" aria-label="相近的已有物资" hidden></div>
+      <label>货位<select name="position_id" required><option value="">请选择货位</option>${[...work.positions.values()].map(place => `<option value="${place.id}">${esc(place.label)}</option>`).join('')}</select></label>
+      <label>数量${numberedInput('', 'name="quantity" required', 1)}</label>
+      <button type="submit" class="wh-button wh-button--primary">加入或更新本单</button>
+      <button type="submit" class="wh-button" data-we-single-new hidden>按此名称新建</button>
+    </form>
     <div class="we-import-status" data-we-import-status aria-live="polite" hidden></div>
   </div>`;
+}
+
+function renderSingleSuggestions(work, form) {
+  const region = form.querySelector('[data-we-single-options]');
+  const matches = work.singleItemId ? [] : receivingSuggestions([...work.items.values()],form.elements.name.value);
+  region.hidden = !matches.length;
+  region.innerHTML = warehouseSuggestionButtons(matches,'data-we-single-pick');
+  form.querySelector('[data-we-single-new]').hidden = !work.singleConfirmNew;
+  return matches;
+}
+
+function applyProposedCatalog(work) {
+  for (const id of work.items.keys()) if (id < 0) work.items.delete(id);
+  for (const row of work.draft.items) {
+    if (row.proposed) work.items.set(row.id, {...row.proposed, id:row.id, active:true, category:'其他'});
+  }
+}
+
+function receivingDraftRow(row) {
+  return {...receiptItem(row.item_id,null,row.expected_unit), proposed:row.new_item, received:String(row.received),
+    allocations:row.locations.map(place => ({locationId:place.position_id, quantity:String(place.quantity)}))};
 }
 
 function showInboundImportStatus(work) {
@@ -59,6 +76,7 @@ function showInboundImportStatus(work) {
   region.dataset.error = String(error);
   region.innerHTML = message ? `<p>${esc(message)}</p>${rows.length ? `<ul>${rows.map(row => `<li>第 ${esc(row.row)} 行 · ${esc(row.message)}</li>`).join('')}</ul>` : ''}` : '';
   work.root.querySelector('[data-we-import]').disabled = Boolean(work.importing);
+  for (const control of work.root.querySelectorAll('[data-we-single] button[type="submit"]')) control.disabled = Boolean(work.importing);
   work.root.querySelector('[data-we-next]').disabled = Boolean(work.importing) || !work.draft.items.length;
 }
 
@@ -80,7 +98,7 @@ async function importInbound(work, file) {
       return;
     }
     const data = warehouseEntryData(state);
-    const unavailable = imported.items.some(row => data.items.get(row.item_id)?.active !== true ||
+    const unavailable = imported.items.some(row => (!row.new_item && data.items.get(row.item_id)?.active !== true) ||
       row.locations.some(place => !data.positions.has(place.position_id)));
     if (unavailable) {
       work.importStatus = {error:true,message:'物资或货位资料刚刚更新，请重新导入 Excel。'};
@@ -91,11 +109,15 @@ async function importInbound(work, file) {
       work.draft.key = imported.client_id;
       work.draft.photos = {};
       work.draft.versions = {};
+      delete work.draft.photoStartedAt;
+      delete work.draft.photoGroups;
+      delete work.draft.shelfPhotoGroups;
+      work.draft.deferLocationPhotos = true;
     }
-    work.draft.items = imported.items.map(row => ({...receiptItem(row.item_id),received:String(row.received),
-      allocations:row.locations.map(entry => ({locationId:entry.position_id,quantity:String(entry.quantity)})),
-    }));
-    work.importStatus = {message:`已填入 ${imported.items.length} 种物资。核对后点「下一步」拍照。`};
+    work.draft.items = imported.items.map(receivingDraftRow);
+    applyProposedCatalog(work);
+    const newCount = imported.items.filter(row => row.new_item).length;
+    work.importStatus = {message:`已填入 ${imported.items.length} 种物资${newCount ? `，${newCount} 种将在确认时建档` : ''}${imported.skipped_zero ? `，跳过 ${imported.skipped_zero} 行零数量` : ''}。`};
     work.message = '';
     work.noticeCode = '';
     void saveWarehouseDraft(work.session);
@@ -104,6 +126,68 @@ async function importInbound(work, file) {
     if (!current()) return;
     work.importStatus = {error:true,rows:error.detail?.rows,
       message:error.status ? error.message : '暂时无法读取 Excel，请检查连接后重新导入。'};
+  } finally {
+    work.importing = false;
+    if (current()) showInboundImportStatus(work);
+  }
+}
+
+async function addSingleInbound(work, form, create) {
+  if (work.importing || work.draft.attempted) return;
+  const data = new FormData(form);
+  const input = {name:String(data.get('name')).trim(),position_id:Number(data.get('position_id')),quantity:Number(data.get('quantity'))};
+  if (work.singleItemId) input.item_id = work.singleItemId;
+  if (create) input.confirm_new = true;
+  const matches = renderSingleSuggestions(work,form);
+  if (!create && matches.length && !matches.some(item => exactWarehouseName(item,input.name))) {
+    work.singleConfirmNew = true;
+    renderSingleSuggestions(work,form);
+    work.importStatus = {error:true,message:'找到了相近的已有物资。请点选已有档案，或确认按当前名称新建。'};
+    showInboundImportStatus(work);
+    return;
+  }
+  work.importing = true;
+  showInboundImportStatus(work);
+  const current = () => work.root.isConnected && work.session.view === work && !work.draft.checkout;
+  try {
+    const entry = await work.api('/inbound/single',json('POST',input));
+    if (!current()) return;
+    if (!entry.new_item && !work.items.has(entry.item_id)) {
+      const state = await work.api('/bootstrap');
+      if (!current()) return;
+      Object.assign(work,warehouseEntryData(state));
+    }
+    const nameKey = value => value.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
+    const proposed = work.draft.items.find(row => row.proposed && nameKey(row.proposed.name) === nameKey(input.name));
+    let line = proposed || work.draft.items.find(row => row.id === entry.item_id && !entry.new_item);
+    if (proposed && !entry.new_item) throw new Error('物资档案已更新，请移除本单的待建档项后再录入。');
+    if (line) {
+      if (line.expectedUnit !== entry.expected_unit) throw new Error('本单物资的单位需要重新核对，请移除后再录入。');
+      const allocation = line.allocations.find(row => row.locationId === input.position_id);
+      const {shelved,remaining} = receiptSummary(line);
+      const received = shelved - quantity(allocation?.quantity) + input.quantity + quantity(line.damaged) +
+        quantity(line.direct) + Math.max(0,remaining);
+      if (received > 1000000) throw new Error('这项物资本单的实收数量超过 1000000。');
+      if (allocation) allocation.quantity = String(input.quantity);
+      else line.allocations.push({locationId:input.position_id,quantity:String(input.quantity)});
+      line.received = String(received);
+    } else {
+      if (work.draft.items.length >= 250) throw new Error('本单已达到 250 项，请分批入库。');
+      if (entry.new_item) entry.item_id = Array.from({length:250},(_, index) => -index - 1)
+        .find(id => !work.draft.items.some(row => row.id === id));
+      line = receivingDraftRow(entry);
+      work.draft.items.push(line);
+    }
+    applyProposedCatalog(work);
+    work.singleItemId = null;
+    work.singleConfirmNew = false;
+    work.importStatus = {message:entry.new_item ? '已填入本单。确认入库时将为新物资建档。' : '已填入本单，已有货位的录入数量已更新。'};
+    work.message = '';
+    work.noticeCode = '';
+    void saveWarehouseDraft(work.session);
+    draw(work);
+  } catch (error) {
+    if (current()) work.importStatus = {error:true,message:error.message};
   } finally {
     work.importing = false;
     if (current()) showInboundImportStatus(work);
@@ -140,8 +224,91 @@ function photoSignature(group, work) {
   if (!work.outbound) {
     const item = work.draft.items.find(candidate => String(candidate.id) === group.id);
     lines.push(item?.received, item?.damaged, item?.direct);
+    if (item?.proposed) lines.push(JSON.stringify(item.proposed));
   }
   return lines.join(';');
+}
+
+function syncReceiptShelfPhotos(work, reopenedAt) {
+  if (work.outbound) return;
+  const {draft} = work;
+  const linesByShelf = new Map();
+  for (const item of draft.items) {
+    for (const {locationId,quantity} of selectedAllocations(work,item)) {
+      if (!linesByShelf.has(locationId)) linesByShelf.set(locationId,[]);
+      linesByShelf.get(locationId).push(`${item.id}:${Number(quantity)}`);
+    }
+  }
+  draft.shelfPhotoGroups = Object.fromEntries([...linesByShelf].map(([id,lines]) => {
+    const signature = lines.sort().join(';');
+    const previous = draft.shelfPhotoGroups?.[id];
+    return [id,{signature,startedAt:previous?.signature === signature ? previous.startedAt : reopenedAt}];
+  }));
+}
+
+function syncPhotoGroups(work) {
+  const {draft} = work;
+  const previous = draft.photoGroups;
+  const reopenedAt = new Date().toISOString();
+  const groups = {};
+  for (const group of groupsOf(work)) {
+    const signature = photoSignature(group,work);
+    const prior = previous?.[group.id];
+    const photo = draft.photos[group.id];
+    const kept = photo?.signature === signature;
+    if (!kept) delete draft.photos[group.id];
+    groups[group.id] = {
+      signature,
+      startedAt: prior?.signature === signature ? prior.startedAt : (!previous && kept && draft.photoStartedAt) || reopenedAt,
+    };
+  }
+  for (const id of Object.keys(draft.photos)) if (!groups[id]) delete draft.photos[id];
+  draft.photoGroups = groups;
+  delete draft.photoStartedAt;
+  syncReceiptShelfPhotos(work,reopenedAt);
+}
+
+function receiptPhotoLocations(work, group) {
+  if (work.outbound) return [];
+  const item = work.draft.items.find(entry => String(entry.id) === group.id);
+  if (!item || quantity(item.damaged) || quantity(item.direct) || item.note.trim()) return [];
+  return [...new Set(group.lines.map(line => line.locationId))];
+}
+
+function receiptPhotoLocationMarkup(work, group) {
+  const locations = receiptPhotoLocations(work, group);
+  if (!locations.length) return '';
+  const item = work.draft.items.find(entry => String(entry.id) === group.id);
+  return `<label class="we-photo-location">如果拍的是上架后的整层，可同时更新货位照
+    <select data-we-photo-location aria-label="${esc(group.title)}的货位照（选填）">
+      <option value="">仅作为本单物资照</option>
+      ${locations.map(id => `<option value="${id}"${id === item.photoPositionId ? ' selected' : ''}>${esc(work.positions.get(id)?.label)}</option>`).join('')}
+    </select></label>`;
+}
+
+function canDeferLocationPhotos(work) {
+  return !work.outbound && work.draft.key.startsWith(inboundBatchPrefix) && work.draft.items.length > 0 &&
+    work.draft.items.every(item => !quantity(item.damaged) && !quantity(item.direct) && !item.note.trim() &&
+      selectedAllocations(work,item).length);
+}
+
+function defersLocationPhotos(work) {
+  return canDeferLocationPhotos(work) && work.draft.deferLocationPhotos !== false;
+}
+
+function receiptPhotoOption(work) {
+  if (!canDeferLocationPhotos(work)) return '';
+  const deferred = defersLocationPhotos(work);
+  const places = new Map();
+  for (const item of work.draft.items) {
+    const record = work.items.get(item.id);
+    for (const row of selectedAllocations(work,item)) {
+      if (!places.has(row.locationId)) places.set(row.locationId,[]);
+      places.get(row.locationId).push(`${record?.name || '物资'} ${row.quantity} ${item.expectedUnit || ''}`);
+    }
+  }
+  return `<div class="we-identity we-photo-option"><label class="we-check-label"><input type="checkbox" data-we-defer-photos${deferred ? ' checked' : ''}>先确认入库，稍后补货位照</label>
+    ${deferred ? `<p>请核对物资实际摆放的货位。还没上架的物资请放到地面临时储存区，并在入库单选该区域。确认后将提醒 ${places.size} 个货位补照。</p><ul>${[...places].map(([id,items]) => `<li><strong>${esc(work.positions.get(id)?.label)}</strong> · ${esc(items.join('、'))}</li>`).join('')}</ul>` : ''}</div>`;
 }
 
 function issueKey(positionId, itemId) {
@@ -167,6 +334,13 @@ function receiptSummary(item) {
   return { shelved, remaining: quantity(item.received) - quantity(item.damaged) - quantity(item.direct) - shelved };
 }
 
+function receiptUnitIssue(work) {
+  if (work.outbound) return '';
+  const line = work.draft.items.find(item => !item.expectedUnit || item.expectedUnit !== work.items.get(item.id)?.unit);
+  if (!line) return '';
+  return `请重新核对「${work.items.get(line.id)?.name || '物资'}」的单位，移除后重新选择，或重新导入 Excel。`;
+}
+
 function formIssue(work) {
   if (!work.draft.items.length) return '请先添加物资。';
   for (const item of work.draft.items) {
@@ -190,7 +364,7 @@ function formIssue(work) {
     if (quantity(item.direct) && !item.destination.trim()) return `请补充「${name}」的直接使用去向。`;
     if (receiptSummary(item).remaining !== 0) return `请核对「${name}」的实收、破损、上架和直用数量。`;
   }
-  return '';
+  return receiptUnitIssue(work);
 }
 
 function allocationMarkup(work, item, row, index) {
@@ -206,7 +380,8 @@ function allocationMarkup(work, item, row, index) {
 }
 
 function selectedMarkup(work, line) {
-  const item = work.items.get(line.id) || { id: line.id, name: '档案已移除', unit: '件' };
+  const record = work.items.get(line.id) || { id: line.id, name: '档案已移除', unit: '件' };
+  const item = {...record, unit:line.expectedUnit || record.unit};
   const remaining = receiptSummary(line).remaining;
   const hasExtra = line.damaged || line.direct || line.destination || line.note;
   return `<article class="we-selection" data-we-item="${item.id}">
@@ -230,18 +405,18 @@ function receiptMessage(remaining, unit, hasReceived) {
 }
 
 function renderMatches(work) {
-  const matches = lookupItems([...work.items.values()], work.query, work.category);
+  const matches = warehouseMatches([...work.items.values()],work.query,work.category);
   const limited = matches.slice(0, work.more ? 40 : 8);
   const node = work.root.querySelector('[data-we-results]');
   if (!node) return;
-  node.innerHTML = limited.map(item => {
+  node.innerHTML = `${work.query.trim() && matches.length ? '<p class="wh-name-hint">已有物资 · 点选加入本单</p>' : ''}${limited.map(item => {
     const total = [...work.positions.keys()].reduce((sum, positionId) => sum + presentBalance(work, item.id, positionId), 0);
     const selected = work.draft.items.some(line => line.id === item.id);
     return `<button type="button" class="we-result" data-we-add-item="${item.id}">
       <span><strong>${esc(item.name)}</strong><small>${esc([item.spec, item.category].filter(Boolean).join(' · '))}</small></span>
       <span class="we-result-end"><small>${work.outbound ? `余 ${total} ${esc(item.unit)}` : esc(item.unit)}</small><span>${selected ? '已选' : '＋'}</span></span>
     </button>`;
-  }).join('') || '<p class="we-empty">未找到符合条件的物资。可以换个关键词或切回全部类目。</p>';
+  }).join('')}` || '<p class="we-empty">未找到符合条件的物资。可以换个关键词或切回全部类目。</p>';
   if (matches.length > 8 && !work.more) node.insertAdjacentHTML('beforeend', `<button class="we-text-button" type="button" data-we-more>展开结果（${matches.length} 项）</button>`);
   if (matches.length > 40 && work.more) node.insertAdjacentHTML('beforeend', '<p class="we-empty">结果较多，可以继续输入名称缩小范围。</p>');
 }
@@ -264,7 +439,7 @@ function discrepancyMarkup(work, positionId, line) {
 
 function incomingLines(work, group) {
   const entry = work.draft.items.find(row => String(row.id) === group.id);
-  const unit = work.items.get(entry.id)?.unit;
+  const unit = entry.expectedUnit || work.items.get(entry.id)?.unit;
   return `<div class="we-check-item"><strong>实收 ${esc(entry.received)} ${esc(unit)}</strong><span>上架 ${receiptSummary(entry).shelved} · 直用 ${quantity(entry.direct)} · 破损 ${quantity(entry.damaged)}</span></div>
     ${group.lines.map(row => `<p class="we-check-place">${esc(work.positions.get(row.locationId)?.label)} <strong>＋${esc(row.quantity)} ${esc(unit)}</strong></p>`).join('')}
     ${entry.destination ? `<p class="we-check-place">直用去向 <strong>${esc(entry.destination)}</strong></p>` : ''}`;
@@ -284,6 +459,7 @@ function evidenceMarkup(work, group) {
         <button type="button" class="secondary" data-we-pick>拍照</button>
         <button type="button" class="we-text-button" data-we-retry hidden>继续上传</button>
       </div></div>
+    ${receiptPhotoLocationMarkup(work, group)}
     <div class="we-check-lines">${work.outbound ? group.lines.map(line => discrepancyMarkup(work, group.id, line)).join('') : incomingLines(work, group)}</div>
     <div class="we-review" data-we-review ${review ? '' : 'hidden'}>
       <p>这一层有新收发。请对照上方最新余量，现场照片仍准确时可继续使用。</p>
@@ -336,10 +512,11 @@ function refreshCheckout(work) {
       previewLink.removeAttribute('href');
     }
     node.querySelector('[data-we-review]').hidden = !work.draft.review.includes(Number(group.id));
-    node.querySelectorAll('[data-we-reviewed], [data-we-toggle-report], [data-we-observed], [data-we-report-note]').forEach(input => {
+    node.querySelectorAll('[data-we-reviewed], [data-we-toggle-report], [data-we-observed], [data-we-report-note], [data-we-photo-location]').forEach(input => {
       input.disabled = busy || work.draft.attempted;
     });
   }
+  const deferred = defersLocationPhotos(work);
   const required = groups.length;
   const ready = groups.filter(group => {
     const photo = work.draft.photos[group.id];
@@ -347,11 +524,14 @@ function refreshCheckout(work) {
   }).length;
   const confirm = work.root.querySelector('[data-we-confirm]');
   if (!confirm) return;
-  confirm.disabled = busy || work.noticeCode === 'INBOUND_BATCH_POSTED' || (!work.draft.attempted && (Boolean(work.draft.review.length) || ready !== required || !required));
+  confirm.disabled = busy || work.noticeCode === 'INBOUND_BATCH_POSTED' || (!work.draft.attempted && !deferred && (Boolean(work.draft.review.length) || ready !== required || !required));
   confirm.textContent = busy ? '正在核对…' : work.draft.attempted ? '查询提交结果' : work.noticeCode === 'INSUFFICIENT_STOCK' ? '提交报错并保留原单' : `确认${work.outbound ? '出库' : '入库'}`;
   work.root.querySelector('[data-we-edit]').disabled = busy || work.draft.attempted;
-  work.root.querySelector('[data-we-progress]').textContent = `照片已传 ${ready} / ${required}`;
+  work.root.querySelector('[data-we-progress]').textContent = deferred ? '确认后生成补照待办' : `照片已传 ${ready} / ${required}`;
+  const photoOption = work.root.querySelector('[data-we-defer-photos]');
+  if (photoOption) photoOption.disabled = busy || work.draft.attempted;
   const progress = work.root.querySelector('[data-we-progress-bar]');
+  progress.hidden = deferred;
   progress.max = required || 1;
   progress.value = ready;
   const message = work.root.querySelector('[data-we-notice]');
@@ -375,11 +555,12 @@ function draw(work) {
     </header>
     ${work.draft.checkout ? `<div class="we-identity"><span>经办人 <strong>${esc(work.operator.name)}</strong></span><span>登记时间 <strong>${esc(formatTime())}</strong></span></div>
       <p role="status" class="we-notice" data-we-notice hidden></p>
-      <div class="we-checkout">${groups.map(group => evidenceMarkup(work, group)).join('')}</div>
+      ${receiptPhotoOption(work)}
+      ${defersLocationPhotos(work) ? '' : `<div class="we-checkout">${groups.map(group => evidenceMarkup(work, group)).join('')}</div>`}
       <div class="we-footer"><button type="button" class="secondary" data-we-edit>返回修改</button><div class="we-progress-block"><span data-we-progress role="status"></span><progress data-we-progress-bar aria-label="照片上传进度" max="1" value="0"></progress></div><button type="button" class="primary" data-we-confirm></button></div>` : `
       <div class="we-entry-grid"><section class="we-lookup" aria-label="查找物资">
-        ${outbound ? '' : inboundImportMarkup()}
-        <div class="we-search"><label>物资搜索 <input type="search" data-we-search value="${esc(work.query)}" placeholder="名称或常用简称" autocomplete="off"></label>
+        ${outbound ? '' : inboundImportMarkup(work)}
+        <div class="we-search"><label>物资搜索 <input type="search" data-we-search value="${esc(work.query)}" placeholder="名称或关键词，如 卡" autocomplete="off"></label>
         <label>类目<select data-we-category><option value="">全部类目</option>${categories.map(category => `<option ${work.category === category ? 'selected' : ''} value="${esc(category)}">${esc(category)}</option>`).join('')}</select></label></div>
         <div class="we-results" data-we-results></div>
       </section><section class="we-order" aria-label="本单物资"><div class="we-order-head"><h4>本单物资</h4><span>${work.draft.items.length} 项</span></div>
@@ -454,13 +635,14 @@ async function uploadQueue(work) {
 async function usePhoto(work, group, file) {
   const former = work.draft.photos[group.id];
   if (!file || former?.status === 'compressing') return;
-  const photo = { capturedAt: new Date().toISOString(), signature: photoSignature(group, work), status: 'compressing' };
+  const photo = { captureChecked: true, signature: photoSignature(group, work), status: 'compressing' };
   work.draft.photos[group.id] = photo;
   work.session.refresh?.();
   try {
-    const blob = await compressWarehousePhoto(file);
+    const [blob, capturedAt] = await Promise.all([compressWarehousePhoto(file), warehousePhotoTime(file)]);
     if (work.draft.photos[group.id] !== photo) return;
     photo.blob = blob;
+    photo.capturedAt = capturedAt;
     photo.status = 'queued';
     if (work.noticeCode === 'PHOTO_ERROR') { work.noticeCode = ''; work.message = ''; }
     void saveWarehouseDraft(work.session);
@@ -488,19 +670,28 @@ function makePayload(work) {
   const lines = work.draft.items.flatMap(item => selectedAllocations(work, item).map(row => ({ item_id: item.id, position_id: row.locationId, quantity: Number(row.quantity) })));
   const receipts = work.outbound ? [] : work.draft.items.map(item => ({
     item_id: item.id, received: Number(item.received), damaged: quantity(item.damaged), direct_quantity: quantity(item.direct),
-    direct_destination: item.destination.trim(), note: item.note.trim(),
+    direct_destination: item.destination.trim(), note: item.note.trim(), expected_unit: item.expectedUnit,
   }));
-  const photos = groupsOf(work).map(group => ({
-    photo_id: work.draft.photos[group.id].id,
-    [work.outbound ? 'position_id' : 'item_id']: Number(group.id),
-  }));
+  const newItems = work.draft.items.filter(item => item.proposed).map(item => ({...item.proposed,item_id:item.id}));
+  const deferred = defersLocationPhotos(work);
+  const photos = deferred ? [] : groupsOf(work).map(group => {
+    const photoId = work.draft.photos[group.id].id;
+    const startedAt = work.draft.photoGroups?.[group.id]?.startedAt;
+    if (work.outbound) return {photo_id: photoId, position_id: Number(group.id), started_at: startedAt};
+    const item = work.draft.items.find(entry => String(entry.id) === group.id);
+    const positionId = receiptPhotoLocations(work, group).includes(item.photoPositionId) ? item.photoPositionId : null;
+    return {photo_id: photoId, item_id: item.id, ...(positionId ? {
+      position_id: positionId, started_at: startedAt, position_started_at: work.draft.shelfPhotoGroups?.[positionId]?.startedAt,
+    } : {})};
+  });
   const discrepancies = Object.entries(work.draft.discrepancies).map(([key, report]) => {
     const [position_id, item_id] = key.split(':').map(Number);
     return { position_id, item_id, observed_quantity: report.observed === '' ? null : Number(report.observed), note: report.note.trim() };
   });
   return {
     client_id: work.draft.key, kind: work.outbound ? 'outbound' : 'inbound', position_versions: work.draft.versions,
-    lines, receipts, photos, discrepancies, hold_if_insufficient: work.noticeCode === 'INSUFFICIENT_STOCK',
+    lines, receipts, photos, discrepancies, ...(newItems.length ? {new_items:newItems} : {}),
+    hold_if_insufficient: work.noticeCode === 'INSUFFICIENT_STOCK', ...(deferred ? {defer_location_photos:true} : {}),
   };
 }
 
@@ -514,10 +705,11 @@ async function complete(work, result) {
     const balances = (result.balances || []).map(balance => {
       const item = work.items.get(balance.item_id);
       const position = work.positions.get(balance.position_id);
-      return `<li><span>${esc(item?.name)} · ${esc(position?.label)}</span><strong>余 ${esc(balance.quantity)} ${esc(item?.unit)}</strong></li>`;
+      return `<li><span>${esc(item?.name ?? balance.item_name)} · ${esc(position?.label)}</span><strong>余 ${esc(balance.quantity)} ${esc(item?.unit ?? balance.unit)}</strong></li>`;
     }).join('');
     work.root.innerHTML = `<section class="we-result-page" role="status"><span class="we-complete-mark" data-pending="${pending}">${pending ? '!' : '✓'}</span>
       <h3>${title}</h3><p>单据 ${esc(result.id)} · ${esc(result.actor_name || work.operator.name)}${result.posted_at ? ` · ${esc(formatTime(result.posted_at))}` : ''}</p>
+      ${result.deferred_photo_positions?.length ? `<p>${result.deferred_photo_positions.length} 个货位已列入补照待办</p>` : ''}
       ${pending ? '<p>照片和原出库记录已保留，负责人核实后统一补记。</p>' : balances ? `<ul class="we-result-balances">${balances}</ul>` : ''}
       <button type="button" class="primary" data-we-complete>返回物资管理</button></section>`;
     work.root.querySelector('[data-we-complete]').onclick = () => work.onComplete?.(result);
@@ -527,6 +719,20 @@ async function complete(work, result) {
 function currentView(work) {
   const current = work.session.view;
   return current?.draft === work.draft && current.root.isConnected ? current : work;
+}
+
+function revalidateDraftPhotos(work) {
+  for (const [id,photo] of Object.entries(work.draft.photos)) {
+    if (photo.captureChecked) continue;
+    if (!photo.blob) {
+      delete work.draft.photos[id];
+      continue;
+    }
+    // Keep photos from prior drafts as evidence without treating their selection times as capture times.
+    Object.assign(photo,{captureChecked:true,capturedAt:'unknown',status:'queued'});
+    delete photo.id;
+    delete photo.url;
+  }
 }
 
 async function checkOutcome(work) {
@@ -544,13 +750,23 @@ async function checkOutcome(work) {
     }
   }
   work.draft.attempted = false;
+  revalidateDraftPhotos(work);
+  syncPhotoGroups(work);
   void saveWarehouseDraft(work.session);
+  void uploadQueue(currentView(work));
   return false;
 }
 
 async function submit(work) {
   if (work.busy || work.session.submitting) return;
   if (!work.draft.attempted) {
+    const unitIssue = receiptUnitIssue(work);
+    if (unitIssue) {
+      work.noticeCode = 'INBOUND_UNIT_CHANGED';
+      work.message = unitIssue;
+      refreshCheckout(work);
+      return;
+    }
     const invalid = Object.values(work.draft.discrepancies).some(report =>
       (report.observed === '' && !report.note.trim()) || (report.observed !== '' && (!Number.isSafeInteger(Number(report.observed)) || Number(report.observed) < 0 || Number(report.observed) > 1_000_000)));
     if (invalid) {
@@ -634,17 +850,23 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
     previews: new Map(), query: '', category: '', message: '', noticeCode: '', busy: false,
   };
   session.view = work;
+  if (!work.draft.attempted) revalidateDraftPhotos(work);
+  applyProposedCatalog(work);
   session.refresh = () => refreshCheckout(work);
   if (prefill && !work.draft.attempted && work.items.has(Number(prefill.itemId))) {
     const id = Number(prefill.itemId);
     const existing = work.draft.items.find(item => item.id === id);
     const place = Number(prefill.locationId);
     if (!existing || (place && !existing.allocations.some(row => row.locationId === place))) {
-      if (!existing) work.draft.items.push(receiptItem(id, place));
+      if (!existing) work.draft.items.push(receiptItem(id, place,work.items.get(id)?.unit));
       else existing.allocations.push({ locationId: place, quantity: '' });
       work.draft.checkout = false;
       void saveWarehouseDraft(session);
     }
+  }
+  if (work.draft.checkout && !work.draft.attempted) {
+    syncPhotoGroups(work);
+    void saveWarehouseDraft(session);
   }
   if (work.draft.checkout && !work.draft.attempted && outbound) {
     for (const group of groupsOf(work)) {
@@ -690,12 +912,18 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       renderMatches(work);
       return;
     }
+    if (target.matches('[data-we-single] input[name="name"]')) {
+      work.singleItemId = null;
+      work.singleConfirmNew = false;
+      renderSingleSuggestions(work,target.form);
+      return;
+    }
     const itemNode = target.closest('[data-we-item]');
     if (itemNode) {
       const item = work.draft.items.find(row => row.id === Number(itemNode.dataset.weItem));
       if (target.matches('[data-we-field]')) item[target.dataset.weField] = target.value;
       if (target.matches('[data-we-allocation]')) item.allocations[Number(target.dataset.weAllocation)].quantity = target.value;
-      if (!outbound) itemNode.querySelector('[data-we-receipt-check]').textContent = receiptMessage(receiptSummary(item).remaining, work.items.get(item.id)?.unit, Boolean(item.received));
+      if (!outbound) itemNode.querySelector('[data-we-receipt-check]').textContent = receiptMessage(receiptSummary(item).remaining, item.expectedUnit, Boolean(item.received));
       void saveWarehouseDraft(session);
     }
     const reportNode = target.closest('[data-we-discrepancy]');
@@ -708,7 +936,12 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
 
   root.addEventListener('change', event => {
     const target = event.target;
-    if (target.matches('[data-we-category]')) {
+    if (target.matches('[data-we-defer-photos]')) {
+      work.draft.deferLocationPhotos = target.checked;
+      void saveWarehouseDraft(session);
+      draw(work);
+      root.querySelector('[data-we-defer-photos]')?.focus();
+    } else if (target.matches('[data-we-category]')) {
       work.category = target.value;
       work.more = false;
       renderMatches(work);
@@ -720,6 +953,11 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       const file = target.files?.[0];
       target.value = '';
       void importInbound(work,file);
+    } else if (target.matches('[data-we-photo-location]')) {
+      const id = target.closest('[data-we-group]').dataset.weGroup;
+      const item = work.draft.items.find(entry => String(entry.id) === id);
+      item.photoPositionId = Number(target.value) || null;
+      void saveWarehouseDraft(session);
     } else if (target.matches('[data-we-camera]')) {
       const id = target.closest('[data-we-group]').dataset.weGroup;
       const file = target.files?.[0] || target.files?.item?.(0);
@@ -742,6 +980,27 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
     if (!button || button.disabled) return;
     if (button.matches('[data-we-back]')) { onBack?.(); return; }
     if (button.matches('[data-we-import]')) { root.querySelector('[data-we-import-file]').click(); return; }
+    if (button.matches('[data-we-single-toggle]')) {
+      work.singleOpen = !work.singleOpen;
+      const form = root.querySelector('[data-we-single]');
+      form.hidden = !work.singleOpen;
+      button.setAttribute('aria-expanded',String(work.singleOpen));
+      if (work.singleOpen) form.elements.name.focus();
+      return;
+    }
+    if (button.matches('[data-we-single-pick]')) {
+      const item = work.items.get(Number(button.dataset.weSinglePick));
+      if (!item) return;
+      const form = button.form;
+      work.singleItemId = item.id;
+      work.singleConfirmNew = false;
+      work.importStatus = null;
+      form.elements.name.value = item.name;
+      renderSingleSuggestions(work,form);
+      showInboundImportStatus(work);
+      form.elements.position_id.focus();
+      return;
+    }
     if (button.matches('[data-we-confirm]')) { void submit(work); return; }
     const groupNode = button.closest('[data-we-group]');
     if (groupNode) {
@@ -762,13 +1021,14 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       const id = Number(button.dataset.weAddItem);
       if (!work.draft.items.some(row => row.id === id)) {
         const only = locationsFor(work, work.items.get(id)).filter(position => presentBalance(work, id, position.id) > 0);
-        work.draft.items.push(receiptItem(id, only.length === 1 ? only[0].id : null));
+        work.draft.items.push(receiptItem(id, only.length === 1 ? only[0].id : null,work.items.get(id)?.unit));
       }
       const row = work.draft.items.find(entry => entry.id === id);
       if (!row.allocations.length) row.allocations.push({ locationId: 0, quantity: '' });
       focusItem = id;
     } else if (button.matches('[data-we-remove-item]')) {
       work.draft.items = work.draft.items.filter(row => row !== item);
+      applyProposedCatalog(work);
       if (!work.draft.items.length && work.draft.key.startsWith(inboundBatchPrefix)) {
         work.draft.key = newSubmissionKey();
         work.draft.photos = {};
@@ -782,17 +1042,13 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       const issue = formIssue(work);
       if (issue) { work.message = issue; draw(work); return; }
       work.draft.checkout = true;
-      const groups = groupsOf(work);
       const currentLocations = new Set(work.draft.items.flatMap(entry => selectedAllocations(work, entry).map(line => line.locationId)));
       const validDiscrepancies = new Set(work.draft.items.flatMap(entry => selectedAllocations(work, entry).map(line => issueKey(line.locationId, entry.id))));
       for (const key of Object.keys(work.draft.versions)) if (!currentLocations.has(Number(key))) delete work.draft.versions[key];
       for (const key of Object.keys(work.draft.discrepancies)) if (!validDiscrepancies.has(key)) delete work.draft.discrepancies[key];
       work.draft.review = work.draft.review.filter(id => currentLocations.has(id));
       for (const id of currentLocations) if (work.draft.versions[id] === undefined) work.draft.versions[id] = work.positions.get(id)?.version;
-      for (const [key, photo] of Object.entries(work.draft.photos)) {
-        const group = groups.find(entry => entry.id === key);
-        if (!group || photo.signature !== photoSignature(group, work)) delete work.draft.photos[key];
-      }
+      syncPhotoGroups(work);
     } else return;
     work.message = '';
     work.noticeCode = '';
@@ -804,6 +1060,11 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       root.querySelector('.we-heading h2')?.focus({preventScroll:true});
     }
     if (focusItem) root.querySelector(`[data-we-item="${focusItem}"] select, [data-we-item="${focusItem}"] [data-we-field="received"]`)?.focus();
+  }, { signal });
+  root.addEventListener('submit', event => {
+    if (!event.target.matches('[data-we-single]')) return;
+    event.preventDefault();
+    void addSingleInbound(work,event.target,event.submitter?.matches('[data-we-single-new]'));
   }, { signal });
   return () => controller.abort();
 }

@@ -93,6 +93,65 @@ const jpeg = (canvas, quality) => new Promise((resolve, reject) => {
   canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('照片压缩失败，请重新拍摄。')), 'image/jpeg', quality);
 });
 
+function jpegExif(bytes) {
+  if (bytes.byteLength < 4 || bytes.getUint16(0) !== 0xffd8) return;
+  for (let marker = 2; marker + 4 <= bytes.byteLength;) {
+    const kind = bytes.getUint16(marker);
+    if (kind === 0xffda || (kind & 0xff00) !== 0xff00) return;
+    const size = bytes.getUint16(marker + 2);
+    const end = marker + 2 + size;
+    if (size < 2 || end > bytes.byteLength) return;
+    if (kind === 0xffe1 && size >= 16 && bytes.getUint32(marker + 4) === 0x45786966 &&
+        bytes.getUint16(marker + 8) === 0) {
+      return new DataView(bytes.buffer, marker + 10, end - marker - 10);
+    }
+    marker = end;
+  }
+}
+
+function exifCaptureTime(tiff) {
+  if (!tiff) return NaN;
+  const order = tiff.getUint16(0);
+  if (order !== 0x4949 && order !== 0x4d4d) return NaN;
+  const little = order === 0x4949;
+  const short = at => tiff.getUint16(at, little);
+  const long = at => tiff.getUint32(at, little);
+  if (short(2) !== 42) return NaN;
+  const entry = (directory, tag) => {
+    if (directory < 8 || directory + 2 > tiff.byteLength) return -1;
+    const end = directory + 2 + short(directory) * 12;
+    if (end > tiff.byteLength) return -1;
+    for (let at = directory + 2; at < end; at += 12) if (short(at) === tag) return at;
+    return -1;
+  };
+  const pointer = entry(long(4), 0x8769);
+  if (pointer < 0) return NaN;
+  const directory = long(pointer + 8);
+  const text = tag => {
+    const at = entry(directory, tag);
+    if (at < 0 || short(at + 2) !== 2) return '';
+    const size = long(at + 4);
+    const start = size <= 4 ? at + 8 : long(at + 8);
+    if (size > 32 || start + size > tiff.byteLength) return '';
+    return new TextDecoder().decode(new Uint8Array(tiff.buffer, tiff.byteOffset + start, size)).replace(/\0+$/, '');
+  };
+  const date = text(0x9003).match(/^(\d{4}):(\d\d):(\d\d) (\d\d:\d\d:\d\d)$/);
+  if (!date) return NaN;
+  const offset = text(0x9011);
+  const zone = /^[+-]\d\d:\d\d$/.test(offset) ? offset : '+08:00';
+  return Date.parse(`${date[1]}-${date[2]}-${date[3]}T${date[4]}${zone}`);
+}
+
+export async function warehousePhotoTime(file) {
+  const when = [file.lastModified];
+  try {
+    // Read the original image header before browser compression discards the metadata.
+    when.push(exifCaptureTime(jpegExif(new DataView(await file.slice(0, 128 * 1024).arrayBuffer()))));
+  } catch { /* The file timestamp remains available when image metadata cannot be read. */ }
+  const valid = when.filter(value => Number.isFinite(value) && value > 0 && value <= Date.now() + 120000);
+  return valid.length ? new Date(Math.min(...valid)).toISOString() : 'unknown';
+}
+
 export async function compressWarehousePhoto(file) {
   if (file.size > 25 * 1024 * 1024) throw new Error('照片超过 25 MB，请重新拍摄。');
   if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) throw new Error('请选择现场照片。');

@@ -1,4 +1,7 @@
 [
+  {"version": "2026.11.24.2", "date": "2026-11-24", "status": "candidate", "items": [
+    {"summary": "物资调拨与货位照片待办", "detail": "物资管理增加货位调拨、单项入库预览及名称联想。待补货位照进入待办，交班时提示仍未补拍的货位。符合清理条件的旧货位照片仅保留记录。", "audiences": ["all"]}
+  ]},
   {"version": "2026.11.24.1", "date": "2026-11-24", "status": "candidate", "items": [
     {"summary": "轮岗联系人与签到更正", "detail": "轮岗看板新增热力追踪培训师名单，负责热力追踪的正式 GSM 可排序和置顶。完善已在岗人员的签到补记和超时显示。", "audiences": ["all"]},
     {"summary": "声明更正与还原核对", "detail": "正式 GSM 可按权限更正、作废和还原符合条件的记录。提交前核对分值和重复事件，保留员工类型快照。", "audiences": ["all"], "permissions": ["DECLARATION_STATS_VIEW"]}

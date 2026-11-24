@@ -1,6 +1,7 @@
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from hashlib import sha256
+from re import fullmatch
 from unicodedata import normalize
 from uuid import uuid4
 
@@ -10,11 +11,13 @@ from sqlalchemy.orm import Session
 from app.json_digest import canonical_json
 from app.v2_auth import V2User
 from app.v2_models import Employee
+from app.warehouse.photo_retention import record_location_photo
+from app.warehouse.photo_tasks import close_photo_task, photo_covers_open_task, request_location_photo, sync_open_photo_version
 from app.warehouse.models import (
-    GROUND_SHELF, SHELF_ZONES, WarehouseBalance, WarehouseIssue, WarehouseIssueLine, WarehouseItem, WarehouseMovement,
-    WarehousePhoto, WarehousePosition, WarehouseTransaction, WarehouseTransactionPhoto, warehouse_now,
+    GROUND_SHELF, SHELF_ZONES, UNKNOWN_PHOTO_TIME, WAREHOUSE_TZ, WarehouseBalance, WarehouseIssue, WarehouseIssueLine, WarehouseItem,
+    WarehouseMovement, WarehousePhoto, WarehousePosition, WarehousePositionPhotoRevision, WarehouseTransaction, WarehouseTransactionPhoto, warehouse_now,
 )
-from app.warehouse.schemas import INBOUND_BATCH_KEY, AdjustmentInput, Attachment, CalibrationInput, CorrectionInput, ItemInput, ResolveInput, TransactionInput
+from app.warehouse.schemas import INBOUND_BATCH_KEY, AdjustmentInput, Attachment, CalibrationInput, CorrectionInput, ItemInput, LocationMoveInput, ResolveInput, TransactionInput
 
 
 def stamp(value: datetime | None) -> str | None:
@@ -41,7 +44,8 @@ def get_quantity(db: Session, key: tuple[int, int]) -> int:
 
 
 def photo_data(photo: WarehousePhoto) -> dict:
-    return {"id": photo.id, "captured_at": stamp(photo.captured_at), "updated_at": stamp(photo.uploaded_at),
+    captured = None if photo.captured_at == UNKNOWN_PHOTO_TIME else photo.captured_at
+    return {"id": photo.id, "captured_at": stamp(captured), "updated_at": stamp(photo.uploaded_at),
             "updated_by": photo.owner_name, "url": f"/api/warehouse/photos/{photo.id}"}
 
 
@@ -79,6 +83,36 @@ def item_data(item: WarehouseItem, locations: list[dict]) -> dict:
 
 def warehouse_item_key(value: str) -> str:
     return normalize("NFKC", " ".join(value.split())).casefold()
+
+
+RECEIVING_UNITS = frozenset("件 个 箱 包 袋 盒 把 本 张 支 卷 套 瓶 筒 桶 台 双 只 捆 条 册 块 组 打 扎 对".split())
+
+
+def receiving_name_and_unit(name: str) -> tuple[str, str]:
+    key = warehouse_item_key(name)
+    suffix = fullmatch(r"(.+?)\s*\(\s*([^()]+?)\s*\)", key)
+    if suffix and suffix[2] in RECEIVING_UNITS:
+        return suffix[1], suffix[2]
+    return key, ""
+
+
+def receiving_item_candidates(catalog: dict[str, list[WarehouseItem]], name: str) -> list[WarehouseItem]:
+    base_name, _ = receiving_name_and_unit(name)
+    return catalog.get(warehouse_item_key(name)) or catalog.get(base_name, [])
+
+
+def receiving_item_index(db: Session) -> dict[str, list[WarehouseItem]]:
+    names: dict[str, list[WarehouseItem]] = defaultdict(list)
+    aliases: dict[str, list[WarehouseItem]] = defaultdict(list)
+    names_without_unit: dict[str, list[WarehouseItem]] = defaultdict(list)
+    for item in db.query(WarehouseItem):
+        names[item.name_key].append(item)
+        base_name, unit = receiving_name_and_unit(item.name)
+        if unit and unit == item.unit:
+            names_without_unit[base_name].append(item)
+        for alias in {warehouse_item_key(value) for value in (item.aliases or [])} - {""}:
+            aliases[alias].append(item)
+    return names_without_unit | aliases | names
 
 
 def save_item(db: Session, body: ItemInput, item: WarehouseItem | None = None) -> WarehouseItem:
@@ -135,15 +169,34 @@ def staged_photo(db: Session, photo_id: str, user: V2User) -> WarehousePhoto:
     return row
 
 
+def photo_order(photo: WarehousePhoto) -> tuple:
+    return photo.captured_at, photo.uploaded_at, photo.id
+
+
 def update_latest_photo(db: Session, position: WarehousePosition, photo: WarehousePhoto,
-                        now: datetime, *, transaction_id: int | None, fresh: bool = True) -> None:
+                        now: datetime, *, transaction_id: int | None) -> bool:
+    if photo.captured_at == UNKNOWN_PHOTO_TIME:
+        return False
     previous = db.get(WarehousePhoto, position.latest_photo_id) if position.latest_photo_id else None
-    if previous and (photo.captured_at, photo.uploaded_at, photo.id) <= (previous.captured_at, previous.uploaded_at, previous.id):
-        return
+    if previous and (photo_order(photo) <= photo_order(previous) or photo.content == previous.content):
+        return False
+    if not photo_covers_open_task(db, position.id, photo):
+        return False
+    record_location_photo(db, position, photo)
     position.latest_photo_id = photo.id
-    position.latest_photo_version = position.version if fresh else None
+    position.latest_photo_version = position.version
     position.latest_photo_set_at = now
     position.latest_photo_transaction_id = transaction_id
+    close_photo_task(db, position, photo, now)
+    return True
+
+
+def save_current_location_photo(db: Session, position: WarehousePosition, photo: WarehousePhoto,
+                                now: datetime, transaction_id: int, checkpoint: datetime | None) -> None:
+    if ((checkpoint and photo.captured_at < checkpoint)
+            or not update_latest_photo(db, position, photo, now, transaction_id=transaction_id)):
+        raise HTTPException(409, {"code": "STALE_LOCATION_PHOTO",
+                                  "message": "照片与当前现场照相同，或拍摄时间不符合要求，请重新拍摄当前货位"})
 
 
 def touch_positions(db: Session, position_ids: set[int], now: datetime) -> None:
@@ -151,6 +204,7 @@ def touch_positions(db: Session, position_ids: set[int], now: datetime) -> None:
         position = get_position(db, position_id)
         position.version += 1
         position.updated_at = now
+        sync_open_photo_version(db, position)
 
 
 def new_transaction(db: Session, user: V2User, kind: str, now: datetime,
@@ -167,6 +221,20 @@ def new_transaction(db: Session, user: V2User, kind: str, now: datetime,
 
 def fingerprint(body: TransactionInput) -> str:
     payload = body.model_dump(mode="json", exclude={"position_versions", "hold_if_insufficient"})
+    if not body.new_items:
+        del payload["new_items"]  # Preserve fingerprints of orders saved before first-time receiving.
+    if not body.defer_location_photos:
+        del payload["defer_location_photos"]
+    if body.photo_started_at is None:
+        del payload["photo_started_at"]
+    for receipt in payload["receipts"]:
+        if receipt["expected_unit"] is None:
+            del receipt["expected_unit"]
+    for photo in payload["photos"]:
+        if photo["started_at"] is None:
+            del photo["started_at"]
+        if photo["position_started_at"] is None:
+            del photo["position_started_at"]
     return sha256(canonical_json(payload, compact=True).encode("utf-8")).hexdigest()
 
 
@@ -204,11 +272,19 @@ def add_movement(db: Session, tx: WarehouseTransaction, item_id: int, position_i
 
 
 def tx_photos(db: Session, tx_id: int) -> list[dict]:
-    pairs = db.query(WarehouseTransactionPhoto, WarehousePhoto).join(WarehousePhoto).filter(
+    revision = WarehousePositionPhotoRevision
+    pairs = db.query(WarehouseTransactionPhoto, WarehousePhoto, revision.cleared_at).join(
+        WarehousePhoto, WarehousePhoto.id == WarehouseTransactionPhoto.photo_id,
+    ).outerjoin(revision, revision.photo_id == WarehousePhoto.id).filter(
         WarehouseTransactionPhoto.transaction_id == tx_id,
     ).order_by(WarehousePhoto.captured_at, WarehousePhoto.id).all()
-    return [{**photo_data(photo), "photo_id": photo.id, "item_id": link.item_id, "position_id": link.position_id}
-            for link, photo in pairs]
+    rows = []
+    for link, photo, cleared_at in pairs:
+        row = {**photo_data(photo), "photo_id": photo.id, "item_id": link.item_id, "position_id": link.position_id}
+        if cleared_at is not None:
+            row.update(url=None, cleared_at=stamp(cleared_at))
+        rows.append(row)
+    return rows
 
 
 def transaction_data(db: Session, tx: WarehouseTransaction, *, detail: bool = True) -> dict:
@@ -220,8 +296,18 @@ def transaction_data(db: Session, tx: WarehouseTransaction, *, detail: bool = Tr
             "related_id": tx.related_id, "lines": lines, "receipts": receipts}
     if detail:
         keys = {(row["item_id"], row["position_id"]) for row in lines}
+        if tx.payload.get("defer_location_photos"):
+            data["deferred_photo_positions"] = sorted({position_id for _, position_id in keys})
+        elif tx.payload.get("deferred_photo_positions"):
+            data["deferred_photo_positions"] = tx.payload["deferred_photo_positions"]
         movements = db.query(WarehouseMovement).filter_by(transaction_id=tx.id).order_by(WarehouseMovement.id).all()
         data.update(fresh_state(db, keys))
+        if tx.kind == "inbound" and keys:
+            items = {item.id: item for item in db.query(WarehouseItem).filter(WarehouseItem.id.in_({key[0] for key in keys}))}
+            for balance in data["balances"]:
+                item = items.get(balance["item_id"])
+                if item:
+                    balance.update(item_name=item.name, unit=item.unit)
         data["issue_id"] = db.query(WarehouseIssue.id).filter_by(transaction_id=tx.id).scalar()
         data["photos"] = tx_photos(db, tx.id)
         data["movements"] = [{"id": row.id, "item_id": row.item_id, "position_id": row.position_id, "kind": row.kind,
@@ -236,12 +322,15 @@ def issue_data(db: Session, issue: WarehouseIssue) -> dict:
     assignee = db.get(Employee, issue.assignee_id) if issue.assignee_id else None
     lines = db.query(WarehouseIssueLine).filter_by(issue_id=issue.id).order_by(WarehouseIssueLine.id).all()
     title = "待补记出库" if tx and tx.status == "pending" else "货位账实核对"
+    photo_cleared = issue.photo_id and db.query(WarehousePositionPhotoRevision.cleared_at).filter_by(
+        photo_id=issue.photo_id
+    ).scalar()
     return {"id": issue.id, "status": issue.status, "title": title, "reporter_id": issue.reporter_id,
             "reporter_name": issue.reporter_name, "assignee_id": issue.assignee_id,
             "assignee_name": assignee.name if assignee else "", "transaction_id": issue.transaction_id,
             "transaction_status": tx.status if tx else None, "opened_at": stamp(issue.opened_at),
             "closed_at": stamp(issue.closed_at), "reason": issue.reason, "note": issue.note,
-            "resolution": issue.resolution, "photo_id": issue.photo_id,
+            "resolution": issue.resolution, "photo_id": issue.photo_id, "photo_cleared": bool(photo_cleared),
             "lines": [{"item_id": line.item_id, "position_id": line.position_id, "book_quantity": line.book_quantity,
                        "expected_quantity": line.expected_quantity, "observed_quantity": line.observed_quantity,
                        "note": line.note} for line in lines]}
@@ -289,7 +378,13 @@ def validate_transaction(db: Session, body: TransactionInput) -> tuple[dict, dic
     if not shelved.keys() <= receipts.keys():
         raise HTTPException(422, "上架物资须有对应实收记录")
     for item_id, receipt in receipts.items():
-        get_item(db, item_id, active=True)
+        item = get_item(db, item_id, active=True)
+        if receipt.expected_unit is None:
+            raise HTTPException(409, {"code": "INBOUND_UNIT_REQUIRED", "item_id": item_id,
+                                      "message": f"「{item.name}」的草稿缺少原单位。请刷新页面，重新选取物资或导入 Excel 后再确认"})
+        if receipt.expected_unit != item.unit:
+            raise HTTPException(409, {"code": "INBOUND_UNIT_CHANGED", "item_id": item_id,
+                                      "message": f"「{item.name}」的单位由{receipt.expected_unit}改为{item.unit}，请返回核对并重新选取物资或导入 Excel"})
         if receipt.received - receipt.damaged != shelved[item_id] + receipt.direct_quantity:
             raise HTTPException(422, "完好实收量必须等于上架量与直用量之和")
         if receipt.direct_quantity and not receipt.direct_destination:
@@ -303,8 +398,20 @@ def transaction_photo_selection(db: Session, user: V2User, body: TransactionInpu
                                 quantities: dict, receipts: dict) -> list[tuple[Attachment, WarehousePhoto]]:
     inbound = body.kind == "inbound"
     photos = body.photos
+    if body.defer_location_photos:
+        if (not inbound or not INBOUND_BATCH_KEY.fullmatch(body.client_id) or not quantities or photos
+                or any(row.damaged or row.direct_quantity or row.note for row in receipts.values())):
+            raise HTTPException(422, "只有正常上架的 Excel 批量入库可以先入账补货位照；异常实收与到货直用须先拍照")
+        return []
     if inbound:
-        invalid = any(row.position_id is not None or row.item_id is None for row in photos)
+        invalid = any(row.item_id is None for row in photos)
+        for row in photos:
+            if row.position_id is None:
+                continue
+            receipt = receipts.get(row.item_id)
+            if ((row.item_id, row.position_id) not in quantities or receipt is None
+                    or receipt.damaged or receipt.direct_quantity or receipt.note):
+                raise HTTPException(422, "货位照须对应本次正常上架的物资和实际货位")
         picked = {row.item_id for row in photos}
         required = set(receipts)
     else:
@@ -335,21 +442,101 @@ def require_new_inbound_batch(db: Session, client_id: str) -> None:
                                   "message": f"这份 Excel 已按入库单 {posted.id} 入账。新一批到货请重新下载模板。"})
 
 
+def resolve_inbound_items(db: Session, body: TransactionInput) -> TransactionInput:
+    new_items = {entry.item_id: entry for entry in body.new_items}
+    receipt_ids = {row.item_id for row in body.receipts if row.item_id < 0}
+    referenced = receipt_ids | {row.item_id for row in (*body.lines, *body.photos) if row.item_id is not None and row.item_id < 0}
+    if referenced != new_items.keys() or receipt_ids != referenced or len(new_items) != len(body.new_items):
+        raise HTTPException(422, "新物资明细不完整，请重新录入入库单")
+    if not new_items:
+        return body
+    if body.kind != "inbound":
+        raise HTTPException(422, "首次建档只能随入库办理")
+    resolved = {}
+    catalog = receiving_item_index(db)
+    for item_id, entry in new_items.items():
+        name_key = warehouse_item_key(entry.name)
+        existing = receiving_item_candidates(catalog, entry.name)
+        matches = [row for row in existing if row.active and row.unit == entry.unit
+                   and (not entry.spec or row.spec_key == warehouse_item_key(entry.spec))]
+        if len(matches) == 1:
+            item = matches[0]
+        elif existing:
+            raise HTTPException(409, f"「{entry.name}」的档案刚有变动，请重新录入并核对单位")
+        else:
+            item = save_item(db, ItemInput(name=entry.name, spec=entry.spec, unit=entry.unit))
+            catalog[name_key] = [item]
+            base_name, unit = receiving_name_and_unit(entry.name)
+            if unit and unit == entry.unit:
+                catalog.setdefault(base_name, [item])
+        resolved[item_id] = item.id
+    return body.model_copy(update={
+        field: [row.model_copy(update={"item_id": resolved.get(row.item_id, row.item_id)}) for row in getattr(body, field)]
+        for field in ("lines", "receipts", "photos")
+    } | {"new_items": []})
+
+
+def operation_photo_candidates(db: Session, tx: WarehouseTransaction, attachments) -> tuple[set[int], dict[int, WarehousePhoto]]:
+    started = tx.payload.get("photo_started_at")
+    # File metadata may only have whole-second precision.
+    checkout = datetime.fromisoformat(started).astimezone(WAREHOUSE_TZ).replace(tzinfo=None, microsecond=0) if started else None
+    photo_inputs = {row["photo_id"]: row for row in tx.payload.get("photos", ())}
+    positions = set()
+    candidates = {}
+    for link, photo in attachments:
+        if link.position_id is None:
+            continue
+        position = get_position(db, link.position_id)
+        positions.add(position.id)
+        photo_input = photo_inputs.get(photo.id, {})
+        position_start = photo_input.get("position_started_at")
+        if tx.kind == "inbound" and not position_start:
+            # Older receipts may still post. Their item pictures cannot certify the whole shelf.
+            continue
+        cutoff = checkout
+        for value in (photo_input.get("started_at"), position_start):
+            if value:
+                started_at = datetime.fromisoformat(value).astimezone(WAREHOUSE_TZ).replace(tzinfo=None)
+                cutoff = max(cutoff, started_at) if cutoff is not None else started_at
+        # Older clients do not send a checkout time. Accept only photos taken close to initial upload.
+        if cutoff is None:
+            cutoff = photo.uploaded_at - timedelta(minutes=2)
+        if position.updated_at is not None:
+            cutoff = max(cutoff, position.updated_at)
+        if photo.captured_at < cutoff:
+            continue
+        previous = candidates.get(position.id)
+        if previous is None or photo_order(photo) > photo_order(previous):
+            candidates[position.id] = photo
+    return positions, candidates
+
+
+def publish_operation_photos(db: Session, tx: WarehouseTransaction, user: V2User, now: datetime,
+                             positions: set[int], candidates: dict[int, WarehousePhoto]) -> None:
+    missing = []
+    for position_id in sorted(positions):
+        position = get_position(db, position_id)
+        photo = candidates.get(position_id)
+        if photo is None or not update_latest_photo(db, position, photo, now, transaction_id=tx.id):
+            request_location_photo(db, position, now, user.id, tx.id)
+            missing.append(position_id)
+    if missing:
+        tx.payload = {**tx.payload, "deferred_photo_positions": missing}
+
+
 def post_outbound(db: Session, tx: WarehouseTransaction, user: V2User, now: datetime,
                   quantities: dict[tuple[int, int], int], *, adjusted_positions: set[int] | None = None) -> None:
     positions = {position_id for _, position_id in quantities}
-    occurred_before = {position_id: get_position(db, position_id).updated_at for position_id in positions}
+    attachments = db.query(WarehouseTransactionPhoto, WarehousePhoto).join(WarehousePhoto).filter(
+        WarehouseTransactionPhoto.transaction_id == tx.id,
+    )
+    photo_positions, candidates = operation_photo_candidates(db, tx, attachments)
     for (item_id, position_id), quantity in quantities.items():
         add_movement(db, tx, item_id, position_id, "outbound", -quantity, now,
                      usage_delta=quantity, usage_at=tx.created_at)
     touch_positions(db, positions | (adjusted_positions or set()), now)
     mark_posted(tx, user, now)
-    for link, photo in db.query(WarehouseTransactionPhoto, WarehousePhoto).join(WarehousePhoto).filter(
-        WarehouseTransactionPhoto.transaction_id == tx.id,
-    ):
-        checkpoint = occurred_before[link.position_id]
-        fresh = checkpoint is None or photo.captured_at >= checkpoint
-        update_latest_photo(db, get_position(db, link.position_id), photo, now, transaction_id=tx.id, fresh=fresh)
+    publish_operation_photos(db, tx, user, now, photo_positions, candidates)
 
 
 def confirm_transaction(db: Session, user: V2User, body: TransactionInput, now: datetime) -> tuple[WarehouseTransaction, set[int]]:
@@ -365,6 +552,8 @@ def confirm_transaction(db: Session, user: V2User, body: TransactionInput, now: 
         # The transaction route holds the warehouse writer lock across this check and posting.
         require_new_inbound_batch(db, body.client_id)
 
+    original = body
+    body = resolve_inbound_items(db, body)
     quantities, receipts = validate_transaction(db, body)
     keys = set(quantities)
     before = {key: get_quantity(db, key) for key in keys}
@@ -379,8 +568,11 @@ def confirm_transaction(db: Session, user: V2User, body: TransactionInput, now: 
 
     photos = transaction_photo_selection(db, user, body, quantities, receipts)
     tx = new_transaction(db, user, body.kind, now, transaction_input=body)
+    if original is not body:
+        tx.fingerprint = fingerprint(original)
     attach_transaction_photos(db, tx, photos, now)
     if body.kind == "inbound":
+        photo_positions, candidates = operation_photo_candidates(db, tx, photos)
         for (item_id, position_id), quantity in quantities.items():
             add_movement(db, tx, item_id, position_id, "inbound", quantity, now)
         for item_id, receipt in receipts.items():
@@ -388,8 +580,10 @@ def confirm_transaction(db: Session, user: V2User, body: TransactionInput, now: 
                 add_movement(db, tx, item_id, None, "direct", 0, now, direct_quantity=receipt.direct_quantity, usage_at=now)
             elif not any(key[0] == item_id for key in quantities):
                 add_movement(db, tx, item_id, None, "receipt", 0, now)
-        touch_positions(db, {position_id for _, position_id in keys}, now)
+        positions = {position_id for _, position_id in keys}
+        touch_positions(db, positions, now)
         mark_posted(tx, user, now)
+        publish_operation_photos(db, tx, user, now, positions if body.defer_location_photos else photo_positions, candidates)
         return tx, set(receipts)
 
     if not holding:
@@ -436,6 +630,8 @@ def apply_adjustment(db: Session, user: V2User, body: AdjustmentInput, now: date
     add_movement(db, tx, *key, body.kind, body.quantity - quantity, now)
     if body.quantity != quantity or body.kind == "opening":
         touch_positions(db, {body.position_id}, now)
+    if body.defer_location_photo:
+        request_location_photo(db, get_position(db, body.position_id), now, user.id, tx.id)
     mark_posted(tx, user, now)
     return tx
 
@@ -461,12 +657,7 @@ def calibrate_position(db: Session, user: V2User, position_id: int, body: Calibr
     for item_id in counts:
         get_item(db, item_id, active=True)
     photo = staged_photo(db, body.photo_id, user) if body.photo_id else None
-    if photo:
-        previous = db.get(WarehousePhoto, position.latest_photo_id) if position.latest_photo_id else None
-        if (position.updated_at and photo.captured_at < position.updated_at) or (
-            previous and photo.captured_at < previous.captured_at
-        ):
-            raise HTTPException(409, "现场照早于货位最新记录，请核对后重拍")
+    checkpoint = position.updated_at
 
     tx = new_transaction(db, user, "calibration", now, reason=body.reason)
     tx.client_id, tx.fingerprint = body.client_id, signature
@@ -482,9 +673,39 @@ def calibrate_position(db: Session, user: V2User, position_id: int, body: Calibr
         touch_positions(db, {position_id}, now)
     if photo:
         attach_transaction_photos(db, tx, [(Attachment(photo_id=photo.id, position_id=position_id), photo)], now)
-        update_latest_photo(db, position, photo, now, transaction_id=tx.id)
+        save_current_location_photo(db, position, photo, now, tx.id, checkpoint)
+    elif counts:
+        request_location_photo(db, position, now, user.id, tx.id)
     mark_posted(tx, user, now)
     return tx, set(counts)
+
+
+def move_stock(db: Session, user: V2User, body: LocationMoveInput, now: datetime) -> WarehouseTransaction:
+    source, target = body.from_position_id, body.to_position_id
+    if source == target:
+        raise HTTPException(422, "请选择不同的原货位和实际移入货位")
+    signature = sha256(canonical_json(body.model_dump(exclude={"from_version", "to_version"}), compact=True).encode()).hexdigest()
+    original = get_transaction_by_client(db, user, body.client_id)
+    if original:
+        if original.kind != "move" or original.fingerprint != signature:
+            raise HTTPException(409, "该单号已用于另一笔操作")
+        return original
+    get_item(db, body.item_id, active=True)
+    keys = {(body.item_id, source), (body.item_id, target)}
+    require_versions(db, {source: body.from_version, target: body.to_version}, keys)
+    for position_id in (source, target):
+        require_no_pending_outbound(db, position_id, {body.item_id})
+    tx = new_transaction(db, user, "move", now, reason="物资已实际移位")
+    tx.client_id, tx.fingerprint = body.client_id, signature
+    tx.payload = {"lines": [{"item_id": body.item_id, "position_id": position_id, "quantity": delta}
+                            for position_id, delta in ((source, -body.quantity), (target, body.quantity))]}
+    for row in tx.payload["lines"]:
+        add_movement(db, tx, body.item_id, row["position_id"], "move", row["quantity"], now)
+    touch_positions(db, {source, target}, now)
+    mark_posted(tx, user, now)
+    for position_id in (source, target):
+        request_location_photo(db, get_position(db, position_id), now, user.id, tx.id)
+    return tx
 
 
 def resolve_issue(db: Session, user: V2User, issue: WarehouseIssue, body: ResolveInput, now: datetime) -> set[int]:

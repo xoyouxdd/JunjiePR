@@ -85,6 +85,10 @@
 .warehouse-workbench .we-import-actions .wh-button { min-height: 40px; padding: 6px 9px; font-size: .82rem; color: var(--we-accent); }
 .we-import-actions a { display: inline-flex; align-items: center; text-decoration: none; }
 .warehouse-workbench .we-import-actions [data-we-import] { background: var(--we-tint); }
+.we-single { display: grid; gap: 7px 8px; margin-top: 8px; grid-template-columns: minmax(0,1fr) minmax(68px,.55fr); }
+.we-single label:first-child { grid-column: 1 / -1; }
+.we-single-options { grid-column: 1 / -1; margin-top: 0; }
+.warehouse-workbench .we-single button { grid-column: 1 / -1; justify-self: start; }
 .we-import-status { margin-top: 8px; padding: 7px 9px; border-radius: 8px; background: var(--we-tint); color: var(--we-ink); font-size: .82rem; overflow-wrap: anywhere; }
 .we-import-status[data-error="true"] { background: var(--warn-bg,#fff3df); color: var(--warn-text,#8a4c00); }
 .we-import-status ul { max-height: 12rem; overflow: auto; padding: 4px 0 0 1.2rem; }
@@ -169,6 +173,9 @@
   padding: 10px 14px;
 }
 .we-identity strong { color: var(--we-ink); margin-left: .2rem; }
+.we-photo-option { display: grid; gap: 7px; }
+.we-photo-option ul { display: flex; flex-wrap: wrap; gap: 5px 12px; list-style: none; padding: 0; }
+.we-photo-option li { color: var(--we-accent); }
 .we-checkout { display: grid; gap: 12px; align-items: start; }
 .we-evidence { border-top: 3px solid var(--we-accent); }
 .we-evidence .we-card-head { align-items: start; }
@@ -186,6 +193,7 @@
 .we-camera-mark::before { position: absolute; content: ''; width: 9px; height: 9px; border: 2px solid currentColor; border-radius: 50%; inset: 5px auto auto 10px; }
 .we-camera-mark::after { position: absolute; content: ''; width: 10px; height: 3px; background: currentColor; border-radius: 2px 2px 0 0; inset: -5px auto auto 4px; }
 .we-photo-row:has(img:not([hidden])) .we-camera-mark { display: none; }
+.we-photo-location { display: grid; gap: 4px; margin-top: 10px; font-size: .8rem; color: var(--we-muted); }
 .we-photo-actions { justify-content: flex-end; flex-wrap: wrap; flex: 1; }
 #app[data-view="warehouse"] .we-photo-actions button[data-we-pick] { min-height: 44px; width: auto; border-color: color-mix(in srgb,var(--we-accent) 50%,var(--we-border)); background: var(--we-panel); color: var(--we-accent); }
 .we-photo-status {

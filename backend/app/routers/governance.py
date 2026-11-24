@@ -40,6 +40,7 @@ from app.http_utils import client_ip
 from app.data_cache import invalidate_data_caches
 from app.date_utils import parse_score_month
 from app.warehouse.assessment import action_counts as warehouse_action_counts
+from app.warehouse.photo_tasks import photo_reminder_counts
 
 router = APIRouter()
 
@@ -305,6 +306,13 @@ def action_center(db: Session = Depends(get_db), user: V2User = Depends(current_
             warehouse_count, "warehouse", "critical", f"{summary}。打开物资管理接手处理。",
         )
         items.append({**task, "strong_reminder": True})
+    photo_count, handover_due = photo_reminder_counts(db, user)
+    if photo_count:
+        items.append(action_center_item(
+            "warehouse_photo_followup", "交班待补货位照" if handover_due else "货位待补照",
+            photo_count, "warehouse", "warning" if handover_due else "info",
+            f"交班时仍有 {handover_due} 个货位待补拍。" if handover_due else "可直接补拍，符合条件的出库照也能自动结办。",
+        ))
     order = {"critical": 0, "warning": 1, "info": 2}
     items.sort(key=lambda row: (not row.get("strong_reminder"), order.get(row["severity"], 9), row["title"]))
     return {"items": items, "total": sum(row["count"] for row in items), "role": role_code, "month": current_month,
