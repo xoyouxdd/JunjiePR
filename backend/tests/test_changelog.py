@@ -195,16 +195,19 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         assert "content_version" not in first["release"]
         assert first["release"]["items"] == history[0]["items"]
         assert [item["summary"] for item in first["release"]["items"]] == [CURRENT_RELEASE_NOTE]
-        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
-        assert client.get("/api/changelog/announcement").json()["read"] is True
-        client.post("/api/logout")
-        login(client, "GSMTEST01")
-        assert client.get("/api/changelog/announcement").json()["read"] is True
         client.post("/api/logout")
         login(client, "HR01", "HR123")
         admin = client.get("/api/changelog/announcement").json()
         assert admin["read"] is False
         assert [item["summary"] for item in admin["release"]["items"]] == [WAREHOUSE_ADMIN_RELEASE_NOTE]
+        assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
+        assert client.get("/api/changelog/announcement").json()["read"] is True
+        client.post("/api/logout")
+        login(client, "HR01", "HR123")
+        assert client.get("/api/changelog/announcement").json()["read"] is True
+        client.post("/api/logout")
+        login(client, "GSMTEST01")
+        assert client.get("/api/changelog/announcement").json()["read"] is False
 
 
 def test_import_skip_note_requires_hr_role_and_manage_permission():
