@@ -143,6 +143,43 @@ def test_apply_seconds_pauses_and_authentication_stays_on_real_time(manager):
     clock(manager, 'set', date=DAY, time='07:30:12')
 
 
+def test_paused_ticker_repairs_saved_early_plan_without_advancing(manager):
+    from app.rotation import engine as E
+    from app.rotation.manual import Hooks
+
+    now = clock(manager, 'set', date=DAY, time='04:38:13')['clock']['minute']
+    with SessionLocal() as db:
+        db.info['rotation_formal'] = True
+        with S.transaction(db):
+            cfg = db.query(F.RotationConfig).one()
+            aid = cfg.attraction_id
+            row = S.day_row(db, aid, DAY)
+            baseline = S.day_state(row)
+            shifts = {str(i): '07:00-16:00' for i in range(4)}
+            roster = {'people': {pid: {'name': pid} for pid in shifts}, 'days': {DAY: shifts}}
+            settings = S.settings_of(cfg)
+            state = E.build_draft(DAY, roster, {'lines': E.DEFAULT_LINES}, settings, {}, {}, push7_history={})
+            engine = E.Engine(state, settings, Hooks({}))
+            engine.publish(now, 'test')
+            missing = state['plan']['seven'].pop('D1#3')
+            engine.line('D1')['posts'][3].update(seven=None, occ=None)
+            state.update(lastTick=now, initialDraft=baseline['initialDraft'], initialSettings=baseline['initialSettings'])
+            people = state['persons']
+            S.save_day(db, row, state, notify=False)
+            revision = row.version
+
+    S.tick_attraction(aid, formal=True)
+    S.tick_attraction(aid, formal=True)
+    with SessionLocal() as db:
+        row = db.query(F.RotationDay).filter_by(attraction_id=aid, work_date=DAY).one()
+        restored = json.loads(row.state_json)
+        assert restored['plan']['seven']['D1#3'] == missing
+        assert restored['persons'] == people and restored['lastTick'] == now
+        assert row.version == revision + 1
+    current_clock = board(manager)['clock']
+    assert current_clock['paused'] and current_clock['minute'] == now
+
+
 def test_paused_rest_meal_manual_placement_and_records_use_simulated_seconds(manager):
     clock(manager, 'set', date=DAY, time='07:30:12')
     pid = ready(manager, 1, 'meal')

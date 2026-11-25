@@ -69,8 +69,19 @@ async function main(){try{
     await dropOnSlot(page.locator('[data-f-drag="'+pid+'"]').first(),'B#0');
     await page.getByRole('heading',{name:'现场安排',exact:true}).waitFor();assert.equal(await page.locator('[name=place_mode]').count(),1);assert.equal(await page.locator('[name=swapMode]').count(),0);
     await page.getByRole('button',{name:'取消',exact:true}).click();
+    const vacancy=after.lines[0].posts[1];
+    await ok(await request.post(base+'/api/rotation-board/act',{data:{action:'pool',pid:vacancy.occ,pool:'rest'}}));
+    await page.evaluate(()=>RT.load());
+    await page.locator('[data-f-head="A"]').click();
+    await page.getByRole('button',{name:'删除空岗',exact:true}).click();
+    const options=page.getByRole('dialog').locator('select[name=i] option');
+    assert.deepEqual(await options.allTextContents(),[`第 2 岗 · ${vacancy.name}`]);
+    await page.getByRole('button',{name:'确认删除',exact:true}).click();
+    await page.waitForFunction(()=>!RT.modalOpen);
+    const remaining=(await board()).lines[0].posts;
+    assert.deepEqual(remaining.map(post=>post.key),after.lines[0].posts.filter(post=>post.key!==vacancy.key).map(post=>post.key));
     assert.deepEqual(errors,[]);await context.close();await browser.close();browser=null;
-    console.log(engine+': double-click rename, Enter/Escape/no-change, same/cross-line post swap modes, distinct person drag and 390/1280px PASS');
+    console.log(engine+': rename, post swap modes, distinct person drag, named vacancy deletion and 390/1280px PASS');
   }
 }finally{if(browser)await browser.close();if(server&&server.exitCode===null){server.kill();await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(report,'server.log'),log);}}
 main().catch(error=>{console.error(error);console.error(log.slice(-4000));process.exitCode=1;});

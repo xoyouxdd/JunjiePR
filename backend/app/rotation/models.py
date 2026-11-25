@@ -118,6 +118,7 @@ class RotationRosterEntry(Base):
     person_type: Mapped[str] = mapped_column(String(30), default="")
     mark: Mapped[str] = mapped_column(String(30), default="")
     cell_raw: Mapped[str] = mapped_column(String(255), default="")
+    name_remark: Mapped[str] = mapped_column(Text, server_default="")
 
 
 class RotationDay(Base):

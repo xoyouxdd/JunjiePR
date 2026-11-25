@@ -23,6 +23,12 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));let server,browser;
   for(const width of [320,390,430,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,name+' exception modal overflow '+width);}
   const response=page.waitForResponse(async r=>r.url().endsWith('/api/rotation-board/roster/upload')&&!(await r.json()).preview);
   await page.locator('[data-include-exceptions]').click();const uploaded=await response;assert(uploaded.ok(),await uploaded.text());const result=await uploaded.json();assert.equal(result.entry_count,4);assert.deepEqual(result.skipped,[missing]);await page.locator('[data-include-exceptions]').waitFor({state:'detached'});
+  const remark=page.locator('.rt-roster-name-remark').filter({hasText:'新人评估'});
+  await remark.waitFor();
+  assert(await remark.evaluate(el=>{
+   const name=document.createRange();name.selectNode(el.parentNode.firstChild);
+   return name.toString()==='合成员工9730000'&&el.getBoundingClientRect().top>=name.getBoundingClientRect().bottom;
+  }));
   const information=await context.request.get(base+'/__fixture/info?no='+no).then(r=>r.json());const heat=information.circles['热力追踪'],dwarf=information.circles['矮人迷宫'];assert.equal(information.account_enabled,false);
   assert((await context.request.post(base+`/__fixture/live?aid=${heat}&no=${no}`)).ok());
   await context.request.post(base+'/api/logout');await page.goto(base+'/login');await page.locator('[name=employee_no]').fill(no);await page.locator('[name=password]').fill('rotation-existing');await page.locator('[type=submit]').click();

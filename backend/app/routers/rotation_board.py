@@ -49,12 +49,14 @@ ROLES = MANAGERS | {'CM', 'TR'}
 
 def capabilities(user, db=None):
     if user.rotation_temporary:
-        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings','screen_account_admin','rotation_contacts'),False)
+        return dict.fromkeys(('can_operate','can_manage','can_records','can_settings',
+                              'can_view_post_rotation_time','screen_account_admin','rotation_contacts'),False)
     codes = set(user.role_codes)
     manage = bool(codes & MANAGERS)
     local_tr = 'TR' in codes and getattr(user.employee.attraction, 'name', None) == ROTATION_ATTRACTION_NAME
     return {'can_operate': manage or local_tr, 'can_manage': manage,
             'can_records': manage, 'can_settings': manage,
+            'can_view_post_rotation_time': user.base_role.code == 'GSM',
             'screen_account_admin': db is not None and can_manage_screen_accounts(db, user),
             'rotation_contacts': bool(codes & ROLES)}
 
@@ -340,12 +342,6 @@ def confirmation(token: str, date: str, attraction_id: int | None = None, db: Se
                 None if capabilities(user)['can_operate'] and aid==board_aid else user.employee.employee_no)
 
 
-@router.post('/undo/preview')
-def undo_preview(payload:dict,db:Session=Depends(formal_db),user:V2User=Depends(operator)):
-    from app.rotation.history import preview
-    return call(preview,db,board_attraction_id(db,user),payload.get('line'))
-
-
 @router.get('/daily')
 def month(month: str, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
     return call(D.month_payload, db, board_attraction_id(db,user), month)
@@ -471,7 +467,8 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
     from app.v2_crypto import hash_password
     aid=board_attraction_id(db,user)
     preliminary=preflight(db,parsed,aid,scope,date or None,skip)
-    if preview: return {'ok':True,'preview':True,**preliminary}
+    if preview:
+        return {'ok': True, 'preview': True, **{key: value for key, value in preliminary.items() if key != 'name_remarks'}}
     if expected_digest and expected_digest!=preliminary['digest']:
         raise HTTPException(409,'班表或人员身份已变化，请重新预检')
     if preliminary['warnings'] and (not confirm_exceptions or not expected_digest):
@@ -493,6 +490,9 @@ def _save_uploaded_roster(parsed, scope, date, preview, expected_digest, filenam
                 provision(db,parsed,aid,batch,passwords)
                 from copy import deepcopy
                 selected=deepcopy(parsed)
+                selected['name_remarks'] = batch['name_remarks']
+                for no, identity in batch['identities'].items():
+                    selected['people'][no]['name'] = identity['name']
                 for day in batch['dates']:
                     selected['days'][day]={no:cell for no,cell in selected['days'][day].items() if no not in batch['skipped']}
                 if not any(selected['days'][day] for day in batch['dates']):raise HTTPException(400,'跳过后没有可导入人员')

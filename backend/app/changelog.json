@@ -1,4 +1,8 @@
 [
+  {"version": "2026.11.25.2", "date": "2026-11-25", "status": "candidate", "items": [
+    {"summary": "轮岗 101 模式与当天加岗", "detail": "101 模式让塔台及协助岗位继续值守，跟踪应到岗位，并在结束后随顺推接回。当天可按指定顺位新增岗位，并选择立即或定时开放。", "audiences": ["TR", "SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM"]},
+    {"summary": "入库货位分配核对", "detail": "入库时逐项核对实收数量和货位分配。数量未分完、超出或缺少货位时会提示，确认前可继续修改草稿。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]}
+  ]},
   {"version": "2026.11.25.1", "date": "2026-11-25", "status": "candidate", "items": [
     {"summary": "共享货架与物资归档", "detail": "共享货架集中显示库存、入库照片和货位。仓库负责人可输入本人员工号归档零库存物资，保留领用记录，也可恢复使用。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]}
   ]},

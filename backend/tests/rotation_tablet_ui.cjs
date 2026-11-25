@@ -7,11 +7,11 @@ const out=path.resolve(__dirname,'../../.handover_review');
 function fixture(){
   const persons=[],names=['林晓晨','陈雨欣','李佳宁','王思远','周乐怡','张明轩','黄子涵','许嘉宁','赵雨桐','杨文昊'];let seq=0;
   const person=(state,extra={})=>{const p={pid:String(++seq),name:names[(seq-1)%names.length][0]+names[Math.floor((seq-1)/names.length)%names.length].slice(1),state,role:'rotation',flags:[],tags:[],start:420,end:1080,lineStart:480-(seq%9)*3,...extra};persons.push(p);return p;};
-  const definitions=[['A1','A',['塔台','上客1','上协1','下协','大出口商店']],['A2','A',['饮水童车','小C','核销','身高墙','分组1']],['B1','B',['塔台协助','上客2','上协2','分组2','快迎2']],['B2','B',['迎宾童车','迎宾','豹协','汇合','快速汇合']],['C1','C',['上客3','上协3','预演','预演协助','单人队末']],['C2','C',['快迎1','单人迎宾','分组3','上客4','上协4']],['D1','D',['河马池','铁出口','迎宾协助','下客1','下客2']],['D2','D',['铁A','铁B','铁C']],['E','E',['城内巡视','队末']]];
-  const lines=definitions.map(([id,group,posts],j)=>({id,group,active:j<7,posts:Array.from({length:6},(_,i)=>{
+  const definitions=[['A1','A',['塔台','上客1','上协1','下协','大出口商店']],['A2','A',['饮水童车','小C','核销','身高墙','分组1']],['B1','B',['塔台协助','上客2','上协2','分组2','快迎2']],['B2','B',['迎宾童车','迎宾','豹协','汇合','快速汇合']],['C1','C',['上客3','上协3','预演','预演协助','单人队末']],['C2','C',['快迎1','单人迎宾','分组3','上客4','上协4']],['D1','D',['河马池','铁出口','迎宾协助','下客1','下客2']],['D2','D',['铁A','铁B','铁C']],['E','E',['队末','城内巡视']]];
+  const lines=definitions.map(([id,group,posts],j)=>({id,group,active:j<7,posts:Array.from({length:id==='E'?2:6},(_,i)=>{
     const name=posts[i]??(i===5?'末端备用岗':'巡游交接岗位');
     const scheduled=j===0&&i===4,standby=j>=7,vacant=j===1&&i===5;
-    const p=scheduled||vacant?null:person(standby?'notyet':'onpost',{
+    const p=scheduled||vacant||id==='E'?null:person(standby?'notyet':'onpost',{
       line:id,post:name,...(i===2?{name:'欧阳沐辰·现场支援',mealEligible:true,preparing:standby?null:'推下班'}:{}),
       ...(i===3?{name:'司马晓筠·轮岗伙伴',flags:['7点岗'],mealEligible:true,preparing:standby?null:'推病假'}:{}),
       ...(j===0&&i===0?{entrySortAt:450+5/60}:{}),
@@ -30,7 +30,7 @@ function fixture(){
   person('done',{pid:'sick',name:'病假测试',leaveReason:'病假'});
   person('away',{pid:'outside',name:'出圈测试',away:{reason:'专项任务'}});
   person('notyet',{pid:'future-outside',name:'待出圈测试',initialPool:'away',start:900});
-  person('excluded',{pid:'ojt',name:'OJT测试',role:'excluded',label:'OJT'});
+  person('excluded',{pid:'ojt',name:'OJT测试',role:'excluded',label:'OJT D3',rosterNameRemark:'新人复训'});
   person('done',{pid:'ended',name:'已下班测试'});
   person('notyet',{pid:'later',name:'待到班测试',start:900});
   for(let i=0;i<46;i++)person('done',{name:`下班人员 ${i+1}`});
@@ -46,19 +46,35 @@ function fixture(){
   const date='2026-10-11';
   return {version:1,clock:{date,minute:480,paused:true,mode:'sim'},settings:{departEarly:0},day:{date,status:'live',ruleVersion:2,taskWorkflow:2,lines,persons,off}};
 }
+async function testScreenWithOlderSharedScripts(browser,origin){
+  const page=await browser.newPage({viewport:{width:2000,height:1200}});
+  try{
+    const scripts=[['rotation-common.js','rotationLineCollapsed'],['rotation-workflow.js','rotationBatchNotice']];
+    for(const [file,fn] of scripts){
+      const current=fs.readFileSync(path.resolve(__dirname,'../app/static/js',file),'utf8');
+      const older=current.replace(`function ${fn}(`,`function legacy${fn}(`);
+      assert.notEqual(older,current);
+      await page.route(url=>url.pathname.endsWith('/'+file),route=>route.fulfill({contentType:'text/javascript',body:older}));
+    }
+    await page.goto(`${origin}/`);
+    await page.locator('.rt-screen-live [data-f-slot], #rtApp .rt-empty').first().waitFor();
+    assert.equal(await page.locator('#rtApp .rt-empty').count(),0,await page.locator('#rtApp .rt-empty').allTextContents());
+    assert(await page.locator('.rt-screen-live [data-f-slot]').count()>0);
+  }finally{await page.close();}
+}
 async function main(){
   const screen=createScreenFixture(fixture(), {demo:true});
   const preview=process.argv.includes('--serve');
   const origin=await screen.start(preview?18112:0);
   if(preview){console.log(`Tablet layout preview: ${origin}/`);return;}
   let browser;
-  try{browser=await chromium.launch({channel:'msedge',headless:true});fs.mkdirSync(out,{recursive:true});for(const [width,height] of [[1920,1080],[1280,800],[1366,1024],[1180,820],[1024,768],[800,1280],[390,844]]){
+  try{browser=await chromium.launch({channel:'msedge',headless:true});await testScreenWithOlderSharedScripts(browser,origin);fs.mkdirSync(out,{recursive:true});for(const [width,height] of [[1920,1080],[1280,800],[1366,1024],[1180,820],[1024,768],[800,1280],[390,844]]){
     const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(`${origin}/`);
     await page.locator('.rt-screen-live .rt-line').first().waitFor();
     assert.equal(await page.locator('.rt-line').count(),9);
-    const entry=page.locator('[data-f-slot="A1#0"] .rt-post-entry-time');
-    assert.equal(await entry.innerText(),'入线 07:30:05');
-    assert(await entry.evaluate(el=>el.getBoundingClientRect().right<=el.closest('.rt-post').getBoundingClientRect().right+1));
+    assert.match(await page.locator('[data-f-head="E"]').innerText(),/未开线/);
+    assert.equal(await page.locator('[data-f-slot^="E#"]').count(),0);
+    assert.equal(await page.locator('.rt-post-entry-time').count(),0);
     assert.equal(await page.locator('.rt-screen-live [data-f-pool]').count(),8);
     const pool=key=>page.locator(`[data-f-pool="${key}"]`);
     const count=key=>page.locator(`[data-screen-count="${key}"]`).innerText();
@@ -91,10 +107,11 @@ async function main(){
     const exceptionBox=await pool('exception').boundingBox();
     assert(exceptionBox.y<=(await pool('rest').boundingBox()).y);
     assert(exceptionBox.y<=(await pool('meal').boundingBox()).y);
-    for(const [region,name] of [['away','病假测试'],['away','出圈测试'],['other','OJT测试']]){
+    for(const [region,name] of [['away','病假测试'],['away','出圈测试'],['away','OJT测试']]){
       assert.equal(await pool(region).getByText(name,{exact:true}).count(),1);
       assert.equal(await page.locator('.rt-pool').getByText(name,{exact:true}).count(),1);
     }
+    assert(await pool('away').getByText('不轮岗 · OJT D3 · 新人复训',{exact:true}).isVisible());
     const other=page.locator('details[data-screen-detail="other"]');
     assert.equal(await other.evaluate(el=>el.open),false);
     assert.equal(await other.getByText('已下班测试',{exact:true}).isVisible(),false);
@@ -146,20 +163,48 @@ async function main(){
     await page.screenshot({path:path.join(out,`rotation-tablet-${width}x${height}.png`),fullPage:width!==1920});
     if(width===1920){
       const slots=page.locator('.rt-lines [data-f-slot]');
-      assert.equal(await slots.count(),54);
+      assert.equal(await slots.count(),48);
       const bottom=await slots.evaluateAll(items=>Math.max(...items.map(node=>node.getBoundingClientRect().bottom)));
       if(bottom>height+1){
         const lines=await page.locator('.rt-lines .rt-line').evaluateAll(items=>items.map(node=>({top:Math.round(node.getBoundingClientRect().top),postHeights:[...node.querySelectorAll('[data-f-slot]')].map(post=>Math.round(post.getBoundingClientRect().height))})));
-        assert.fail(`9 lines × 6 posts must fit the 1080p opening viewport, bottom ${bottom}. ${JSON.stringify(lines)}`);
+        assert.fail(`8 lines × 6 posts must fit the 1080p opening viewport, bottom ${bottom}. ${JSON.stringify(lines)}`);
       }
     }
-    await page.evaluate(()=>{RT.data.clock.minute=434;RT.data.day.persons.push({pid:'waiting715',name:'待开始休息测试',state:'notyet',upcomingShift:true,start:435,end:975,flags:[],tags:[]});RT.render();});
+    await page.evaluate(()=>{
+      const e=RT.data.day.lines.find(line=>line.id==='E');
+      e.active=true;e.posts.forEach(post=>{post.open=true;});RT.render();
+    });
+    assert.deepEqual(await page.locator('[data-f-slot^="E#"] .rt-pn').allTextContents(),['队末','城内巡视']);
+    await page.evaluate(()=>{
+      const e=RT.data.day.lines.find(line=>line.id==='E');
+      e.active=false;e.posts.forEach(post=>{post.open=false;});RT.render();
+    });
+    assert.equal(await page.locator('[data-f-slot^="E#"]').count(),0);
+    await page.evaluate(()=>{
+      RT.data.clock.minute=431;
+      RT.data.day.persons.push(
+        {pid:'waiting715',name:'待开始休息测试',state:'notyet',role:'rotation',canBatchCheckIn:true,start:435,end:975,flags:[],tags:[]},
+        {pid:'op-before',name:'待到班OP测试',state:'notyet',role:'op',start:300,end:780,flags:[],tags:[]},
+      );
+      RT.render();
+    });
     const unopened=page.locator('[data-f-pool="rest"] .rt-chip').filter({hasText:'待开始休息测试'});
-    assert.match(await unopened.innerText(),/准备上班 · 距到班 1 分钟/);
+    assert.match(await unopened.innerText(),/07:15 开始休息/);
     assert.equal(await unopened.locator('button').count(),0);
+    assert.equal(await pool('checkin').locator('[data-f-check-in="waiting715"]').count(),1);
+    const pendingOP=pool('pending').locator('.rt-chip').filter({hasText:'待到班OP测试'});
+    assert.match(await pendingOP.textContent(),/OP · 05:00到班/);
+    assert.equal(await pendingOP.locator('button').count(),0);
     assert.deepEqual(await totals(),['41','30','2','1']);
     await page.evaluate(()=>{
+      RT.data.clock.minute=435;
+      Object.assign(RT.data.day.persons.find(p=>p.pid==='waiting715'),{state:'rest',canBatchCheckIn:false,readyAt:450});
+      RT.render();
+    });
+    assert.match(await unopened.innerText(),/15分钟 · 07:30:00可上岗/);
+    await page.evaluate(()=>{
       RT.data.clock.minute=500;
+      RT.data.day.persons=RT.data.day.persons.filter(p=>p.pid!=='waiting715');
       Object.assign(RT.data.day.persons.find(p=>p.pid==='outside'),{state:'rest',away:null,readyAt:525});
       RT.render();
     });

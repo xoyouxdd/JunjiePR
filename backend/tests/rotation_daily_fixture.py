@@ -68,9 +68,14 @@ with TestClient(app) as client:
     ok(client.post('/api/login', json={'employee_no': 'GSMTEST01', 'password': 'daily-fixture-2026'}))
     # Seed and publish before the automatic 03:00 start can race the setup.
     ok(client.post(CLOCK, json={'action': 'set', 'date': '2026-10-04', 'time': '02:30'}))
-    ok(client.put(f'{BOARD}/config', json={'lines': [
+    lines = [
         {'id': 'A', 'posts': [{'name': '入口分组'}, {'name': '安全观察'}, {'name': '出口协助'}]},
-        {'id': 'B', 'posts': [{'name': '排队引导'}, {'name': '通道管理'}, {'name': '游客协助'}]}]}))
+        {'id': 'B', 'posts': [{'name': '排队引导'}, {'name': '通道管理'}, {'name': '游客协助'}]},
+    ]
+    if os.environ.get('ROTATION_STANDBY_E_FIXTURE') == '1':
+        from app.rotation.engine import DEFAULT_E_LINE
+        lines.append(DEFAULT_E_LINE)
+    ok(client.put(f'{BOARD}/config', json={'lines': lines}))
     wb = Workbook()
     wb.active.append(['工号', '姓名', '日期', '班次', '备注'])
     for day in ('2026-10-04', '2026-10-06'):

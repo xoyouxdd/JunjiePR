@@ -130,6 +130,7 @@
 .rt-lines { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; align-content: start; }
 .rt-line { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 .rt-line.off { opacity: .6; }
+.rt-line.is-collapsed { align-self:start; }
 .rt-line-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; font-weight: 700; color: var(--text-strong); background: var(--neutral-bg); }
 .rt-line-head[role="button"] { cursor: pointer; }
 .rt-sort-times { display:grid; justify-items:center; gap:2px; line-height:1.15; font-variant-numeric:tabular-nums; white-space:nowrap; }
@@ -146,14 +147,13 @@
 .rt-pool-add { margin-left:auto; font-size:var(--fs-sm); }
 [data-f-pool] h2 { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
 [data-f-head] { flex-wrap:wrap; gap:4px; }
-.rt-post.rt-batch-on-post { background-color:var(--surface-raised, #ecfdf5); border-inline-start:4px solid #168368; }
 [data-f-slot] .rt-who-name { min-width:0; overflow-wrap:anywhere; }
 [data-f-slot] button.rt-who-name { border:0; background:transparent; padding:0; min-height:0; font:inherit; color:inherit; box-shadow:none; }
-.rt-line-head.g-A { background: var(--line-a); }
-.rt-line-head.g-B { background: var(--line-b); }
-.rt-line-head.g-C { background: var(--line-c); }
-.rt-line-head.g-D { background: var(--line-d); }
-.rt-line-head.g-E { background: var(--line-e); }
+.rt-line-head.g-A, .rt-task-line header.g-A { background: var(--line-a); }
+.rt-line-head.g-B, .rt-task-line header.g-B { background: var(--line-b); }
+.rt-line-head.g-C, .rt-task-line header.g-C { background: var(--line-c); }
+.rt-line-head.g-D, .rt-task-line header.g-D { background: var(--line-d); }
+.rt-line-head.g-E, .rt-task-line header.g-E { background: var(--line-e); }
 .rt-lid { font-size: var(--fs-xl); }
 .rt-post { display: grid; grid-template-columns: 5.5em minmax(0, 1fr) auto; gap: 6px; align-items: center; padding: 6px 10px; border-top: 1px solid var(--line); font-size: var(--fs-md); }
 .rt-post[role="button"] { cursor: pointer; }
@@ -228,6 +228,7 @@ button.rt-chip { cursor: pointer; }
 .rt-roster-exception input{width:20px;min-height:20px;flex:none;}
 .rt-roster-exception span{min-width:0;overflow-wrap:anywhere;}
 .rt-roster-exception small{display:block;color:var(--text-secondary);margin-top:4px;}
+.rt-roster-name-remark{display:block;margin-top:2px;color:var(--text-secondary);font-size:var(--fs-sm);white-space:pre-line;overflow-wrap:anywhere;}
 .rt-personal-scope label{display:grid;gap:8px;min-width:0;}
 .rt-personal-scope select{width:100%;min-width:0;max-width:100%;min-height:44px;}
 .rt-pill { display: inline-block; padding: 4px 10px; border-radius: var(--radius-pill); background: var(--surface-tint); color: var(--text-strong); font-size: var(--fs-base); }
@@ -427,7 +428,9 @@ button.rt-chip { cursor: pointer; }
 .rt-workflow-heading h1{margin:0;font-size:var(--fs-2xl)}
 .rt-workflow-tools{display:flex;gap:8px;flex-wrap:wrap}
 .rt-workflow-tools button{min-height:40px;font-size:var(--fs-base)}
-.rt-workflow-tools .rt-101-on{border-color:var(--danger);color:var(--danger-text);background:var(--danger-bg)}
+.rt-post.rt-mode101-fixed{background:color-mix(in srgb,var(--panel) 86%,var(--muted));border-inline-start-color:var(--muted)}
+.rt-post.rt-mode101-fixed :is(.rt-pn,.rt-who-name,.rt-post-name,.rt-post-shift-end){color:var(--muted)}
+.rt-post.rt-mode101-fixed .rt-post-name{white-space:normal;overflow-wrap:anywhere}
 .rotation-page .rt-workflow-board .rt-board{grid-template-columns:minmax(0,1.65fr) minmax(300px,1fr);gap:12px}
 .rotation-page .rt-workflow-board .rt-lines{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;max-height:none;overflow:visible}
 .rotation-page .rt-workflow-board .rt-post{grid-template-columns:minmax(0,.85fr) minmax(0,1fr) auto;gap:4px;padding:8px 6px;min-height:43px;font-size:var(--fs-base)}
@@ -461,8 +464,13 @@ button.rt-chip { cursor: pointer; }
 .rt-task-slot span{color:var(--text-secondary);overflow-wrap:anywhere;min-width:0}
 .rt-task-slot strong{font-size:var(--fs-base);overflow-wrap:anywhere}
 .rt-task-slot.changed{background:var(--info-bg)}
-.rt-task-slot.changed strong{color:var(--primary)}
-.rt-personal-comparison .rt-task-slot.changed:not(.new-worker) strong{color:inherit}
+.rt-task-slot.new-worker strong{color:var(--primary)}
+.rt-batch-notice {
+  display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px 12px;
+  margin:0 0 10px; padding:8px 12px; background:var(--info-bg); border:1px solid var(--line);
+  border-radius:var(--radius-md); color:var(--text-strong); font-variant-numeric:tabular-nums;
+}
+.rt-batch-notice button { min-height:40px; }
 .rt-batch-result-heading{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .rt-batch-shift-end{padding:2px 6px;border:1px solid currentColor;border-radius:4px;background:var(--danger-bg);color:var(--danger-text);font-size:12px;font-weight:700;white-space:nowrap}
 .rt-task-opening{padding:2px 6px;border:1px solid currentColor;border-radius:4px;background:#eaf6ef;color:#22643f;font-size:12px;font-weight:700;overflow-wrap:anywhere}
@@ -482,6 +490,47 @@ button.rt-chip { cursor: pointer; }
 .rt-badge.rt-missed-attendance{background:var(--danger-bg);color:var(--danger-text);white-space:nowrap}
 .rt-own-post-name{color:#000;font-weight:800}
 .rt-post .rt-post-check-in{display:block;min-height:28px;padding:2px 5px;white-space:nowrap}
+
+/* Live rotation board: align all posts and keep the two times with the employee. */
+.rotation-page .rt-workflow-board .rt-lines:has(> .rt-compact-line) {
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,max(205px,(100% - 27px) / 4)),1fr));
+}
+.rotation-page .rt-workflow-board .rt-post-compact {
+  box-sizing:border-box; block-size:58px; min-height:0; padding:4px 7px 4px 5px;
+  grid-template-columns:clamp(46px,27%,76px) minmax(0,1fr); column-gap:6px; row-gap:0;
+  border-inline-start:3px solid transparent; line-height:1.2;
+}
+.rt-post-compact .rt-pn {
+  grid-column:1; grid-row:1 / span 2; min-width:0; line-height:1.2; overflow-wrap:anywhere;
+}
+.rt-post-compact .rt-who-name {
+  grid-column:2; grid-row:1 / span 2; display:grid; gap:3px; text-align:left; line-height:1.2;
+}
+.rt-post-compact .rt-post-person-main,
+.rt-post-compact .rt-post-person-detail {
+  display:flex; align-items:baseline; gap:3px 5px; min-width:0;
+}
+.rt-post-compact .rt-post-person-main { font-weight:650; }
+.rt-post-compact .rt-post-person-detail { flex-wrap:wrap; gap:2px 4px; }
+.rt-post-compact .rt-post-name {
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.rt-post-compact :is(.rt-post-end-label,.rt-post-slot-status) {
+  color:var(--text-secondary); font-size:var(--fs-xs); font-weight:400; white-space:nowrap;
+}
+.rt-post-compact :is(.rt-post-entry-time,.rt-post-shift-end) { margin:0; }
+.rt-post-compact .rt-post-person-detail .rt-badge {
+  margin:0; padding:0 3px; font-size:var(--fs-xs); line-height:1.2; white-space:nowrap;
+}
+.rt-post-compact:has(.rt-post-check-in) .rt-pn { grid-row:1; align-self:end; min-height:0; }
+.rt-post-compact .rt-post-check-in {
+  grid-column:1; grid-row:2; justify-self:start; min-height:22px; margin:1px 0 0; padding:1px 3px;
+  font-size:var(--fs-xs);
+}
+.rotation-page .rt-workflow-board .rt-post.rt-batch-on-post {
+  background:#d7e8ff; border-inline-start:3px solid #2269d2;
+}
+.rt-post.rt-batch-on-post .rt-post-name { color:#104b9e; }
 .rt-shift-end-person{color:var(--danger-text)}
 .rt-shift-end-person strong{color:inherit}
 .rt-shift-end-person small{font-size:11px;font-weight:700}
@@ -671,7 +720,7 @@ html[data-skin="dark"] .rt-line-head:is(.g-A,.g-B,.g-C,.g-D,.g-E) { color: #1622
 .rotation-screen .rt-screen-live .rt-line.off .rt-line-head { border-top-color:#afbccb; color:var(--text-secondary); background:var(--neutral-bg); }
 .rt-screen-live .rt-lid { font-size:clamp(18px,1.5vw,29px); }
 .rotation-screen .rt-screen-live .rt-post { grid-template-columns:minmax(0,.86fr) minmax(0,1.14fr); min-height:54px; padding:8px; align-items:start; }
-.rt-screen-live .rt-post.prep:not(.pending-add) { background:var(--warn-bg-soft); }
+.rt-screen-live .rt-post.prep:not(.pending-add,.rt-batch-on-post) { background:var(--warn-bg-soft); }
 .rotation-screen .rt-screen-live .rt-pn { padding-top:2px; color:#415973; font-size:clamp(13px,1vw,18px); }
 .rotation-screen .rt-screen-live .rt-who-name { font-size:clamp(15px,1.2vw,22px); line-height:1.24; }
 .rt-screen-live .rt-post .rt-badge { margin:3px 4px 0 0; }

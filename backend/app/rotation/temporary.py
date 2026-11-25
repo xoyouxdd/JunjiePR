@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.database.connection import Base
 from app.v2_crypto import hash_password, verify_password, new_session_token, token_hash
 from app.v2_models import Employee, UserAccount, EmployeeNumberHistory, Attraction
-from app.rotation.roster import classify
+from app.rotation.roster import classify, name_and_remark
 from app.security import request_is_https
 
 COOKIE = 'rc_rotation_temporary'
@@ -78,16 +78,30 @@ def preflight(db, parsed, attraction_id, scope, only_date, skip=None):
     members={m.employee_no:m for m in db.query(TemporaryMember).filter(TemporaryMember.employee_no.in_(numbers))}
     history={r.old_employee_no for r in db.query(EmployeeNumberHistory).filter(EmployeeNumberHistory.old_employee_no.in_(numbers))}
     new=[];reuse=[];warnings=[];identities={};signature=[]
+    name_remarks = {day: {} for day in dates}
+    submitted_names = parsed.get('names_by_day', {})
+    explicit_remarks = parsed.get('name_remarks', {})
     for no in numbers:
         person=parsed['people'].get(no,{})
-        name=str(person.get('name') or '').strip()
-        if not re.fullmatch(r'[0-9]{7}',no) or not name or len(name)>100:
-            raise HTTPException(400,'班表工号须为7位数字，姓名不能为空或超过100字')
         e=existing.get(no);member=members.get(no);issues=[];account=None
+        registered = e.name if e else name_and_remark(member.name.strip())[0] if member else None
+        names = []
+        for day in dates:
+            if no not in parsed['days'][day]:
+                continue
+            raw_name = str(submitted_names.get(day, {}).get(no, person.get('name')) or '').strip()
+            name, remark = name_and_remark(raw_name, registered)
+            if not re.fullmatch(r'[0-9]{7}', no) or not name or len(name) > 100:
+                raise HTTPException(400,'班表工号须为7位数字，姓名不能为空或超过100字')
+            names.append(name)
+            explicit = explicit_remarks.get(day, {}).get(no)
+            notes = [*remark.splitlines(), explicit]
+            name_remarks[day][no] = '\n'.join(dict.fromkeys(part for part in notes if part))
+        name = names[-1]
         if e:
             issues,account=account_issues(db,e)
-            person['name']=name=e.name
-        elif member and member.name!=name:
+            name=e.name
+        elif member and any(submitted != registered for submitted in names):
             issues.append('班表姓名与原轮岗身份不一致')
         if not e and no in history:issues.append('历史员工号')
         metadata={'name':name,'employee_id':e.id if e else None,
@@ -108,7 +122,7 @@ def preflight(db, parsed, attraction_id, scope, only_date, skip=None):
     return {'new':[p for p in new if p['employee_no'] not in skip],
         'reuse':[p for p in reuse if p['employee_no'] not in skip],
         'warnings':warnings,'identities':{no:v for no,v in identities.items() if no not in skip},
-        'dates':dates,'digest':digest,'skipped':sorted(skip)}
+        'dates':dates,'digest':digest,'skipped':sorted(skip),'name_remarks':name_remarks}
 
 
 def provision(db, parsed, attraction_id, batch, passwords):

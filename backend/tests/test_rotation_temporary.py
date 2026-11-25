@@ -134,6 +134,40 @@ def test_scope_date_only_creates_selected_people_and_stale_preflight_is_rejected
         ok(upload(c,rows,expected_digest=p['digest'],date=today))
         with SessionLocal() as db: assert not db.query(T).filter_by(employee_no='9730102').first()
 
+def test_roster_name_remarks_keep_the_existing_identity_and_follow_the_work_date():
+    start = date.today() + timedelta(days=14)
+    day_one, day_two = start.isoformat(), (start + timedelta(days=1)).isoformat()
+    with TestClient(app) as manager:
+        ok(login(manager))
+        register_temp(manager, no='9730182', name='合成轮岗成员', day=(start - timedelta(days=1)).isoformat())
+        rows = [
+            ['9730182','合成轮岗成员（新人复训）',day_one,'07:15-16:15',''],
+            ['9730182','合成轮岗成员',day_two,'09:00-18:00','新人评估'],
+            ['9730000','复核 · 合成员工9730000\n临时支援',day_one,'07:15-16:15',''],
+            ['9730183','合成新成员 新人评估',day_two,'09:00-18:00',''],
+        ]
+        preview = ok(upload(manager, rows, scope='week', preview='true'))
+        assert not preview['warnings']
+        assert preview['identities']['9730182']['name'] == '合成轮岗成员'
+        assert preview['new'][0]['name'] == '合成新成员'
+        ok(upload(manager, rows, scope='week', expected_digest=preview['digest']))
+
+        def roster(day):
+            return {person['employee_no']: person for person in
+                    ok(manager.get('/api/rotation-board/roster', params={'date': day}))['people']}
+
+        first, second = roster(day_one), roster(day_two)
+        assert (first['9730182']['name'], first['9730182']['name_remark']) == ('合成轮岗成员', '新人复训')
+        assert (second['9730182']['name_remark'], second['9730182']['cell']) == ('新人评估', '09:00-18:00')
+        assert first['9730000']['name_remark'] == '复核\n临时支援'
+        assert (second['9730183']['name'], second['9730183']['name_remark']) == ('合成新成员', '新人评估')
+        conflict = ok(upload(manager, [['9730182','完全不同的人名',day_one,'07:15-16:15','']],
+                             preview='true'))
+        assert conflict['warnings'][0]['reasons'] == ['班表姓名与原轮岗身份不一致']
+    with SessionLocal() as db:
+        assert db.query(T).filter_by(employee_no='9730182').one().name == '合成轮岗成员'
+
+
 def test_failed_import_rolls_back_temporary_creation(monkeypatch):
     with TestClient(app) as c:
         ok(login(c));rows=[['9730103','合成回滚',date.today().isoformat(),'07:15-16:15','']]

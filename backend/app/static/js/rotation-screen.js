@@ -21,7 +21,8 @@ function screenSections(day, pools) {
   for (const key of ['meal','rest']) {
     const section = sections.get(key);
     ready.push(...section.people.filter(p => p.canDepart));
-    section.people = screenOrder(section.people.filter(p => !p.canDepart && !checkinIds.has(p.pid)), p => p.readyAt ?? p.start);
+    section.people = screenOrder(section.people.filter(p => !p.canDepart &&
+      (!checkinIds.has(p.pid) || key === 'rest' && plannedRestLabel(p))), p => p.readyAt ?? p.start);
   }
   const other = sections.get('other');
   other.people = other.people.filter(p => !checkinIds.has(p.pid));
@@ -86,6 +87,7 @@ function screenView(day, sections, n) {
   return `<section class="rt-workflow-board rt-screen-live">
     <header class="rt-workflow-heading rt-screen-heading"></header>
     <p class="field-hint rt-screen-prestart" hidden>首班到班前显示预排，实际占岗和计时从开班开始。</p>
+    <div class="rt-screen-batch"></div>
     <div class="rt-board">
       <div class="rt-pool rt-screen-priority"></div>
       <div class="rt-lines"></div>
@@ -95,7 +97,7 @@ function screenView(day, sections, n) {
 }
 
 const renderedScreenRegions = new WeakMap();
-const screenFocusKeys = ['data-screen-heading','data-f-arrive','data-f-board','data-f-check-in'];
+const screenFocusKeys = ['data-screen-heading','data-f-arrive','data-f-board','data-f-check-in','data-rotation-batch'];
 
 function replaceScreenRegion(region, html) {
   if (renderedScreenRegions.get(region) === html) return;
@@ -151,6 +153,9 @@ RT.render = () => {
   replaceScreenRegion($app.querySelector('.rt-screen-priority'),screenPriority.map(key => screenPool(key,sections.get(key),n,key==='exception'?undefined:limit)).join(''));
   replaceScreenRegion($app.querySelector('.rt-screen-secondary'),screenSecondary.map(key => screenPool(key,sections.get(key),n)).join(''));
   renderScreenCountdowns(n);
+  // Older cached workflow scripts may not include the batch notice yet.
+  const batchNotice=typeof rotationBatchNotice==='function'?rotationBatchNotice(day,n):'';
+  replaceScreenRegion($app.querySelector('.rt-screen-batch'),batchNotice);
 };
 
 const renderScreenResize = () => RT.render();

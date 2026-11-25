@@ -25,33 +25,29 @@ def opening_status(state, line, index):
 
 def lines_view(state):
     from app.rotation.forecast import sort_time
+    from app.rotation.engine import removable_empty_post, reserved_post_pid
 
     people = state['persons']
-    plan = state.get('plan', {})
-    crew = plan.get('crew', {})
-    seven = plan.get('seven', {})
-    batches = state.get('completedShiftBatches', {})
     lines = []
     for line in state['lines']:
         posts = []
         for index, post in enumerate(line['posts']):
             pid = post.get('occ')
             if not pid and line.get('active'):
-                key = f"{line['id']}#{index}"
-                planned = seven.get(key) or crew.get(key)
-                worker = people.get(planned, {})
-                if worker.get('state') == 'notyet' and str(round(worker['start'] * 60)) not in batches:
-                    pid = planned
+                pid = reserved_post_pid(state, line['id'], index)
             person = people.get(pid, {})
             posts.append({
                 'name': post['name'], 'open': post.get('open'), 'occ': pid, 'key': post.get('key'),
                 'occName': person.get('name'), 'since': post.get('since'), 'hold': post.get('hold') or post.get('hold101'),
+                **({'plannedHold': True} if post.get('draftHold') else {}),
                 'prearranged': person.get('state') == 'notyet', 'hold101': bool(post.get('hold101')),
                 'hold101Role': post.get('hold101Role'), 'manualHold': post.get('hold'),
+                'mode101': post.get('mode101'),
                 'continuousStart': person.get('continuousStart'), 'entrySortAt': person.get('entrySortAt'),
                 'openingStatus': opening_status(state, line, index),
                 'openAt': post.get('openAt'), 'openExpired': bool(post.get('openExpired')), 'closeAt': post.get('closeAt'),
                 'closeMode': post.get('closeMode'), 'opened': post.get('opened'), 'seven': post.get('seven'),
+                'canDeletePost': state.get('status') == 'live' and removable_empty_post(state, line, index),
             })
         lines.append({
             'id': line['id'], 'group': line.get('group'), 'active': line.get('active'), 'standby': line.get('standby'),
@@ -65,7 +61,10 @@ def lines_view(state):
 
 def planned_state(state):
     """Display the retained assignments and configuration of an unstarted plan."""
+    from app.rotation.engine import trim_unused_spares
+
     view = deepcopy(state)
+    trim_unused_spares(view)
     view['status'] = 'live'
     lost = set(view.get('plan', {}).get('lost', []))
     for line in view['lines']:

@@ -61,6 +61,7 @@ def test_old_snapshots_use_stored_time_order_routes_and_occupants(rotation, monk
         assert replay['times'] == [{'id': first_id, 'minute': 480}, {'id': latest_id, 'minute': 480}]
         assert replay['as_of'] == 480 and replay['day']['lines'][0]['posts'][0]['name'] == '末次岗位'
         assert replay['day']['readOnly'] and not replay['can_edit'] and not replay['can_generate']
+        assert replay['day']['lines'][0]['posts'][0]['hold101']
         posted, ready = replay['day']['persons']
         assert posted['post'] == '末次岗位' and posted['continuousMinutes'] == 30
         assert ready['assign']['entryPost'] == '末次岗位' and ready['task']['deadlineAt'] == 483

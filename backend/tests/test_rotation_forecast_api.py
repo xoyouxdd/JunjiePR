@@ -10,7 +10,7 @@ import pytest
 
 from test_rotation_transaction_boundaries import rotation, DAY
 from test_rotation_forecast import add_later_shifts
-from app.rotation import service as S, forecast as F
+from app.rotation import daily as D, service as S, forecast as F
 from app.rotation.forecast_service import snapshot, search_people
 from app.rotation.models import RotationDay, RotationDuty, RotationEvent, RotationSegment, RotationSnapshot
 
@@ -99,24 +99,32 @@ def test_early_0715_staff_waiting_for_rest_is_done_thirty_minutes_before_end(cur
         act(current, {'action': 'arrive', 'pid': '5', 'confirmation_token': old_token})
 
 
-def test_confirmed_break_before_cutoff_still_gets_a_task_and_returns_preparing_to_leave(current):
+@pytest.mark.parametrize('break_start,shift_end', [(925, 960), (805 + 12 / 60, 825)])
+def test_confirmed_break_still_gets_a_task_and_returns_preparing_to_leave(current, break_start, shift_end):
     aid = current.attraction_id
+    cutoff = shift_end - 30
+    ready_at = break_start + 15
     with current.factory() as db, S.transaction(db):
         cfg = S.load_config(db, aid)
         row = S.day_row(db, aid, DAY)
         state = S.day_state(row)
-        state['lastTick'] = 925
-        state['persons']['5'].update(state='pending', start=435, end=960, readyAt=None, assign=None)
+        state['lastTick'] = break_start
+        state['persons']['5'].update(state='pending' if break_start < cutoff else 'done',
+                                     start=435, end=shift_end, readyAt=None, assign=None)
         add_later_shifts(state['persons'], (945, 975))
-        S.set_sim_clock(cfg, DAY, 925, paused=True)
+        S.set_sim_clock(cfg, DAY, break_start, paused=True)
         S.save_day(db, row, state)
 
     waiting = person(current)
-    assert waiting['canArrive']
-    confirmed = act(current, {'action': 'arrive', 'pid': '5', 'meal_choice': 'rest',
-                              'confirmation_token': waiting['confirmationTokens']['arrive']})
+    if break_start < cutoff:
+        assert waiting['canArrive']
+        confirmed = act(current, {'action': 'arrive', 'pid': '5', 'meal_choice': 'rest',
+                                  'confirmation_token': waiting['confirmationTokens']['arrive']})
+    else:
+        assert not waiting['canArrive']
+        confirmed = act(current, {'action': 'pool', 'pid': '5', 'pool': 'rest'})
     assert confirmed['executed']
-    assert person(current)['readyAt'] == 940
+    assert person(current)['readyAt'] == ready_at
 
     def advance_to(minute):
         with current.factory() as db, S.transaction(db):
@@ -125,13 +133,17 @@ def test_confirmed_break_before_cutoff_still_gets_a_task_and_returns_preparing_t
             S.set_sim_clock(cfg, DAY, minute, paused=True)
             S.advance(db, cfg, row, S.day_state(row), minute)
 
-    advance_to(930)
-    resting = person(current)
-    assert resting['state'] == 'rest' and not resting['canDepart']
-    assert resting['task']['allowedAt'] == 940
-    advance_to(940)
+    if break_start < cutoff:
+        advance_to(cutoff)
+    with current.factory() as db:
+        screen = next(p for p in S.screen_payload(db, aid)['day']['persons'] if p['pid'] == '5')
+        member = S.member_payload(db, aid, '5')['person']
+    for resting in (person(current), screen, member):
+        assert resting['state'] == 'rest' and not resting['canDepart']
+        assert resting['task']['allowedAt'] == ready_at and resting['task']['routes']
+    advance_to(ready_at)
     ready = person(current)
-    assert ready['canDepart'] and ready['task']['deadlineAt'] == 941
+    assert ready['canDepart'] and ready['task']['deadlineAt'] == ready_at + 1
     assert act(current, depart_body(current, '5'))['executed']
     with current.factory() as db:
         screen = next(p for p in S.screen_payload(db, aid)['day']['persons'] if p['pid'] == '5')
@@ -204,20 +216,20 @@ def test_opening_relief_uses_actual_history_and_other_unseated_staff_rest(rotati
         assert db.query(RotationDuty).filter_by(work_date=DAY, kind='push7').count() == 0
 
 
-def test_deployed_legacy_post_names_do_not_silently_fill_other_early_posts(rotation):
+def test_1126_uses_four_early_posts_and_legacy_names_still_work(rotation):
     aid = rotation.attraction_id
     people = {str(i): {'name': f'员工{i}'} for i in range(1, 7)}
     roster = {'people': people, 'days': {DAY: dict.fromkeys(people, '07:00-16:00')}, 'hours': {}}
     state = S.E.build_draft(DAY, roster, {'lines': S.E.DEFAULT_LINES}, S.E.DEFAULT_SETTINGS, {}, {}, push7_history={})
-    assert list(state['plan']['seven']) == ['B2#1', 'C2#0', 'A2#1']
-    assert any('铁马入口、铁马检票1、熊出口' in alert for alert in state['draftAlerts'])
+    assert list(state['plan']['seven']) == ['B2#1', 'C2#0', 'A2#1', 'D1#3']
+    assert not any(alert.startswith(S.E.SEVEN_CONFIGURATION_ALERT) for alert in state['draftAlerts'])
 
     lines = deepcopy(S.E.DEFAULT_LINES)
     d2 = next(line for line in lines if line['id'] == 'D2')
     d2['standby'] = False
     d2['posts'][0]['name'] = '铁马入口'
     d2['posts'][1]['name'] = '铁马检票1'
-    next(line for line in lines if line['id'] == 'D1')['posts'][0]['name'] = '熊出口'
+    next(line for line in lines if line['id'] == 'D1')['posts'][0] = {'name': '熊出口'}
     with rotation.factory() as db, S.transaction(db):
         S.load_config(db, aid).lines_json = json.dumps(lines)
         S.save_roster(db, aid, roster, scope='day', file_name='六岗线路.xlsx', uploader_id=None, uploader_name='测试')
@@ -272,14 +284,6 @@ def depart_body(current, pid):
             'expected_push7': p['task']['push7Route'], 'confirmation_token': p['confirmationTokens']['depart']}
 
 
-def restore_latest(current):
-    from app.rotation.history import preview
-    with current.factory() as db:
-        undo = preview(db, current.attraction_id, 'A')
-    return act(current, {'action': 'restore_line', 'line': 'A', 'checkpoint': undo['checkpoint'],
-                         'expected_snapshot': undo['expected_snapshot'], 'notified': True})
-
-
 def test_two_distinct_people_cannot_confirm_the_same_morning_target(current):
     morning_relievers(current)
     first, second = depart_body(current, '5'), depart_body(current, '6')
@@ -301,27 +305,7 @@ def test_two_distinct_people_cannot_confirm_the_same_morning_target(current):
     assert person(current, '2')['state'] == 'pending'
 
 
-def test_undo_of_later_same_second_confirmation_preserves_earlier_morning_receipt(current):
-    morning_relievers(current)
-    first = depart_body(current, '5')
-    assert act(current, first)['executed']
-    with current.factory() as db:
-        prior_segments = {row.id for row in db.query(RotationSegment).filter_by(
-            work_date=DAY, employee_no='2', end_min=600)}
-        assert prior_segments
-    second = depart_body(current, '6')
-    assert act(current, second)['executed']
-    restore_latest(current)
-    assert act(current, first)['duplicate']
-    with current.factory() as db:
-        state = S.day_state(S.day_row(db, current.attraction_id, DAY))
-        assert state['confirmations'][second['confirmation_token']]['status'] == 'reversed'
-        assert state['persons']['2']['push7Completion']['owner'] == '5'
-        assert {row.id for row in db.query(RotationSegment).filter_by(
-            work_date=DAY, employee_no='2', end_min=600)} == prior_segments
-
-
-def test_timed_out_manual_chain_retry_and_undo_then_redo_count_once(current):
+def test_timed_out_manual_chain_retry_counts_once(current):
     morning_relievers(current, second_ready=602)
     old_body = depart_body(current, '5')
     aid = current.attraction_id
@@ -342,15 +326,6 @@ def test_timed_out_manual_chain_retry_and_undo_then_redo_count_once(current):
     assert person(current, '2')['state'] == 'pending'
     with current.factory() as db:
         assert S.completed_push7(db, aid, future) == {'5': [1, DAY, 602]}
-    restore_latest(current)
-    assert person(current, '5')['state'] == 'exception'
-    with current.factory() as db:
-        assert S.completed_push7(db, aid, future) == {}
-    redone = depart_body(current, '6')
-    assert act(current, redone)['executed']
-    assert act(current, redone)['duplicate']
-    with current.factory() as db:
-        assert S.completed_push7(db, aid, future) == {'6': [1, DAY, 602]}
 
 
 def test_concurrent_manual_and_self_confirmation_only_credit_one_reliever(current):
@@ -381,7 +356,7 @@ def test_concurrent_manual_and_self_confirmation_only_credit_one_reliever(curren
         assert S.completed_push7(db, aid, future) == {winner: [1, DAY, 602]}
 
 
-def test_undo_excludes_a_preexisting_execution_without_a_completion_id(current):
+def test_archived_correction_excludes_an_execution_without_a_completion_id(current):
     morning_relievers(current)
     aid = current.attraction_id
     future = (date.fromisoformat(DAY) + timedelta(days=1)).isoformat()
@@ -399,16 +374,21 @@ def test_undo_excludes_a_preexisting_execution_without_a_completion_id(current):
         execution.detail_json = json.dumps(detail)
     with current.factory() as db:
         assert S.completed_push7(db, aid, future) == {'5': [1, DAY, 600]}
-    restore_latest(current)
+    with current.factory() as db, S.transaction(db):
+        checkpoint = RotationEvent(attraction_id=aid, work_date=DAY, minute=600, line='A',
+                                   event_type='workflow_checkpoint', actor_type='system', actor_name='测试',
+                                   detail_json=json.dumps({'lines': ['A'], 'beforePeople': {
+                                       '5': {'state': 'ready'}, '2': {'state': 'onpost'}}}))
+        db.add(checkpoint)
+        db.flush()
+        db.add(RotationEvent(attraction_id=aid, work_date=DAY, minute=600, line='A',
+                             event_type='workflow_restore', actor_type='system', actor_name='测试',
+                             detail_json=json.dumps({'checkpoints': [checkpoint.id]})))
     with current.factory() as db:
-        state = S.day_state(S.day_row(db, aid, DAY))
-        assert state.get('push7History', {}) == {}
-    assert act(current, depart_body(current, '5'))['executed']
-    with current.factory() as db:
-        assert S.completed_push7(db, aid, future) == {'5': [1, DAY, 600]}
+        assert S.completed_push7(db, aid, future) == {}
 
 
-def test_push7_counts_only_committed_executions_across_retries_and_restore(current):
+def test_push7_counts_only_committed_executions_across_retries(current):
     aid = current.attraction_id
     previous = (date.fromisoformat(DAY) - timedelta(days=8)).isoformat()
     future = (date.fromisoformat(DAY) + timedelta(days=1)).isoformat()
@@ -443,12 +423,6 @@ def test_push7_counts_only_committed_executions_across_retries_and_restore(curre
         logs = db.query(RotationEvent).filter_by(work_date=DAY, employee_no='5', event_type='depart').all()
         assert len(logs) == 1 and json.loads(logs[0].detail_json)['purpose'] == 'push7'
         assert db.query(RotationDuty).filter_by(work_date=DAY, kind='push7').count() == 0
-        from app.rotation.history import preview
-        undo = preview(db, aid, body['expected_line'])
-    act(current, {'action': 'restore_line', 'line': body['expected_line'], 'checkpoint': undo['checkpoint'],
-                  'expected_snapshot': undo['expected_snapshot'], 'notified': True})
-    with current.factory() as db:
-        assert S.completed_push7(db, aid, future) == {'5': [1, previous, 435]}
 
 
 @pytest.mark.parametrize('end,now,expected', [(625,599+59/60,None),(625,600,'推下班'),(625,625,'推下班'),
@@ -814,6 +788,177 @@ def test_scheduling_for_the_current_second_does_not_enable_an_inactive_line(curr
     assert not line['active'] and not line['posts'][1]['open'] and line['posts'][1]['openExpired']
 
 
+@pytest.mark.parametrize('position,scheduled', [(0, False), (1, True), (2, False)])
+def test_create_and_fill_new_post_at_selected_position(current, position, scheduled):
+    r = current
+    ready = 605 + 12 / 60 if scheduled else 600
+    if scheduled:
+        with r.factory() as db, S.transaction(db):
+            row = S.day_row(db, r.attraction_id, DAY)
+            state = S.day_state(row)
+            state['persons']['5']['readyAt'] = ready
+            eng, _ = S.engine_for(db, S.load_config(db, r.attraction_id), row, state)
+            F.plan(eng, 600)
+            S.save_day(db, row, state)
+    before = board(r)
+    prior = before['lines'][0]
+    payload = {'action': 'post_create', 'line': 'A', 'i': position, 'name': '插入新岗',
+               'expected_snapshot': before['forecastSnapshot']}
+    if scheduled:
+        payload['openAt'] = '10:05:12'
+    assert act(r, payload)['executed']
+    with pytest.raises(S.ConfirmationConflict):
+        act(r, payload)
+    line = board(r)['lines'][0]
+    post = line['posts'][position]
+    assert post['name'] == '插入新岗' and post['open'] == (not scheduled)
+    assert [p for p in line['posts'] if p['key'] != post['key']] == prior['posts']
+    assert line['sortAt'] == prior['sortAt']
+    if scheduled:
+        with r.factory() as db, S.transaction(db):
+            S.set_sim_clock(S.load_config(db, r.attraction_id), DAY, ready, paused=True)
+        S.tick_attraction(r.attraction_id)
+    worker = person(r)
+    assert worker['canDepart'] and worker['task']['kind'] == 'opening'
+    assert act(r, depart_body(r, '5'))['executed']
+    filled = board(r)['lines'][0]
+    assert all(p['occ'] for p in filled['posts'])
+    assert filled['sortAt'] == prior['sortAt']
+
+
+@pytest.fixture
+def prestart_rotation(rotation):
+    with rotation.factory() as db:
+        for action in ('draft_generate', 'publish'):
+            S.do_draft_action(db, rotation.attraction_id, 'test', {'action': action, 'date': DAY})
+        with S.transaction(db):
+            cfg = S.load_config(db, rotation.attraction_id)
+            row = S.day_row(db, rotation.attraction_id, DAY)
+            S.set_sim_clock(cfg, DAY, 420, paused=True)
+            S.advance(db, cfg, row, S.day_state(row), 420)
+    return rotation
+
+
+def test_new_post_preserves_check_in_of_original_worker(prestart_rotation):
+    r = prestart_rotation
+    day = board(r)
+    original = day['lines'][0]['posts'][0]
+    pid = original['occ']
+    assert person(r, pid)['canBatchCheckIn']
+    act(r, {'action': 'post_create', 'line': 'A', 'i': 0, 'name': '新入口',
+            'expected_snapshot': day['forecastSnapshot']})
+    token = person(r, pid)['confirmationTokens']['batch_check_in']
+    assert act(r, {'action': 'batch_check_in', 'pid': pid, 'confirmation_token': token})['executed']
+    assert board(r)['lines'][0]['posts'][1]['key'] == original['key']
+    assert person(r, pid)['batchCheckedIn'] and not person(r, pid)['canBatchCheckIn']
+    assert act(r, {'action': 'batch_check_in', 'pid': pid, 'confirmation_token': token})['duplicate']
+
+
+@pytest.mark.parametrize('legacy_post', [False, True])
+def test_created_spare_can_reopen_after_withdrawal_or_be_deleted(current, legacy_post):
+    r = current
+    act(r, {'action': 'post_create', 'line': 'A', 'i': 2, 'name': '备用',
+            'expected_snapshot': board(r)['forecastSnapshot']})
+    with r.factory() as db, S.transaction(db):
+        row = S.day_row(db, r.attraction_id, DAY)
+        state = S.day_state(row)
+        post = state['lines'][0]['posts'][2]
+        key = post['key']
+        assert post['createdManually']
+        if legacy_post:
+            post.pop('createdManually')
+            S.save_day(db, row, state)
+
+    def set_open(value):
+        act(r, {'action': 'post', 'line': 'A', 'i': 2, 'post_key': key, 'open': value,
+                **({'close_mode': 'rest'} if not value else {}),
+                'expected_snapshot': board(r)['forecastSnapshot']})
+        post = board(r)['lines'][0]['posts'][2]
+        assert post['key'] == key and post['open'] is value
+
+    set_open(False)
+    set_open(True)
+    set_open(False)
+    act(r, {'action': 'post_delete', 'line': 'A', 'i': 2, 'post_key': key,
+            'expected_snapshot': board(r)['forecastSnapshot']})
+    assert len(board(r)['lines'][0]['posts']) == 2
+
+
+@pytest.mark.parametrize('name, opened', [('备用', False), ('机动引导', True)])
+def test_delete_empty_middle_post_remaps_assignments(current, name, opened):
+    r = current
+    with r.factory() as db, S.transaction(db):
+        row = S.day_row(db, r.attraction_id, DAY)
+        state = S.day_state(row)
+        line = state['lines'][0]
+        added = S.E.add_line_post(state, line, 1, name)
+        added.update(open=opened, opened=opened)
+        prior_plan = S.E.post_plan_by_key(state)
+        eng, _ = S.engine_for(db, S.load_config(db, r.attraction_id), row, state)
+        F.plan(eng, 600)
+        S.save_day(db, row, state)
+    before = board(r)
+    posts = before['lines'][0]['posts']
+    assert posts[1]['canDeletePost'] and not posts[0]['canDeletePost']
+    payload = {'action': 'post_delete', 'line': 'A', 'i': 1, 'post_key': posts[1]['key'],
+               'expected_snapshot': before['forecastSnapshot']}
+    with pytest.raises(S.ConfirmationConflict):
+        act(r, {**payload, 'post_key': 'stale'})
+    with pytest.raises(S.ActionError, match='只可删除'):
+        act(r, {**payload, 'i': 0, 'post_key': posts[0]['key']})
+    assert act(r, payload)['executed']
+    assert [post['key'] for post in board(r)['lines'][0]['posts']] == [posts[0]['key'], posts[2]['key']]
+    with r.factory() as db:
+        assert S.E.post_plan_by_key(S.day_state(S.day_row(db, r.attraction_id, DAY))) == prior_plan
+
+
+def test_delete_opening_vacancy_updates_pending_confirmation_route(current):
+    r = current
+    act(r, {'action': 'post_create', 'line': 'A', 'i': 1, 'name': '新入口',
+            'expected_snapshot': board(r)['forecastSnapshot']})
+    before = board(r)
+    post = before['lines'][0]['posts'][1]
+    task = person(r)['task']
+    assert post['open'] and post['canDeletePost'] and task['kind'] == 'opening'
+    pending = {**depart_body(r, '5'), 'expected_route': task['routeSignature'],
+               'expected_opening': task['openingRoute']}
+    act(r, {'action': 'post_delete', 'line': 'A', 'i': 1, 'post_key': post['key'],
+            'expected_snapshot': before['forecastSnapshot']})
+
+    after = board(r)
+    assert after['lines'][0]['sortAt'] == before['lines'][0]['sortAt']
+    assert not any(p['key'] == post['key'] for line in after['lines'] for p in line['posts'])
+    result = act(r, pending)
+    assert result['line_changed'] and not result.get('executed')
+    assert person(r)['state'] == 'rest'
+
+
+def test_delete_live_vacancy_with_a_past_seat_keeps_other_seats_and_config(current):
+    r = current
+    before = board(r)
+    line = before['lines'][0]
+    vacancy = line['posts'][0]
+    with r.factory() as db:
+        cfg_before = S.load_config(db, r.attraction_id).lines_json
+        state = S.day_state(S.day_row(db, r.attraction_id, DAY))
+        assert vacancy['key'] in S.E.post_plan_by_key(state)['crew']
+        initial = state['initialDraft']
+
+    act(r, {'action': 'pool', 'pid': vacancy['occ'], 'pool': 'rest'})
+    vacant = board(r)
+    assert vacant['lines'][0]['posts'][0]['canDeletePost']
+    act(r, {'action': 'post_delete', 'line': 'A', 'i': 0, 'post_key': vacancy['key'],
+            'expected_snapshot': vacant['forecastSnapshot']})
+    remaining = board(r)
+    assert remaining['lines'][0]['posts'][0]['key'] == line['posts'][1]['key']
+    assert remaining['lines'][0]['posts'][0]['occ'] == line['posts'][1]['occ']
+    assert remaining['lines'][0]['sortAt'] == line['sortAt']
+    assert not remaining['lines'][0]['posts'][0]['canDeletePost']
+    with r.factory() as db:
+        assert S.load_config(db, r.attraction_id).lines_json == cfg_before
+        assert S.day_state(S.day_row(db, r.attraction_id, DAY))['initialDraft'] == initial
+
+
 def test_immediate_opening_reactivates_line_and_preserves_its_other_scheduled_addition(current):
     r = current
     act(r, {'action': 'post', 'line': 'A', 'i': 1, 'open': False})
@@ -1015,9 +1160,6 @@ def test_immediate_withdrawal_checks_the_preview_and_applies_it_once(current):
     assert [post['occ'] for post in line['posts']] == [None, '1']
     assert person(current, '2')['state'] == 'pending' and line['sortAt'] == 600
     assert line['previousSortAt'] == 435
-    restore_latest(current)
-    line = board(current)['lines'][0]
-    assert line['sortAt'] == 435 and line['previousSortAt'] is None
 
 
 def test_immediate_withdrawal_can_relieve_the_sick_tail(current):

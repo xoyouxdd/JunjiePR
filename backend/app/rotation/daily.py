@@ -5,7 +5,6 @@ from datetime import date
 import hashlib
 import json
 import zlib
-from uuid import uuid4
 from app.date_utils import month_bounds as calendar_month_bounds
 from app.rotation import replay, service as S
 from app.rotation.namespace import tables_for
@@ -49,22 +48,26 @@ def month_payload(db,attraction_id,month):
         'status':rows[f'{month}-{n:02d}'].status if f'{month}-{n:02d}' in rows else None} for n in range(1,int(last[-2:])+1)]}
 
 
-def present(db, attraction_id, state, minute):
-    return replay.board_view(state, minute, S.off_people_view(db, attraction_id, state))
+def present(db, attraction_id, state, minute, *, opening=False):
+    if opening:
+        state = deepcopy(state)
+        S.E.trim_unused_spares(state)
+    result = replay.board_view(state, minute, S.off_people_view(db, attraction_id, state))
+    S.add_excluded_roster_remarks(db, state, result['persons'])
+    return result
 
 
 def first_start(state):
     return min((p['start'] for p in state.get('persons', {}).values()), default=1440)
 
 
+def showing_opening_plan(state, now):
+    return state.get('status') == 'live' and not state.get('dailyOpening') and now < first_start(state)
+
+
 def prestart(state, now):
-    return (state.get('status') == 'live' and not state.get('dailyOpening')
-            and now < first_start(state)
-            and all(p['state'] in ('notyet', 'excluded') for p in state['persons'].values()))
-
-
-def before_first_start(state, work_date, today, now):
-    return work_date > today or work_date == today and now < first_start(state)
+    return showing_opening_plan(state, now) and all(
+        p['state'] in ('notyet', 'excluded') for p in state['persons'].values())
 
 
 def plan_revision(state):
@@ -75,18 +78,6 @@ def plan_revision(state):
 
 def planned_view(db, attraction_id, state):
     return present(db, attraction_id, replay.planned_state(state), min(S.PREARRANGE_MINUTE, first_start(state) - 1))
-
-
-def fill_prestart_spares(state):
-    """Append missing standard slots without moving any planned people/posts."""
-    added = S.E.append_standard_spares(state['lines'])
-    for line in state['lines']:
-        count = added.get(line['id'], 0)
-        if count:
-            for post in line['posts'][-count:]:
-                post.update(openAt=None, closeAt=None, seven=None, key=uuid4().hex, hold101Role=None,
-                            open=False, opened=True, manual=bool(post.get('draftClosed')), occ=None, since=None)
-    return added
 
 
 @S.transactional
@@ -101,16 +92,6 @@ def day_payload(db,attraction_id,work_date,at=None):
     state=S.day_state(row) if row else None
     current_rules = bool(state and state.get('ruleVersion') == 2)
     retired = bool(row and row.status == 'draft' and not current_rules)
-    # Templates do not retrofit already-generated plans. Only upgrade editable
-    # pre-start states; historical/frozen snapshots and existing assignments stay intact.
-    editable = bool(current_rules and at is None and
-        (row.status == 'draft' and before_first_start(state,work_date,today,now)
-         or work_date == today and prestart(state,now)))
-    if editable:
-        added = fill_prestart_spares(state)
-        if added:
-            S.save_day(db,row,state)
-            S.DbHooks(db,attraction_id,work_date).log('draft_fill_spares','system',None,None,None,{'added':added})
     if current_rules and at is None and work_date==today and row.status=='live' and not db.info.get('rotation_formal'):
         S.advance(db,cfg,row,state,now)
     query=db.query(RotationSnapshot).filter_by(attraction_id=attraction_id,work_date=work_date)
@@ -127,22 +108,27 @@ def day_payload(db,attraction_id,work_date,at=None):
         result['roster_changed'] = S.draft_roster_changed(db, attraction_id, work_date, state)
     if latest and (at is not None or state is None):
         saved=json.loads(zlib.decompress(base64.b64decode(latest.payload)))
-        result['day']=present(db,attraction_id,saved['state'],minute if minute is not None else latest.minute)
+        result['day']=present(db,attraction_id,saved['state'],minute if minute is not None else latest.minute,
+                              opening=minute is None)
     elif state and row.status!='draft' and minute is None and not state.get('dailyOpening') and not state.get('initialDraft'):
-        result['day']=present(db,attraction_id,state,float(state.get('lastTick',now)))
+        result['day']=present(db,attraction_id,state,float(state.get('lastTick',now)),opening=True)
     result['first_start'] = first_start(state) if state else None
     result['plan_revision'] = plan_revision(state) if state else None
     result['frozen'] = False
     result['opening_source'] = None
     if at is None and state:
-        editable_live = current_rules and work_date == today and prestart(state, now)
+        opening_live = current_rules and work_date == today and showing_opening_plan(state, now)
+        editable_live = opening_live and prestart(state, now)
         result['can_edit'] = result['can_edit'] or editable_live
         result['can_generate'] = result['can_generate'] and (result['can_edit'] or retired)
         result['can_publish'] = row.status == 'draft' and work_date == today and not (retired or result['roster_changed'])
+        if opening_live:
+            result['day'] = S.live_view(db, cfg, row, now, committed_only=True)
+            result['prestart_live'] = True
         if result['can_edit']:
             result['draft'] = deepcopy(state)
-            result['day'] = planned_view(db, attraction_id, state) if row.status == 'draft' else present(db, attraction_id, state, now)
-            result['prestart_live'] = editable_live
+            if not opening_live:
+                result['day'] = planned_view(db, attraction_id, state)
             if state.get('ruleVersion') == 2:
                 from app.rotation.forecast import opening_push7_candidates
                 eng = S.E.Engine(deepcopy(state), S.settings_of(cfg), S.DbHooks(db, attraction_id, work_date))
@@ -151,11 +137,11 @@ def day_payload(db,attraction_id,work_date,at=None):
                 result['push7_recommendations'] = [
                     {'target': pid, 'candidate': by_target.get(pid)} for pid in push7_target_slots(state).values()
                 ]
-        else:
+        elif not opening_live:
             result['frozen'] = True
             opening = state.get('dailyOpening')
             if opening:
-                result['day'] = present(db, attraction_id, opening['state'], opening['minute'])
+                result['day'] = present(db, attraction_id, opening['state'], opening['minute'], opening=True)
                 result['as_of'] = opening.get('captured_at', opening['minute']) if opening.get('late_publish') else opening['minute']
                 result['opening_source'] = 'late_publish' if opening.get('late_publish') else 'opening'
             elif row.status=='draft':
@@ -169,7 +155,7 @@ def day_payload(db,attraction_id,work_date,at=None):
                 earliest = query.order_by(RotationSnapshot.minute, RotationSnapshot.id).first()
                 if earliest:
                     saved = json.loads(zlib.decompress(base64.b64decode(earliest.payload)))
-                    result['day'] = present(db, attraction_id, saved['state'], earliest.minute)
+                    result['day'] = present(db, attraction_id, saved['state'], earliest.minute, opening=True)
                     result['as_of'] = earliest.minute
                     result['opening_source'] = 'earliest_record'
                 else:
@@ -242,8 +228,9 @@ def fill_new_seven_slots(state, previous_slots, settings, read_history=None):
     plan = state['plan']
     assigned = set(plan['crew'].values()) | set(plan['seven'].values())
     early = [p for p in state['persons'].values() if p['role'] == 'rotation' and p['start'] == 420
-             and not p.get('initialPool')]
-    S.E.refresh_seven_configuration_alert(state.setdefault('draftAlerts', []), early_slots, len(early))
+             and not p.get('initialPool') and not p.get('manualPaused')]
+    S.E.refresh_seven_configuration_alert(state.setdefault('draftAlerts', []), early_slots, len(early),
+                                         S.E.seven_post_priorities(state['lines']))
     available = sorted((p for p in early if p['pid'] not in assigned),
                        key=lambda p: (-(p['end'] - p['start']), p['name'], p['pid']))
     free = [(rank, lid, i) for rank, lid, i in early_slots if (rank, lid, i) not in previous_slots
@@ -272,11 +259,43 @@ def fill_new_seven_slots(state, previous_slots, settings, read_history=None):
     plan['push7Targets'] = bindings
 
 
+def update_1126_opening_plan(state, settings, read_history):
+    """Add the missing fourth early slot in a saved plan before it opens."""
+    priorities = S.E.seven_post_priorities(state['lines'])
+    if priorities is not S.E.SEVEN_1126_PRIORITY:
+        return False
+    slots = S.E.open_seven_slots(state['lines'])
+    rank = priorities['铁马出口']
+    exit_slot = next((slot for slot in slots if slot[0] == rank), None)
+    if not exit_slot:
+        return False
+    _, lid, index = exit_slot
+    line = next(line for line in state['lines'] if line['id'] == lid)
+    post = line['posts'][index]
+    if post.get('seven') == rank:
+        return False
+    if post.get('occ') and state['persons'][post['occ']]['state'] != 'notyet':
+        return False
+    key = f'{lid}#{index}'
+    plan = state['plan']
+    assigned = set(plan['crew'].values()) | set(plan['seven'].values())
+    has_waiting_early = any(p['start'] == 420 and p['role'] == 'rotation' and p['pid'] not in assigned
+                            and not p.get('initialPool') and not p.get('manualPaused') for p in state['persons'].values())
+    displaced = plan['crew'].pop(key, None) if has_waiting_early and not post.get('draftHold') else None
+    post['seven'] = rank
+    fill_new_seven_slots(state, [slot for slot in slots if slot != exit_slot], settings, read_history)
+    if key in plan['seven'] and state['status'] == 'live':
+        post['occ'] = plan['seven'][key] if line.get('active') and post.get('open') else None
+    elif displaced is not None and key not in plan['seven']:
+        plan['crew'][key] = displaced
+    return True
+
+
 def set_prestart_line(state,lid,active, *, settings=None, read_history=None, now=None):
     if not isinstance(lid,str) or type(active) is not bool:raise S.ActionError('线路或启用状态无效')
     line=next((line for line in state['lines'] if line['id']==lid),None)
     if line is None:raise S.ActionError('线路不存在')
-    if not active and any(post.get('hold') or post.get('hold101') or post.get('draftHold') for post in line['posts']):
+    if not active and any(post.get('hold') or post.get('draftHold') for post in line['posts']):
         raise S.ActionError('本线还有定岗人员，请先取消定岗再停用')
     if (not line.get('standby',False))==active and line.get('active',active)==active:return False
     previous=seven_relief_slots(state)
@@ -348,7 +367,7 @@ def configure_post(state, body, now, actor):
             post['draftHold'] = {'pid': pid, 'reason': reason.strip() or '现场任务',
                                  'by': getattr(actor, 'name', str(actor))}
     elif change in ('open', 'close', 'cancel_close'):
-        if post.get('draftHold') or post.get('hold') or post.get('hold101'):
+        if post.get('draftHold') or post.get('hold'):
             raise S.ActionError('请先取消定岗再调整开撤岗')
         if change == 'cancel_close':
             post.update(closeAt=None, closeMode='direct', closedAuto=False)
@@ -408,7 +427,7 @@ def edit(db,attraction_id,actor,work_date,body):
         raise S.ConfirmationConflict('旧版未启用预排仅供查看。请重新生成并核对后启用')
     previous_slots=seven_relief_slots(state)
     previous_open=S.E.open_seven_slots(state['lines']) if state.get('ruleVersion') == 2 and action in (
-        'draft_rename_post', 'draft_post') else ()
+        'draft_rename_post', 'draft_post', 'draft_post_create', 'draft_post_delete') else ()
     def read_push7_history():
         return S.completed_push7(db, attraction_id, work_date)
     if action == 'draft_person':
@@ -472,8 +491,22 @@ def edit(db,attraction_id,actor,work_date,body):
         S.save_day(db,row,state)
         S.DbHooks(db,attraction_id,work_date).log(action,actor,None,lid,None,{'active':active})
         return
-    if action == 'draft_post':
-        line, post = configure_post(state, body, now if work_date == today else 0, actor)
+    if action in ('draft_post', 'draft_post_create', 'draft_post_delete'):
+        planning_time = now if work_date == today else 0
+        if action == 'draft_post_create':
+            engine = S.E.Engine(state, S.settings_of(cfg), None)
+            line, index = engine.line(body.get('line')), body.get('i')
+            S.E.add_line_post(state, line, index, body.get('name'))
+            previous_slots = seven_relief_slots(state)
+            previous_open = [item for item in S.E.open_seven_slots(state['lines']) if item[1:] != (line['id'], index)]
+            body = {**body, 'post': f"{line['id']}#{index}", 'change': 'open'}
+        if action == 'draft_post_delete':
+            line, index, _ = slot(state, body.get('post'))
+            post = S.E.delete_empty_post(state, line, index)
+            previous_slots = seven_relief_slots(state)
+            previous_open = S.E.open_seven_slots(state['lines'])
+        else:
+            line, post = configure_post(state, body, planning_time, actor)
         normalize_seven_assignments(state, previous_slots)
         fill_new_seven_slots(state, previous_open, S.settings_of(cfg), read_push7_history)
         validate_plan(state)
@@ -482,7 +515,7 @@ def edit(db,attraction_id,actor,work_date,body):
             S.write_lost_property_duties(db, attraction_id, work_date, state['plan'])
         S.save_day(db, row, state)
         S.DbHooks(db, attraction_id, work_date).log(action, actor, None, line['id'], post['name'],
-                                                   {'change': body['change'], 'post': body['post']})
+                                                   {'change': body.get('change'), 'post': body['post']})
         return
     if action in ('draft_swap_people','draft_swap_posts'):
         source,target=body.get('source'),body.get('target')

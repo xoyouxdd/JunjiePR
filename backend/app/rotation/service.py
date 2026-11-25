@@ -157,7 +157,14 @@ def settings_of(cfg: RotationConfig) -> dict:
 
 
 def lines_of(cfg: RotationConfig) -> list[dict]:
-    return json.loads(cfg.lines_json)
+    lines = json.loads(cfg.lines_json)
+    E.trim_unused_spares({'lines': lines})
+    if E.seven_post_priorities(lines) is E.SEVEN_1126_PRIORITY:
+        for line in lines:
+            for post in line['posts']:
+                if post['name'].strip() == '铁马出口':
+                    post['seven'] = E.SEVEN_1126_PRIORITY['铁马出口']
+    return lines
 
 
 def clock_state(cfg: RotationConfig) -> dict:
@@ -254,7 +261,8 @@ def roster_for(db: Session, attraction_id: int, day: str) -> dict | None:
     rows = db.query(RotationRosterEntry).filter(RotationRosterEntry.upload_id == upload.id, RotationRosterEntry.work_date == day).all()
     hours = json.loads(upload.hours_json or "{}")
     return {
-        "people": {r.employee_no: {"pid": r.employee_no, "name": r.name, "type": r.person_type, "mark": r.mark} for r in rows},
+        "people": {r.employee_no: {"pid": r.employee_no, "name": r.name, "type": r.person_type,
+                                   "mark": r.mark, "name_remark": r.name_remark} for r in rows},
         "days": {day: {r.employee_no: r.cell_raw for r in rows}},
         "hours": {day: hours[day]} if day in hours else {},
     }
@@ -289,6 +297,7 @@ def save_roster(db: Session, attraction_id: int, parsed: dict, *, scope: str, fi
     )
     db.add(upload)
     db.flush()
+    name_remarks = parsed.get("name_remarks", {})
     count = 0
     for d in dates:
         for no, cell in parsed["days"][d].items():
@@ -302,6 +311,7 @@ def save_roster(db: Session, attraction_id: int, parsed: dict, *, scope: str, fi
                 person_type=(person.get("type") or "")[:30],
                 mark=(person.get("mark") or "")[:30],
                 cell_raw=(cell or "")[:255],
+                name_remark=name_remarks.get(d, {}).get(no, ""),
             ))
             count += 1
     upload.entry_count = count
@@ -317,7 +327,9 @@ def roster_summary(db: Session, attraction_id: int, day: str) -> dict:
     people = []
     for no, cell in sorted(roster["days"][day].items(), key=lambda kv: roster["people"][kv[0]]["name"]):
         info = classify(cell)
-        people.append({"employee_no": no, "name": roster["people"][no]["name"], "cell": cell, "kind": info["kind"], "label": info.get("label", "")})
+        person = roster["people"][no]
+        people.append({"employee_no": no, "name": person["name"], "name_remark": person["name_remark"],
+                       "cell": cell, "kind": info["kind"], "label": info.get("label", "")})
     return {
         "date": day,
         "available": True,
@@ -326,6 +338,20 @@ def roster_summary(db: Session, attraction_id: int, day: str) -> dict:
         "hours": roster["hours"].get(day),
         "people": people,
     }
+
+
+def add_excluded_roster_remarks(db: Session, state: dict, people: list[dict]) -> None:
+    upload_id = state.get('rosterUploadId')
+    excluded = {p['pid']: p for p in people if p.get('role') == 'excluded'}
+    if not upload_id or not excluded:
+        return
+    entry = tables_for(db).RotationRosterEntry
+    rows = db.query(entry.employee_no, entry.name_remark).filter(
+        entry.upload_id == upload_id, entry.work_date == state['date'],
+        entry.employee_no.in_(excluded), entry.name_remark != '',
+    )
+    for pid, remark in rows:
+        excluded[pid]['rosterNameRemark'] = remark
 
 
 def off_people_view(db: Session, attraction_id: int, state: dict) -> list[dict]:
@@ -518,6 +544,11 @@ def day_state(row: RotationDay, *, use_cache: bool = True) -> dict:
     if state.get('ruleVersion') == 2:
         from app.rotation.forecast import upgrade_opening_requests
         upgrade_opening_requests(state)
+        if state['status'] in ('draft', 'live'):
+            E.clear_retired_101(state)
+            E.trim_unused_spares(state)
+            if state.get('initialDraft'):
+                E.trim_unused_spares(state['initialDraft'])
     return state
 
 
@@ -731,7 +762,9 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *,
     state = day_state(row, use_cache=not committed_only)
     if state.get('ruleVersion') != 2:
         from app.rotation.replay import board_view
-        return board_view(state, state.get('lastTick', now), off_people_view(db, row.attraction_id, state))
+        result = board_view(state, state.get('lastTick', now), off_people_view(db, row.attraction_id, state))
+        add_excluded_roster_remarks(db, state, result['persons'])
+        return result
     if not committed_only and "confirmationEpoch" not in state:
         save_day(db, row, state, notify=False)
     projection = _read_projection_cache(db, cfg, row, now)
@@ -750,6 +783,7 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *,
         "timeoutWaitingMatch": [],
         "lines": lines_view(eng, now=now),
         "persons": [person_view(eng, p, now) for p in state["persons"].values()],
+        "completedShiftBatches": state.get("completedShiftBatches", {}),
         "off": off_people_view(db, row.attraction_id, state),
         "rosterSickPoolMoves": state['status'] == 'live',
         "alerts": eng.alerts(now) if state["status"] == "live" else [],
@@ -758,10 +792,10 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *,
         "draftAlerts": state.get("draftAlerts", []),
         "openTime": state.get("openTime"), "closeAt": state.get("closeAt"), "closed": state.get("closed", False),
         "rotationEnd": E.rotation_end(state),
-        "taskWorkflow":state.get('taskWorkflow'),"hold101Active":state.get('hold101Active',False),
-        "hold101Recent":state.get('hold101Recent',[]),
+        "taskWorkflow": state.get('taskWorkflow'), "mode101Active": bool(state.get('mode101Active')),
     }
 
+    add_excluded_roster_remarks(db, state, result['persons'])
     projection['live'] = deepcopy(result)
     return result
 
@@ -781,9 +815,6 @@ def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int,
         if retired_draft(state) or draft_roster_changed(db, attraction_id, day, state):
             # Never run a superseded roster or silently overwrite manual adjustments.
             return
-        from app.rotation import daily as D
-        if D.before_first_start(state, day, day, minute):
-            D.fill_prestart_spares(state)
         remember_initial_draft(state, cfg)
         eng, hooks = engine_for(db, cfg, row, state)
         hooks.now = PREARRANGE_MINUTE
@@ -810,6 +841,7 @@ def board_payload(db: Session, attraction_id: int, *, committed_only: bool = Fal
         "syncEpoch": RUNTIME.sync_epoch,
         "settings": settings_of(cfg),
         "lines": lines_of(cfg),
+        "structuralPosts": True,
         "roster": roster_summary(db, attraction_id, day),
         "rosterDates": [d for (d,) in db.query(RotationRosterEntry.work_date).filter(RotationRosterEntry.attraction_id == attraction_id).distinct().order_by(RotationRosterEntry.work_date.asc()).all()],
         "days": [{"date": r.work_date, "status": r.status} for r in db.query(RotationDay).filter(RotationDay.attraction_id == attraction_id).order_by(RotationDay.work_date.desc()).limit(30).all()],
@@ -963,7 +995,7 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
 SCREEN_ACTIONS = {"arrive", "depart", "batch_check_in", "correct_check_in"}
 LIVE_ACTIONS = SCREEN_ACTIONS | {
     "post", "line", "away", "back", "leave", "set_close", "add_person", "plan_place", "move",
-    "post_order", "post_hold", "rename_post", "hold101", "restore_line", "pool", "break_time",
+    "post_order", "post_create", "post_delete", "post_hold", "rename_post", "mode101", "mode101_target", "mode101_swap", "pool", "break_time",
     "shift", "sort_time", "place", "sick",
 }
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
@@ -1007,8 +1039,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict, *,
         raise ActionError('休息室大屏只可确认去休息或去轮岗')
     if act=='move' and body.get('force') is True and not body.get('expected_snapshot'):
         raise ActionError('强制安排必须先预览影响并确认')
-    if act not in {"post", "post_order", "line", "set_close", "rename_post", "hold101",
-                   "restore_line", "sort_time", "add_person"}:
+    if act not in {"post", "post_order", "post_create", "post_delete", "line", "set_close", "rename_post",
+                   "mode101", "mode101_target", "mode101_swap", "sort_time", "add_person"}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
             raise ActionError("工号必须是字符串")
@@ -1036,6 +1068,8 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict, *,
         if row.status != "live":
             raise ActionError("今天的轮岗还没有发布")
         expected = body.get('expected_snapshot')
+        if act in {'post_create', 'post_delete', 'mode101', 'mode101_target', 'mode101_swap'} and not expected:
+            raise ConfirmationConflict('请刷新看板后重新确认岗位安排')
         if expected:
             from app.rotation.manual import fingerprint
             if expected != fingerprint(state):
@@ -1215,9 +1249,6 @@ def do_draft_action(db: Session, attraction_id: int, actor, body: dict) -> None:
                 raise ActionError('上传班表已更新，旧预排已过期。请重新生成并核对预排后启用')
             hooks = DbHooks(db, attraction_id, day)
             hooks.now = now
-            from app.rotation import daily as D
-            if D.before_first_start(state, day, clock_day, now):
-                D.fill_prestart_spares(state)
             remember_initial_draft(state, cfg)
             eng = E.Engine(state, state["initialSettings"], hooks)
             eng.publish(now, actor)

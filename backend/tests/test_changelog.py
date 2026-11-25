@@ -20,7 +20,7 @@ from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-CURRENT_RELEASE_NOTE = "共享货架与物资归档"
+CURRENT_RELEASE_NOTES = ["轮岗 101 模式与当天加岗", "入库货位分配核对"]
 WAREHOUSE_ADMIN_RELEASE_NOTE = "仓库负责人交接补照待办"
 
 
@@ -108,7 +108,7 @@ def test_changelog_filters_by_role() -> None:
     assert "公告中心阅读与操作体验升级" in cm_text
     assert gsm[0]["current"] is True
     assert visible_releases("GSM", {"HR_MONTHLY_REPORT"})[0]["current"] is True
-    assert CURRENT_RELEASE_NOTE not in cm_text
+    assert all(note not in cm_text for note in CURRENT_RELEASE_NOTES)
     assert [item["summary"] for release in cm if release["version"] == "2026.11.10.1" for item in release["items"]] == ["个人积点卡"]
     assert "我的信息新增个人月结游戏段位" not in gsm_text
     assert "我的信息新增个人月结游戏段位" not in admin_text
@@ -126,12 +126,9 @@ def test_changelog_filters_by_role() -> None:
     ]
     assert all(release["version"] != APP_VERSION for release in visible_releases("SYSTEM_ADMIN", set()))
     assert all(release["version"] != APP_VERSION for release in visible_releases("HR_CIRCLE", {"SYSTEM_ADMIN"}))
-    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == [
-        CURRENT_RELEASE_NOTE,
-    ]
-    assert [item["summary"] for item in gsm[0]["items"]] == [
-        CURRENT_RELEASE_NOTE,
-    ]
+    assert [item["summary"] for item in visible_releases("SUPERVISOR", {"REVIEW_DIRECT"})[0]["items"]] == CURRENT_RELEASE_NOTES
+    assert [item["summary"] for item in gsm[0]["items"]] == CURRENT_RELEASE_NOTES
+    assert [item["summary"] for item in visible_releases("TR", set())[0]["items"]] == [CURRENT_RELEASE_NOTES[0]]
     assert "POC 特别贡献支持批量发放" not in {
         item["summary"] for release in visible_releases("GSM", set()) for item in release["items"]
     }
@@ -181,7 +178,7 @@ def test_changelog_count_is_shared_and_deduplicated(monkeypatch) -> None:
 
 def test_release_announcement_shows_current_items_and_is_read_once() -> None:
     with TestClient(app) as client:
-        for employee_no, password in (("CMTEST01", "1234"), ("TRTEST01", "1234"), ("HR01", "HR123")):
+        for employee_no, password in (("CMTEST01", "1234"), ("HR01", "HR123")):
             login(client, employee_no, password)
             assert client.get("/api/changelog/announcement").json() == {"release": None, "read": True}
             assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 404
@@ -194,12 +191,12 @@ def test_release_announcement_shows_current_items_and_is_read_once() -> None:
         assert first["release"]["version"] == APP_VERSION
         assert "content_version" not in first["release"]
         assert first["release"]["items"] == history[0]["items"]
-        assert [item["summary"] for item in first["release"]["items"]] == [CURRENT_RELEASE_NOTE]
+        assert [item["summary"] for item in first["release"]["items"]] == CURRENT_RELEASE_NOTES
         client.post("/api/logout")
         login(client, "SUPTEST01")
         supervisor = client.get("/api/changelog/announcement").json()
         assert supervisor["read"] is False
-        assert [item["summary"] for item in supervisor["release"]["items"]] == [CURRENT_RELEASE_NOTE]
+        assert [item["summary"] for item in supervisor["release"]["items"]] == CURRENT_RELEASE_NOTES
         assert client.post("/api/changelog/announcement/read", json={"version": APP_VERSION}).status_code == 200
         assert client.get("/api/changelog/announcement").json()["read"] is True
         client.post("/api/logout")

@@ -11,15 +11,35 @@ async function comparison(scope){
   const card=scope.locator('.rt-task-comparison');await card.waitFor();
   assert.deepEqual(await card.locator('.rt-task-columns>div>p').allTextContents(),['执行前 · 当前站位','执行后 · 预计站位']);
   assert.equal(await card.locator('.rt-task-line').count(),2);
-  const panes=await card.locator('.rt-task-line').evaluateAll(lines=>lines.map(line=>[...line.querySelectorAll('.rt-task-slot')].map(row=>({post:row.querySelector('span').textContent,name:row.querySelector('strong').textContent,changed:row.classList.contains('changed')}))));
+  const panes=await comparisonRows(card);
   assert(panes[0].every(row=>!row.changed),'The before pane must keep its original neutral style');
   assert(panes[1].some(row=>row.changed),'The after pane must highlight changed positions');
   assert.equal(panes[0].length,panes[1].length,'Only actual post rows are shown');
   panes[1].forEach((row,i)=>assert.equal(row.changed,row.name!==panes[0][i].name,'Only changed occupants are highlighted'));
   assert.equal(await card.locator('.rt-task-extra').count(),0);
-  const colors=await card.locator('.changed strong').evaluateAll(nodes=>nodes.map(n=>getComputedStyle(n).color.match(/\d+/g).slice(0,3).map(Number)));
-  for(const [r,g,b] of colors)assert(b>r&&b>g,'Involved names must be blue');
-  return panes;
+  assertComparisonColors(panes);
+  return panes.map(rows=>rows.map(({post,name,changed})=>({post,name,changed})));
+}
+async function comparisonRows(card){
+  return card.locator('.rt-task-line').evaluateAll(lines=>lines.map(line=>[...line.querySelectorAll('.rt-task-slot')].map(row=>{
+    const name=row.querySelector('strong');
+    return {post:row.querySelector('span').textContent,name:name.textContent,changed:row.classList.contains('changed'),
+      newWorker:row.classList.contains('new-worker'),color:getComputedStyle(name).color,background:getComputedStyle(row).backgroundColor};
+  })));
+}
+function assertComparisonColors([before,after]){
+  const original=new Map(before.map(row=>[row.name,row]));
+  for(const [i,row] of after.entries()){
+    if(row.changed)assert.notEqual(row.background,before[i].background,'A changed position must have a visible background');
+    const stillOnLine=original.get(row.name);
+    if(stillOnLine){
+      assert(!row.newWorker);
+      assert.equal(row.color,stillOnLine.color,'Existing workers keep their name color after moving');
+    }else if(row.newWorker){
+      const [r,g,b]=row.color.match(/\d+/g).slice(0,3).map(Number);
+      assert(b>r&&b>g,'New workers are shown in blue');
+    }
+  }
 }
 async function redNotice(dialog,waiting){
   const notice=dialog.locator('.rt-route-change');await notice.waitFor();
@@ -53,7 +73,15 @@ async function main(){try{
     const before=day.lines.map(l=>l.posts.map(p=>p.occ));
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(base+'/rotation-board');await page.locator('[data-f-board="'+later.pid+'"]').click();
-    await comparison(page.getByRole('dialog'));
+    const screenContext=await browser.newContext({viewport:{width:1920,height:1080}});
+    await ok(await screenContext.request.post(base+'/api/login',{data:{employee_no:'6666666',password:'1243'}}));
+    const screen=await screenContext.newPage();screen.on('pageerror',e=>errors.push(e.message));
+    await screen.goto(base+'/rotation/screen');
+    await screen.locator('[data-f-board="'+later.pid+'"]').click();
+    const screenDialog=screen.getByRole('dialog'),boardDialog=page.getByRole('dialog');
+    assert.deepEqual(await comparison(screenDialog),await comparison(boardDialog));
+    assert.deepEqual(await comparisonRows(screenDialog),await comparisonRows(boardDialog));
+    await screenDialog.getByRole('button',{name:'取消',exact:true}).click();
     await page.getByRole('button',{name:'确认上岗',exact:true}).click();
     await page.getByRole('heading',{name:'线路已改变，请重新确认',exact:true}).waitFor();
     const dialog=page.getByRole('dialog');await redNotice(dialog,first.name);
@@ -66,8 +94,10 @@ async function main(){try{
     await page.getByRole('button',{name:'取消',exact:true}).click();
     const member=await browser.newContext({viewport:{width:390,height:844}});
     await ok(await member.request.post(base+'/api/login',{data:{employee_no:later.pid,password:'rotation-local-2026'}}));
-    const health=await ok(await member.request.get(base+'/health'));
-    await ok(await member.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}}));
+    const announcement=await ok(await member.request.get(base+'/api/changelog/announcement'));
+    if(announcement.release&&!announcement.read){
+      await ok(await member.request.post(base+'/api/changelog/announcement/read',{data:{version:announcement.release.version}}));
+    }
     const mobile=await member.newPage();mobile.on('pageerror',e=>errors.push(e.message));await mobile.goto(base+'/?view=actionCenter');
     await comparison(mobile.locator('[data-formal-rotation-todo]'));
     await mobile.locator('[data-rotation-task=depart]').click();await comparison(mobile.getByRole('dialog'));
@@ -132,8 +162,43 @@ async function main(){try{
     await setLine(true);
     assert.equal(await missed.getByText('加岗已失效',{exact:true}).count(),1);
     day=await board();assert.equal(day.lines.find(l=>l.id==='A').posts[2].open,false);
+    // Let a real signed-in shift dispatch, then compare the notifications and on-post styling.
+    await clock({action:'set',date:'2026-11-05',time:'15:45:00'});
+    const checkingIn=(await board()).persons.filter(p=>p.start===960&&p.canBatchCheckIn);
+    assert.equal(checkingIn.length,2);
+    for(const p of checkingIn)await post({action:'batch_check_in',pid:p.pid,confirmation_token:p.confirmationTokens.batch_check_in});
+    await clock({action:'set',date:'2026-11-05',time:'15:57:05'});
+    await Promise.all([page.evaluate(()=>RT.load()),screen.evaluate(()=>RT.load())]);
+    const notice=side=>side.getByRole('region',{name:'批量上岗通知'});
+    assert.match(await notice(screen).innerText(),/16:00 班批量排岗.*15:57:05/s);
+    assert.equal(await notice(screen).innerText(),await notice(page).innerText());
+    const postColors=side=>side.locator('.rt-batch-on-post').evaluateAll(rows=>rows.map(row=>{
+      const style=getComputedStyle(row);
+      return [row.dataset.fSlot,style.backgroundColor,style.borderInlineStartColor,getComputedStyle(row.querySelector('.rt-post-name')).color];
+    }));
+    const boarded=await postColors(screen);
+    assert(boarded.length>0);
+    assert.deepEqual(boarded,await postColors(page));
+    for(const [_,background,border,name] of boarded)assert.deepEqual([background,border,name],['rgb(215, 232, 255)','rgb(34, 105, 210)','rgb(16, 75, 158)']);
+    await notice(screen).getByRole('button',{name:'查看安排'}).click();
+    await notice(page).getByRole('button',{name:'查看安排'}).click();
+    const batchRows=await comparisonRows(screenDialog);
+    assert(batchRows.length>=2);
+    assert.deepEqual(batchRows,await comparisonRows(boardDialog));
+    for(let i=0;i<batchRows.length;i+=2)assertComparisonColors(batchRows.slice(i,i+2));
+    await screen.setViewportSize({width:390,height:844});
+    assert.equal(await screen.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await screenDialog.getByRole('button',{name:'关闭',exact:true}).click();
+    await boardDialog.getByRole('button',{name:'关闭',exact:true}).click();
+    await clock({action:'set',date:'2026-11-05',time:'16:02:05'});
+    await Promise.all([page.evaluate(()=>RT.load()),screen.evaluate(()=>RT.load())]);
+    await Promise.all([
+      notice(screen).waitFor({state:'hidden'}),
+      notice(page).waitFor({state:'hidden'}),
+    ]);
+    await screenContext.close();
     assert.deepEqual(errors,[]);await context.close();await browser.close();browser=null;
-    console.log(engine+': original before/after UI; neutral before pane, blue changed positions only after; identical board/mobile routes; red reroute; per-person confirmation; header edit; 320/390px; opening and ordinary header behavior PASS');
+    console.log(engine+': manual and batch comparison colors match on board/screen; live batch highlight, notice expiry, mobile layout and route checks PASS');
   }
 }finally{if(browser)await browser.close();if(server&&server.exitCode===null){server.kill();await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(report,'server.log'),log);}}
 main().catch(error=>{console.error(error);console.error(log.slice(-2500));process.exitCode=1;});

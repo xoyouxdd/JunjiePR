@@ -5,7 +5,13 @@ from collections.abc import Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from app.database.migrations.rotation import ensure_rotation_five_posts, ensure_rotation_six_posts
+from app.database.migrations.rotation import (
+    ensure_heat_pursuit_post_template_1126,
+    ensure_rotation_five_posts,
+    ensure_rotation_roster_name_remarks,
+    ensure_rotation_six_posts,
+    ensure_rotation_standby_e_line,
+)
 from app.database.migrations.upgrade_repair import ensure_rejected_upgrade_claim_release
 
 from app.database.migrations.schema import (
@@ -89,6 +95,9 @@ MIGRATION_RUNNERS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ('2026-11-rejected-upgrade-claim-release', ensure_rejected_upgrade_claim_release),
     ('2026-11-deduction-incident-date', ensure_deduction_incident_date),
     ('2026-11-deduction-employee-type-snapshot', ensure_deduction_employee_type_snapshot),
+    ('2026-11-rotation-roster-name-remarks', ensure_rotation_roster_name_remarks),
+    ('2026-11-rotation-standby-e-line', ensure_rotation_standby_e_line),
+    ('2026-11-rotation-heat-pursuit-post-template-1126', ensure_heat_pursuit_post_template_1126),
 )
 SCHEMA_MIGRATION_STEPS = [(key, runner.__name__) for key, runner in MIGRATION_RUNNERS]
 

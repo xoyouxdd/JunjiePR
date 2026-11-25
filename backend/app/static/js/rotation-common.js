@@ -105,8 +105,14 @@ function restUntil(p) {
 function waitingInitialRest(p) {
   return p.state === 'notyet' && p.scheduledRestStart !== null && p.scheduledRestStart !== undefined;
 }
-function plannedReturnRestLabel(p){
-  return p.state==='notyet'&&p.initialPool==='rest'?`班次未开始 · ${hm(p.start)} 开始休息`:null;
+function openingShift(p){
+  return p.role==='rotation'&&(p.start===420||p.start===435);
+}
+function plannedRestLabel(p){
+  if(p.state!=='notyet')return null;
+  const opening=openingShift(p)&&!p.initialPool&&!p.manualPaused&&
+    !(p.absences||[]).some(a=>a.start<=p.start&&p.start<a.end);
+  return p.initialPool==='rest'||opening?`${hm(p.start)} 开始休息`:null;
 }
 function restSummary(people) {
   const waiting=people.filter(waitingInitialRest).length;
@@ -124,8 +130,14 @@ function sickLeaveLabel(p){
 }
 function outsideKind(p){
   if(p.state==='sick'||p.initialPool==='sick'||p.state==='done'&&/病假/.test(p.leaveReason||''))return '病假';
-  if(p.role==='excluded'&&/OJT/i.test([p.label,p.note,p.type].join(' ')))return 'OJT';
+  if(p.role==='excluded')return '不轮岗';
   return p.state==='away'||p.initialPool==='away'?'出圈':null;
+}
+function outsideRosterDetail(p){
+  const kind=outsideKind(p);
+  if(kind==='病假')return sickLeaveLabel(p);
+  if(kind==='不轮岗')return [...new Set([kind,p.label||p.note,p.rosterNameRemark].filter(Boolean))].join(' · ');
+  return p.away?.reason||kind||'';
 }
 async function rtApi(path, options = {}) {
   const {timeoutMs=12000,preserveBoardOnForbidden=false,...fetchOptions}=options;
@@ -570,10 +582,13 @@ function rotationPostShiftEnd(person){
   const end=hm(person.end);
   return `<time class="rt-post-shift-end" datetime="${end}" title="下班时间">${end}</time>`;
 }
+function showsPostRotationTime(){
+  return !screenRotation&&!personalRotation&&!!RT.data?.capabilities?.can_view_post_rotation_time;
+}
 function rotationPostEntryTime(person){
-  if(!Number.isFinite(person?.entrySortAt))return '';
+  if(!showsPostRotationTime()||!Number.isFinite(person?.entrySortAt))return '';
   const stamp=forecastClock(person.entrySortAt);
-  return `<time class="rt-post-entry-time" datetime="${esc(stamp.split(' ').at(-1))}" title="入线时的表头时间">入线 ${esc(stamp)}</time>`;
+  return `<time class="rt-post-entry-time" datetime="${esc(stamp.split(' ').at(-1))}" title="排岗时记录的轮岗时间">轮岗 ${esc(stamp)}</time>`;
 }
 function rotationSevenBadge(person, planned = false){
   const flags = person?.flags || [];
@@ -583,15 +598,19 @@ function rotationSevenBadge(person, planned = false){
 function pendingAddTime(post){
   return !post.openExpired&&!post.open&&!post.opened&&post.openAt?post.openAt:null;
 }
+function rotationLineCollapsed(line){
+  return line.id==='E'&&!line.active;
+}
 function lineCard(L, n, ops, view = {}) {
-  if(!view.daily&&!view.readOnly)return forecastLineCard(L,n,ops);
+  if(!view.daily&&!view.readOnly)return forecastLineCard(L,n,ops,view);
   const persons = view.day?.persons || RT.data.day.persons;
   const lookup = pid => persons.find(p => p.pid === pid);
   const daily = !!view.daily, editable = daily && view.editable && !L.standby;
   const draftPosts = view.draft?.lines.find(line=>line.id===L.id)?.posts;
   const openIdx = L.posts.map((x, i) => (x.open ? i : -1)).filter(i => i >= 0);
   const exitIndex = openIdx.length ? openIdx[openIdx.length - 1] : -1;
-  const rows = L.posts.map((x, i) => {
+  const collapsed = rotationLineCollapsed(L);
+  const rows = collapsed ? '' : L.posts.map((x, i) => {
     let cls = 'rt-post', who, mins = '';
     if(daily){
       cls+=' rt-daily-slot'+(!x.open?' closed':'');
@@ -600,8 +619,7 @@ function lineCard(L, n, ops, view = {}) {
       const plannedSeven=p?.start===420&&!p.sevenReplaced;
       const addTime=pendingAddTime(x),who=p?.name||(addTime?`${addTime} 加岗`:'空岗');
       const personName=esc(who)+(p?.state==='onpost'?rotationPostEntryTime(p):'')+rotationPostShiftEnd(p)+rotationSevenBadge(p,plannedSeven);
-      const livePerson=p&&typeof forecastActive==='function'&&forecastActive()&&RT.data.day.status==='live'&&view.day?.date===RT.data.day.date;
-      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(who)}，岗位操作" aria-haspopup="dialog">${personName}</button>`:livePerson?`<button type="button" class="rt-who-name" data-f-person="${esc(p.pid)}">${personName}</button>`:`<span class="rt-who-name">${personName}</span>`;
+      const person=editable?`<button type="button" class="rt-who-name rt-daily-person" draggable="true" data-daily-person="${esc(key)}" aria-label="${esc(who)}，岗位操作" aria-haspopup="dialog">${personName}</button>`:`<span class="rt-who-name">${personName}</span>`;
       let status=x.open?(p?'预排':'空岗'):p?'预排 · 未开岗':'未开岗';
       if(draftPosts?.[i]?.draftHold)status='预予定岗';
       else if(editable&&x.closeAt)status=`${esc(x.closeAt)} 撤`;
@@ -630,5 +648,6 @@ function lineCard(L, n, ops, view = {}) {
   const occupied = L.posts.filter(x => x.open && x.occ).length;
   const opened = L.posts.filter(x => x.open).length;
   const head = daily&&view.editable ? ` data-daily-line="${esc(L.id)}" tabindex="0" role="button" aria-label="${esc(L.id)}线预排${L.standby?'启用':'停用'}" title="点击或右键设置线路预排"` : '';
-  return `<div class="rt-line${L.active ? '' : ' off'}"><div class="rt-line-head g-${esc(L.group || '')}"${head}><span class="rt-lid">${esc(L.id)}</span><span>${daily?`${opened}/${L.posts.length} 岗`:L.active ? `${occupied}/${opened} 岗` : '待命线'}</span></div>${rows}</div>`;
+  const status = collapsed?'未开线':daily?`${opened}/${L.posts.length} 岗`:L.active?`${occupied}/${opened} 岗`:'待命线';
+  return `<div class="rt-line${L.active ? '' : ' off'}${collapsed?' is-collapsed':''}"><div class="rt-line-head g-${esc(L.group || '')}"${head}><span class="rt-lid">${esc(L.id)}</span><span>${status}</span></div>${rows}</div>`;
 }

@@ -22,12 +22,6 @@ const hm=value=>{
   return `${String(Math.floor(minute/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}`;
 };
 const taskTime=value=>value===null||value===undefined?'--:--':hm(value)+(Math.floor((value-Math.floor(value))*60+1e-6)?':'+String(Math.floor((value-Math.floor(value))*60+1e-6)).padStart(2,'0'):'');
-function postEntryTime(post){
-  if(!Number.isFinite(post.entrySortAt))return '';
-  const seconds=Math.round(post.entrySortAt*60),day=Math.floor(seconds/86400);
-  const stamp=(day===1?'次日 ':day>1?'+'+day+'日 ':'')+hm(Math.floor(seconds/60))+':'+String(seconds%60).padStart(2,'0');
-  return `<time class="rt-post-entry-time" datetime="${esc(stamp.split(' ').at(-1))}" title="入线时的表头时间">入线 ${esc(stamp)}</time>`;
-}
 const personalTaskPaused=p=>!!(p.timeoutCase||p.timeoutPending||p.task?.status==='exception_hold');
 function personalAssignment(p,data){
   if(personalTaskPaused(p)||p.entryHold)return null;
@@ -46,7 +40,7 @@ function personalReceipt(result){
 function entryRoutes(routes){return (routes||[]).map(r=>`<li><strong>${esc(r.name)}</strong>：${esc(r.from)} → ${esc(r.to)}</li>`).join('');}
 function taskLine(line,pid){
   if(!line)return '';
-  return `<div class="rt-line"><div class="rt-line-head"><strong>${esc(line.id)}线 · 岗位详情</strong></div>${line.posts.map(post=>`<div class="rt-post ${post.occ===pid?'me':''}"><span class="rt-pn">${esc(post.name)}</span><span class="rt-who-name">${post.occ===pid?`<strong class="rt-own-post-name">${esc(post.occName||'空岗')}</strong>`:esc(post.occName||'空岗')}${postEntryTime(post)}${post.missedCheckIn?'<small class="rt-badge rt-missed-attendance">未答到</small>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span><span class="rt-mins">${post.open?'':'未开岗'}</span></div>`).join('')}</div>`;
+  return `<div class="rt-line"><div class="rt-line-head"><strong>${esc(line.id)}线 · 岗位详情</strong></div>${line.posts.map(post=>`<div class="rt-post ${post.occ===pid?'me':''}"><span class="rt-pn">${esc(post.name)}</span><span class="rt-who-name">${post.occ===pid?`<strong class="rt-own-post-name">${esc(post.occName||'空岗')}</strong>`:esc(post.occName||'空岗')}${post.missedCheckIn?'<small class="rt-badge rt-missed-attendance">未答到</small>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</span><span class="rt-mins">${post.open?'':'未开岗'}</span></div>`).join('')}</div>`;
 }
 
 function personalTaskComparison(p){
@@ -66,11 +60,10 @@ function personalTaskComparison(p){
     const sevenRow=originalSeven||task.afterPosts[i]?.seven;
     const missed=post.missedCheckIn;
     const attendanceRow=original?.missedCheckIn||task.afterPosts[i]?.missedCheckIn;
-    const entryTimeRow=Number.isFinite(original?.entrySortAt)||Number.isFinite(task.afterPosts[i]?.entrySortAt);
     const changed=after&&post.occ!==original?.occ;
     const newWorker=changed&&post.occ&&!originalWorkers.has(post.occ);
-    const classes=(shiftEndRow?' shift-end-row':'')+(sevenRow?' seven-row':'')+(attendanceRow?' attendance-row':'')+(entryTimeRow?' entry-time-row':'')+(opening?' opening-row':'')+(shiftEnd?' shift-end':'')+(changed?' changed':'')+(newWorker?' new-worker':'');
-    const name=`<span class="rt-task-name"><strong>${esc(post.occName||(opening&&!after?'—':post.open===false?'未开岗':'空岗'))}</strong>${postEntryTime(post)}</span>`;
+    const classes=(shiftEndRow?' shift-end-row':'')+(sevenRow?' seven-row':'')+(attendanceRow?' attendance-row':'')+(opening?' opening-row':'')+(shiftEnd?' shift-end':'')+(changed?' changed':'')+(newWorker?' new-worker':'');
+    const name=`<span class="rt-task-name"><strong>${esc(post.occName||(opening&&!after?'—':post.open===false?'未开岗':'空岗'))}</strong></span>`;
     const sevenBadge=seven?'<small class="rt-badge p7">7点</small>':'';
     const missedBadge=missed?'<small class="rt-badge rt-missed-attendance">未答到</small>':'';
     const person=seven||shiftEnd||missed?`<div class="rt-task-person${shiftEnd?' rt-shift-end-person':''}">${name}${sevenBadge}${missedBadge}${shiftEnd?'<small>下班</small>':''}</div>`:name;

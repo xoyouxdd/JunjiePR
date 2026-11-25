@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.rotation import service as S
+from app.rotation import forecast, service as S
 from app.rotation import forecast_service as F
 from app.rotation.engine import rotation_end
 from app.rotation.namespace import tables_for
@@ -138,8 +138,17 @@ def install(app):
     advance = S.advance
     def forward_only(db, cfg, row, state, target):
         cursor = state.get('lastTick')
-        if cursor is not None and (target < cursor or (target == cursor and S.clock_state(cfg).get('paused'))):
+        if cursor is not None and target < cursor:
             return False
+        if target == cursor and S.clock_state(cfg).get('paused'):
+            # Refresh a saved opening plan without processing time-based transitions.
+            if target >= forecast.SEVEN_SHIFT or state['status'] != 'live' or state.get('ruleVersion') != 2:
+                return False
+            eng, _ = S.engine_for(db, cfg, row, state)
+            if not forecast.repair_opening_plan(eng, target):
+                return False
+            S.save_day(db, row, state)
+            return True
         return advance(db, cfg, row, state, target)
     S.advance = forward_only
     payload = S.clock_payload

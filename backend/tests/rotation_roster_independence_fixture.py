@@ -17,7 +17,7 @@ for i in range(3):
 
 @app.get('/__fixture/roster')
 def workbook(index:int=0):
-    return Response(book(rows(('9730000','本圈'),('9730001','跨圈'),(str(9740300+index),'停用'),
+    return Response(book(rows(('9730000','合成员工9730000 新人评估'),('9730001','跨圈'),(str(9740300+index),'停用'),
         (str(9740310+index),'无账号'),(str(9740320+index),'合成临时支援人员'+str(index)))),media_type='application/octet-stream')
 
 @app.post('/__fixture/live')

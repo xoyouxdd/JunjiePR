@@ -34,39 +34,69 @@ function forecastOverdue(p,n,screen=false){
   const seconds=Math.floor(Math.max(0,n-start)*60+1e-6);
   return `<span class="rt-forecast-overdue" title="从可上岗起累计，满${windowMinutes}分钟进入异常池">超时${Math.floor(seconds/60)}分${pad2(seconds%60)}秒</span>`;
 }
-function forecastLineCard(L,n,ops){
-  const manage=forecastOperator(),editPosts=forecastPostOperator(),personTag=manage?'button':'span',screen=forecastScreen();
+function forecastLineCard(L,n,ops,{day=RT.data.day,viewOnly=false}={}){
+  const manage=!viewOnly&&forecastOperator(),editPosts=manage&&forecastPostOperator(),personTag=manage?'button':'span',screen=forecastScreen();
   const times=`<span class="rt-sort-times"><span class="rt-sort-time" title="当前线路排序时间">${forecastClock(L.sortAt||0)}</span><span class="rt-previous-sort-time">上次 ${forecastClock(L.previousSortAt)}</span></span>`;
-  return `<div class="rt-line${L.active?'':' off'}"><div class="rt-line-head g-${esc(L.group||'')}" data-f-head="${esc(L.id)}"${manage?' tabindex="0" role="button"':''}><span class="rt-lid">${esc(L.id)}</span>${times}${L.adding?'<span class="rt-badge">加岗</span>':''}<span>${L.posts.filter(x=>x.open&&!x.hold).length}/${L.posts.length}岗</span></div>${L.posts.map((post,i)=>{
-    const p=personOf(post.occ),drag=manage&&p?' draggable="true" data-f-drag="'+esc(p.pid)+'"':'';
+  const collapsed=typeof rotationLineCollapsed==='function'&&rotationLineCollapsed(L);
+  const status=collapsed?'未开线':`${L.posts.filter(x=>x.open&&!x.hold&&x.mode101?.phase!=='fixed').length}/${L.posts.length}岗`;
+  const head=`<div class="rt-line-head g-${esc(L.group||'')}"${viewOnly?'':` data-f-head="${esc(L.id)}"`}${manage?' tabindex="0" role="button"':''}><span class="rt-lid">${esc(L.id)}</span>${collapsed?'':times}${L.adding?'<span class="rt-badge">加岗</span>':''}<span>${status}</span></div>`;
+  const rows=collapsed?'':L.posts.map((post,i)=>{
+    const p=day.persons.find(p=>p.pid===post.occ),drag=manage&&p?' draggable="true" data-f-drag="'+esc(p.pid)+'"':'';
     const addTime=pendingAddTime(post)||(post.openingStatus?post.openAt:null);
     const adding=addTime||post.openingStatus;
-    const who=p?.name||(addTime?`${addTime} 加岗`:post.openingStatus?'等待接替':'空岗');
+    const marker=post.mode101,modeControl=manage&&marker;
+    const goal=marker?.target===null?'待下线':L.posts.find(slot=>slot.key===marker?.target)?.name||post.name;
+    const displayName=p&&marker?`${p.name}（${goal}）`:p?.name;
+    const who=displayName||(addTime?`${addTime} 加岗`:post.openingStatus?'等待接替':'空岗');
     const status=post.openExpired?'加岗已失效':adding?(post.openingStatus?'准备加岗':'待加'):post.prearranged||p?.state==='notyet'?'预排':post.open?(p?'在岗':'空岗'):'未开岗';
     const label=editPosts?`<button type="button" class="rt-pn" draggable="true" data-f-post="${esc(L.id)}#${i}" data-f-post-key="${esc(post.key)}" aria-label="${esc(post.name)}，双击改名，拖拽交换岗位" title="双击改名，拖拽交换岗位">${esc(post.name)}</button>`:`<span class="rt-pn">${esc(post.name)}</span>`;
-    const canCorrect=(manage||screen)&&!RT.data?.day?.readOnly&&post.missedCheckIn&&p?.canCorrectCheckIn;
+    const canCorrect=(manage||screen)&&!day.readOnly&&post.missedCheckIn&&p?.canCorrectCheckIn;
     const attendanceBadge=(post.missedCheckIn||p?.missedCheckIn)&&!canCorrect
       ?'<small class="rt-badge rt-missed-attendance">未答到</small>'
       :post.pendingCheckIn?'<small class="rt-badge prep">未签到</small>':'';
     const checkIn=canCorrect
       ?`<button type="button" class="rt-badge rt-missed-attendance rt-post-check-in" data-f-correct-check-in="${esc(p.pid)}" title="补记已到">未答到</button>`
       :manage&&p?.canBatchCheckIn&&(p.state==='onpost'||post.pendingCheckIn)?`<button type="button" class="secondary rt-post-check-in" data-f-check-in="${esc(p.pid)}">已到</button>`:'';
+    const batch=p?.state==='onpost'&&p.batchOnPost!=null&&marker?.phase!=='fixed';
+    const entry=p?.state==='onpost'?rotationPostEntryTime(p):'';
+    const end=rotationPostShiftEnd(p);
+    const notices=rotationSevenBadge(p,p?.state==='notyet'&&p.start===420)+attendanceBadge+rotationMealBadge(p)
+      +(p?.preparing?'<span class="rt-badge prep">'+preparingText(p.preparing)+'</span>':'')
+      +(post.hold||post.plannedHold?`<span class="rt-badge post-hold">${post.hold?'定岗':'预予定岗'}</span>`:'');
+    const addNotice=p&&addTime?`<span class="rt-badge prep">待加 ${esc(addTime)}</span>`:'';
+    const rowClass=`rt-post${post.open?'':' closed'}${adding?' pending-add':''}${p?.preparing?' prep':''}${batch?' rt-batch-on-post':''}${marker?.phase==='fixed'?' rt-mode101-fixed':''}${screen?'':' rt-post-compact'}`;
+    const rowAttrs=viewOnly?'':`data-f-slot="${esc(L.id)}#${i}" data-f-slot-key="${esc(post.key)}"`;
+    const modeDrag=marker?.phase==='fixed'&&!post.hold&&p?.state==='onpost'?drag:'';
+    const workerAttrs=modeControl?` type="button" data-mode101-post="${esc(post.key)}"${modeDrag}`:manage&&p?` type="button" data-f-person="${esc(p.pid)}"${drag}`:'';
+    if(!screen){
+      const summary=p?`<span class="rt-post-name" title="${esc(displayName)}">${esc(displayName)}</span>${end?`<span class="rt-post-end-label">下班 ${end}</span>`:''}`
+        :`<span>${esc(post.openExpired?status:adding?(post.openingStatus?'等待接替':'待加岗'):'空岗')}</span>${addTime?`<time>${esc(addTime)}</time>`:''}`;
+      const detail=p?entry+notices+addNotice+(status==='预排'?'<span class="rt-post-slot-status">预排</span>':'')
+        :status==='未开岗'?'<span class="rt-post-slot-status">未开岗</span>':'';
+      const tag=p||modeControl?personTag:'span';
+      const batchLabel=batch?' title="系统批量上岗"':'';
+      return `<div class="${rowClass}" ${rowAttrs}${batchLabel}>${label}<${tag} class="rt-who-name"${workerAttrs}>
+        <span class="rt-post-person-main">${summary}</span>${detail?`<span class="rt-post-person-detail">${detail}</span>`:''}</${tag}>${checkIn}</div>`;
+    }
     const statusTag=screen&&status===who&&!checkIn?'':`<span class="rt-mins${status==='在岗'&&!checkIn?' rt-post-staffed':''}">${status}${checkIn}</span>`;
-    return `<div class="rt-post${post.open?'':' closed'}${adding?' pending-add':''}${p?.preparing?' prep':''}${p?.state==='onpost'&&p.batchOnPost!=null?' rt-batch-on-post':''}" data-f-slot="${esc(L.id)}#${i}" data-f-slot-key="${esc(post.key)}">${label}<${personTag}${manage?' type="button"':''} class="rt-who-name"${manage&&p?' data-f-person="'+esc(p.pid)+'"':''}${drag}>${esc(who)}${p&&addTime?`<span class="rt-badge prep">待加 ${esc(addTime)}</span>`:''}${p?.state==='onpost'?rotationPostEntryTime(p):''}${rotationPostShiftEnd(p)}${rotationSevenBadge(p,p?.state==='notyet'&&p.start===420)}${attendanceBadge}${rotationMealBadge(p)}${p?.preparing?'<span class="rt-badge prep">'+preparingText(p.preparing)+'</span>':''}${post.hold?'<span class="rt-badge post-hold">定岗</span>':''}</${personTag}>${statusTag}</div>`;
-  }).join('')}</div>`;
+    const screenName=p?`<span class="rt-post-name">${esc(who)}</span>`:esc(who);
+    return `<div class="${rowClass}" ${rowAttrs}${batch?' title="系统批量上岗"':''}>${label}<span class="rt-who-name">${screenName}${addNotice}${entry}${end}${notices}</span>${statusTag}</div>`;
+  }).join('');
+  return `<div class="rt-line${L.active?'':' off'}${collapsed?' is-collapsed':''}${screen?'':' rt-compact-line'}">${head}${rows}</div>`;
 }
 function forecastPreparing(p){return p.upcomingShift||p.state==='notyet'&&(p.canBatchCheckIn||p.batchCheckedIn);}
 function forecastPoolData(day){
   const posted=new Set(day.lines.flatMap(l=>l.posts.map(x=>x.occ).filter(Boolean)));
-  const people=[...day.persons.filter(p=>p.state!=='onpost'&&(p.upcomingShift||!posted.has(p.pid))),...rosterSickPeople(day)];
-  const preparing=forecastPreparing;
-  const isOutside=p=>['出圈','病假'].includes(outsideKind(p));
-  const definitions=[['pending','待确定休息',p=>['pending','walkback','op'].includes(p.state)],
+  const people=[...day.persons.filter(p=>p.state!=='onpost'&&(!posted.has(p.pid)||p.upcomingShift&&!openingShift(p))),...rosterSickPeople(day)];
+  const outside=people.filter(outsideKind),inside=people.filter(p=>!outsideKind(p));
+  const pending=p=>opWaiting(p)||['pending','walkback','op'].includes(p.state);
+  const rest=p=>!pending(p)&&(forecastPreparing(p)||plannedRestLabel(p)||p.state==='rest'||p.state==='ready'&&p.breakKind!=='meal');
+  const definitions=[['pending','待确定休息',pending],
     ['meal','吃饭区',p=>p.state==='meal'||p.state==='ready'&&p.breakKind==='meal'],
-    ['rest','休息区',p=>preparing(p)||plannedReturnRestLabel(p)||p.state==='rest'||p.state==='ready'&&p.breakKind!=='meal'],
-    ['away','圈外人员',isOutside],['other','其他人员',p=>!preparing(p)&&!plannedReturnRestLabel(p)&&['notyet','other','done','excluded'].includes(p.state)&&!isOutside(p)],
+    ['rest','休息区',rest],
+    ['away','圈外人员',outsideKind],['other','其他人员',p=>!pending(p)&&!rest(p)&&['notyet','other','done','excluded'].includes(p.state)],
     ['exception','异常池',p=>p.state==='exception']];
-  return definitions.map(([key,title,filter])=>[key,title,people.filter(filter)]);
+  return definitions.map(([key,title,filter])=>[key,title,key==='away'?outside:inside.filter(filter)]);
 }
 
 function renderRotationTotals(container, day, now, pools) {
@@ -86,7 +116,7 @@ function renderRotationTotals(container, day, now, pools) {
     (p.state === 'rest' || p.state === 'ready'));
   const totals = {
     posts: day.lines.reduce((count, line) => count + (line.active ? line.posts.filter(post => post.open).length : 0), 0),
-    rest: resting.length + pending.length,
+    rest: resting.length + pending.filter(p=>p.state!=='notyet').length,
     sick: away.filter(p => outsideKind(p) === '病假' &&
       (!Number.isFinite(p.start) || now >= p.start) && (!Number.isFinite(p.end) || now < p.end)).length,
     away: away.filter(p => p.state === 'away' && outsideKind(p) === '出圈').length,
@@ -107,15 +137,16 @@ function forecastPoolCard(p,key,n,{manage=false,screen=false}={}){
   const upcoming=forecastPreparing(p),ready=!!p.canDepart,rest=['rest','meal','ready'].includes(p.state);
   const a=upcoming?p.previewAssign:p.assign,route=upcoming?a:p.task;
   const mealTail=p.breakKind==='meal_rest'?'饭后休息 · ':'';
-  const returnRest=plannedReturnRestLabel(p);
-  const detail=screen&&ready?'':outsideKind(p)==='病假'?esc(sickLeaveLabel(p)):key==='away'?esc(p.away?.reason||'出圈'):returnRest?esc(returnRest):upcoming?`准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-n))} 分钟`:p.awaitingShiftEntry?(ready?'准备上班 · 已到班':'准备上班 · 已到班，等待安排'):p.exception?`原预计 ${esc(p.exception.assignment?.line||'')} · ${forecastClock(p.exception.allowedAt)}可上岗 · ${forecastClock(p.exception.at)}进异常池`:rest?`${mealTail}${Math.max(0,Math.ceil((p.readyAt??n)-n))}分钟 · ${forecastClock(p.readyAt)}可上岗`:p.state==='notyet'?`${forecastClock(p.start)}到班`:p.state==='done'?'已下班':'';
-  return `<div class="rt-chip${ready?' rt-can-board':''}"${manage?' draggable="true" data-f-drag="'+esc(p.pid)+'"':''}><div class="rt-forecast-person-head"><${personTag}${manage?' type="button"':''} class="rt-forecast-name"${manage?' data-f-person="'+esc(p.pid)+'"':''}>${rotationName(p)}</${personTag}>${rotationSevenBadge(p,p.state==='notyet'&&p.start===420)}${p.missedCheckIn?'<small class="rt-badge rt-missed-attendance">未答到</small>':''}${rotationMealBadge(p)}${forecastOverdue(p,n,screen)}</div>${detail?`<span class="rt-sub">${detail}</span>`:''}${confirm&&p.canBatchCheckIn?`<button type="button" class="primary" data-f-check-in="${esc(p.pid)}">已到</button>`:upcoming&&p.batchCheckedIn?'<span class="rt-sub">已签到</span>':''}${a?`<span class="rt-go">预计 ${esc(a.line)}${a.why?' · '+esc(a.why):''}${a.batchSize>1?' · 同分钟预计'+a.batchSize+'人':''}</span>`:''}${route?.routes?.length?`<details class="rt-forecast-detail"${screen?` data-screen-detail="route:${esc(p.pid)}"`:''}><summary>预计路线</summary>${forecastRoutes(route)}</details>`:''}${confirm&&ready?`<button type="button" class="primary" data-f-board="${esc(p.pid)}">${screen?'确认去轮岗':'可上岗'}</button>`:''}${confirm&&['pending','walkback','op'].includes(p.state)?`<button type="button" class="primary" data-f-arrive="${esc(p.pid)}">${screen?'去休息':'确认休息／吃饭'}</button>`:''}</div>`;
+  const plannedRest=plannedRestLabel(p);
+  const canCheckIn=confirm&&p.canBatchCheckIn&&!(screen&&key==='rest');
+  const detail=screen&&ready?'':key==='away'?esc(outsideRosterDetail(p)):opWaiting(p)?(p.state==='notyet'?`OP · ${hm(p.start)}到班`:'OP'):plannedRest?esc(plannedRest):upcoming?`准备上班 · 距到班 ${Math.max(0,Math.ceil(p.start-n))} 分钟`:p.awaitingShiftEntry?(ready?'准备上班 · 已到班':'准备上班 · 已到班，等待安排'):p.exception?`原预计 ${esc(p.exception.assignment?.line||'')} · ${forecastClock(p.exception.allowedAt)}可上岗 · ${forecastClock(p.exception.at)}进异常池`:rest?`${mealTail}${Math.max(0,Math.ceil((p.readyAt??n)-n))}分钟 · ${forecastClock(p.readyAt)}可上岗`:p.state==='notyet'?`${forecastClock(p.start)}到班`:p.state==='done'?'已下班':'';
+  return `<div class="rt-chip${ready?' rt-can-board':''}"${manage?' draggable="true" data-f-drag="'+esc(p.pid)+'"':''}><div class="rt-forecast-person-head"><${personTag}${manage?' type="button"':''} class="rt-forecast-name"${manage?' data-f-person="'+esc(p.pid)+'"':''}>${rotationName(p)}</${personTag}>${rotationSevenBadge(p,p.state==='notyet'&&p.start===420)}${p.missedCheckIn?'<small class="rt-badge rt-missed-attendance">未答到</small>':''}${rotationMealBadge(p)}${forecastOverdue(p,n,screen)}</div>${detail?`<span class="rt-sub">${detail}</span>`:''}${canCheckIn?`<button type="button" class="primary" data-f-check-in="${esc(p.pid)}">已到</button>`:upcoming&&p.batchCheckedIn?'<span class="rt-sub">已签到</span>':''}${a?`<span class="rt-go">预计 ${esc(a.line)}${a.why?' · '+esc(a.why):''}${a.batchSize>1?' · 同分钟预计'+a.batchSize+'人':''}</span>`:''}${route?.routes?.length?`<details class="rt-forecast-detail"${screen?` data-screen-detail="route:${esc(p.pid)}"`:''}><summary>预计路线</summary>${forecastRoutes(route)}</details>`:''}${confirm&&ready?`<button type="button" class="primary" data-f-board="${esc(p.pid)}">${screen?'确认去轮岗':'可上岗'}</button>`:''}${confirm&&['pending','walkback','op'].includes(p.state)?`<button type="button" class="primary" data-f-arrive="${esc(p.pid)}">${screen?'去休息':'确认休息／吃饭'}</button>`:''}</div>`;
 }
 
-function forecastPools(n){
-  const manage=forecastOperator(),screen=forecastScreen();
-  return forecastPoolData(RT.data.day).map(([key,title,list])=>
-    `<section class="rt-sect${list.length?'':' is-empty'}" data-f-pool="${key}"><h2>${title}<span class="rt-n">${list.length}</span>${manage&&key!=='exception'?'<button type="button" class="secondary rt-pool-add" data-f-add>新增人员</button>':''}</h2><div class="rt-chips${list.length?'':' empty'}">${list.map(p=>forecastPoolCard(p,key,n,{manage,screen})).join('')||'暂无'}</div></section>`
+function forecastPools(n,{day=RT.data.day,viewOnly=false}={}){
+  const manage=!viewOnly&&forecastOperator(),screen=forecastScreen();
+  return forecastPoolData(day).map(([key,title,list])=>
+    `<section class="rt-sect${list.length?'':' is-empty'}"${viewOnly?'':` data-f-pool="${key}"`}><h2>${title}<span class="rt-n">${list.length}</span>${manage&&key!=='exception'?'<button type="button" class="secondary rt-pool-add" data-f-add>新增人员</button>':''}</h2><div class="rt-chips${list.length?'':' empty'}">${list.map(p=>forecastPoolCard(p,key,n,{manage,screen})).join('')||'暂无'}</div></section>`
   ).join('');
 }
 function forecastConfirm(p){
@@ -227,7 +258,7 @@ function forecastPostSwap(source,line,i,targetKey){
     }).map(L=>L.id);
   });
 }
-function forecastHeadIndex(line){return line?.active?line.posts.findIndex(p=>p.open&&!p.hold&&!p.hold101):-1;}
+function forecastHeadIndex(line){return line?.active?line.posts.findIndex(p=>p.open&&!p.hold&&p.mode101?.phase!=='fixed'):-1;}
 function forecastHeaderOption(){return '<div data-f-header-option hidden><label class="checkbox-row"><input type="checkbox" name="update_sort_time">更新表头轮岗时间（默认不更新）</label><p class="field-hint" data-f-header-lines></p></div>';}
 function forecastBindHeaderOption(select,affected){
   const host=document.querySelector('#rtModal [data-f-header-option]'),checkbox=host.querySelector('[name=update_sort_time]');
@@ -257,8 +288,16 @@ function forecastPlace(pid,line,i){
   const sourcePost=sourceLine?.posts.find(item=>item.occ===pid),other=personOf(post.occ);
   const destination=`${esc(line)} · ${esc(post.name)}`;
   const source=sourcePost?`${esc(sourceLine.id)} · ${esc(sourcePost.name)}`:'';
+  if(RT.data.day.prestartPlanRevision&&p.state==='notyet'){
+    if(post.occ===pid)return;
+    const expected_snapshot=RT.data.day.forecastSnapshot;
+    confirmBox('调整预排人员',`${esc(p.name)} → ${destination}${other?`<br>${esc(other.name)} → ${source||'待安排区'}`:''}`,'确认调整',
+      ()=>forecastRun({action:'move',pid,line,i,expected_snapshot}));
+    return;
+  }
   const swapLabel=other?(sourcePost?'直接交换，两人互换岗位':'直接交换，本人上岗、原岗人员回待确定休息'):'直接放入空岗';
-  const swapDetail=`${esc(p.name)}：${source?source+' → ':''}${destination}${other?`<br>${esc(other.name)}：${destination} → ${source||'待确定休息'}`:source?'；原岗位空出。':'；不替下其他人员。'}`;
+  const exchange=!!(sourcePost&&other);
+  const swapDetail=`${esc(p.name)}：${source?source+' → ':''}${destination}${other?`<br>${esc(other.name)}：${destination} → ${source||'待确定休息'}`:source?'；原岗位空出。':'；不替下其他人员。'}${exchange?'<br>保留各岗位的轮岗时间和线路表头时间。':''}`;
   const original=p.exception?.assignment;
   const early=original?.kind==='push7'&&original.line===line&&i===forecastHeadIndex(L)&&personOf(original.target);
   const earlyIndex=early&&L.posts.findIndex(item=>item.occ===early.pid&&item.open&&!item.hold);
@@ -269,23 +308,58 @@ function forecastPlace(pid,line,i){
   const select=document.querySelector('#rtModal [name=place_mode]'),detail=document.querySelector('#rtModal [data-f-place-detail]');
   select.onchange=()=>{detail.hidden=select.value!=='swap';};
   forecastBindHeaderOption(select,mode=>{
-    const lines=[];
-    if(i===forecastHeadIndex(L)&&post.occ!==pid&&(mode!=='push'||!recover||
-      !L.posts.slice(earlyIndex+1).some(item=>item.open&&!item.hold)))lines.push(L.id);
-    if(mode==='swap'&&other&&sourcePost&&sourceLine.posts[forecastHeadIndex(sourceLine)]===sourcePost&&other.pid!==pid)lines.push(sourceLine.id);
-    return lines;
+    if(mode==='swap'&&exchange)return [];
+    return i===forecastHeadIndex(L)&&post.occ!==pid&&(mode!=='push'||!recover||
+      !L.posts.slice(earlyIndex+1).some(item=>item.open&&!item.hold))?[L.id]:[];
   });
 }
+
+function forecastMode101Drop(person,lineId,index,snapshot){
+  const day=RT.data.day;
+  const sourceLine=day.lines.find(line=>line.posts.some(post=>post.occ===person.pid));
+  const source=sourceLine?.posts.find(post=>post.occ===person.pid);
+  const line=day.lines.find(item=>item.id===lineId);
+  const destination=line?.posts[index];
+  const fromFixed=source?.mode101?.phase==='fixed',toFixed=destination?.mode101?.phase==='fixed';
+  if(!fromFixed&&!toFixed)return false;
+  if(source===destination)return true;
+  if(snapshot&&snapshot!==day.forecastSnapshot){toast('岗位安排已变化，请重新拖拽',true);return true;}
+  if(!line?.active||!destination?.open||destination.hold||source?.hold||
+      destination.mode101?.phase==='return'||source?.mode101?.phase==='return'){
+    toast('请选择已开放且可交换的岗位',true);
+    return true;
+  }
+  if(!['onpost','ready','rest','pending'].includes(person.state)){
+    toast('此人当前不能接替 101 岗位',true);
+    return true;
+  }
+  const other=personOf(destination.occ);
+  const from=source?`${esc(sourceLine.id)} · ${esc(source.name)}`:'';
+  const to=`${esc(line.id)} · ${esc(destination.name)}`;
+  const detail=`<p>${esc(person.name)} → ${to}</p>${other?`<p>${esc(other.name)} → ${from||'待确定休息'}</p>`:''}`;
+  const target=fromFixed?{post_key:source.key,destination_post_key:destination.key}:{post_key:destination.key};
+  confirmBox(other?'确认交换人员':'确认移动人员',detail,'确认',
+    ()=>forecastRun({action:'mode101_swap',pid:person.pid,...target,expected_snapshot:day.forecastSnapshot}));
+  return true;
+}
+
+function newPostFields(line){
+  const positions=line.posts.map((post,i)=>`<option value="${i}">第 ${i+1} 岗 · 在${esc(post.name)}前</option>`).join('');
+  return `<label>新岗位名称<input name="name" maxlength="40"></label><label>插入位置<select name="position">${positions}<option value="${line.posts.length}" selected>第 ${line.posts.length+1} 岗 · 末尾</option></select></label>`;
+}
+
 function forecastPostSchedule(line,open){
   const day=RT.data.day;
   const L=day?.lines.find(item=>item.id===line);
   if(!L)return;
   const withWithdrawal=!open&&Boolean(day.closurePreviews);
-  const options=L.posts.map((p,i)=>({p,i})).filter(({p})=>open?!p.open:p.open&&!p.hold&&!p.hold101);
-  if(!options.length){toast(open?'没有可加的岗位':'没有可撤的开放岗位',true);return;}
+  const options=L.posts.map((p,i)=>({p,i})).filter(({p})=>!p.mode101&&(open?!p.open:p.open&&!p.hold));
+  const canCreate=open&&RT.data.structuralPosts;
+  if(!options.length&&!canCreate){toast(open?'没有可加的岗位':'没有可撤的开放岗位',true);return;}
   const dates=['本工作日','次日','后日'];
   const offset=Math.floor(nowMin()/1440);
-  const scheduleFields=`<label>岗位<select name="i">${options.map(({p,i})=>`<option value="${i}">${esc(p.name)}</option>`).join('')}</select></label>
+  const scheduleFields=`<label>岗位<select name="i">${options.map(({p,i})=>`<option value="${i}">${esc(p.name)}</option>`).join('')}${canCreate?'<option value="new">新建岗位</option>':''}</select></label>
+    ${canCreate?`<div class="form-stack" data-f-new-post hidden>${newPostFields(L)}</div>`:''}
     <label>计划日期<select name="day_offset">${dates.map((label,i)=>`<option value="${i}" ${i===offset?'selected':''}>${label}</option>`).join('')}</select></label>
     <label>计划时间（留空立即生效）<input type="time" name="time" step="1"></label>`;
   const modeFields=withWithdrawal?`
@@ -294,6 +368,11 @@ function forecastPostSchedule(line,open){
     <p class="field-hint" data-f-close-summary aria-live="polite"></p>`:
     open?'<p class="field-hint">定时加岗到点时线路仍停用，这次计划失效。</p>':'';
   formBox(open?'顺推加岗':'撤岗',scheduleFields+modeFields,v=>{
+    if(v.i==='new'){
+      const body={action:'post_create',line:L.id,i:Number(v.position),name:v.name,expected_snapshot:day.forecastSnapshot};
+      if(v.time)Object.assign(body,{openAt:v.time,day_offset:Number(v.day_offset)});
+      return forecastRun(body);
+    }
     const i=Number(v.i),post=L.posts[i];
     const body={action:'post',line:L.id,i,day_offset:Number(v.day_offset),post_key:post.key,open,expected_snapshot:day.forecastSnapshot};
     if(v.time)body[open?'openAt':'closeAt']=v.time;
@@ -303,6 +382,17 @@ function forecastPostSchedule(line,open){
     }
     return forecastRun(body);
   });
+  if(canCreate){
+    const form=document.querySelector('#rtModal [data-form]');
+    const fields=form.querySelector('[data-f-new-post]');
+    const showNew=()=>{
+      const selected=form.elements.i.value==='new';
+      fields.hidden=!selected;
+      form.elements.name.required=selected;
+    };
+    form.elements.i.addEventListener('change',showNew);
+    showNew();
+  }
   if(!withWithdrawal)return;
   const form=document.querySelector('#rtModal [data-form]');
   const destination=form.elements.push_destination,summary=form.querySelector('[data-f-close-summary]');
@@ -347,10 +437,16 @@ function forecastHead(line){
   if(!forecastOperator()||forecastScreen())return;
   const L=RT.data.day.lines.find(x=>x.id===line);if(!L)return;
   const lineContext={date:RT.data.day.date,active:L.active,planRevision:RT.data.day.prestartPlanRevision??null};
-  openModal(`<h3>${esc(line)} · 线路操作</h3><div class="rt-actions"><button type="button" class="secondary" data-f-sort>修改排序时间</button><button type="button" class="secondary" data-f-open>顺推加岗</button><button type="button" class="secondary" data-f-close>撤岗</button><button type="button" class="secondary" data-f-line>${L.active?'停用':'启用'}线路</button><button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
+  const emptyPosts=L.posts.map((p,i)=>({p,i})).filter(({p})=>p.canDeletePost);
+  const snapshot=RT.data.day.forecastSnapshot;
+  openModal(`<h3>${esc(line)} · 线路操作</h3><div class="rt-actions"><button type="button" class="secondary" data-f-sort>修改排序时间</button><button type="button" class="secondary" data-f-open>顺推加岗</button><button type="button" class="secondary" data-f-close>撤岗</button>${emptyPosts.length?'<button type="button" class="danger" data-f-delete-post>删除空岗</button>':''}<button type="button" class="secondary" data-f-line>${L.active?'停用':'启用'}线路</button><button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
     host.querySelector('[data-f-sort]').onclick=()=>formBox('修改排序时间',`<label>日期<select name="day_offset">${[0,1,2].map(day=>`<option value="${day}" ${Math.floor((L.sortAt||0)/1440)===day?'selected':''}>${['本工作日','次日','后日'][day]}</option>`).join('')}</select></label><label>排序时间<input type="time" name="time" step="1" value="${forecastClock(L.sortAt||0).split(' ').at(-1)}" required></label>`,v=>forecastRun({action:'sort_time',line,...v,day_offset:Number(v.day_offset)}));
     host.querySelector('[data-f-open]').onclick=()=>forecastPostSchedule(line,true);
     host.querySelector('[data-f-close]').onclick=()=>forecastPostSchedule(line,false);
+    host.querySelector('[data-f-delete-post]')?.addEventListener('click',()=>formBox('删除空岗',
+      `<label>岗位<select name="i">${emptyPosts.map(({p,i})=>`<option value="${i}">第 ${i+1} 岗 · ${esc(p.name)}</option>`).join('')}</select></label><p class="field-hint">删除当前工作日的岗位，有定时加撤岗安排的会一并取消。</p>`,
+      v=>forecastRun({action:'post_delete',line,i:Number(v.i),post_key:L.posts[Number(v.i)].key,expected_snapshot:snapshot}),
+      {warn:true,okText:'确认删除'}));
     host.querySelector('[data-f-line]').onclick=()=>confirmBox(L.active?'停用线路':'启用线路',`<p>${lineContext.planRevision?'将调整当天的预排人员；首班开始后须重新核对。':'按当前现场站位调整本线路。'}</p>`,L.active?'停用':'启用',()=>forecastRun({action:'line',line,active:!L.active,line_context:lineContext}));
   });
 }
@@ -427,7 +523,14 @@ document.addEventListener('click',event=>{
 },true);
 document.addEventListener('contextmenu',event=>{const head=event.target.closest('[data-f-head]');if(forecastActive()&&forecastOperator()&&head){event.preventDefault();forecastHead(head.dataset.fHead);}},true);
 document.addEventListener('dblclick',event=>{const post=event.target.closest('[data-f-post]');if(!forecastActive()||!post||!forecastPostOperator())return;event.preventDefault();event.stopImmediatePropagation();forecastRenamePost(post);},true);
-document.addEventListener('keydown',event=>{if(event.key==='Enter'&&forecastActive()&&forecastPostOperator()&&event.target.matches('[data-f-post]')){event.preventDefault();event.stopImmediatePropagation();forecastRenamePost(event.target);}},true);
+document.addEventListener('keydown',event=>{
+  if(!forecastActive()||!forecastOperator())return;
+  if((event.key==='Enter'||event.key===' ')&&event.target.matches('[data-f-head][role="button"]')){
+    event.preventDefault();forecastHead(event.target.dataset.fHead);
+  }else if(event.key==='Enter'&&event.target.matches('[data-f-post]')){
+    event.preventDefault();event.stopImmediatePropagation();forecastRenamePost(event.target);
+  }
+},true);
 document.addEventListener('dragstart',event=>{
   if(!forecastActive()||!forecastOperator())return;
   const post=event.target.closest('[data-f-post]');
@@ -438,7 +541,7 @@ document.addEventListener('dragstart',event=>{
     event.stopImmediatePropagation();RT.dragging=true;event.dataTransfer.effectAllowed='move';
     event.dataTransfer.setData('application/x-rotation-post',JSON.stringify(forecastDrag));event.dataTransfer.setData('text/plain','rotation-post:'+JSON.stringify(forecastDrag));return;
   }
-  const p=event.target.closest('[data-f-drag]');if(!p)return;event.stopImmediatePropagation();RT.dragging=true;forecastDrag={kind:'person',pid:p.dataset.fDrag,date:RT.data.day.date};event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-rotation-person',p.dataset.fDrag);event.dataTransfer.setData('text/plain','rotation-person:'+p.dataset.fDrag);
+  const p=event.target.closest('[data-f-drag]');if(!p)return;event.stopImmediatePropagation();RT.dragging=true;forecastDrag={kind:'person',pid:p.dataset.fDrag,date:RT.data.day.date,snapshot:RT.data.day.forecastSnapshot};event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('application/x-rotation-person',p.dataset.fDrag);event.dataTransfer.setData('text/plain','rotation-person:'+p.dataset.fDrag);
 },true);
 document.addEventListener('dragover',event=>{if(forecastActive()&&forecastOperator()&&event.target.closest('[data-f-slot],[data-f-pool]:not([data-f-pool=exception])'))event.preventDefault();},true);
 document.addEventListener('dragend',()=>{forecastDrag=null;if(forecastActive()){RT.dragging=false;RT.pressing=false;}},true);
@@ -457,12 +560,14 @@ document.addEventListener('drop',event=>{
   const pid=event.dataTransfer.getData('application/x-rotation-person')||(raw.startsWith('rotation-person:')?raw.slice(16):'')||forecastDrag?.pid;
   if(!pid)return;
   const slot=event.target.closest('[data-f-slot]'),pool=event.target.closest('[data-f-pool]');if(!slot&&!pool)return;
+  const dragSnapshot=forecastDrag?.snapshot;
   event.preventDefault();event.stopImmediatePropagation();forecastDrag=null;RT.dragging=false;RT.pressing=false;
   const person=forecastPoolPerson(pid);
   if(!person)return;
   if(slot){
     if(person.rosterSick){toast('请先将班表病假人员移入人员池，再安排上岗',true);return;}
-    const [line,i]=slot.dataset.fSlot.split('#');forecastPlace(pid,line,Number(i));
+    const [line,i]=slot.dataset.fSlot.split('#');
+    if(!forecastMode101Drop(person,line,Number(i),dragSnapshot))forecastPlace(pid,line,Number(i));
   }
   else if(pool.dataset.fPool!=='exception')void forecastPoolMove(person,pool.dataset.fPool);
 },true);

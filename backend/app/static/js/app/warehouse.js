@@ -357,7 +357,7 @@ export async function renderWarehouse(root, context = {}) {
     rows.sort((left,right) => (risk[left.level] ?? 4) - (risk[right.level] ?? 4) || left.name.localeCompare(right.name,'zh-CN'));
     const riskRows = rows.filter(row => shortStock(row.level));
     const suggestions = rows.filter(row => !riskRows.includes(row) && row.suggested_point != null && row.stock <= row.suggested_point);
-    const rowMarkup = row => `<article class="wh-assessment-row wh-assessment-row--${esc(row.level)}"><div class="wh-assessment-head"><div><strong>${esc(row.name)}</strong><small>可领 ${esc(quantity(row,row.stock))}</small></div>${tag(levels[row.level] || levels.unset,row.level || 'unset')}</div><div class="wh-assessment-numbers"><div><small>建议补货点</small><strong>${row.suggested_point == null ? '待评估' : esc(quantity(row,row.suggested_point))}</strong></div><div><small>强提醒触发点</small><strong>${row.minimum == null ? '缺货时' : `低于 ${esc(quantity(row,row.minimum))}`}</strong></div></div>${row.suggested_point != null && row.stock <= row.suggested_point ? `<p class="wh-annotation">已到建议补货点${row.suggested_quantity != null ? ` · 建议补 ${esc(quantity(row,row.suggested_quantity))}` : ''}</p>` : ''}${manager() ? `<div class="wh-row-end">${button('设置预警与补货','rule',row.item_id)}</div>` : ''}</article>`;
+    const rowMarkup = row => `<article class="wh-assessment-row wh-assessment-row--${esc(row.level)}"><div class="wh-assessment-head"><div><strong>${esc(row.name)}</strong><small>可领 ${esc(quantity(row,row.stock))}</small></div>${tag(levels[row.level] || levels.unset,row.level || 'unset')}</div><div class="wh-assessment-numbers"><div><small>建议补货点</small><strong>${row.suggested_point == null ? '待评估' : esc(quantity(row,row.suggested_point))}</strong></div><div><small>强提醒触发点</small><strong>${row.minimum == null ? '缺货时' : `低于 ${esc(quantity(row,row.minimum))}`}</strong></div></div>${row.suggested_point != null && row.stock <= row.suggested_point ? `<p class="wh-annotation">已到建议补货点${row.suggested_quantity != null ? ` · 建议补 ${esc(quantity(row,row.suggested_quantity))}` : ''}</p>` : ''}${manager() ? `<div class="wh-row-end">${button('设置预警与补货','rule',row.item_id)}${row.stock === 0 ? button('归档物资','archive-item',row.item_id) : ''}</div>` : ''}</article>`;
     const counts = rows.reduce((totals,row) => {
       totals[row.level] = (totals[row.level] || 0) + 1;
       return totals;
@@ -491,7 +491,7 @@ export async function renderWarehouse(root, context = {}) {
         <div class="wh-catalog-places">${bins.length ? `<ul aria-label="货位余量">${bins.map(({location,row}) => `<li><span>${esc(locationName(location))}</span><strong>${esc(quantity(item,row.quantity))}</strong>${row.reported ? '<span class="wh-catalog-review">待核对</span>' : ''}</li>`).join('')}</ul>` : '<small>暂无在库货位</small>'}</div>
         <div class="wh-catalog-stock"><small>账面库存</small><strong>${fmt(stockOf(item))} <span>${esc(item.unit)}</span></strong></div>
         <div class="wh-catalog-row-actions">${button('编辑资料','edit-item',id)}${item.active !== false && bins.some(({row}) => row.quantity > 0) ? button('移位','move',id) : ''}
-          ${item.active === false ? button('恢复使用','restore-item',id) : stockOf(item) === 0 && !bins.some(({row}) => row.reported) ? button('归档','archive-item',id) : ''}</div>
+          ${item.active === false ? button('恢复使用','restore-item',id) : stockOf(item) === 0 ? button('归档物资','archive-item',id) : ''}</div>
       </article>`;
     };
     body.innerHTML = (items.length ? `<div class="wh-results">${items.map(card).join('')}</div>` : empty('暂无在用物资')) +
@@ -504,11 +504,21 @@ export async function renderWarehouse(root, context = {}) {
     openDialog(item ? `编辑 · ${item.name}` : '添加物资',`<form class="wh-form" data-wh-form="catalog" data-wh-item="${esc(id)}"><div class="wh-form-grid"><label>名称<input name="name" value="${esc(item?.name || '')}" required maxlength="100"></label><label>规格<input name="spec" value="${esc(item?.spec || '')}" maxlength="100"></label><label>类目<input name="category" value="${esc(item?.category || '')}" maxlength="50"></label><label>单位<input name="unit" value="${esc(item?.unit || '')}" required maxlength="20" placeholder="箱、个、件"></label></div><label>简称（用顿号分隔）<input name="aliases" value="${esc(item?.aliases?.join('、') ?? '')}" maxlength="240"></label><button class="wh-button wh-button--primary">保存物资</button></form>`);
   }
 
-  function archiveDialog(id) {
+  async function archiveDialog(id) {
+    if (!manager()) return;
+    const source = revision;
+    await refresh();
+    if (!active() || source !== revision || !manager()) return;
     const item = itemById(id);
-    if (!manager() || !item || item.active === false || stockOf(item) !== 0) return;
+    if (!item || item.active === false) { tell('该物资已归档。'); return; }
+    if (stockOf(item) !== 0) { tell('该物资仍有库存在货位，请核对全仓余量。','error'); return; }
+    if (binsOf(item).some(({row}) => row.reported)) {
+      openDialog(`归档 · ${item.name}`,`<p>该物资还有待核对差异或待补记出库。请在负责人待办结清后归档。</p>
+        <div class="wh-row-end">${button('打开负责人待办','tasks','','primary')}</div>`);
+      return;
+    }
     openDialog(`归档 · ${item.name}`,`<form class="wh-form" data-wh-form="archive" data-wh-item="${esc(id)}">
-      <p>归档后从日常物资列表移除，历史单据继续可查。</p>
+      <p>已核对全仓余量为 0。归档会结束该物资的缺货提醒，历史单据保留，可在物资档案恢复使用。</p>
       <label>本人登录员工号<input name="employee_no" autocomplete="off" maxlength="40" required></label>
       <button class="wh-button wh-button--primary">确认归档</button></form>`);
   }
@@ -600,6 +610,7 @@ export async function renderWarehouse(root, context = {}) {
       if (line.damaged) details.push(`破损 ${quantity(item,line.damaged)}`);
       if (line.direct_quantity) details.push(`直用 ${quantity(item,line.direct_quantity)}`);
       if (line.direct_destination) details.push(line.direct_destination);
+      if (line.note && receipts.includes(line)) details.push(`收货说明 ${line.note}`);
       const canCorrect = row.status === 'posted' && ['inbound','outbound'].includes(row.kind) && (lines.includes(line) || line.direct_quantity);
       return `<div class="wh-history-line"><div><strong>${esc(item?.name ?? line.item_name ?? '物资')}</strong><small>${details.map(esc).join(' · ')}</small></div>${canCorrect ? `<button type="button" class="wh-button wh-button--plain" ${actionAttrs('correct-record',line.item_id)} data-wh-location="${esc(line.position_id ?? '')}">${lines.includes(line) ? '纠正数量' : '纠正直用量'}</button>` : ''}</div>`;
     });

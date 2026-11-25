@@ -212,7 +212,7 @@ async function main(){try{
     assert.equal(assigned.entrySortAt,807+5/60);
     await page.evaluate(()=>RT.load());
     const entryStamp=page.locator('[data-f-person="'+assigned.pid+'"] .rt-post-entry-time');
-    await entryStamp.filter({hasText:'入线 13:27:05'}).waitFor();
+    await entryStamp.filter({hasText:'轮岗 13:27:05'}).waitFor();
     await page.locator('[data-f-head="'+assigned.line+'"] .rt-sort-time').filter({hasText:'13:27:05'}).waitFor();
     assert.deepEqual(errors,[]);
     console.log(engine+': forecast, individual execution, head edit, responsive widths, sick leave corrections, batch entry clock PASS');

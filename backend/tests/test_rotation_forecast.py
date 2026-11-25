@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.rotation import engine as E, forecast as F, forecast_service as API
+from app.rotation import engine as E, forecast as F, forecast_service as API, mode101
 from app.rotation.manual import Hooks
 
 
@@ -36,6 +36,119 @@ def fixture(counts=(3, 3), now=600):
 
 def occupants(e, lid='A'):
     return [x.get('occ') for x in e.line(lid)['posts']]
+
+
+def test_existing_1126_preplan_fills_fourth_seven_post_and_early_rest_starts_on_shift():
+    day = '2026-11-26'
+    shifts = {f'early{i}': '07:00-16:00' for i in range(5)}
+    shifts.update({f'relief{i}': '07:15-16:00' for i in range(40)})
+    roster = {'people': {pid: {'name': pid} for pid in shifts}, 'days': {day: shifts}}
+    state = E.build_draft(day, roster, {'lines': E.DEFAULT_LINES}, E.DEFAULT_SETTINGS, {}, {}, push7_history={})
+    engine = E.Engine(state, deepcopy(E.DEFAULT_SETTINGS), Hooks({}))
+    engine.publish(240, 'test')
+    post = engine.line('D1')['posts'][3]
+    fourth = state['plan']['seven'].pop('D1#3')
+    original_seven = dict(state['plan']['seven'])
+    seated = set(state['plan']['crew'].values()) | set(state['plan']['push7'])
+    displaced = next(pid for pid in shifts if pid.startswith('relief') and pid not in seated)
+    state['plan']['push7'] = state['plan']['push7'][:3]
+    state['plan']['crew']['D1#3'] = displaced
+    post.update(seven=None, occ=displaced)
+
+    assert F.tick(engine, 279)
+    assert state['plan']['seven'] == {**original_seven, 'D1#3': fourth}
+    assert post['occ'] == fourth and engine.P[fourth]['state'] == 'notyet'
+    assert 'D1#3' not in state['plan']['crew']
+    assert engine.P['early4']['readyAt'] is None and engine.P[displaced]['readyAt'] is None
+    F.tick(engine, 420)
+    assert engine.P[fourth]['state'] == 'onpost'
+    assert engine.P['early4']['state'] == 'rest' and engine.P['early4']['readyAt'] == 435
+    assert engine.P[displaced]['state'] == 'notyet' and engine.P[displaced]['readyAt'] is None
+    F.tick(engine, 435)
+    assert engine.P[displaced]['state'] == 'rest' and engine.P[displaced]['readyAt'] == 450
+
+
+def test_101_skips_fixed_post_and_resumes_from_next_shadow_position():
+    e = fixture((4, 2))
+    line = e.line('A')
+    tower, first, second, _ = line['posts']
+    tower['name'], first['name'], second['name'] = '塔台', '上客1', '上协1'
+    e.line('B')['posts'][0]['name'] = '塔台协助'
+    mode101.toggle(e, True, 600, 'test')
+    assert F.indexes(line, 600) == [1, 2, 3]
+    assert F.indexes(e.line('B'), 600) == [1]
+    first_push = {'owner': 'new0', 'line': 'A', 'kind': 'push'}
+    moves = F.route(e, first_push, 600)
+    assert moves[0]['to'] == first['key']
+    F.execute_moves(e, e.P['new0'], first_push, moves, 600, 'test')
+    assert tower['occ'] == 'A0' and tower['mode101']['target'] == first['key']
+    assert occupants(e) == ['A0', 'new0', 'A1', 'A2']
+
+    mode101.toggle(e, False, 601, 'test')
+    assert occupants(e) == ['A0', 'new0', 'A1', 'A2']
+    next_push = {'owner': 'new1', 'line': 'A', 'kind': 'push'}
+    moves = F.route(e, next_push, 602)
+    assert moves[:2] == [
+        {'pid': 'new1', 'from': None, 'to': tower['key']},
+        {'pid': 'A0', 'from': tower['key'], 'to': second['key']},
+    ]
+    F.execute_moves(e, e.P['new1'], next_push, moves, 602, 'test')
+    assert occupants(e) == ['new1', 'new0', 'A0', 'A1']
+    assert 'mode101' not in tower and e.P['A0']['continuousStart'] == 420
+    assert line['sortAt'] == 602
+
+
+def test_101_target_can_be_edited_and_replacement_starts_at_tower():
+    e = fixture((4,))
+    line = e.line('A')
+    tower, first, second, tail = line['posts']
+    tower['name'] = '塔台'
+    mode101.toggle(e, True, 600, 'test')
+    mode101.configure(e, {'action': 'mode101_target', 'post_key': tower['key'],
+                          'target_post_key': second['key']}, 600, 'test')
+    assert tower['mode101']['target'] == second['key']
+    mode101.configure(e, {'action': 'mode101_swap', 'post_key': tower['key'], 'pid': 'A1'}, 600, 'test')
+    assert occupants(e) == ['A1', 'A0', 'A2', 'A3']
+    assert tower['mode101']['target'] == tower['key']
+    assert line['sortAt'] == 435
+    mode101.configure(e, {'action': 'mode101_target', 'post_key': tower['key'],
+                          'target_post_key': tail['key']}, 600, 'test')
+    mode101.toggle(e, False, 601, 'test')
+    push = {'owner': 'new0', 'line': 'A', 'kind': 'push'}
+    moves = F.route(e, push, 602)
+    F.execute_moves(e, e.P['new0'], push, moves, 602, 'test')
+    assert occupants(e) == ['new0', 'A0', 'A2', 'A3']
+    assert e.P['A1']['state'] == 'pending'
+    assert line['sortAt'] == 435
+
+
+def test_101_drag_from_fixed_post_keeps_the_marker_with_the_post():
+    e = fixture((3, 3))
+    tower = e.line('A')['posts'][0]
+    assist, normal, vacant = e.line('B')['posts']
+    tower['name'], assist['name'] = '塔台', '塔台协助'
+    e.P['A0']['entrySortAt'] = 480
+    e.P['B1']['entrySortAt'] = 500
+    mode101.toggle(e, True, 600, 'test')
+    mode101.configure(e, {'action': 'mode101_swap', 'post_key': tower['key'],
+                          'destination_post_key': normal['key'], 'pid': 'A0'}, 601, 'test')
+    assert tower['occ'] == 'B1' and normal['occ'] == 'A0'
+    assert e.held('B1') and not e.held('A0')
+    assert e.P['A0']['line'] == 'B' and e.P['B1']['line'] == 'A'
+    assert e.P['B1']['entrySortAt'] == 480 and e.P['A0']['entrySortAt'] == 500
+
+    mode101.configure(e, {'action': 'mode101_swap', 'post_key': tower['key'],
+                          'destination_post_key': assist['key'], 'pid': 'B1'}, 602, 'test')
+    assert tower['occ'] == 'B0' and assist['occ'] == 'B1'
+    assert e.held('B0') and e.held('B1')
+    assert tower['mode101']['target'] == tower['key'] and assist['mode101']['target'] == assist['key']
+
+    F.remove(e, e.P['B2'], 603)
+    mode101.configure(e, {'action': 'mode101_swap', 'post_key': assist['key'],
+                          'destination_post_key': vacant['key'], 'pid': 'B1'}, 603, 'test')
+    assert assist['occ'] is None and mode101.fixed(assist)
+    assert vacant['occ'] == 'B1' and not e.held('B1')
+    assert e.line('A')['sortAt'] == e.line('B')['sortAt'] == 435
 
 
 @pytest.mark.parametrize('mode,exit_pid,expected,sort_time', [
@@ -408,23 +521,31 @@ def test_longer_stint_midline_relief_keeps_header_until_actual_last_open_post():
     assert e.P['A2']['state'] == 'done' and e.line('A')['sortAt'] == 935
 
 
-def test_manual_middle_placement_keeps_head_clock_and_crossline_swap_updates_correct_lines():
+def test_manual_middle_placement_keeps_head_clock():
     e = fixture()
     F.manual_place(e, 'new0', 'A', 1, 'swap', 600, 'screen')
     assert occupants(e) == ['A0', 'new0', 'A2']
     assert e.line('A')['sortAt'] == 435 and e.P['A1']['state'] == 'pending'
-    F.manual_place(e, 'A0', 'B', 1, 'swap', 601, 'screen', update_sort_time=True)
-    assert occupants(e)[0] == 'B1' and occupants(e, 'B')[1] == 'A0'
-    assert e.P['B1']['line'] == 'A' and e.P['A0']['line'] == 'B'
-    assert e.P['B1']['continuousStart'] == 420 and e.P['A0']['continuousStart'] == 420
-    assert e.line('A')['sortAt'] == 601 and e.line('B')['sortAt'] == 435
 
 
-def test_same_line_swapping_head_into_middle_updates_clock_when_requested():
+@pytest.mark.parametrize('lid,index,entry_time', [('A', 1, 0), ('B', 1, 460), ('B', 0, None)])
+def test_manual_person_exchange_keeps_post_times_and_both_headers(lid, index, entry_time):
     e = fixture()
-    F.manual_place(e, 'A0', 'A', 1, 'swap', 600, 'screen', update_sort_time=True)
-    assert occupants(e) == ['A1', 'A0', 'A2']
-    assert e.line('A')['sortAt'] == 600
+    a, b = e.line('A'), e.line('B')
+    a.update(sortAt=540, previousSortAt=535)
+    b.update(sortAt=550, previousSortAt=544)
+    first, second = e.P['A0'], e.P[f'{lid}{index}']
+    first.update(entrySortAt=470, continuousStart=410)
+    second.update(entrySortAt=entry_time, continuousStart=412)
+
+    F.manual_place(e, first['pid'], lid, index, 'swap', 600, 'screen', update_sort_time=True)
+
+    assert a['posts'][0]['occ'] == second['pid'] and e.line(lid)['posts'][index]['occ'] == first['pid']
+    assert (second['line'], first['line']) == ('A', lid)
+    assert (second['entrySortAt'], first['entrySortAt']) == (470, entry_time)
+    assert (a['sortAt'], a['previousSortAt'], b['sortAt'], b['previousSortAt']) == (540, 535, 550, 544)
+    assert (first['continuousStart'], second['continuousStart']) == (410, 412)
+    assert first['lineStart'] == second['lineStart'] == 600
 
 
 def test_manual_push7_exchange_clears_badges_but_is_not_counted_as_a_chain():
@@ -572,24 +693,27 @@ def test_early_manual_placement_keeps_late_shift_in_rotation_in_last_twenty_minu
     assert occupants(eng) == [person['pid']]
 
 
-def test_confirmed_break_allows_final_twenty_minute_push_but_respects_absence_and_shift_end():
-    e = fixture((1,), now=940)
+@pytest.mark.parametrize('break_start', [925, 930, 940 + 12 / 60])
+def test_confirmed_break_allows_final_twenty_minute_push_but_respects_absence_and_shift_end(break_start):
+    ready_at = break_start + 15
+    e = fixture((1,), now=ready_at)
     person = e.P['new0']
-    person.update(start=430, breakStart=925)
+    person.update(start=430, breakStart=break_start, readyAt=ready_at)
     for pid in ('new1', 'new2', 'new3'):
         e.P[pid]['state'] = 'other'
     for p in e.P.values():
         p['end'] = 960
     # The only occupied post belongs to the late shift, so the route is an ordinary push.
     e.S['lateShiftsByDay'] = {e.d['date']: [435 * 60]}
-    F.plan(e, 940)
+    F.plan(e, ready_at)
     assert person['assign']['kind'] == 'push'
-    person['absences'] = [{'start': 950, 'end': 970}]
-    assert not F.eligible(e, person, 940)
+    assert F.task_view(e, person, ready_at)['routes']
+    person['absences'] = [{'start': 957, 'end': 970}]
+    assert not F.eligible(e, person, ready_at)
     person['absences'] = []
     assert not F.eligible(e, person, 960)
-    person['breakStart'] = 930
-    assert not F.eligible(e, person, 940)
+    person['breakStart'] = None
+    assert not F.eligible(e, person, ready_at)
 
 
 def test_scheduled_opening_is_forecast_but_cannot_execute_early_or_timeout_while_closed():

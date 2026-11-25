@@ -66,20 +66,15 @@ def apply_batch(eng, now, start, booked):
 
 def advance(db, cfg, row, state, target):
     """Jump between meaningful boundaries, not 15-second replay steps."""
-    from app.rotation import service as S, daily as D, history as H
+    from app.rotation import service as S, daily as D
     from app.rotation.engine import _m, rotation_end
     eng, hooks = S.engine_for(db, cfg, row, state)
     previous = min(float(state.get('lastTick', target)), target)
     t = previous
-    changed = bool(D.prestart(state, target) and D.fill_prestart_spares(state))
+    changed = False
     while True:
         hooks.now = t
-        batch_before = H.snapshot(eng.d) if next(F.due_batches(eng, t, batch_target=target), None) is not None else None
-        if batch_before is not None:
-            batch_before['existingSegmentIds'] = H.existing_segment_ids(db, eng, t)
         step_changed = F.tick(eng, t, advance_batches=True, execute_batch=apply_batch, batch_target=target)
-        if batch_before is not None:
-            H.record(db, eng, batch_before, 'batch_depart', 'system', t)
         changed = step_changed or changed
         if step_changed:
             D.capture_snapshot(db, row.attraction_id, state, S.settings_of(cfg), t)
@@ -259,7 +254,7 @@ def person_view(eng, p, now):
             'batchResult': batch_result_view(deepcopy(p['batchResult'])) if p.get('batchResult') else None,
             'entryHold': None, 'entryGroup': None, 'assignmentLocked': False,
             'post': L['posts'][i]['name'] if L else None, 'postIndex': i,
-            'postHold': (L['posts'][i].get('hold') or L['posts'][i].get('hold101')) if L else None,
+            'postHold': L['posts'][i].get('hold') if L else None,
             'canDepart': can, 'canArrive': p['state'] in F.WAITING_TO_REST,
             'departureRoutes': task['routes'] if task else [], 'departureBlocked': None,
             'previewAssign': deepcopy(preview), 'upcomingShift': upcoming,
@@ -330,7 +325,7 @@ def restore_roster_sick(db, eng, pid, correction, now, actor):
 
 
 def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
-    from app.rotation import service as S, history as H
+    from app.rotation import service as S, mode101
     act = body['action']
     pid = body.get('pid')
     if getattr(actor, 'kind', None) == 'screen' and act not in S.SCREEN_ACTIONS:
@@ -357,8 +352,6 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         S.sync_notices(db, row.attraction_id, eng.d, eng, now)
         S.save_day(db, row, eng.d)
         return {'ok': True, 'executed': True, 'result': receipt}
-    before = H.snapshot(eng.d)
-    before['existingSegmentIds'] = H.existing_segment_ids(db, eng, now)
     result = {'ok': True, 'executed': True}
     if act == 'batch_check_in':
         if not F.can_check_in(eng, p, now) or F.attendance_recorded(p):
@@ -477,14 +470,25 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         if not prestart(eng.d, now) or eng.person(pid)['state'] != 'notyet':
             raise ActionError('运行中请使用顺推或交换安排人员')
         eng.act_plan_place(pid, body.get('line'), body.get('i'), now, actor)
-    elif act == 'post':
-        from app.rotation.engine import rotation_end
+    elif act == 'post_delete':
         L, i, post = eng.post(body.get('line'), body.get('i'))
-        if body.get('post_key') is not None and body['post_key'] != post.get('key'):
+        if body.get('post_key') != post.get('key'):
             raise S.ConfirmationConflict('岗位顺序已变化，请重新选择')
-        opened = S.action_boolean(body, 'open')
+        S.E.delete_empty_post(eng.d, L, i)
+        eng.h.log(act, actor, None, L['id'], post['name'], {'position': i + 1})
+    elif act in ('post', 'post_create'):
+        from app.rotation.engine import rotation_end
+        if act == 'post_create':
+            L, i = eng.line(body.get('line')), body.get('i')
+            post = S.E.add_line_post(eng.d, L, i, body.get('name'))
+            opened = True
+        else:
+            L, i, post = eng.post(body.get('line'), body.get('i'))
+            if body.get('post_key') is not None and body['post_key'] != post.get('key'):
+                raise S.ConfirmationConflict('岗位顺序已变化，请重新选择')
+            opened = S.action_boolean(body, 'open')
         close_mode = body.get('close_mode')
-        if post.get('hold') or post.get('hold101'):
+        if post.get('hold') or post.get('mode101'):
             raise ActionError('请先解除定岗')
         if not opened and close_mode is not None:
             if close_mode not in F.WITHDRAWAL_MODES:
@@ -528,7 +532,8 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
                     if body.get('expected_closure') != plan['signature']:
                         raise S.ConfirmationConflict('撤岗顺推路线已变化，请刷新看板后重新确认')
                 F.withdraw_post(eng, L, i, now, actor, close_mode, plan)
-        eng.h.log('post_schedule', actor, None, L['id'], post['name'], {'open': opened})
+        eng.h.log('post_create' if act == 'post_create' else 'post_schedule',
+                   actor, None, L['id'], post['name'], {'open': opened, 'position': i + 1})
     elif act == 'line':
         L = eng.line(body.get('line'))
         from app.rotation import daily as D
@@ -554,7 +559,7 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
                 if not post.get('draftClosed') and not post.get('openAt'):
                     post.update(open=True, manual=False, opened=True)
         else:
-            if any(post.get('hold') or post.get('hold101') for post in L['posts']):
+            if any(post.get('hold') or post.get('mode101') for post in L['posts']):
                 raise ActionError('请先解除本线路的定岗')
             for i in range(len(L['posts'])):
                 post = L['posts'][i]
@@ -567,18 +572,6 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         add_person(db, eng, body, now, actor, add_identity)
     elif act == 'post_hold':
         eng.act_post_hold(body['line'], body['i'], pid, S.action_boolean(body, 'on'), str(body.get('reason') or ''), now, actor)
-    elif act == 'hold101':
-        on = S.action_boolean(body, 'on')
-        posts = [post for line in eng.d['lines'] for post in line['posts'] if post.get('hold101Role')]
-        for post in posts:
-            if on:
-                post['hold101'] = {'pid': post.get('occ'), 'since': now, 'reason': '101定岗',
-                                   'by': getattr(actor, 'name', str(actor))}
-            else:
-                post.pop('hold101', None)
-        eng.d['hold101Active'] = on
-        eng.h.log('hold101' if on else 'resume101', actor, None, None, None,
-                  {'recent': [], 'posts': [post['key'] for post in posts]})
     elif act == 'rename_post':
         L, _, post = F.locate_post(eng, body.get('post_key'))
         if not post:
@@ -605,18 +598,16 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         eng.act_post_order(body['line'], body['i'], body['target_i'], now, actor,
                            swap_mode=body.get('swapMode'), target_lid=body.get('target_line'))
         F.update_manual_sort_times(eng, before_heads, now, actor, update_sort_time and body.get('swapMode') == 'with_people')
-    elif act == 'restore_line':
-        if body.get('notified') is not True:
-            raise ActionError('请确认现场可通知相关人员')
-        H.execute(db, eng, body['line'], body['checkpoint'], now, actor)
+    elif act == 'mode101':
+        mode101.toggle(eng, S.action_boolean(body, 'on'), now, actor)
+    elif act in {'mode101_target', 'mode101_swap'}:
+        mode101.configure(eng, body, now, actor)
     elif act == 'set_close':
         clock_value(body.get('close'))
         eng.act_set_close(body['close'], now, actor)
     else:
         raise ActionError('新预排流程不支持此旧任务操作')
     F.tick(eng, now)
-    if act != 'restore_line':
-        H.record(db, eng, before, act, actor, now)
     if act in {'arrive', 'depart', 'batch_check_in'}:
         if act != 'depart':
             eng.P[pid]['confirmationSequence'] = eng.P[pid].get('confirmationSequence', 0) + 1

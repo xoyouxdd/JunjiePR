@@ -43,27 +43,32 @@ async function main(){try{
     const b=(await board()).lines[1].posts[0].occ;await post({action:'pool',pid:b,pool:'rest'});await open(b,'B',0);
     assert.equal(await checkbox().isChecked(),false);await checkbox().check();await save();assert.equal((await board()).lines[1].sortAt,450);
     await clock({action:'jump',minutes:1});day=await board();await open(day.lines[0].posts[0].occ,'B',1);
+    const rowTimes=()=>page.locator('[data-f-slot]').evaluateAll(rows=>rows.map(row=>row.querySelector('.rt-post-entry-time')?.textContent||''));
+    const beforeMiddle=await rowTimes();
+    assert.notEqual(beforeMiddle[0],beforeMiddle[4]);
     assert.equal(await checkbox().isVisible(),false);await page.locator('[name=place_mode]').selectOption('swap');
-    assert(await checkbox().isVisible());assert.equal(await checkbox().isChecked(),false);await save();
+    assert.equal(await checkbox().isVisible(),false);await save();
+    assert.deepEqual(await rowTimes(),beforeMiddle);
     assert.deepEqual((await board()).lines.map(L=>L.sortAt),[450,450]);
-    day=await board();await open(day.lines[0].posts[0].occ,'B',1);await page.locator('[name=place_mode]').selectOption('swap');
-    await checkbox().check();await save();assert.deepEqual((await board()).lines.map(L=>L.sortAt),[451,450]);
-    // Changing operation mode resets the opt-in; a two-head exchange names both lines.
+    // Switching from push to a two-head exchange clears and hides the opt-in.
     await clock({action:'jump',minutes:1});day=await board();await open(day.lines[0].posts[0].occ,'B',0);
+    const beforeHeads=await rowTimes();
     await checkbox().check();await page.locator('[name=place_mode]').selectOption('swap');assert.equal(await checkbox().isChecked(),false);
-    assert.match(await page.locator('[data-f-header-lines]').innerText(),/A/);assert.match(await page.locator('[data-f-header-lines]').innerText(),/B/);
-    await checkbox().check();
+    assert.equal(await checkbox().isVisible(),false);
+    assert.match(await page.locator('[data-f-place-detail]').innerText(),/保留各岗位的轮岗时间和线路表头时间/);
     for(const width of [390,1280]){await page.setViewportSize({width,height:900});assert(await page.getByRole('dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1));await page.screenshot({path:path.join(report,engine+'-'+width+'.png'),animations:'disabled'});}
-    await save();assert.deepEqual((await board()).lines.map(L=>L.sortAt),[452,452]);
+    await save();assert.deepEqual((await board()).lines.map(L=>L.sortAt),[450,450]);
+    assert.deepEqual(await rowTimes(),beforeHeads);
+    assert.equal(writes.at(-1).update_sort_time,false);
     // Whole-post/person movement uses the same option; configuration-only swap does not.
     await clock({action:'jump',minutes:1});
     const openPosts=async()=>{await page.evaluate(()=>RT.load());await page.evaluate(()=>{const L=RT.data.day.lines[0];forecastPostSwap({line:L.id,i:0,key:L.posts[0].key,date:RT.data.day.date,snapshot:RT.data.day.forecastSnapshot},L.id,1,L.posts[1].key);});};
     await openPosts();assert.equal(await checkbox().isVisible(),false);await page.locator('[name=swapMode]').selectOption('with_people');assert(await checkbox().isVisible());assert.equal(await checkbox().isChecked(),false);
-    await save();assert.deepEqual((await board()).lines.map(L=>L.sortAt),[452,452]);
-    await openPosts();await page.locator('[name=swapMode]').selectOption('with_people');await checkbox().check();await save();assert.deepEqual((await board()).lines.map(L=>L.sortAt),[453,452]);
+    await save();assert.deepEqual((await board()).lines.map(L=>L.sortAt),[450,450]);
+    await openPosts();await page.locator('[name=swapMode]').selectOption('with_people');await checkbox().check();await save();assert.deepEqual((await board()).lines.map(L=>L.sortAt),[453,450]);
     for(const body of writes.filter(b=>['place','post_order'].includes(b?.action)))assert.equal(typeof body.update_sort_time,'boolean');
     assert.deepEqual(errors,[]);await context.close();await browser.close();browser=null;
-    console.log(engine+': manual default unchanged, explicit head update, normal confirm, affected source/two-line heads, mode reset and post/person options PASS');
+    console.log(engine+': personnel exchanges keep post/header times, push and whole-post opt-ins, normal confirmations and mobile modal PASS');
   }
 }finally{if(browser)await browser.close();if(server&&server.exitCode===null){server.kill();await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(report,'server.log'),log);}}
 main().catch(error=>{console.error(error);console.error(log.slice(-4000));process.exitCode=1;});

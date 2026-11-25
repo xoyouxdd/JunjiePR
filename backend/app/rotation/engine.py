@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from uuid import uuid4
 
 from app.rotation.roster import classify, fmt, hm
 
@@ -39,23 +40,31 @@ DEFAULT_SETTINGS = {
     'lostCount': 2,
 }
 
+DEFAULT_E_LINE = {'id': 'E', 'group': 'E', 'standby': True,
+                  'posts': [{'name': '队末'}, {'name': '城内巡视'}]}
+
 DEFAULT_LINES = [
-    {'id': 'A1', 'group': 'A', 'posts': [{'name': '塔台'}, {'name': '上客1'}, {'name': '上协1'}, {'name': '下协'}, {'name': '大出口商店', 'openAt': '09:00'}]},
+    {'id': 'A1', 'group': 'A', 'posts': [{'name': '塔台'}, {'name': '上客1'}, {'name': '上协1'}, {'name': '下协'}, {'name': '大出口商店', 'openAt': '08:30'}]},
     {'id': 'A2', 'group': 'A', 'posts': [{'name': '饮水童车'}, {'name': '小C', 'seven': 3}, {'name': '核销'}, {'name': '身高墙'}, {'name': '分组1'}]},
-    {'id': 'B1', 'group': 'B', 'posts': [{'name': '塔台协助'}, {'name': '上客2'}, {'name': '上协2'}, {'name': '分组2'}, {'name': '快迎2', 'openAt': '09:00'}]},
-    {'id': 'B2', 'group': 'B', 'posts': [{'name': '迎宾童车'}, {'name': '迎宾', 'seven': 1}, {'name': '豹协'}, {'name': '汇合'}, {'name': '快速汇合', 'openAt': '09:00'}]},
-    {'id': 'C1', 'group': 'C', 'posts': [{'name': '上客3'}, {'name': '上协3'}, {'name': '预演'}, {'name': '预演协助'}, {'name': '单人队末', 'openAt': '09:00'}]},
+    {'id': 'B1', 'group': 'B', 'posts': [{'name': '塔台协助'}, {'name': '上客2'}, {'name': '上协2'}, {'name': '分组2'}, {'name': '快迎2', 'openAt': '08:30'}]},
+    {'id': 'B2', 'group': 'B', 'posts': [{'name': '迎宾童车'}, {'name': '迎宾', 'seven': 1}, {'name': '豹协'}, {'name': '汇合'}, {'name': '快速汇合', 'openAt': '08:30'}]},
+    {'id': 'C1', 'group': 'C', 'posts': [{'name': '上客3'}, {'name': '上协3'}, {'name': '预演'}, {'name': '预演协助'}, {'name': '单人队末'}]},
     {'id': 'C2', 'group': 'C', 'posts': [{'name': '快迎1', 'seven': 2}, {'name': '单人迎宾', 'openAt': '08:15'}, {'name': '分组3'}, {'name': '上客4'}, {'name': '上协4'}]},
-    {'id': 'D1', 'group': 'D', 'posts': [{'name': '河马池'}, {'name': '铁马出口'}, {'name': '迎宾协助'}, {'name': '下客1'}, {'name': '下客2'}]},
-    {'id': 'D2', 'group': 'D', 'standby': True, 'posts': [{'name': '铁马A'}, {'name': '铁马B'}, {'name': '铁马C'}, {'name': '备用'}, {'name': '备用'}]},
-    {'id': 'E', 'group': 'E', 'standby': True, 'posts': [{'name': '城内巡视'}, {'name': '队末'}, {'name': '备用'}, {'name': '备用'}, {'name': '备用'}]},
+    {'id': 'D1', 'group': 'D', 'posts': [
+        {'name': '铁马C', 'openAt': '08:00'}, {'name': '铁马B'}, {'name': '铁马A'}, {'name': '铁马出口', 'seven': 4}, {'name': '迎宾协助'},
+    ]},
+    {'id': 'D2', 'group': 'D', 'posts': [
+        {'name': '河马池'}, {'name': '单人截流'}, {'name': '下客1'}, {'name': '下客2'},
+    ]},
+    DEFAULT_E_LINE,
 ]
 
 STANDARD_POST_COUNT = 6
 
 
 def append_standard_spares(lines, count=STANDARD_POST_COUNT):
-    standard_ids = {line['id'] for line in DEFAULT_LINES}
+    # The historical migrations use the standard line IDs from their release.
+    standard_ids = {'A1', 'A2', 'B1', 'B2', 'C1', 'C2', 'D1', 'D2', 'E'}
     added = {}
     for line in lines:
         posts = line['posts']
@@ -70,7 +79,100 @@ def append_standard_spares(lines, count=STANDARD_POST_COUNT):
     return added
 
 
-append_standard_spares(DEFAULT_LINES)
+def removable_spare(state, line, index):
+    post = line['posts'][index]
+    key = f"{line['id']}#{index}"
+    return (len(line['posts']) > 1 and post['name'] == '备用'
+            and not any(post.get(field) for field in (
+                'occ', 'open', 'openAt', 'closeAt', 'seven', 'openRequest', 'resumeOpen',
+                'resumeScheduled', 'closeAfterRelief', 'hold', 'draftHold', 'mode101',
+            ))
+            and not any(key in state.get('plan', {}).get(kind, {}) for kind in ('crew', 'seven')))
+
+
+def trim_unused_spares(state):
+    """Drop trailing legacy placeholders without changing retained slot indexes."""
+    for line in state['lines']:
+        while len(line['posts']) > 1:
+            index = len(line['posts']) - 1
+            post = line['posts'][index]
+            # Older operator-managed posts also carry openRequest after being withdrawn.
+            if post.get('createdManually') or 'openRequest' in post or not removable_spare(state, line, index):
+                break
+            line['posts'].pop()
+
+
+def clear_retired_101(state):
+    """Release legacy mode holds when loading an editable plan."""
+    for plan in (state, state.get('initialDraft')):
+        if not plan:
+            continue
+        plan.pop('hold101Active', None)
+        plan.pop('hold101Recent', None)
+        for line in plan['lines']:
+            for post in line['posts']:
+                post.pop('hold101', None)
+                post.pop('hold101Role', None)
+
+
+def post_plan_by_key(state):
+    return {kind: {post['key']: state['plan'][kind][slot]
+                   for line in state['lines'] for i, post in enumerate(line['posts'])
+                   if (slot := f"{line['id']}#{i}") in state['plan'][kind]}
+            for kind in ('crew', 'seven')}
+
+
+def remap_post_plan(state, assignments):
+    for kind in ('crew', 'seven'):
+        state['plan'][kind] = {f"{line['id']}#{i}": assignments[kind][post['key']]
+                               for line in state['lines'] for i, post in enumerate(line['posts'])
+                               if post.get('key') in assignments[kind]}
+
+
+def add_line_post(state, line, index, raw_name):
+    if type(index) is not int or not 0 <= index <= len(line['posts']):
+        raise ActionError('新岗位的位置超出范围')
+    name = raw_name.strip() if isinstance(raw_name, str) else ''
+    if not 1 <= len(name) <= 40 or any(post['name'] == name for post in line['posts']):
+        raise ActionError('岗位名称须为1至40字，且本线不能重名')
+    saved = post_plan_by_key(state)
+    post = {'key': uuid4().hex, 'name': name, 'openAt': None, 'closeAt': None, 'seven': None,
+            'open': False, 'opened': False, 'manual': False, 'occ': None, 'since': None, 'createdManually': True}
+    line['posts'].insert(index, post)
+    remap_post_plan(state, saved)
+    return post
+
+
+def reserved_post_pid(state, line_id, index):
+    key = f'{line_id}#{index}'
+    plan = state.get('plan', {})
+    pid = plan.get('seven', {}).get(key) or plan.get('crew', {}).get(key)
+    if not pid or state['status'] == 'draft':
+        return pid
+    person = state['persons'].get(pid, {})
+    if person.get('state') == 'notyet' and str(round(person['start'] * 60)) not in state.get('completedShiftBatches', {}):
+        return pid
+    return None
+
+
+def removable_empty_post(state, line, index):
+    post = line['posts'][index]
+    if (len(line['posts']) <= 1 or any(post.get(key) for key in ('occ', 'hold', 'draftHold', 'hold101', 'mode101'))
+            or reserved_post_pid(state, line['id'], index)):
+        return False
+    key = post.get('key')
+    return not key or not any((other.get('mode101') or {}).get('target') == key for other in line['posts'])
+
+
+def delete_empty_post(state, line, index):
+    if len(line['posts']) <= 1:
+        raise ActionError('每条线路至少保留一个岗位')
+    if not removable_empty_post(state, line, index):
+        raise ActionError('只可删除没有在岗、预排人员或定岗安排的空岗')
+    saved = post_plan_by_key(state)
+    post = line['posts'].pop(index)
+    remap_post_plan(state, saved)
+    return post
 
 CLOSING_WORK = '闭园后工作'
 TARGET_MODES = ('push7', 'chain')
@@ -101,20 +203,30 @@ def rotation_end(day):
 
 SEVEN_POST_PRIORITY = {name: rank for rank, name in enumerate(
     ('迎宾', '快迎1', '小C', '铁马入口', '铁马检票1', '熊出口'), 1)}
+SEVEN_1126_PRIORITY = {name: rank for rank, name in enumerate(('迎宾', '快迎1', '小C', '铁马出口'), 1)}
 SEVEN_CONFIGURATION_ALERT = '07:00 岗位未配置、重复、停用或未到开放时间：'
 
 
+def seven_post_priorities(lines):
+    """Identify the new D layout while retaining named priorities for earlier templates."""
+    names = {post['name'].strip() for line in lines for post in line['posts']}
+    if {'铁马A', '铁马B', '铁马出口', '单人截流'} <= names and not {'铁马入口', '铁马检票1', '熊出口'} & names:
+        return SEVEN_1126_PRIORITY
+    return SEVEN_POST_PRIORITY
+
+
 def open_seven_slots(lines):
-    named = {SEVEN_POST_PRIORITY[post['name'].strip()] for line in lines for post in line['posts']
-             if post['name'].strip() in SEVEN_POST_PRIORITY}
+    priorities = seven_post_priorities(lines)
+    named = {priorities[post['name'].strip()] for line in lines for post in line['posts']
+             if post['name'].strip() in priorities}
     slots = {}
     for line in lines:
         if line.get('standby'):
             continue
         for i, post in enumerate(line['posts']):
-            name_rank = SEVEN_POST_PRIORITY.get(post['name'].strip())
+            name_rank = priorities.get(post['name'].strip())
             rank = name_rank or post.get('seven')
-            if (rank in SEVEN_POST_PRIORITY.values() and (name_rank or rank not in named) and not post.get('draftClosed')
+            if (rank in priorities.values() and (name_rank or rank not in named) and not post.get('draftClosed')
                     and (not post.get('openAt') or _m(post['openAt']) <= 420)
                     and (not post.get('closeAt') or _m(post['closeAt']) > 420)):
                 slots.setdefault(rank, []).append((rank, line['id'], i))
@@ -123,11 +235,11 @@ def open_seven_slots(lines):
     return [matches[0] for _, matches in sorted(slots.items()) if len(matches) == 1]
 
 
-def refresh_seven_configuration_alert(alerts, slots, early_count):
+def refresh_seven_configuration_alert(alerts, slots, early_count, priorities):
     alerts[:] = [alert for alert in alerts if not alert.startswith(SEVEN_CONFIGURATION_ALERT)]
-    if len(slots) < min(early_count, len(SEVEN_POST_PRIORITY)):
+    if len(slots) < min(early_count, len(priorities)):
         present = {rank for rank, _, _ in slots}
-        missing = [name for name, rank in SEVEN_POST_PRIORITY.items() if rank not in present]
+        missing = [name for name, rank in priorities.items() if rank not in present]
         if missing:
             alerts.append(SEVEN_CONFIGURATION_ALERT + '、'.join(missing))
 
@@ -167,12 +279,13 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
             'label': info.get('label', ''),
         }
     lines = []
+    early_priorities = seven_post_priorities(config['lines'])
     for L in config['lines']:
         lines.append({
             'id': L['id'], 'group': L.get('group', ''), 'standby': bool(L.get('standby')),
             'walk': L.get('walk'),
             'posts': [dict(name=x['name'], openAt=x.get('openAt'), closeAt=x.get('closeAt'),
-                           seven=SEVEN_POST_PRIORITY.get(x['name'].strip(), x.get('seven')),
+                           seven=early_priorities.get(x['name'].strip(), x.get('seven')),
                            **({'draftClosed': True} if x.get('draftClosed') else {}))
                       for x in L['posts']],
         })
@@ -186,7 +299,7 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
     sevens = sorted([p for p in rot if p['role'] == 'rotation' and p['start'] == 420],
                     key=lambda p: (-(p['end'] - p['start']), p['name']))
     seven_posts = open_seven_slots(lines)
-    refresh_seven_configuration_alert(alerts, seven_posts, len(sevens))
+    refresh_seven_configuration_alert(alerts, seven_posts, len(sevens), early_priorities)
     if len(sevens) < 2:
         alerts.append('07:00 上班只有 %d 人，少于 2 人，7 点岗位需要主管安排' % len(sevens))
     use = seven_posts[:len(sevens)]
@@ -207,7 +320,8 @@ def build_draft(date, roster, config, settings, duty_counts, week_minutes, *, pu
     # 开园岗位：07:15 班次填满 07:15 开放的非 7 点岗位
     seated7 = set(seven.values())
     crew_pool = [p for p in rot if p['role'] == 'rotation' and open_at - 60 < p['start'] <= open_at
-                 and p['pid'] not in push7 and p['pid'] not in seated7]
+                 and p['pid'] not in push7 and p['pid'] not in seated7
+                 and not (early_priorities is SEVEN_1126_PRIORITY and p['start'] == 420)]
     crew_pool.sort(key=lambda p: (-(p['end'] - p['start']), p['name']))
     crew = {}
     slots = [(L['id'], i) for L in lines if not L['standby'] for i, post in enumerate(L['posts'])
@@ -297,11 +411,11 @@ class Engine:
         return [i for i, x in enumerate(L['posts']) if x.get('open')]
 
     def rotation_posts(self, L):
-        return [i for i in self.open_posts(L) if not (L['posts'][i].get('hold') or L['posts'][i].get('hold101'))]
+        return [i for i in self.open_posts(L) if not L['posts'][i].get('hold')]
 
     def held(self, pid):
         L, i = self.find_post(pid)
-        return L is not None and bool(L['posts'][i].get('hold') or L['posts'][i].get('hold101'))
+        return L is not None and bool(L['posts'][i].get('hold') or L['posts'][i].get('mode101'))
 
     def act_post_hold(self, lid, i, pid, on, reason, now, actor):
         L, i, x = self.post(lid, i)
@@ -310,6 +424,8 @@ class Engine:
         if on:
             if x.get('hold'):
                 return
+            if x.get('mode101'):
+                raise ActionError('请先完成 101 岗位恢复')
             if self.d.get('closed'):
                 raise ActionError('闭园后不能新设定岗；已有定岗仍保留到取消')
             x['hold'] = {'pid': pid, 'since': now, 'reason': reason or '现场任务',
@@ -495,7 +611,7 @@ class Engine:
             p['flags'].append('推7点')
 
     def _leave_line(self, p, L, i, now):
-        if (L['posts'][i].get('hold') or L['posts'][i].get('hold101')):
+        if L['posts'][i].get('hold'):
             raise ActionError('该人员正在定岗，请先取消定岗')
         if p.get('lineStart') is not None:
             self.h.segment(p['pid'], L['id'], p['lineStart'], max(now, p['lineStart']))
@@ -531,7 +647,7 @@ class Engine:
                     return '原接替岗位已持续定岗'
             if a.get('mode') == 'opening':
                 _, _, post = self.post(a['line'], a['post'])
-                if not post.get('openRequest') or post.get('occ') or (post.get('hold') or post.get('hold101')):
+                if not post.get('openRequest') or post.get('occ') or post.get('hold'):
                     return '原加岗位置已变化'
                 if post.get('openAt') and a.get('notBefore') is not None and abs(_m(post['openAt'])-a['notBefore']) > .01:
                     return '原加岗时间已变化'
@@ -647,7 +763,7 @@ class Engine:
             return
         if swap_mode not in (None,'posts','with_people'):
             raise ActionError('请选择只交换岗位或岗位和人员一起交换')
-        if any((x.get('hold') or x.get('hold101')) for x in L['posts'][min(i,target_i):max(i,target_i)+1]):
+        if any(x.get('hold') or x.get('mode101') for x in L['posts'][min(i,target_i):max(i,target_i)+1]):
             raise ActionError('涉及定岗岗位，请先取消定岗')
         if swap_mode=='posts':
             self._swap_post_configs(L, i, L, target_i, now)
@@ -675,7 +791,7 @@ class Engine:
         R, target_i, right = self.post(target_lid, target_i)
         if mode not in ('posts', 'with_people'):
             raise ActionError('跨线交换请选择只交换岗位或岗位和人员一起交换')
-        if (left.get('hold') or left.get('hold101')) or (right.get('hold') or right.get('hold101')):
+        if left.get('hold') or right.get('hold') or left.get('mode101') or right.get('mode101'):
             raise ActionError('涉及定岗岗位，请先取消定岗')
         for line, index, incoming in ((L, i, right), (R, target_i, left)):
             if any(j != index and x['name'] == incoming['name'] for j, x in enumerate(line['posts'])):
@@ -745,7 +861,7 @@ class Engine:
                 self.h.log('line_on' if active else 'line_off', actor, None, lid, None, {'prestart': True})
             return
         L = self.line(lid)
-        if not active and any((x.get('hold') or x.get('hold101')) for x in L['posts']):
+        if not active and any(x.get('hold') or x.get('mode101') for x in L['posts']):
             raise ActionError('本线还有定岗人员，请先取消定岗再停用')
         if active:
             L['active'] = True
@@ -789,10 +905,10 @@ class Engine:
 
     def end_day(self, now):
         from app.rotation.forecast import finish_continuous
-        self.d['hold101Active']=False
+        self.d.pop('mode101Active', None)
         for L in self.d['lines']:
             for x in L['posts']:
-                x.pop('hold101',None)
+                x.pop('mode101', None)
                 hold = x.pop('hold', None)
                 if hold:
                     self.h.log('post_resume', 'system', hold['pid'], L['id'], x['name'],

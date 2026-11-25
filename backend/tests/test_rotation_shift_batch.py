@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.rotation import forecast as F, forecast_service as API, history as H, service as S
+from app.rotation import forecast as F, forecast_service as API, service as S
 from app.rotation.models import RotationEvent, RotationNotice, RotationSegment
 from test_rotation_forecast import add_later_shifts, fixture, occupants
 from test_rotation_forecast_api import act, board, current, person, rotation, DAY
@@ -602,25 +602,6 @@ def test_batch_write_preserves_closure_event_order(rotation):
 
     with r.factory() as db:
         events = db.query(RotationEvent).order_by(RotationEvent.id).all()
-        assert [e.event_type for e in events] == ['post_close', *['depart'] * 4, 'workflow_checkpoint']
+        assert [e.event_type for e in events] == ['post_close', *['depart'] * 4]
         assert json.loads(events[1].detail_json)['effectiveAt'] == 810
         assert db.query(RotationSegment).filter_by(employee_no='A1').one().end_min == 807
-
-
-def test_undo_preserves_segment_written_by_earlier_future_timed_batch(current):
-    r = current
-    with r.factory() as db, S.transaction(db):
-        row = S.day_row(db, r.attraction_id, DAY)
-        eng, _ = S.engine_for(db, S.load_config(db, r.attraction_id), row, S.day_state(row))
-        eng.h.segment('5', 'A', 600, 610)
-        db.flush()
-        before = H.snapshot(eng.d)
-        before['existingSegmentIds'] = H.existing_segment_ids(db, eng, 600)
-        eng.h.segment('5', 'B', 605, 610)
-        F.execute(eng, '5', 600, 'test', 'A')
-        H.record(db, eng, before, 'depart', 'test', 600)
-        db.flush()
-        undo = H.plan(db, eng, 'A')
-        H.execute(db, eng, 'A', undo['id'], 600, 'test')
-        assert [(seg.line, seg.start_min, seg.end_min)
-                for seg in db.query(RotationSegment).filter_by(employee_no='5')] == [('A', 600, 610)]

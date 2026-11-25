@@ -263,23 +263,54 @@ function syncPhotoGroups(work) {
     };
   }
   for (const id of Object.keys(draft.photos)) if (!groups[id]) delete draft.photos[id];
+  for (const [id,preview] of work.previews) {
+    if (draft.photos[id]?.blob === preview.blob) continue;
+    URL.revokeObjectURL(preview.url);
+    work.previews.delete(id);
+  }
   draft.photoGroups = groups;
   delete draft.photoStartedAt;
   syncReceiptShelfPhotos(work,reopenedAt);
 }
 
-function receiptPhotoLocations(work, group) {
+function prepareCheckout(work) {
+  const allocations = work.draft.items.flatMap(item =>
+    selectedAllocations(work,item).map(line => ({...line,itemId:item.id})));
+  const locations = new Set(allocations.map(line => line.locationId));
+  const discrepancies = new Set(allocations.map(line => issueKey(line.locationId,line.itemId)));
+  for (const id of Object.keys(work.draft.versions)) if (!locations.has(Number(id))) delete work.draft.versions[id];
+  for (const key of Object.keys(work.draft.discrepancies)) if (!discrepancies.has(key)) delete work.draft.discrepancies[key];
+  work.draft.review = work.draft.review.filter(id => locations.has(id));
+  for (const id of locations) if (work.draft.versions[id] === undefined) work.draft.versions[id] = work.positions.get(id)?.version;
+  syncPhotoGroups(work);
+}
+
+function removeDraftItem(work, item) {
+  work.draft.items = work.draft.items.filter(row => row !== item);
+  applyProposedCatalog(work);
+  if (work.draft.checkout) prepareCheckout(work);
+  else syncPhotoGroups(work);
+  if (work.draft.items.length) return;
+  work.draft.checkout = false;
+  if (work.draft.key.startsWith(inboundBatchPrefix)) {
+    work.draft.key = newSubmissionKey();
+    delete work.draft.deferLocationPhotos;
+    work.importStatus = null;
+  }
+}
+
+function receiptPhotoLocations(work, group, ignoreNote = false) {
   if (work.outbound) return [];
   const item = work.draft.items.find(entry => String(entry.id) === group.id);
-  if (!item || quantity(item.damaged) || quantity(item.direct) || item.note.trim()) return [];
+  if (!item || quantity(item.damaged) || quantity(item.direct) || (!ignoreNote && item.note.trim())) return [];
   return [...new Set(group.lines.map(line => line.locationId))];
 }
 
 function receiptPhotoLocationMarkup(work, group) {
-  const locations = receiptPhotoLocations(work, group);
+  const locations = receiptPhotoLocations(work, group, true);
   if (!locations.length) return '';
   const item = work.draft.items.find(entry => String(entry.id) === group.id);
-  return `<label class="we-photo-location">如果拍的是上架后的整层，可同时更新货位照
+  return `<label class="we-photo-location" data-we-receipt-shelf>如果拍的是上架后的整层，可同时更新货位照
     <select data-we-photo-location aria-label="${esc(group.title)}的货位照（选填）">
       <option value="">仅作为本单物资照</option>
       ${locations.map(id => `<option value="${id}"${id === item.photoPositionId ? ' selected' : ''}>${esc(work.positions.get(id)?.label)}</option>`).join('')}
@@ -329,8 +360,8 @@ function locationsFor(work, item) {
   });
 }
 
-function receiptSummary(item) {
-  const shelved = item.allocations.reduce((sum, row) => sum + quantity(row.quantity), 0);
+function receiptSummary(item, allocations = item.allocations) {
+  const shelved = allocations.reduce((sum, row) => sum + quantity(row.quantity), 0);
   return { shelved, remaining: quantity(item.received) - quantity(item.damaged) - quantity(item.direct) - shelved };
 }
 
@@ -373,7 +404,7 @@ function allocationMarkup(work, item, row, index) {
     return `<option value="${position.id}" ${position.id === row.locationId ? 'selected' : ''}>${esc(position.label)}${work.outbound ? ` · 余 ${available} ${esc(item.unit)}` : ''}</option>`;
   }).join('');
   return `<div class="we-allocation">
-    <label>${work.outbound ? '取货层位' : '上架层位'}<select data-we-location="${index}"><option value="">请选择实际层位</option>${options}</select></label>
+    <label>${work.outbound ? '取货层位' : '上架货位'}<select data-we-location="${index}"><option value="">${work.outbound ? '请选择实际层位' : '请选择实际上架货位'}</option>${options}</select></label>
     <label>数量（${esc(item.unit)}）${numberedInput(row.quantity, `data-we-allocation="${index}"`, 1)}</label>
     <button class="we-icon" type="button" data-we-remove-allocation="${index}" aria-label="移除这一层">×</button>
   </div>`;
@@ -382,26 +413,50 @@ function allocationMarkup(work, item, row, index) {
 function selectedMarkup(work, line) {
   const record = work.items.get(line.id) || { id: line.id, name: '档案已移除', unit: '件' };
   const item = {...record, unit:line.expectedUnit || record.unit};
-  const remaining = receiptSummary(line).remaining;
+  const progress = work.outbound ? null : receiptProgress(work,line,item.unit);
   const hasExtra = line.damaged || line.direct || line.destination || line.note;
   return `<article class="we-selection" data-we-item="${item.id}">
     <div class="we-card-head"><div><h4>${esc(item.name)}</h4>${item.spec ? `<p>${esc(item.spec)}</p>` : ''}</div><button class="we-text-button" type="button" data-we-remove-item>移除</button></div>
     ${work.outbound ? '' : `<label class="we-received">实际收到（${esc(item.unit)}，含破损）${numberedInput(line.received, 'data-we-field="received"', 1)}</label>`}
     <div class="we-allocations">${line.allocations.map((row, index) => allocationMarkup(work, item, row, index)).join('')}</div>
-    <button class="we-text-button" type="button" data-we-add-allocation>＋ ${work.outbound ? '加一个取货层' : '加一个上架层'}</button>
+    ${work.outbound ? '<button class="we-text-button" type="button" data-we-add-allocation>＋ 加一个取货层</button>' :
+      `<div class="we-allocation-tools">
+        <button class="we-text-button we-add-location" type="button" data-we-add-allocation>＋ 添加货位</button>
+        <p class="we-quantity-check" data-we-receipt-check data-state="${progress.state}" role="status">${esc(progress.text)}</p>
+      </div>`}
     ${work.outbound ? '' : `<details class="we-extra" ${hasExtra ? 'open' : ''}><summary>到货直用或收货异常</summary>
       <div class="we-extra-fields"><label>直用数量${numberedInput(line.direct, 'data-we-field="direct"')}</label>
       <label>实际去向<input maxlength="120" data-we-field="destination" value="${esc(line.destination)}" placeholder="例：交给当班使用"></label>
       <label>破损数量${numberedInput(line.damaged, 'data-we-field="damaged"')}</label>
       <label>少到、破损等说明<input maxlength="500" data-we-field="note" value="${esc(line.note)}"></label></div>
-    </details><p class="we-quantity-check" data-we-receipt-check>${esc(receiptMessage(remaining, item.unit, Boolean(line.received)))}</p>`}
+    </details>`}
   </article>`;
 }
 
-function receiptMessage(remaining, unit, hasReceived) {
-  if (!hasReceived) return '填写收到数量，再分配到实际货位或直用。';
-  if (remaining === 0) return '实收、上架、直用和破损数量已对齐。';
-  return remaining > 0 ? `还有 ${remaining} ${unit} 未分配。` : `分配数量比实收多 ${Math.abs(remaining)} ${unit}。`;
+function receiptProgress(work, item, unit = item.expectedUnit || work.items.get(item.id)?.unit || '件') {
+  const received = quantity(item.received);
+  if (received <= 0) return {state:'pending',text:'先填实收数量'};
+  const filled = item.allocations.filter(row => quantity(row.quantity));
+  const placed = filled.filter(row => work.positions.has(row.locationId));
+  const {remaining} = receiptSummary(item,placed);
+  const text = `已分配 ${received - remaining} / ${received} ${unit}`;
+  if (new Set(placed.map(row => row.locationId)).size !== placed.length) {
+    return {state:'invalid',text:'同一货位的数量请合并'};
+  }
+  if (filled.length !== placed.length) {
+    return {state:'invalid',text:`${text} · 有数量未选货位`};
+  }
+  if (remaining < 0) return {state:'invalid',text:`${text} · 超出 ${-remaining} ${unit}`};
+  if (remaining > 0) return {state:'pending',text:`${text} · 还差 ${remaining} ${unit}`};
+  return {state:'ready',text};
+}
+
+function updateReceiptProgress(work, item, itemNode) {
+  const progress = itemNode.querySelector('[data-we-receipt-check]');
+  if (!progress) return;
+  const {state,text} = receiptProgress(work,item);
+  progress.dataset.state = state;
+  progress.textContent = text;
 }
 
 function renderMatches(work) {
@@ -442,15 +497,20 @@ function incomingLines(work, group) {
   const unit = entry.expectedUnit || work.items.get(entry.id)?.unit;
   return `<div class="we-check-item"><strong>实收 ${esc(entry.received)} ${esc(unit)}</strong><span>上架 ${receiptSummary(entry).shelved} · 直用 ${quantity(entry.direct)} · 破损 ${quantity(entry.damaged)}</span></div>
     ${group.lines.map(row => `<p class="we-check-place">${esc(work.positions.get(row.locationId)?.label)} <strong>＋${esc(row.quantity)} ${esc(unit)}</strong></p>`).join('')}
-    ${entry.destination ? `<p class="we-check-place">直用去向 <strong>${esc(entry.destination)}</strong></p>` : ''}`;
+    ${entry.destination ? `<p class="we-check-place">直用去向 <strong>${esc(entry.destination)}</strong></p>` : ''}
+    <label class="we-checkout-note">${quantity(entry.damaged) ? '破损说明（必填）' : '收货说明（选填）'}
+      <input data-we-receipt-note maxlength="500" value="${esc(entry.note)}" aria-label="${esc(group.title)}的收货说明">
+      <small data-we-receipt-photo-hint hidden>有收货说明时，请随单上传物资照。该照片仅用于本单物资记录。</small>
+      <small data-we-receipt-note-required hidden>请填写破损说明。</small></label>`;
 }
 
 function evidenceMarkup(work, group) {
   const review = work.draft.review.includes(Number(group.id));
   const label = work.outbound ? `${group.title}取货后的现场` : group.title;
   return `<article class="we-evidence" data-we-group="${group.id}">
-    <div class="we-card-head"><div><h4>${esc(group.title)}</h4><p>${work.outbound ? `请拍摄${esc(label)}` : '请拍摄本项实收物资'}</p></div><span data-we-photo-status class="we-photo-status"></span></div>
-    <div class="we-photo-row">
+    <div class="we-card-head"><div><h4>${esc(group.title)}</h4><p data-we-photo-only>${work.outbound ? `请拍摄${esc(label)}` : '请拍摄本项实收物资'}</p></div>
+      <div class="we-evidence-actions"><span data-we-photo-status data-we-photo-only class="we-photo-status"></span>${work.outbound ? '' : '<button type="button" class="we-text-button" data-we-remove-receipt>移出本单</button>'}</div></div>
+    <div class="we-photo-row" data-we-photo-only>
       <a data-we-preview-link class="we-photo-preview" target="_blank" rel="noopener" aria-label="查看整张照片 · ${esc(label)}" hidden>
         <img data-we-preview alt="${esc(label)}" hidden>
       </a>
@@ -474,9 +534,30 @@ function refreshCheckout(work) {
   if (!work.root.isConnected || !work.draft.checkout) return;
   const groups = groupsOf(work);
   const busy = work.busy || work.session.submitting;
+  const deferred = defersLocationPhotos(work);
+  const editable = !busy && !work.draft.attempted && work.noticeCode !== 'INBOUND_BATCH_POSTED';
+  let missingNote = false;
+  const photoOptions = work.root.querySelector('[data-we-receipt-photo-options]');
+  if (!photoOptions) return;
+  if (Boolean(photoOptions.firstElementChild) !== canDeferLocationPhotos(work)) {
+    photoOptions.innerHTML = receiptPhotoOption(work);
+  }
   for (const group of groups) {
     const node = work.root.querySelector(`[data-we-group="${group.id}"]`);
     if (!node) continue;
+    node.querySelectorAll('[data-we-photo-only]').forEach(element => { element.hidden = deferred; });
+    if (!work.outbound) {
+      const item = work.draft.items.find(row => String(row.id) === group.id);
+      const note = node.querySelector('[data-we-receipt-note]');
+      const required = quantity(item.damaged) > 0 && !item.note.trim();
+      const receiptShelf = node.querySelector('[data-we-receipt-shelf]');
+      if (receiptShelf) receiptShelf.hidden = deferred || Boolean(item.note.trim());
+      node.querySelector('[data-we-receipt-photo-hint]').hidden = !item.note.trim() || Boolean(quantity(item.damaged) || quantity(item.direct));
+      node.querySelector('[data-we-receipt-note-required]').hidden = !required;
+      note.setAttribute('aria-invalid',String(required));
+      note.disabled = node.querySelector('[data-we-remove-receipt]').disabled = !editable;
+      missingNote ||= required;
+    }
     const photo = work.draft.photos[group.id];
     const available = Boolean(photo && photo.signature === photoSignature(group, work));
     const status = node.querySelector('[data-we-photo-status]');
@@ -516,7 +597,6 @@ function refreshCheckout(work) {
       input.disabled = busy || work.draft.attempted;
     });
   }
-  const deferred = defersLocationPhotos(work);
   const required = groups.length;
   const ready = groups.filter(group => {
     const photo = work.draft.photos[group.id];
@@ -524,7 +604,8 @@ function refreshCheckout(work) {
   }).length;
   const confirm = work.root.querySelector('[data-we-confirm]');
   if (!confirm) return;
-  confirm.disabled = busy || work.noticeCode === 'INBOUND_BATCH_POSTED' || (!work.draft.attempted && !deferred && (Boolean(work.draft.review.length) || ready !== required || !required));
+  confirm.disabled = busy || work.noticeCode === 'INBOUND_BATCH_POSTED' || (!work.draft.attempted &&
+    (missingNote || !required || (!deferred && (Boolean(work.draft.review.length) || ready !== required))));
   confirm.textContent = busy ? '正在核对…' : work.draft.attempted ? '查询提交结果' : work.noticeCode === 'INSUFFICIENT_STOCK' ? '提交报错并保留原单' : `确认${work.outbound ? '出库' : '入库'}`;
   work.root.querySelector('[data-we-edit]').disabled = busy || work.draft.attempted;
   work.root.querySelector('[data-we-progress]').textContent = deferred ? '确认后生成补照待办' : `照片已传 ${ready} / ${required}`;
@@ -555,8 +636,8 @@ function draw(work) {
     </header>
     ${work.draft.checkout ? `<div class="we-identity"><span>经办人 <strong>${esc(work.operator.name)}</strong></span><span>登记时间 <strong>${esc(formatTime())}</strong></span></div>
       <p role="status" class="we-notice" data-we-notice hidden></p>
-      ${receiptPhotoOption(work)}
-      ${defersLocationPhotos(work) ? '' : `<div class="we-checkout">${groups.map(group => evidenceMarkup(work, group)).join('')}</div>`}
+      <div data-we-receipt-photo-options>${receiptPhotoOption(work)}</div>
+      <div class="we-checkout">${groups.map(group => evidenceMarkup(work, group)).join('')}</div>
       <div class="we-footer"><button type="button" class="secondary" data-we-edit>返回修改</button><div class="we-progress-block"><span data-we-progress role="status"></span><progress data-we-progress-bar aria-label="照片上传进度" max="1" value="0"></progress></div><button type="button" class="primary" data-we-confirm></button></div>` : `
       <div class="we-entry-grid"><section class="we-lookup" aria-label="查找物资">
         ${outbound ? '' : inboundImportMarkup(work)}
@@ -906,6 +987,18 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
 
   root.addEventListener('input', event => {
     const target = event.target;
+    if (target.matches('[data-we-receipt-note]')) {
+      if (target.disabled || work.busy || session.submitting || work.draft.attempted) return;
+      const id = Number(target.closest('[data-we-group]').dataset.weGroup);
+      const item = work.draft.items.find(row => row.id === id);
+      if (!item) return;
+      const wasDeferred = defersLocationPhotos(work);
+      item.note = target.value;
+      if (wasDeferred && item.note.trim()) work.draft.deferLocationPhotos = false;
+      void saveWarehouseDraft(session);
+      refreshCheckout(work);
+      return;
+    }
     if (target.matches('[data-we-search]')) {
       work.query = target.value;
       work.more = false;
@@ -923,7 +1016,7 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       const item = work.draft.items.find(row => row.id === Number(itemNode.dataset.weItem));
       if (target.matches('[data-we-field]')) item[target.dataset.weField] = target.value;
       if (target.matches('[data-we-allocation]')) item.allocations[Number(target.dataset.weAllocation)].quantity = target.value;
-      if (!outbound) itemNode.querySelector('[data-we-receipt-check]').textContent = receiptMessage(receiptSummary(item).remaining, item.expectedUnit, Boolean(item.received));
+      if (!outbound) updateReceiptProgress(work,item,itemNode);
       void saveWarehouseDraft(session);
     }
     const reportNode = target.closest('[data-we-discrepancy]');
@@ -947,7 +1040,9 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       renderMatches(work);
     } else if (target.matches('[data-we-location]')) {
       const parent = target.closest('[data-we-item]');
-      work.draft.items.find(item => item.id === Number(parent.dataset.weItem)).allocations[Number(target.dataset.weLocation)].locationId = Number(target.value);
+      const item = work.draft.items.find(item => item.id === Number(parent.dataset.weItem));
+      item.allocations[Number(target.dataset.weLocation)].locationId = Number(target.value);
+      if (!outbound) updateReceiptProgress(work,item,parent);
       void saveWarehouseDraft(session);
     } else if (target.matches('[data-we-import-file]')) {
       const file = target.files?.[0];
@@ -1005,6 +1100,18 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
     const groupNode = button.closest('[data-we-group]');
     if (groupNode) {
       const id = groupNode.dataset.weGroup;
+      if (button.matches('[data-we-remove-receipt]')) {
+        if (outbound || work.busy || session.submitting || work.draft.attempted || work.noticeCode === 'INBOUND_BATCH_POSTED') return;
+        const item = work.draft.items.find(row => row.id === Number(id));
+        if (!item) return;
+        work.message = `已从本单移出「${work.items.get(item.id)?.name || '物资'}」。`;
+        work.noticeCode = '';
+        removeDraftItem(work,item);
+        void saveWarehouseDraft(session);
+        draw(work);
+        root.querySelector('.we-heading h2')?.focus({preventScroll: true});
+        return;
+      }
       if (button.matches('[data-we-pick]')) groupNode.querySelector('[data-we-camera]').click();
       if (button.matches('[data-we-retry]') && work.draft.photos[id]?.blob) {
         work.draft.photos[id].status = 'queued';
@@ -1017,6 +1124,7 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
     const itemNode = button.closest('[data-we-item]');
     const item = itemNode && work.draft.items.find(row => row.id === Number(itemNode.dataset.weItem));
     let focusItem;
+    let focusLocation;
     if (button.matches('[data-we-add-item]')) {
       const id = Number(button.dataset.weAddItem);
       if (!work.draft.items.some(row => row.id === id)) {
@@ -1027,28 +1135,17 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       if (!row.allocations.length) row.allocations.push({ locationId: 0, quantity: '' });
       focusItem = id;
     } else if (button.matches('[data-we-remove-item]')) {
-      work.draft.items = work.draft.items.filter(row => row !== item);
-      applyProposedCatalog(work);
-      if (!work.draft.items.length && work.draft.key.startsWith(inboundBatchPrefix)) {
-        work.draft.key = newSubmissionKey();
-        work.draft.photos = {};
-        work.importStatus = null;
-      }
-    }
-    else if (button.matches('[data-we-add-allocation]')) item.allocations.push({ locationId: 0, quantity: '' });
-    else if (button.matches('[data-we-remove-allocation]')) item.allocations.splice(Number(button.dataset.weRemoveAllocation), 1);
+      removeDraftItem(work,item);
+    } else if (button.matches('[data-we-add-allocation]')) {
+      item.allocations.push({ locationId: 0, quantity: '' });
+      if (!outbound) focusLocation = `[data-we-item="${item.id}"] [data-we-location="${item.allocations.length - 1}"]`;
+    } else if (button.matches('[data-we-remove-allocation]')) item.allocations.splice(Number(button.dataset.weRemoveAllocation), 1);
     else if (button.matches('[data-we-edit]')) work.draft.checkout = false;
     else if (button.matches('[data-we-next]')) {
       const issue = formIssue(work);
       if (issue) { work.message = issue; draw(work); return; }
       work.draft.checkout = true;
-      const currentLocations = new Set(work.draft.items.flatMap(entry => selectedAllocations(work, entry).map(line => line.locationId)));
-      const validDiscrepancies = new Set(work.draft.items.flatMap(entry => selectedAllocations(work, entry).map(line => issueKey(line.locationId, entry.id))));
-      for (const key of Object.keys(work.draft.versions)) if (!currentLocations.has(Number(key))) delete work.draft.versions[key];
-      for (const key of Object.keys(work.draft.discrepancies)) if (!validDiscrepancies.has(key)) delete work.draft.discrepancies[key];
-      work.draft.review = work.draft.review.filter(id => currentLocations.has(id));
-      for (const id of currentLocations) if (work.draft.versions[id] === undefined) work.draft.versions[id] = work.positions.get(id)?.version;
-      syncPhotoGroups(work);
+      prepareCheckout(work);
     } else return;
     work.message = '';
     work.noticeCode = '';
@@ -1059,7 +1156,8 @@ export async function renderWarehouseEntry(root, { mode, state, api, onComplete,
       window.scrollTo(0, 0);
       root.querySelector('.we-heading h2')?.focus({preventScroll:true});
     }
-    if (focusItem) root.querySelector(`[data-we-item="${focusItem}"] select, [data-we-item="${focusItem}"] [data-we-field="received"]`)?.focus();
+    if (focusLocation) root.querySelector(focusLocation)?.focus();
+    else if (focusItem) root.querySelector(`[data-we-item="${focusItem}"] select, [data-we-item="${focusItem}"] [data-we-field="received"]`)?.focus();
   }, { signal });
   root.addEventListener('submit', event => {
     if (!event.target.matches('[data-we-single]')) return;

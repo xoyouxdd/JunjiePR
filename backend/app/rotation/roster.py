@@ -9,11 +9,13 @@ from app.employee_numbers import employee_number_cell
 NS = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
 WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-SHIFT_RE = re.compile(r'^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(.*)$', re.S)
-SICK_LEAVE_RE = re.compile(r'\bSL\b|病假', re.I)
+SHIFT_RE = re.compile(r'^\s*(\d{1,2}:\d{2})\s*[-–—－]\s*(\d{1,2}:\d{2})(.*)$', re.S)
+SICK_LEAVE_RE = re.compile(r'(?<![A-Z])SL(?![A-Z])|病假', re.I)
+TRAINING_NAME_NOTE = re.compile(r'新人(?:评估|复训)')
+NAME_NOTE_SEPARATORS = ' \t\r\n　-—_·•:：,，;；/、()（）[]【】{}'
 
 # 注释中出现这些词：当天不进入轮岗，单独列出
-EXCLUDE_WORDS = ['OJT', 'ZPD', '考试', 'Open', 'AP M&G', 'summer break']
+EXCLUDE_WORDS = ['OJT', 'ZPD', '考试', 'Open', 'AP M&G', 'summer break', '不轮岗']
 # 整格是这些（不是班次）：当天不在本区域
 OFF_WORDS = ['off', 'AL', 'ML', 'LOA', 'NA', 'TA LEAD', 'WTP', 'SDMT', 'SL', 'PH']
 
@@ -49,13 +51,15 @@ def _rich_shift_text(node):
     match = SHIFT_RE.match(value)
     if not match or SICK_LEAVE_RE.search(match.group(3)):
         return value
-    start, stop = match.start(1), match.end(2)
+    times = (match.span(1), match.span(2))
     offset = 0
     for run in node.findall('m:r', NS):
         end = offset + len(_text(run))
-        if end > start and offset < stop and not _strike_enabled(run.find('m:rPr/m:strike', NS)):
+        # The separator may have different formatting from the two times.
+        overlaps_time = any(offset < stop and end > start for start, stop in times)
+        if overlaps_time and not _strike_enabled(run.find('m:rPr/m:strike', NS)):
             return value
-        if end >= stop:
+        if end >= match.end(2):
             return value + '\nSL'
         offset = end
     return value
@@ -257,6 +261,19 @@ def _template_date(value):
     raise ValueError('日期格式无法识别：%s' % value)
 
 
+def name_and_remark(value, registered_name=None):
+    """Split a roster-only annotation without changing the matched person's name."""
+    if registered_name and registered_name in value:
+        before, _, after = value.partition(registered_name)
+        notes = (part.strip(NAME_NOTE_SEPARATORS) for part in (before, after))
+        return registered_name, '\n'.join(part for part in notes if part)
+    notes = TRAINING_NAME_NOTE.findall(value)
+    if not notes:
+        return value, ''
+    name = TRAINING_NAME_NOTE.sub('', value).strip(NAME_NOTE_SEPARATORS)
+    return name, '\n'.join(dict.fromkeys(notes))
+
+
 def parse_template(sheets):
     """标准模板：一行一人一天，列为 工号、姓名、日期、班次、备注。"""
     for rows in sheets.values():
@@ -265,6 +282,7 @@ def parse_template(sheets):
             if all(h in H for h in TEMPLATE_HEADERS[:4]):
                 col = {h: H.index(h) for h in TEMPLATE_HEADERS if h in H}
                 people, days, source_numbers = {}, {}, {}
+                names_by_day, name_remarks = {}, {}
                 for r2 in rows[hdr_i + 1:]:
                     if not r2:
                         continue
@@ -277,17 +295,22 @@ def parse_template(sheets):
                     d = _template_date(get('日期'))
                     cell = str(get('班次') or '').strip()
                     note = str(get('备注') or '').strip()
-                    if note:
+                    name_remark = note if TRAINING_NAME_NOTE.fullmatch(note) else ''
+                    if note and not name_remark:
                         cell = (cell + '\n' + note).strip()
                     key = (d, pid)
                     if key in source_numbers and source_numbers[key] != source_number:
                         raise ValueError('同日员工号重复（七位与前导0写法混用）：%s' % pid)
                     source_numbers[key] = source_number
-                    people[pid] = {'pid': pid, 'name': str(name).strip(), 'type': '', 'mark': ''}
+                    name = str(name).strip()
+                    people[pid] = {'pid': pid, 'name': name, 'type': '', 'mark': ''}
                     days.setdefault(d, {})[pid] = cell
+                    names_by_day.setdefault(d, {})[pid] = name
+                    name_remarks.setdefault(d, {})[pid] = name_remark
                 if not days:
                     raise ValueError('模板里没有任何人员数据')
-                return {'people': people, 'days': days, 'hours': {}}
+                return {'people': people, 'days': days, 'hours': {},
+                        'names_by_day': names_by_day, 'name_remarks': name_remarks}
     return None
 
 

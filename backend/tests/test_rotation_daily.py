@@ -1,15 +1,23 @@
 """Daily plans: real isolated SQLite transactions, history and concurrent edit guards."""
 from copy import deepcopy
+from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
+from openpyxl import Workbook
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
+from openpyxl.styles import Font
 
 from test_rotation_transaction_boundaries import formal_rotation, rotation, DAY, draft, live
+from app.database.migrations.rotation import ensure_heat_pursuit_post_template_1126
 from app.rotation import service as S
 from app.rotation import daily as D
 from app.rotation import forecast
 from app.rotation.manual import Hooks
 from app.rotation.models import RotationDay, RotationDuty, RotationSegment, RotationNotice, RotationSnapshot
+from app.rotation.roster import parse_any
+from app.v2_models import Attraction
 
 FUTURE = '2026-10-05'
 
@@ -49,10 +57,28 @@ def test_0300_future_prearrangement_preserves_manual_plan(rotation):
 
 
 def test_roster_sick_leave_appears_in_board_and_screen_without_entering_rotation(rotation):
-    names = {'21': '班表病假', '22': '备注病假', '23': '正常班次', '24': '公休'}
-    cells = {'21': 'sl', '22': '07:15-16:15\n(SL)', '23': '07:15-16:15', '24': 'OFF'}
-    parsed = {'people': {pid: {'name': name} for pid, name in names.items()},
-              'days': {FUTURE: cells}, 'hours': {}}
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(['工号', '姓名', '日期', '班次', '备注'])
+    strike = InlineFont(strike=True)
+    rows = [
+        ('21', '班表病假', 'sl', ''),
+        ('22', '备注病假', '07:15-16:15', '(SL)'),
+        ('23', '正常班次', '07:15-16:15', ''),
+        ('24', '公休', 'OFF', ''),
+        ('25', '培训病假', '09:30-18:00\nZPD 22sl', ''),
+        ('26', '划掉两个时间', CellRichText(TextBlock(strike, '09:30'), '-',
+                                       TextBlock(strike, '18:00'), '\nZPD 22'), ''),
+        ('27', '整格划掉', '09:30－18:00', ''),
+        ('28', '仅划掉备注', CellRichText('09:30-18:00\n', TextBlock(strike, 'SLIDE')), ''),
+    ]
+    for pid, name, shift, note in rows:
+        sheet.append([pid, name, FUTURE, shift, note])
+        if pid == '27':
+            sheet.cell(sheet.max_row, 4).font = Font(strike=True)
+    data = BytesIO()
+    workbook.save(data)
+    parsed = parse_any(data)
     with rotation.factory() as db:
         S.save_roster(db, rotation.attraction_id, parsed, scope='day', file_name='病假.xlsx',
                       uploader_id=None, uploader_name='测试')
@@ -60,8 +86,13 @@ def test_roster_sick_leave_appears_in_board_and_screen_without_entering_rotation
             S.set_sim_clock(S.load_config(db, rotation.attraction_id), FUTURE, 180, paused=True)
         for payload in (S.board_payload, S.screen_payload):
             day = payload(db, rotation.attraction_id)['day']
-            assert {p['pid'] for p in day['persons']} == {'23'}
-            assert {p['pid']: p['label'] for p in day['off']} == {'21': '病假', '22': '病假', '24': 'OFF'}
+            assert {p['pid'] for p in day['persons']} == {'23', '28'}
+            assert {p['pid']: p['label'] for p in day['off']} == {
+                '21': '病假', '22': '病假', '24': 'OFF', '25': '病假', '26': '病假', '27': '病假',
+            }
+            assert {p['pid']: (p['start'], p['end']) for p in day['off'] if p['pid'] in ('25', '26', '27')} == {
+                '25': (570, 1080), '26': (570, 1080), '27': (570, 1080),
+            }
             assert next(p for p in day['off'] if p['pid'] == '22') == {
                 'pid': '22', 'name': '备注病假', 'label': '病假', 'start': 435, 'end': 975,
             }
@@ -76,6 +107,25 @@ def test_roster_sick_leave_appears_in_board_and_screen_without_entering_rotation
         day = S.board_payload(db, rotation.attraction_id)['day']
         assert next(p for p in day['off'] if p['pid'] == '22')['end'] == 975
         assert 'end' not in next(p for p in S.day_state(row)['off'] if p['pid'] == '22')
+
+
+def test_excluded_board_person_keeps_the_imported_roster_notes(rotation):
+    roster = {
+        'people': {'21': {'name': '培训员工'}, '22': {'name': '轮岗员工'}},
+        'days': {FUTURE: {'21': '07:15-16:15\n不轮岗 培训', '22': '07:15-16:15'}},
+        'name_remarks': {FUTURE: {'21': '新人评估', '22': '新人复训'}},
+    }
+    with rotation.factory() as db:
+        aid = rotation.attraction_id
+        S.save_roster(db, aid, roster, scope='day', file_name='培训.xlsx',
+                      uploader_id=None, uploader_name='测试')
+        with S.transaction(db):
+            S.set_sim_clock(S.load_config(db, aid), FUTURE, 180, paused=True)
+        for payload in (S.board_payload, S.screen_payload):
+            people = {p['pid']: p for p in payload(db, aid)['day']['persons']}
+            assert people['21']['role'] == 'excluded' and people['21']['label'] == '不轮岗 培训'
+            assert people['21']['rosterNameRemark'] == '新人评估'
+            assert 'rosterNameRemark' not in people['22']
 
 
 def test_correcting_imported_sick_leave_moves_the_same_person_without_rewriting_the_roster(formal_rotation):
@@ -163,6 +213,51 @@ def read(rotation, day=FUTURE, at=None):
         return D.day_payload(db, rotation.attraction_id, day, at)
 
 
+def test_upgraded_heat_pursuit_template_applies_to_new_rosters_only(formal_rotation):
+    rotation = formal_rotation
+    aid = rotation.attraction_id
+    with rotation.factory() as db:
+        cfg = S.load_config(db, aid)
+        old_lines = [{'id': 'A1', 'group': 'A', 'walk': 7, 'posts': [{'name': '旧岗位'}]}]
+        S.update_config(cfg, old_lines, {'breakMin': 20}, None)
+        other = Attraction(name='另一个景点')
+        db.add(other)
+        db.flush()
+        other_id = other.id
+        S.update_config(S.load_config(db, other_id), old_lines, None, None)
+        db.commit()
+    live(rotation)
+
+    with rotation.factory() as db:
+        saved = S.day_row(db, aid, DAY).state_json
+        cfg = S.load_config(db, aid)
+        settings, clock = cfg.settings_json, cfg.clock_json
+        ensure_heat_pursuit_post_template_1126(db)
+        db.commit()
+        assert S.day_row(db, aid, DAY).state_json == saved
+        assert (cfg.settings_json, cfg.clock_json) == (settings, clock)
+        assert S.lines_of(S.load_config(db, other_id)) == old_lines
+
+    prepare(rotation)
+    with rotation.factory() as db:
+        lines = S.day_state(S.day_row(db, aid, FUTURE))['lines']
+        assert [line['id'] for line in lines] == [line['id'] for line in S.E.DEFAULT_LINES]
+        for actual, expected in zip(lines, S.E.DEFAULT_LINES):
+            assert actual['standby'] == expected.get('standby', False)
+            for field in ('name', 'openAt', 'seven'):
+                assert [post.get(field) for post in actual['posts']] == [post.get(field) for post in expected['posts']]
+        assert lines[0]['walk'] == 7
+
+    with rotation.factory() as db, S.transaction(db):
+        cfg = S.load_config(db, aid)
+        S.set_sim_clock(cfg, FUTURE, 240, paused=True)
+        S.ensure_prearranged_day(db, cfg, aid, FUTURE, 240)
+        state = S.day_state(S.day_row(db, aid, FUTURE))
+        assert state['status'] == 'live'
+        standby = state['lines'][-1]
+        assert not standby['active'] and all(not post['open'] for post in standby['posts'])
+
+
 def test_v2_daily_person_shift_sick_and_return_preserve_import_and_configuration(rotation):
     prepare(rotation)
     before = read(rotation)
@@ -202,8 +297,8 @@ def test_future_standby_line_can_enable_assign_and_disable_without_starting_time
     board.act_line(lid,True,240,'board')
     edit(rotation,action='draft_line',line=lid,active=True)
     opened=read(rotation);line=next(l for l in opened['draft']['lines'] if l['id']==lid)
-    assert not line['standby'] and all(post['open'] for post in line['posts'][:5])
-    assert not line['posts'][5]['open']
+    assert not line['standby'] and len(line['posts']) == 5
+    assert all(post['open'] for post in line['posts'])
     assert next(l for l in opened['day']['lines'] if l['id']==lid)['active']
     assigned=set(original['crew'].values())|set(original['seven'].values())
     pid=next(pid for pid in opened['draft']['persons'] if pid not in assigned)
@@ -301,38 +396,38 @@ def test_post_menu_saves_only_the_selected_day_and_activates_at_the_planned_time
     assert not engine.line('B')['posts'][0]['open']
 
 
-def test_spares_use_existing_rename_flow_without_changing_other_slots(rotation):
-    with rotation.factory() as db, S.transaction(db):
-        cfg = S.load_config(db, rotation.attraction_id)
-        cfg.lines_json = S._dumps(S.E.DEFAULT_LINES)
+def test_draft_insert_and_delete_empty_post_keeps_workers_bound_to_original_posts(rotation):
     prepare(rotation)
-    before = read(rotation)
-    assert all(len(line['posts']) == 6 for line in before['draft']['lines'])
-    plan = deepcopy(before['draft']['plan'])
-    original = deepcopy(before['draft']['lines'])
-    identities = None
-    for key, name in [('D2#3', '备用改名甲'), ('D2#4', '备用改名乙'),
-                      ('E#2', '备用改名丙'), ('E#3', '备用改名丁'), ('E#4', '备用改名戊'),
-                      ('A1#5', '备用改名己')]:
-        edit(rotation, action='draft_rename_post', post=key, expected_name='备用', name=name)
-        current_keys = [post['key'] for line in read(rotation)['draft']['lines'] for post in line['posts']]
-        if identities is None:
-            identities = current_keys  # Existing rename flow initializes workflow identities once.
-            assert len(set(identities)) == 54
-        assert current_keys == identities
-        line_id, index = key.split('#')
-        next(line for line in original if line['id'] == line_id)['posts'][int(index)]['name'] = name
-    after = read(rotation)
-    actual = deepcopy(after['draft']['lines'])
-    for lines in (actual, original):
-        for line in lines:
-            for post in line['posts']:
-                post.pop('key', None)
-                post.pop('hold101Role', None)
-    assert actual == original
-    assert after['draft']['plan'] == plan
-    assert next(line for line in after['draft']['lines'] if line['id'] == 'D2')['standby']
-    assert next(line for line in after['draft']['lines'] if line['id'] == 'E')['standby']
+    with rotation.factory() as db, S.transaction(db):
+        row = S.day_row(db, rotation.attraction_id, FUTURE)
+        state = S.day_state(row)
+        line = state['lines'][0]
+        slot = f"{line['id']}#0"
+        early = state['plan']['crew'].pop(slot)
+        seated = set(state['plan']['crew'].values()) | {early}
+        relief = next(pid for pid in state['persons'] if pid not in seated)
+        state['persons'][early]['start'] = 420
+        line['posts'][0]['seven'] = 1
+        state['plan'].update(seven={slot: early}, push7=[relief], push7Targets={relief: early})
+        S.save_day(db, row, state)
+    before = read(rotation)['draft']
+    line = before['lines'][0]
+    prior = S.E.post_plan_by_key(before)
+    edit(rotation, action='draft_post_create', line=line['id'], i=0, name='新入口', time='08:05')
+    after = read(rotation)['draft']
+    posts = after['lines'][0]['posts']
+    assert posts[0]['name'] == '新入口' and posts[0]['openAt'] == '08:05'
+    assert [post['key'] for post in posts[1:]] == [post['key'] for post in line['posts']]
+    assert S.E.post_plan_by_key(after) == prior
+    assert after['plan']['push7'] == before['plan']['push7']
+    assert after['plan']['push7Targets'] == {relief: early}
+    day = read(rotation)['day']
+    assert day['lines'][0]['posts'][0]['canDeletePost'] and not day['lines'][0]['posts'][1]['canDeletePost']
+    with pytest.raises(S.ActionError, match='只可删除'):
+        edit(rotation, action='draft_post_delete', post=f"{line['id']}#1")
+    edit(rotation, action='draft_post_delete', post=f"{line['id']}#0")
+    restored = read(rotation)['draft']
+    assert restored['lines'] == before['lines'] and restored['plan'] == before['plan']
 
 
 def edit(rotation, **body):
@@ -350,7 +445,6 @@ def test_future_post_rename_preserves_plan_and_rejects_invalid_or_stale_edits(ro
     edit(rotation,action='draft_rename_post',post='A#0',expected_name=original,name='新入口')
     after=read(rotation)
     assert after['draft']['lines'][0]['posts'][0]['name']=='新入口'
-    assert after['draft']['lines'][0]['posts'][0]['hold101Role']=='tower'
     assert after['draft']['plan']==before['draft']['plan']
     assert after['draft']['persons']==before['draft']['persons']
     for name in ('', ' '*3, '字'*41, 123, after['draft']['lines'][0]['posts'][1]['name']):
@@ -763,7 +857,7 @@ def test_today_published_prestart_plan_and_board_edit_same_arrangement(rotation)
     after = read(rotation, DAY)
     with rotation.factory() as db:
         board = S.board_payload(db, rotation.attraction_id)['day']
-    assert after['day']['lines'] == board['lines']
+    assert after['day'] == board
     assert after['draft']['plan']['crew']['A#0'] == before['draft']['plan']['crew']['B#0']
     pid = after['draft']['plan']['crew']['A#0']
     with rotation.factory() as db:
@@ -850,6 +944,31 @@ def test_legacy_opening_falls_back_to_saved_plan_without_rewriting_history(rotat
     assert first['revision']==second['revision'] and first['day']==second['day']
 
 
+def test_opening_preview_hides_unused_spares_without_changing_timed_replay(rotation):
+    live(rotation)
+    set_clock(rotation, DAY, 435)
+    read(rotation, DAY)
+    aid = rotation.attraction_id
+    with rotation.factory() as db, S.transaction(db):
+        row = S.day_row(db, aid, DAY)
+        state = S.day_state(row)
+        opening = state['dailyOpening']['state']
+        posts = opening['lines'][0]['posts']
+        posts.extend([
+            {'name': '备用', 'key': 'scheduled', 'openAt': '10:00'},
+            {'name': '备用', 'key': 'unused', 'draftClosed': True},
+        ])
+        S.save_day(db, row, state, notify=False)
+        D.capture_snapshot(db, aid, opening, {}, 435)
+        saved = row.state_json
+    with rotation.factory() as db:
+        opening = D.day_payload(db, aid, DAY)
+        assert opening['opening_source'] == 'opening'
+        assert opening['day']['lines'][0]['posts'][-1]['key'] == 'scheduled'
+        assert D.day_payload(db, aid, DAY, '07:15')['day']['lines'][0]['posts'][-1]['key'] == 'unused'
+        assert S.day_row(db, aid, DAY).state_json == saved
+
+
 def test_late_publish_labels_actual_capture_instead_of_claiming_earlier_snapshot(rotation):
     draft(rotation)
     set_clock(rotation,DAY,600)
@@ -913,149 +1032,32 @@ def test_replaced_roster_can_be_regenerated_and_manually_published_after_first_s
         assert published['as_of'] == pytest.approx(now)
 
 
-def legacy_standard_day(rotation,formal=False,work_date=FUTURE):
-    from app.rotation.namespace import tables_for
-    with rotation.factory() as db:
-        cfg=S.load_config(db,rotation.attraction_id)
-        old=deepcopy(S.E.DEFAULT_LINES)
-        for line in old:
-            line['posts'].pop()
-        old[-2]['posts']=old[-2]['posts'][:3];old[-1]['posts']=old[-1]['posts'][:2]
-        cfg.lines_json=S._dumps(old);db.commit()
+@pytest.mark.parametrize('status', ['draft', 'live', 'ended'])
+def test_old_placeholders_are_trimmed_only_from_active_plans(rotation, status):
     prepare(rotation)
-    with rotation.factory() as db,S.transaction(db):
-        row=S.day_row(db,rotation.attraction_id,FUTURE);state=S.day_state(row)
-        # Preserve a real custom name, assignment and all original stable identities.
-        state['lines'][0]['posts'][0]['name']='已修改名称'
-        state['date']=work_date
-        if formal:
-            db.info['rotation_formal']=True
-            cfg=S.load_config(db,rotation.attraction_id);S.set_sim_clock(cfg,DAY,240,paused=True)
-            row=tables_for(db).RotationDay(attraction_id=rotation.attraction_id,work_date=work_date,status='draft',state_json=S._dumps(state),version=1)
-            db.add(row);db.flush()
-        else:
-            row.work_date=work_date;S.save_day(db,row,state)
-        return deepcopy(state),row.version
-
-
-@pytest.mark.parametrize('formal',[False,True])
-def test_existing_unstarted_plans_fill_spares_without_resetting_arrangement(rotation,formal):
-    before,version=legacy_standard_day(rotation,formal)
-    def load():
-        with rotation.factory() as db:
-            db.info['rotation_formal']=formal
-            return D.day_payload(db,rotation.attraction_id,FUTURE)
-    after=load();lines={l['id']:l for l in after['draft']['lines']}
-    assert all(len(line['posts']) == 6 and line['posts'][5]['draftClosed'] for line in lines.values())
-    assert [p['name'] for p in lines['D2']['posts'][3:]]==['备用']*3
-    assert [p['name'] for p in lines['E']['posts'][2:]]==['备用']*4
-    assert after['draft']['plan']==before['plan'] and after['draft']['persons']==before['persons']
-    for a,b in zip(after['draft']['lines'],before['lines']):assert a['posts'][:len(b['posts'])]==b['posts']
-    keys=[p['key'] for line in after['draft']['lines'] for p in line['posts'] if p.get('name')=='备用']
-    assert len(set(keys))==14
-    assert after['revision']==version+1
-    again=load();assert again['draft']==after['draft'] and again['revision']==after['revision']
-    with rotation.factory() as db:
-        from app.rotation.namespace import tables_for
-        db.info['rotation_formal']=formal
-        assert db.query(tables_for(db).RotationEvent).filter_by(event_type='draft_fill_spares').count()==1
-    if formal:
-        # Upgrading formal storage must not modify the independent sandbox plan.
-        with rotation.factory() as db:assert len(S.day_state(S.day_row(db,rotation.attraction_id,FUTURE))['lines'][-1]['posts'])==2
-
-
-@pytest.mark.parametrize('work_date,minute',[(DAY,240),(DAY,500),('2026-10-03',240)])
-def test_fill_only_before_first_shift_never_rewrites_frozen_or_past_day(rotation,work_date,minute):
-    before,version=legacy_standard_day(rotation,work_date=work_date)
-    with rotation.factory() as db:
-        cfg=S.load_config(db,rotation.attraction_id);S.set_sim_clock(cfg,DAY,minute,paused=True);db.commit()
-    read(rotation,work_date)
-    with rotation.factory() as db:
-        row=S.day_row(db,rotation.attraction_id,work_date);stored=S.day_state(row)
-        if work_date==DAY and minute<435:
-            assert len(stored['lines'][-1]['posts'])==6 and row.version==version+1
-        else:
-            assert stored==before and row.version==version
-
-
-def test_spare_fill_keeps_custom_lines_and_does_not_trim_extra_posts():
-    state={'lines':[{'id':'F','posts':[{'name':'自定义'}]}, {'id':'A1','posts':[{'name':str(i)} for i in range(6)]}]}
-    before=deepcopy(state);assert D.fill_prestart_spares(state)=={};assert state==before
-
-
-def test_enabled_today_before_first_shift_adds_only_closed_empty_spares(rotation):
-    legacy_standard_day(rotation,work_date=DAY)
-    with rotation.factory() as db,S.transaction(db):
-        cfg=S.load_config(db,rotation.attraction_id)
-        row=S.day_row(db,rotation.attraction_id,DAY)
-        state=S.day_state(row)
-        engine,_=S.engine_for(db,cfg,row,state)
-        engine.publish(240,'test')  # Simulate a day already published by the earlier code.
-        S.save_day(db,row,state)
-        before=deepcopy(state)
-        snapshots={r.id:r.payload for r in db.query(RotationSnapshot).all()}
-    S.tick_attraction(rotation.attraction_id)
-    with rotation.factory() as db:
-        assert len(S.board_payload(db,rotation.attraction_id)['day']['lines'][-1]['posts'])==6
-    after=read(rotation,DAY)
-    assert after['prestart_live'] and after['draft']['plan']==before['plan']
-    for line in after['draft']['lines']:
-        old=next(l for l in before['lines'] if l['id']==line['id'])
-        assert line['posts'][:len(old['posts'])]==old['posts']
-        for post in line['posts'][len(old['posts']):]:
-            assert post['name']=='备用' and not post['open'] and post['occ'] is None
-    with rotation.factory() as db:
-        assert all(db.get(RotationSnapshot,key).payload==payload for key,payload in snapshots.items())
-
-
-def test_legacy_spare_fill_commit_failure_rolls_back_and_can_retry(rotation,monkeypatch):
-    before,version=legacy_standard_day(rotation)
-    with rotation.factory() as db:
-        def fail():raise RuntimeError('test fill commit failure')
-        monkeypatch.setattr(db,'commit',fail)
-        with pytest.raises(RuntimeError,match='fill commit failure'):D.day_payload(db,rotation.attraction_id,FUTURE)
-    with rotation.factory() as db:
-        row=S.day_row(db,rotation.attraction_id,FUTURE)
-        assert row.version==version and S.day_state(row)==before
-        from app.rotation.models import RotationEvent
-        assert db.query(RotationEvent).filter_by(event_type='draft_fill_spares').count()==0
-    assert len(read(rotation)['draft']['lines'][-1]['posts'])==6
-
-
-@pytest.mark.parametrize('automatic', [False, True])
-def test_legacy_draft_opens_with_closed_spares_without_daily_page_visit(rotation, automatic):
-    before, _ = legacy_standard_day(rotation, work_date=DAY)
-    with rotation.factory() as db:
-        cfg = S.load_config(db, rotation.attraction_id)
-        with S.transaction(db):
-            row = S.day_row(db, rotation.attraction_id, DAY)
-            state = S.day_state(row)
-            # The fixture copies a plan from another date. Bind it to today's upload.
-            state.update(dailyAutoStart=automatic, rosterUploadId=S.roster_upload_for(db, rotation.attraction_id, DAY).id)
-            S.save_day(db, row, state)
-        if automatic:
-            S.ensure_prearranged_day(db, cfg, rotation.attraction_id, DAY, 240)
-        else:
-            S.do_draft_action(db, rotation.attraction_id, 'test', {'action': 'publish', 'date': DAY})
-        row = S.day_row(db, rotation.attraction_id, DAY)
+    with rotation.factory() as db, S.transaction(db):
+        row = S.day_row(db, rotation.attraction_id, FUTURE)
         state = S.day_state(row)
-        assert row.status == 'live' and state['plan'] == before['plan']
-        assert all(len(line['posts']) == 6 and not line['posts'][5]['open'] for line in state['lines'])
-
-    def view_posts(minute):
-        set_clock(rotation, DAY, minute)
-        S.tick_attraction(rotation.attraction_id)
-        with rotation.factory() as db:
-            day = S.board_payload(db, rotation.attraction_id)['day']
-            return next(line['posts'] for line in day['lines'] if line['id'] == 'D2')
-
-    set_clock(rotation, DAY, 436)
+        state['status'] = status
+        trailing = {'name': '备用', 'key': 'unused-legacy', 'draftClosed': True}
+        scheduled = {'name': '备用', 'key': 'scheduled-legacy', 'openAt': '10:00'}
+        state['lines'][0]['posts'].extend([scheduled, trailing])
+        before_plan = deepcopy(state['plan'])
+        S.save_day(db, row, state, notify=False)
+        version = row.version
     with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test', {'action': 'line', 'line': 'D2', 'active': True})
-    posts = view_posts(436)
-    assert all(post['open'] for post in posts[:5]) and not posts[5]['open']
+        row = S.day_row(db, rotation.attraction_id, FUTURE)
+        normalized = S.day_state(row)
+        posts = normalized['lines'][0]['posts']
+        assert posts[-1]['key'] == ('unused-legacy' if status == 'ended' else 'scheduled-legacy')
+        assert normalized['plan'] == before_plan and row.version == version
+        assert 'unused-legacy' in row.state_json
+
+
+def test_short_lines_stay_short_through_generation_and_publication(rotation):
     with rotation.factory() as db:
-        S.do_live_action(db, rotation.attraction_id, 'test',
-                         {'action': 'post', 'line': 'D2', 'i': 5, 'open': True, 'openAt': '07:20'})
-    assert not view_posts(439)[5]['open']
-    assert view_posts(440)[5]['open']
+        S.do_draft_action(db, rotation.attraction_id, 'test', {'action': 'draft_generate', 'date': DAY})
+        before = S.day_state(S.day_row(db, rotation.attraction_id, DAY))['lines']
+        S.do_draft_action(db, rotation.attraction_id, 'test', {'action': 'publish', 'date': DAY})
+        after = S.day_state(S.day_row(db, rotation.attraction_id, DAY))['lines']
+    assert [len(line['posts']) for line in after] == [len(line['posts']) for line in before]
