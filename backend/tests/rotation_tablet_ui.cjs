@@ -62,13 +62,31 @@ async function testScreenWithOlderSharedScripts(browser,origin){
     assert(await page.locator('.rt-screen-live [data-f-slot]').count()>0);
   }finally{await page.close();}
 }
+async function testScreenRecoversFromInitialFailure(browser,origin){
+  const page=await browser.newPage();
+  let release, first=true;
+  const retry=new Promise(resolve=>{release=resolve;});
+  try{
+    await page.route('**/api/rotation-screen/state',async route=>{
+      if(first){first=false;return route.fulfill({status:500,contentType:'text/plain',body:'Internal Server Error'});}
+      await retry;
+      return route.continue();
+    });
+    await page.goto(`${origin}/`);
+    await page.getByRole('heading',{name:'无法加载大屏'}).waitFor();
+    assert.match(await page.locator('#rtApp').innerText(),/HTTP 500/);
+    release();
+    await page.locator('.rt-screen-live .rt-line').first().waitFor();
+    assert.equal(await page.locator('#rtApp .rt-empty').count(),0);
+  }finally{release();await page.close();}
+}
 async function main(){
   const screen=createScreenFixture(fixture(), {demo:true});
   const preview=process.argv.includes('--serve');
   const origin=await screen.start(preview?18112:0);
   if(preview){console.log(`Tablet layout preview: ${origin}/`);return;}
   let browser;
-  try{browser=await chromium.launch({channel:'msedge',headless:true});await testScreenWithOlderSharedScripts(browser,origin);fs.mkdirSync(out,{recursive:true});for(const [width,height] of [[1920,1080],[1280,800],[1366,1024],[1180,820],[1024,768],[800,1280],[390,844]]){
+  try{browser=await chromium.launch({channel:'msedge',headless:true});await testScreenWithOlderSharedScripts(browser,origin);await testScreenRecoversFromInitialFailure(browser,origin);fs.mkdirSync(out,{recursive:true});for(const [width,height] of [[1920,1080],[1280,800],[1366,1024],[1180,820],[1024,768],[800,1280],[390,844]]){
     const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(`${origin}/`);
     await page.locator('.rt-screen-live .rt-line').first().waitFor();
     assert.equal(await page.locator('.rt-line').count(),9);

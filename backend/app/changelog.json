@@ -1,4 +1,7 @@
 [
+  {"version": "2026.11.25.3", "date": "2026-11-25", "status": "candidate", "items": [
+    {"summary": "轮岗 01:00 预排与看板自动恢复", "detail": "有当日班表时，自动预排提前到 01:00，首班前不占岗、不计时，仍在运行的跨夜班继续到结束。看板和大屏遇到暂时的服务异常时会重试，月历暂未同步时仍可查看已读取的当日班表。", "audiences": ["TR", "SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM"]}
+  ]},
   {"version": "2026.11.25.2", "date": "2026-11-25", "status": "candidate", "items": [
     {"summary": "轮岗 101 模式与当天加岗", "detail": "101 模式让塔台及协助岗位继续值守，跟踪应到岗位，并在结束后随顺推接回。当天可按指定顺位新增岗位，并选择立即或定时开放。", "audiences": ["TR", "SUPERVISOR", "TA_SUPERVISOR", "GSM", "TA_GSM"]},
     {"summary": "入库货位分配核对", "detail": "入库时逐项核对实收数量和货位分配。数量未分完、超出或缺少货位时会提示，确认前可继续修改草稿。", "audiences": ["TA_SUPERVISOR", "SUPERVISOR", "TA_GSM", "GSM", "AM", "OM", "TALEAD", "LEAD"]}

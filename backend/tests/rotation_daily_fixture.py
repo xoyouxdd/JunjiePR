@@ -66,8 +66,8 @@ def edit_daily(client, day, action):
 
 with TestClient(app) as client:
     ok(client.post('/api/login', json={'employee_no': 'GSMTEST01', 'password': 'daily-fixture-2026'}))
-    # Seed and publish before the automatic 03:00 start can race the setup.
-    ok(client.post(CLOCK, json={'action': 'set', 'date': '2026-10-04', 'time': '02:30'}))
+    # Seed and publish before the automatic 01:00 start can race the setup.
+    ok(client.post(CLOCK, json={'action': 'set', 'date': '2026-10-04', 'time': '00:30'}))
     lines = [
         {'id': 'A', 'posts': [{'name': '入口分组'}, {'name': '安全观察'}, {'name': '出口协助'}]},
         {'id': 'B', 'posts': [{'name': '排队引导'}, {'name': '通道管理'}, {'name': '游客协助'}]},

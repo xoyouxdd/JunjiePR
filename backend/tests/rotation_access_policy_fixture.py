@@ -36,7 +36,8 @@ with exclusive_data(path):
         db.commit();db.info['rotation_formal']=True
         people={str(9720001+i):{'name':f'模拟伙伴{i+1:02d}','type':'','mark':''} for i in range(12)}
         shifts={no:'07:15-16:15' if i<8 else '16:00-00:30' if i<10 else '19:00-02:00' for i,no in enumerate(people)}
-        for day in ['2026-11-07','2026-11-08','2026-11-09']:
+        # Leave a gap so each browser starts before its own 01:00 preview.
+        for day in ['2026-11-07','2026-11-09','2026-11-11']:
             S.save_roster(db,heat.id,{'people':people,'days':{day:shifts},'hours':{}},scope='day',
                           file_name='隔离权限班表.xlsx',uploader_id=None,uploader_name='隔离测试')
     import uvicorn

@@ -40,7 +40,7 @@ from app.runtime_environment import environment_kind
 logger = logging.getLogger(__name__)
 
 DAY_END = 24 * 60
-PREARRANGE_MINUTE = 3 * 60
+PREARRANGE_MINUTE = 60
 ActionError = E.ActionError
 
 
@@ -802,7 +802,7 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *,
 
 @transactional
 def ensure_prearranged_day(db: Session, cfg: RotationConfig, attraction_id: int, day: str, minute: float) -> None:
-    """有班表时03:00生成预排；开始时间前仅展示岗位，不计时。"""
+    """有班表时 01:00 生成预排；首班开始前仅展示岗位，不计时。"""
     RUNTIME = runtime_for(db)
     with RUNTIME.lock:
         row=day_row(db,attraction_id,day)

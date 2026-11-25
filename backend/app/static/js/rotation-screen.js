@@ -170,9 +170,10 @@ RT.load = async () => {
 (async () => {
   try {
     await RT.load();
-    connectLive();
-    startLocalTicker();
   } catch (error) {
     $app.innerHTML = `<section class="panel rt-empty"><h2>无法加载大屏</h2><p>${esc(error.message)}</p></section>`;
+    if (error.status === 401 || error.status === 403) return;
   }
+  connectLive();
+  startLocalTicker();
 })();

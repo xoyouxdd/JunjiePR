@@ -552,18 +552,24 @@ def test_new_day_is_v2_and_preview_never_rewrites_config_or_historical_snapshots
         assert all(db.get(RotationSnapshot, key).payload == value for key, value in snapshots.items())
 
 
-def test_prearrange_at_0300_does_not_cut_off_live_overnight_day(current):
+def test_prearrange_at_0100_does_not_cut_off_live_overnight_day(current):
     from datetime import date,timedelta
     tomorrow=(date.fromisoformat(DAY)+timedelta(days=1)).isoformat()
     with current.factory() as db,S.transaction(db):
         cfg=S.load_config(db,current.attraction_id);row=S.day_row(db,current.attraction_id,DAY);state=S.day_state(row)
         for p in state['persons'].values():p['end']=1680
         state['lastTick']=1439
-        S.save_day(db,row,state);S.set_sim_clock(cfg,tomorrow,180,paused=True)
-        assert S.clock_now(cfg)==(DAY,1620)
+        S.save_day(db,row,state);S.set_sim_clock(cfg,tomorrow,60,paused=True)
+        assert S.clock_now(cfg)==(DAY,1500)
+    parsed = {'people': {'1': {'name': '次日员工'}}, 'days': {tomorrow: {'1': '07:15-16:15'}}, 'hours': {}}
+    with current.factory() as db:
+        S.save_roster(db, current.attraction_id, parsed, scope='day', file_name='次日班表.xlsx',
+                      uploader_id=None, uploader_name='测试')
     S.tick_attraction(current.attraction_id)
     data=board(current)
     assert data['date']==DAY and data['status']=='live'
+    with current.factory() as db:
+        assert S.day_row(db, current.attraction_id, tomorrow) is None
 
 
 def test_committed_confirmation_is_idempotent_and_recomputes_others(current):

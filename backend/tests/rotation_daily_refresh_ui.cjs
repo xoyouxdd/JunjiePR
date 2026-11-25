@@ -18,8 +18,36 @@ let server,browser,log='';
   const page=await context.newPage(),errors=[],requests=[];
   page.on('pageerror',e=>errors.push(e.message));
   page.on('request',r=>{const p=new URL(r.url()).pathname;if(p.startsWith('/api/rotation-board/'))requests.push([r.method(),p]);});
-  await page.goto(base+'/rotation-board');await page.locator('[data-tab=draft]').click();
+  await page.route(url=>url.pathname.endsWith('/rotation-contacts.js'),route=>route.abort('failed'));
+  let releaseBoard, firstBoard = true;
+  const boardRetry = new Promise(resolve => { releaseBoard = resolve; });
+  await page.route('**/api/rotation-board/board', async route => {
+   if(firstBoard){firstBoard=false;return route.fulfill({status:500,contentType:'text/plain',body:'Internal Server Error'});}
+   await boardRetry;
+   return route.continue();
+  });
+  await page.goto(base+'/rotation-board');
+  await page.getByRole('heading',{name:'无法进入轮岗'}).waitFor();
+  assert.match(await page.locator('#rtApp').innerText(),/HTTP 500/);
+  releaseBoard();
+
+  await page.route(url=>url.pathname==='/api/rotation-board/daily',
+   route=>route.fulfill({status:503,contentType:'text/plain',body:'Unavailable'}),{times:1});
+  await page.locator('[data-tab=draft]').click();
+  await page.locator('[data-daily-calendar-warning]').waitFor();
+  assert.match(await page.locator('#rtApp').innerText(),/上传班表/);
+  assert(!await page.locator('[data-daily-error]').isVisible());
+  await page.locator('[data-daily-reload]').click();
+  await page.locator('[data-daily-date-button="2026-10-06"]').waitFor();
+  assert(!await page.locator('[data-daily-calendar-warning]').isVisible());
+
+  await page.route('**/api/rotation-board/daily/2026-10-06',
+   route=>route.fulfill({status:500,contentType:'text/plain',body:'Internal Server Error'}),{times:1});
   await page.locator('[data-daily-date-button="2026-10-06"]').click();
+  await page.locator('[data-daily-error]').waitFor();
+  assert.match(await page.locator('[data-daily-error]').innerText(),/HTTP 500/);
+  assert(await page.locator('[data-daily-date-button="2026-10-05"]').isVisible());
+  await page.locator('[data-daily-reload]').click();
   await page.waitForFunction(()=>daily.data?.date==='2026-10-06'&&!daily.loading);
   await page.evaluate(()=>{const load=RT.load;window.swapBoardLoads=0;RT.load=function(...args){if(new Error().stack.includes('dailySend'))window.swapBoardLoads++;return load(...args);};});
   const data=()=>context.request.get(base+'/api/rotation-board/daily/2026-10-06').then(r=>r.json());

@@ -30,7 +30,9 @@ function renderWho() {
 function renderClockBar() {}
 
 function renderTabs() {
-  syncRotationContacts(tab === 'board' && !personalRotation && me.capabilities.rotation_contacts);
+  if (typeof syncRotationContacts === 'function') {
+    syncRotationContacts(tab === 'board' && !personalRotation && me.capabilities.rotation_contacts);
+  }
   if (!isManager()) { $tabs.hidden = true; return; }
   $tabs.hidden = false;
   $tabs.innerHTML = TABS.filter(([id])=>me.capabilities.can_manage||id==='board').map(([id, label]) => `<button type="button" class="${id === tab ? 'active' : ''}" data-tab="${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</button>`).join('');
@@ -106,7 +108,7 @@ function draftSettings(data) {
       <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>姓名</th><th>工号</th><th>班次</th><th>备注</th><th>角色</th></tr></thead><tbody>${persons.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.pid)}</td><td>${hm(p.start)}–${hm(p.end)}</td><td>${esc([p.note,p.label,p.mark].filter(Boolean).join('；'))}</td><td>${roleSelect(p)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
-const daily={month:'',date:'',calendar:null,data:null,time:'',loading:false,error:'',request:0,busy:false,source:null,mode:'people'};
+const daily={month:'',date:'',calendar:null,calendarUnavailable:false,data:null,time:'',loading:false,error:'',request:0,busy:false,source:null,mode:'people'};
 function dailyPendingUI(){
   if(tab!=='draft')return;
   const position={x:window.scrollX,y:window.scrollY,parents:[]};
@@ -119,6 +121,8 @@ function dailyPendingUI(){
   if(selection&&!daily.source){selection.textContent=daily.error?daily.error+'，请刷新班表后重试。':daily.busy?'正在保存调整…':daily.loading?'正在读取班表…':'拖拽到目标位置交换';selection.title=selection.textContent;selection.setAttribute('role',daily.error?'alert':'status');}
   const error=$app.querySelector('[data-daily-error]');
   if(error){error.hidden=!!selection||!daily.error;error.textContent=daily.error?daily.error+'，请刷新班表后重试。':'';}
+  const calendarWarning=$app.querySelector('[data-daily-calendar-warning]');
+  if(calendarWarning)calendarWarning.hidden=!daily.calendarUnavailable;
   for(const [el,disabled,draggable] of daily.pendingControls||[]){el.disabled=disabled;el.draggable=draggable;}
   daily.pendingControls=[];
   if(pending)$app.querySelectorAll('[data-daily-person],[data-daily-pid],[data-daily-post],[data-daily-rename],[data-draft],[data-list],[data-role],[data-d],#draftClose').forEach(el=>{
@@ -129,17 +133,33 @@ function dailyPendingUI(){
   window.scrollTo({left:position.x,top:position.y,behavior:'instant'});
 }
 async function loadDaily(date=daily.date||RT.data.clock.date,time=daily.time,prepare=true,{refreshMonth=true}={}){
-  const retained=daily.data?.date===date&&daily.calendar?.month===date.slice(0,7);
-  const {version:liveVersion,syncEpoch:liveEpoch}=RT.data;const generation=++daily.request;daily.date=date;daily.month=date.slice(0,7);daily.time=time;daily.source=null;daily.loading=true;daily.error='';
+  const month=date.slice(0,7);
+  const retained=daily.data?.date===date;
+  const cachedCalendar=daily.calendar?.month===month?daily.calendar:null;
+  const readCalendar=refreshMonth||!cachedCalendar;
+  const {version:liveVersion,syncEpoch:liveEpoch}=RT.data;
+  const generation=++daily.request;
+  if(daily.month!==month)daily.calendarUnavailable=false;
+  Object.assign(daily,{date,month,time,calendar:cachedCalendar,source:null,loading:true,error:''});
   if(retained)dailyPendingUI();else RT.render(false,true);
   try{
-    const [month,loaded]=await Promise.all([refreshMonth||!retained?rtApi('/api/rotation-board/daily?month='+encodeURIComponent(daily.month)):Promise.resolve(daily.calendar),rtApi('/api/rotation-board/daily/'+date+(time?'?at='+encodeURIComponent(time):''))]);
-    if(generation!==daily.request)return;let data=loaded;
+    const [calendarResult,dayResult]=await Promise.allSettled([
+      readCalendar?rtApi('/api/rotation-board/daily?month='+encodeURIComponent(month)):cachedCalendar,
+      rtApi('/api/rotation-board/daily/'+date+(time?'?at='+encodeURIComponent(time):'')),
+    ]);
+    if(generation!==daily.request)return;
+    if(readCalendar){
+      daily.calendarUnavailable=calendarResult.status==='rejected';
+      if(!daily.calendarUnavailable)daily.calendar=calendarResult.value;
+    }
+    if(dayResult.status==='rejected')throw dayResult.reason;
+    let data=dayResult.value;
     if(prepare&&data.date>data.today&&data.can_generate&&data.revision===0){try{await rtPost('/api/rotation-board/daily/'+date,{action:'draft_generate',revision:0});}catch(error){const latest=await rtApi('/api/rotation-board/daily/'+date);if(!latest.revision)throw error;}data=await rtApi('/api/rotation-board/daily/'+date);}
     if(generation!==daily.request)return;
     const status=data.prestart_live?'live':data.draft?'draft':data.day?.status||null;
-    daily.calendar={...month,days:month.days.map(d=>d.date===date?{...d,status}:d)};daily.data=data;daily.liveVersion=liveVersion;daily.liveEpoch=liveEpoch;
-  }catch(error){if(generation===daily.request){daily.error=error.message;if(!retained){daily.data=null;daily.calendar=null;}}}
+    if(daily.calendar)daily.calendar={...daily.calendar,days:daily.calendar.days.map(d=>d.date===date?{...d,status}:d)};
+    daily.data=data;daily.liveVersion=liveVersion;daily.liveEpoch=liveEpoch;
+  }catch(error){if(generation===daily.request){daily.error=error.message;if(!retained)daily.data=null;}}
   finally{if(generation===daily.request){daily.loading=false;if(tab==='draft'&&RT.data){if(retained&&daily.error)dailyPendingUI();else RT.render(false,true);}}}
 }
 
@@ -156,7 +176,9 @@ function dailyHistory(data){
 }
 function draftView(){
   const data=daily.data,calendar=daily.calendar;
-  const controls=`<section class="panel rt-daily"><header><h2>每日班表</h2><p class="field-hint">预排未来班表。当天启用后请在看板调整，首班开始后这里保留开班安排。</p></header><div class="rt-row"><label>月份<input type="month" data-daily-month value="${esc(daily.month||RT.data.clock.date.slice(0,7))}"></label><label>日期<input type="date" data-daily-date value="${esc(daily.date||RT.data.clock.date)}"></label><button type="button" class="secondary" data-daily-reload>刷新班表</button></div>${calendar?`<div class="rt-daily-calendar" role="group" aria-label="本月每日班表">${['一','二','三','四','五','六','日'].map(d=>`<span class="rt-daily-weekday">${d}</span>`).join('')}${'<span aria-hidden="true"></span>'.repeat((new Date(calendar.month+'-01T12:00:00').getDay()+6)%7)}${calendar.days.map(d=>`<button type="button" class="${d.date===daily.date?'primary':'secondary'}" data-daily-date-button="${d.date}" aria-pressed="${d.date===daily.date}"><strong>${Number(d.date.slice(-2))}</strong><small>${d.status==='draft'?'预排':d.status==='live'?'已启用':d.status==='ended'?'已结束':d.has_roster?'有班表':'无班表'}</small></button>`).join('')}</div>`:''}<p role="status" data-daily-status ${daily.loading||daily.busy?'':'hidden'}>${daily.busy?'正在保存调整…':daily.loading?'正在读取班表…':''}</p><p role="alert" class="rt-warn" data-daily-error ${daily.error?'':'hidden'}>${daily.error?esc(daily.error)+'，请刷新班表后重试。':''}</p></section>`;
+  const controls=`<section class="panel rt-daily"><header><h2>每日班表</h2><p class="field-hint">预排未来班表。当天启用后请在看板调整，首班开始后这里保留开班安排。</p></header><div class="rt-row"><label>月份<input type="month" data-daily-month value="${esc(daily.month||RT.data.clock.date.slice(0,7))}"></label><label>日期<input type="date" data-daily-date value="${esc(daily.date||RT.data.clock.date)}"></label><button type="button" class="secondary" data-daily-reload>刷新班表</button></div>${calendar?`<div class="rt-daily-calendar" role="group" aria-label="本月每日班表">${['一','二','三','四','五','六','日'].map(d=>`<span class="rt-daily-weekday">${d}</span>`).join('')}${'<span aria-hidden="true"></span>'.repeat((new Date(calendar.month+'-01T12:00:00').getDay()+6)%7)}${calendar.days.map(d=>`<button type="button" class="${d.date===daily.date?'primary':'secondary'}" data-daily-date-button="${d.date}" aria-pressed="${d.date===daily.date}"><strong>${Number(d.date.slice(-2))}</strong><small>${d.status==='draft'?'预排':d.status==='live'?'已启用':d.status==='ended'?'已结束':d.has_roster?'有班表':'无班表'}</small></button>`).join('')}</div>`:''}
+    <p role="alert" class="rt-warn" data-daily-calendar-warning ${daily.calendarUnavailable?'':'hidden'}>本月日历暂未同步，请刷新班表重试。</p>
+    <p role="status" data-daily-status ${daily.loading||daily.busy?'':'hidden'}>${daily.busy?'正在保存调整…':daily.loading?'正在读取班表…':''}</p><p role="alert" class="rt-warn" data-daily-error ${daily.error?'':'hidden'}>${daily.error?esc(daily.error)+'，请刷新班表后重试。':''}</p></section>`;
   if(!data||data.date!==daily.date)return controls;
   const roster=`<section class="panel"><details><summary>上传班表 · ${data.roster.people.length}人${data.roster.file_name?' · '+esc(data.roster.file_name):''}</summary><div class="rt-scroll"><table class="rt-table"><thead><tr><th>姓名</th><th>工号</th><th>班次原文</th></tr></thead><tbody>${data.roster.people.map(p=>`<tr><td>${rosterPersonName(p)}</td><td>${esc(p.employee_no)}</td><td>${esc(p.cell)}</td></tr>`).join('')}</tbody></table></div></details></section>`;
   if(data.requires_current_rules&&data.can_generate){
@@ -758,8 +780,19 @@ RT.render = (fromTicker,forceDaily=false) => {
   if (tab === 'settings') bindSettings();
 };
 
+let rotationPageReady = false;
 RT.load = async () => {
+  if (!me) {
+    me = await rtApi('/api/rotation-board/whoami');
+    if (!me.capabilities.can_manage || personalRotation) tab = 'board';
+    renderWho();
+  }
   await loadLive(personalRotation ? '/api/rotation-board/me' : '/api/rotation-board/board');
+  if (!rotationPageReady && RT.data) {
+    renderTabs();
+    if (isManager()) openTab();
+    rotationPageReady = true;
+  }
 };
 
 $app.addEventListener('click', event => {
@@ -778,15 +811,11 @@ document.getElementById('rtSwitch').onclick = () => {
 
 (async () => {
   try {
-    me = await rtApi('/api/rotation-board/whoami');
-    if(!me.capabilities.can_manage||personalRotation)tab='board';
-    renderWho();
     await RT.load();
-    renderTabs();
-    if (isManager()) openTab();
-    connectLive();
-    startLocalTicker();
   } catch (error) {
     $app.innerHTML = `<section class="panel rt-empty"><h2>无法进入轮岗</h2><p>${esc(error.message)}</p></section>`;
+    if (error.status === 401 || error.status === 403) return;
   }
+  connectLive();
+  startLocalTicker();
 })();

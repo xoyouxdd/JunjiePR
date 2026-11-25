@@ -92,7 +92,7 @@ def finishes_on_exit(eng, p, now):
 
 def returning_from_break(p, at):
     started = p.get('breakStart')
-    return (p['state'] in ('rest', 'meal', 'ready') and started is not None
+    return (started is not None and p.get('state') in ('rest', 'meal', 'ready')
             and started <= at
             and 0 < p['end'] - at <= SHIFT_FINISH_MINUTES)
 

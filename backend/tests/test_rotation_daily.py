@@ -22,16 +22,16 @@ from app.v2_models import Attraction
 FUTURE = '2026-10-05'
 
 
-def test_board_and_screen_prearrange_at_exactly_0300_without_early_staffing(rotation):
+def test_board_and_screen_prearrange_at_exactly_0100_without_early_staffing(rotation):
     with rotation.factory() as db,S.transaction(db):
         cfg=S.load_config(db,rotation.attraction_id)
-        S.set_sim_clock(cfg,DAY,180-1/60,paused=True)
+        S.set_sim_clock(cfg,DAY,60-1/60,paused=True)
     with rotation.factory() as db:
         assert S.board_payload(db,rotation.attraction_id)['day'] is None
         assert S.screen_payload(db,rotation.attraction_id)['day'] is None
         assert S.day_row(db,rotation.attraction_id,DAY) is None
     with rotation.factory() as db,S.transaction(db):
-        S.set_sim_clock(S.load_config(db,rotation.attraction_id),DAY,180,paused=True)
+        S.set_sim_clock(S.load_config(db,rotation.attraction_id),DAY,60,paused=True)
     with rotation.factory() as db:
         board=S.board_payload(db,rotation.attraction_id)['day']
         screen=S.screen_payload(db,rotation.attraction_id)['day']
@@ -40,15 +40,15 @@ def test_board_and_screen_prearrange_at_exactly_0300_without_early_staffing(rota
         assert all(line['sortAt']==0 for line in board['lines'])
         assert db.query(RotationSegment).count()==0
         row=S.day_row(db,rotation.attraction_id,DAY)
-        assert S.day_state(row)['lastTick']==180
+        assert S.day_state(row)['lastTick']==60
 
 
-def test_0300_future_prearrangement_preserves_manual_plan(rotation):
+def test_0100_future_prearrangement_preserves_manual_plan(rotation):
     prepare(rotation)
     edit(rotation,action='draft_swap_people',source='A#0',target='B#0')
     expected=deepcopy(read(rotation)['draft']['plan'])
     with rotation.factory() as db,S.transaction(db):
-        cfg=S.load_config(db,rotation.attraction_id);S.set_sim_clock(cfg,FUTURE,180,paused=True)
+        cfg=S.load_config(db,rotation.attraction_id);S.set_sim_clock(cfg,FUTURE,60,paused=True)
     with rotation.factory() as db:
         data=S.screen_payload(db,rotation.attraction_id)['day']
         assert data['status']=='live'
@@ -211,6 +211,27 @@ def prepare(rotation):
 def read(rotation, day=FUTURE, at=None):
     with rotation.factory() as db:
         return D.day_payload(db, rotation.attraction_id, day, at)
+
+
+@pytest.mark.parametrize(('relief_end', 'candidate'), [('16:00', '2'), ('07:40', None)])
+def test_reading_future_draft_recommends_only_eligible_0715_relief(formal_rotation, relief_end, candidate):
+    rotation = formal_rotation
+    aid = rotation.attraction_id
+    shifts = {'1': '07:00-15:30', '2': f'07:15-{relief_end}', '3': '09:00-17:00', '4': '13:30-22:15'}
+    parsed = {'people': {pid: {'name': f'员工{pid}'} for pid in shifts}, 'days': {FUTURE: shifts}, 'hours': {}}
+    with rotation.factory() as db:
+        with S.transaction(db):
+            cfg = S.load_config(db, aid)
+            lines = S.lines_of(cfg)
+            lines[0]['posts'][0]['seven'] = 1
+            S.update_config(cfg, lines, None, None)
+        S.save_roster(db, aid, parsed, scope='day', file_name='次日班表.xlsx',
+                      uploader_id=None, uploader_name='测试')
+        D.edit(db, aid, '测试', FUTURE, {'action': 'draft_generate', 'revision': 0})
+        payload = D.day_payload(db, aid, FUTURE)
+        assert payload['draft']['status'] == 'draft'
+        assert 'state' not in payload['draft']['persons']['2']
+        assert payload['push7_recommendations'] == [{'target': '1', 'candidate': candidate}]
 
 
 def test_upgraded_heat_pursuit_template_applies_to_new_rosters_only(formal_rotation):

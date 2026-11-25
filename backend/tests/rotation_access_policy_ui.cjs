@@ -16,15 +16,15 @@ async function main(){try{
     await ok(await manager.request.post(base+'/api/login',{data:{employee_no:'9738103',password:'rotation-local-2026'}}));
     await ok(await display.request.post(base+'/api/login',{data:{employee_no:'6666666',password:'1243'}}));
     await ok(await tr.request.post(base+'/api/login',{data:{employee_no:'9738110',password:'rotation-local-2026'}}));
-    const day='2026-11-'+String(7+index).padStart(2,'0');
+    const day='2026-11-'+String(7+2*index).padStart(2,'0');
     const clock=async time=>ok(await manager.request.post(base+'/__local/rotation-clock',{data:{action:'set',date:day,time}}));
-    await clock('02:59:59');
+    await clock('00:59:59');
     const page=await manager.newPage(),screen=await display.newPage(),trainer=await tr.newPage();
     for(const p of [page,screen,trainer])p.on('pageerror',e=>errors.push(e.message));
     await Promise.all([page.goto(base+'/rotation-board'),screen.goto(base+'/rotation/screen'),trainer.goto(base+'/rotation-board')]);
     await page.waitForFunction(()=>RT.data&&RT.data.day===null);await screen.waitForFunction(()=>RT.data&&RT.data.day===null);
-    await clock('03:00:00');
-    for(const p of [page,screen,trainer])await p.waitForFunction(()=>RT.data?.day?.status==='live'&&RT.data.clock.minute===180);
+    await clock('01:00:00');
+    for(const p of [page,screen,trainer])await p.waitForFunction(()=>RT.data?.day?.status==='live'&&RT.data.clock.minute===60);
     assert.match(await page.locator('#rtWho').innerText(),/热力追踪/);
     assert.match(await screen.locator('.rt-who-name').first().innerText(),/模拟伙伴/);
     const pre=(await ok(await manager.request.get(base+'/api/rotation-board/board'))).day;
@@ -34,8 +34,8 @@ async function main(){try{
     assert((await screen.locator('.rt-mins').allTextContents()).every(t=>t!=='在岗'));
     assert.equal(await screen.locator('[draggable=true],[data-f-person],[data-f-post],[data-f-add],[data-f-close-all]').count(),0);
     assert.equal(await trainer.locator('[data-tab=settings]').count(),0);assert(await trainer.locator('[data-f-person]').count());
-    await page.screenshot({path:path.join(report,'0300-board-'+engine+'.png'),animations:'disabled'});
-    await screen.screenshot({path:path.join(report,'0300-screen-'+engine+'.png'),animations:'disabled'});
+    await page.screenshot({path:path.join(report,'0100-board-'+engine+'.png'),animations:'disabled'});
+    await screen.screenshot({path:path.join(report,'0100-screen-'+engine+'.png'),animations:'disabled'});
     await clock('07:15:00');
     for(const p of [page,screen])await p.waitForFunction(()=>RT.data.day.persons.filter(x=>x.state==='onpost').length===6);
     let current=(await ok(await manager.request.get(base+'/api/rotation-board/board'))).day;
@@ -57,7 +57,7 @@ async function main(){try{
     await clock('07:30:00');await screen.locator('[data-f-board="'+pid+'"]').waitFor();
     assert.equal(await screen.locator('[data-f-board="'+pid+'"]').innerText(),'确认去轮岗');
     await screen.locator('[data-f-board="'+pid+'"]').click();await screen.getByRole('button',{name:'确认上岗',exact:true}).click();
-    const changed=screen.getByRole('heading',{name:'线路已改变，请重新确认',exact:true});
+    const changed=screen.getByRole('heading',{name:/^(线路|接替路线)已改变，请重新确认$/});
     await Promise.race([changed.waitFor(),screen.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='onpost',pid)]);
     if(await changed.isVisible())await screen.getByRole('button',{name:'确认上岗',exact:true}).click();
     await page.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='onpost',pid);
@@ -95,7 +95,7 @@ async function main(){try{
       await gsm.close();
     }
     assert.deepEqual(errors,[]);await manager.close();await display.close();await tr.close();await browser.close();browser=null;
-    console.log(engine+': 03:00 preview, formal role scopes, canonical screen actions and receipt recovery, GSM screen password reset and session invalidation PASS');
+    console.log(engine+': 01:00 preview, formal role scopes, canonical screen actions and receipt recovery, GSM screen password reset and session invalidation PASS');
   }
 }finally{if(browser)await browser.close();if(server&&server.exitCode===null){server.kill();await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(report,'server.log'),log);}}
 main().catch(e=>{console.error(e);console.error(log.slice(-2500));process.exitCode=1;});

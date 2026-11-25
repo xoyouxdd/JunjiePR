@@ -147,7 +147,9 @@ async function rtApi(path, options = {}) {
   let body;
   try {
     res = await fetch(portalPath(path), { credentials: 'same-origin', ...fetchOptions, signal: controller.signal });
-    body = await res.json();
+    body = await res.json().catch(error => {
+      if (error.name !== 'SyntaxError') throw error;
+    });
   } catch (_) {
     const error = new Error(RT.pendingConfirmation ? '网络连接中断，正在核实确认结果' : '网络连接失败，恢复后将重新同步');
     error.uncertain = true;
@@ -159,15 +161,19 @@ async function rtApi(path, options = {}) {
   }
   if (res.status === 401) {
     location.href = portalPath(document.body.classList.contains('rotation-screen') ? '/login' : '/');
-    throw new Error('请重新进入轮岗');
+    throw Object.assign(new Error('请重新进入轮岗'), {status: res.status});
   }
   if (!res.ok) {
     if(formalRotation&&res.status===403&&!preserveBoardOnForbidden){RT.data=null;const host=document.getElementById('rtApp');if(host)host.innerHTML='<section class="panel"><p role="alert">当前权限不允许执行此操作，请返回工作台或重新打开轮岗看板。</p></section>';}
-    const detail = body.detail;
-    const error = new Error(typeof detail === 'string' ? detail : (detail && detail.message) || '操作失败，请稍后重试');
+    const detail = body?.detail;
+    const message = typeof detail === 'string' ? detail : detail?.message;
+    const error = new Error(message || (res.status >= 500 ? `轮岗服务响应异常（HTTP ${res.status}）` : '操作失败，请稍后重试'));
     error.status = res.status;
     error.uncertain = res.status >= 500;
     throw error;
+  }
+  if (body === undefined) {
+    throw Object.assign(new Error('轮岗服务返回的数据无法读取'), {uncertain: true});
   }
   return body;
 }
