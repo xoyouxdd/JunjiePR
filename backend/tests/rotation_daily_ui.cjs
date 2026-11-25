@@ -159,11 +159,11 @@ async function main(){try{
     const historicalAfter=await context.request.get(base+'/api/rotation-board/daily/2026-10-04').then(r=>r.json());
     assert.equal(historicalBefore.revision,historicalAfter.revision,'history modified live state');
     // Today's enabled plan mirrors the live board. Edits go through the board.
-    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'02:55'}})).ok());
+    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'00:55'}})).ok());
     await page.evaluate(()=>RT.load());
     await page.locator('[data-daily-date]').fill('2026-10-06');await page.locator('[data-daily-date]').dispatchEvent('change');
     await page.locator('[data-daily-person="A#0"]').waitFor();
-    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'04:00'}})).ok());
+    assert((await context.request.post(base+'/__fixture/rotation-clock',{data:{action:'set',date:'2026-10-06',time:'01:00'}})).ok());
     await page.evaluate(()=>RT.load());
     await page.locator('[data-daily-open-board]').waitFor();
     before=await data();assert(before.can_edit&&before.prestart_live);
