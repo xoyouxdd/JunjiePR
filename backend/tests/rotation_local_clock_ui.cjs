@@ -59,8 +59,8 @@ async function main(){try{
     // A real personal page confirms only itself; the other person remains unexecuted.
     const member=await browser.newContext({viewport:{width:390,height:844}});
     await ok(await member.request.post(base+'/api/login',{data:{employee_no:ids[0],password:'rotation-local-2026'}}));
-    const health=await ok(await member.request.get(base+'/health'));
-    await ok(await member.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}}));
+    const announcement=await ok(await member.request.get(base+'/api/changelog/announcement'));
+    if(announcement.release&&!announcement.read)await ok(await member.request.post(base+'/api/changelog/announcement/read',{data:{version:announcement.release.version}}));
     const personal=await member.newPage();personal.on('pageerror',e=>errors.push(e.message));
     await personal.goto(base+'/?view=actionCenter');
     await personal.locator('[data-rotation-task=depart]').click();

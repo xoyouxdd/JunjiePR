@@ -59,11 +59,11 @@ process.stdout.write(JSON.stringify(ctx.output));
 
 
 @pytest.mark.skipif(not NODE, reason="Node is needed for the real JavaScript renderer")
-@pytest.mark.parametrize('state,expected',[
-    ('future','10:00 加岗'),('matching','准备加岗'),('preparing','准备加岗'),
-    ('occupied','worker'),('vacant','空岗'),('cancelled','未开岗'),
+@pytest.mark.parametrize('state,board_label,screen_label',[
+    ('future','待加岗','待加'),('matching','等待接替','准备加岗'),('preparing','等待接替','准备加岗'),
+    ('occupied','worker','worker'),('vacant','空岗','空岗'),('cancelled','未开岗','未开岗'),
 ])
-def test_opening_label_is_shared_by_board_and_screen(state,expected):
+def test_opening_status_is_visible_on_board_and_screen(state, board_label, screen_label):
     script=r"""
 const fs=require('fs'),vm=require('vm');
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
@@ -87,6 +87,11 @@ process.stdout.write(JSON.stringify(ctx.output));
     files = [str(ROOT / 'app/static/js' / f'rotation-{name}.js') for name in ('common', 'workflow', 'forecast')]
     result = subprocess.run([NODE, '-e', script], input=json.dumps({'state': state, 'files': files}), encoding='utf-8', capture_output=True)
     assert result.returncode==0,result.stderr
-    for markup in json.loads(result.stdout):
-        assert expected in markup
-        if state in ('matching','preparing'):assert '>空岗</span>' not in markup
+    board, screen = json.loads(result.stdout)
+    assert board_label in board
+    assert screen_label in screen
+    if state in ('future', 'matching', 'preparing'):
+        assert '<time>10:00</time>' in board
+        assert '10:00 加岗' in screen
+        assert f'>{screen_label}</span>' in screen
+        assert '>空岗</span>' not in board and '>空岗</span>' not in screen

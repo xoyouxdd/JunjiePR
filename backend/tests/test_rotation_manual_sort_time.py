@@ -25,20 +25,26 @@ def test_pool_to_head_updates_real_post_time_but_sort_time_only_when_requested(m
 @pytest.mark.parametrize('mode', ['push', 'swap'])
 def test_cross_line_head_drag_preserves_clocks_by_default_and_updates_only_new_heads(requested, mode):
     e = fixture(); e.line('B')['sortAt'] = 440
+    e.P['A0']['entrySortAt'], e.P['B0']['entrySortAt'] = 435, 440
     F.manual_place(e, 'A0', 'B', 0, mode, 600, 'test', update_sort_time=requested)
-    assert e.line('B')['sortAt'] == (600 if requested else 440)
-    assert e.line('A')['sortAt'] == (600 if requested and mode == 'swap' else 435)
+    assert e.line('B')['sortAt'] == (600 if requested and mode == 'push' else 440)
+    assert e.line('A')['sortAt'] == 435
     assert occupants(e, 'B')[0] == 'A0'
     assert occupants(e)[0] == ('B0' if mode == 'swap' else None)
+    if mode == 'swap':
+        assert (e.P['B0']['entrySortAt'], e.P['A0']['entrySortAt']) == (435, 440)
+        assert e.line('A')['posts'][0]['since'] == e.line('B')['posts'][0]['since'] == 600
 
 
 @pytest.mark.parametrize('target', ['A', 'B'])
 @pytest.mark.parametrize('requested', [False, True])
-def test_source_head_replaced_by_swap_can_opt_in_even_when_target_is_middle(target, requested):
+def test_swapping_with_a_middle_post_keeps_both_line_headers(target, requested):
     e = fixture(); e.line('B')['sortAt'] = 440
     F.manual_place(e, 'A0', target, 1, 'swap', 600, 'test', update_sort_time=requested)
-    assert e.line('A')['sortAt'] == (600 if requested else 435)
+    assert e.line('A')['sortAt'] == 435
     assert e.line('B')['sortAt'] == 440
+    assert occupants(e)[0] == f'{target}1'
+    assert occupants(e, target)[1] == 'A0'
 
 
 def test_checked_option_does_not_update_a_middle_post_or_an_empty_head():

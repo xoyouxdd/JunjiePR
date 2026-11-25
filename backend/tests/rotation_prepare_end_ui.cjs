@@ -28,7 +28,8 @@ async function main(){try{
     await row(page,pid).waitFor();assert.equal(await row(page,pid).getByText('准备下班',{exact:true}).count(),0);
     const mobile=await browser.newContext({viewport:{width:390,height:844}});
     await ok(await mobile.request.post(base+'/api/login',{data:{employee_no:pid,password:'rotation-local-2026'}}));
-    const health=await ok(await mobile.request.get(base+'/health'));await ok(await mobile.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}}));
+    const announcement=await ok(await mobile.request.get(base+'/api/changelog/announcement'));
+    if(announcement.release&&!announcement.read)await ok(await mobile.request.post(base+'/api/changelog/announcement/read',{data:{version:announcement.release.version}}));
     const phone=await mobile.newPage();phone.on('pageerror',e=>errors.push(e.message));await phone.goto(base+'/?view=actionCenter');
     await phone.locator('[data-formal-rotation-todo] .rt-personal-task').waitFor();assert.equal(await phone.getByText('准备下班',{exact:true}).count(),0);
     const display=await browser.newContext();await ok(await display.request.post(base+'/api/login',{data:{employee_no:'6666666',password:'1243'}}));

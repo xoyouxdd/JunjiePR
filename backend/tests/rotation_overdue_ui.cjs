@@ -34,7 +34,8 @@ async function main(){try{
     for(const width of [320,390,1280]){
       await page.setViewportSize({width,height:900});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
       assert(await elapsed(ids[0]).evaluate(el=>el.scrollWidth<=el.clientWidth+1));
-      await page.locator('[data-f-pool=rest]').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(report,engine+'-'+width+'.png'),animations:'disabled'});
+      await page.locator('[data-f-pool=rest]').evaluate(el=>el.scrollIntoView({block:'nearest'}));
+      await page.screenshot({path:path.join(report,engine+'-'+width+'.png'),animations:'disabled'});
     }
     // A paused-closure allowance must come from the adjusted deadline rather
     // than counting all wall time since the original break ended.

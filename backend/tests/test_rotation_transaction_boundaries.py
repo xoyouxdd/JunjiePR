@@ -510,7 +510,8 @@ def test_configuration_route_publishes_version_only_after_commit(formal_rotation
 
     rotation = formal_rotation
     before = rotation.runtime.version
-    user = SimpleNamespace(id=None, role_codes={'GSM'}, rotation_temporary=None, employee=SimpleNamespace(attraction=None))
+    user = SimpleNamespace(id=None, role_codes={'GSM'}, base_role=SimpleNamespace(code='GSM'),
+                           rotation_temporary=None, employee=SimpleNamespace(attraction=None))
     with rotation.factory() as db:
         original_commit = db.commit
 
@@ -534,7 +535,8 @@ def test_configuration_route_maps_invalid_line_id_to_400(formal_rotation):
     from fastapi import HTTPException
     from app.routers.rotation_board import save_config
 
-    user = SimpleNamespace(id=None, role_codes={'GSM'}, rotation_temporary=None, employee=SimpleNamespace(attraction=None))
+    user = SimpleNamespace(id=None, role_codes={'GSM'}, base_role=SimpleNamespace(code='GSM'),
+                           rotation_temporary=None, employee=SimpleNamespace(attraction=None))
     with formal_rotation.factory() as db, pytest.raises(HTTPException) as error:
         save_config({"lines": [{"id": 1, "posts": [{"name": "岗"}]}]}, db, user)
     assert error.value.status_code == 400

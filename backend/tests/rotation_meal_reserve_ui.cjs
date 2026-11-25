@@ -27,7 +27,8 @@ async function main(){try{
     assert.equal((await board()).persons.find(p=>p.pid===pid).mealOptions.supply,5);
     const member=await browser.newContext({viewport:{width:390,height:844}});
     await ok(await member.request.post(base+'/api/login',{data:{employee_no:pid,password:'rotation-local-2026'}}));
-    const health=await ok(await member.request.get(base+'/health'));await ok(await member.request.post(base+'/api/changelog/announcement/read',{data:{version:health.version}}));
+    const announcement=await ok(await member.request.get(base+'/api/changelog/announcement'));
+    if(announcement.release&&!announcement.read)await ok(await member.request.post(base+'/api/changelog/announcement/read',{data:{version:announcement.release.version}}));
     const display=await browser.newContext({viewport:{width:1280,height:900}});
     await ok(await display.request.post(base+'/api/login',{data:{employee_no:'6666666',password:'1243'}}));
     const roomPost=async data=>ok(await display.request.post(base+'/api/rotation-screen/act',{data}));
