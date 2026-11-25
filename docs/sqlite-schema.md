@@ -1154,6 +1154,8 @@
 
 表在 `backend/app/rotation/models.py`，随启动 `create_all` 建立。时间字段 `*_min`、`minute` 为工作日零点起的分钟数（浮点）。正式业务读写 `formal_rotation_*`，原沙盒表保留原数据。`rotation_accounts` 和 `rotation_account_sessions` 是大屏继续使用的身份表。
 
+轮岗名单明细新增 `name_remark` 字段，旧记录默认为空。启动迁移为规则 2 中匹配标准线路且缺少 E 线的未结束安排补入关闭的 E 线，保留已有人员和预排。热力追踪默认配置同步为新版岗位模板，延续同名线路的行走时间。
+
 | 表 | 键与约束 | 索引 |
 |---|---|---|
 | `rotation_accounts` | `login_account` 唯一；`kind` 为 screen / supervisor / manager；`attraction_id` → `attractions` | `login_account`、`attraction_id` |

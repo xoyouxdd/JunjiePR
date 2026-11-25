@@ -6,7 +6,12 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from app.database.migrations.rotation import ensure_rotation_five_posts, ensure_rotation_six_posts, ensure_rotation_standby_e_line
+from app.database.migrations.rotation import (
+    ensure_heat_pursuit_post_template_1126,
+    ensure_rotation_five_posts,
+    ensure_rotation_six_posts,
+    ensure_rotation_standby_e_line,
+)
 from app.rotation.engine import DEFAULT_E_LINE, DEFAULT_LINES, append_standard_spares
 
 
@@ -77,6 +82,34 @@ def test_missing_config_tables_are_safe():
             ensure_rotation_five_posts(db)
             ensure_rotation_six_posts(db)
             ensure_rotation_standby_e_line(db)
+            ensure_heat_pursuit_post_template_1126(db)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize('prefix', ['rotation', 'formal_rotation'])
+def test_heat_pursuit_default_template_keeps_walk_times_and_other_data(prefix):
+    engine = create_engine('sqlite://')
+    configs, days = f'{prefix}_configs', f'{prefix}_days'
+    old_lines = json.dumps([{'id': 'A1', 'walk': 7, 'posts': [{'name': '原岗位'}]}], ensure_ascii=False)
+    expected = deepcopy(DEFAULT_LINES)
+    expected[0]['walk'] = 7
+    try:
+        with Session(engine) as db:
+            db.execute(text('CREATE TABLE attractions (id INTEGER PRIMARY KEY, name TEXT)'))
+            db.execute(text("INSERT INTO attractions VALUES (1,'热力追踪'), (2,'另一景点圈')"))
+            db.execute(text(f'CREATE TABLE {configs} (id INTEGER PRIMARY KEY, attraction_id INTEGER, lines_json TEXT, settings_json TEXT)'))
+            db.execute(text(f'INSERT INTO {configs} VALUES (1,1,:lines,:settings), (2,2,:lines,:settings)'),
+                       {'lines': old_lines, 'settings': '{"unchanged":true}'})
+            db.execute(text(f'CREATE TABLE {days} (id INTEGER PRIMARY KEY, state_json TEXT, version INTEGER)'))
+            db.execute(text(f'INSERT INTO {days} VALUES (1,:state,5)'), {'state': old_lines})
+            ensure_heat_pursuit_post_template_1126(db)
+            rows = db.execute(text(f'SELECT lines_json, settings_json FROM {configs} ORDER BY id')).all()
+            assert json.loads(rows[0][0]) == expected and rows[0][1] == '{"unchanged":true}'
+            assert rows[1] == (old_lines, '{"unchanged":true}')
+            assert db.execute(text(f'SELECT state_json, version FROM {days}')).one() == (old_lines, 5)
+            ensure_heat_pursuit_post_template_1126(db)
+            assert db.execute(text(f'SELECT lines_json, settings_json FROM {configs} ORDER BY id')).all() == rows
     finally:
         engine.dispose()
 
