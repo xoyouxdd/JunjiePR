@@ -32,6 +32,9 @@ async function main(){try{
     await page.locator('[data-f-post="A#0"]').dblclick();await page.getByRole('textbox',{name:'岗位名称',exact:true}).press('Enter');assert.equal(renameWrites,1);
     const dropOnSlot=async(source,slot)=>{
       await page.waitForFunction(()=>!RT.loading&&!RT.modalOpen&&!RT.editingPost&&!RT.dragging&&!RT.submitting);
+      const snapshot=(await board()).forecastSnapshot;
+      await page.evaluate(()=>RT.load());
+      await page.waitForFunction(value=>!RT.loading&&RT.data.day.forecastSnapshot===value,snapshot);
       const target='[data-f-slot="'+slot+'"]';
       // WebKit may replace board nodes between Playwright's pointer events.
       // Dispatch on one render there, retaining native pointer coverage on Edge and Firefox.

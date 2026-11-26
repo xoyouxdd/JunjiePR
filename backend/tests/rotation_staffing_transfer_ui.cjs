@@ -9,7 +9,12 @@ async function ok(r){assert(r.ok(),await r.text());return r.json();}
   server=spawn(path.join(root,'backend/.venv/Scripts/python.exe'),[path.join(__dirname,'rotation_staffing_transfer_fixture.py'),String(port)],{cwd:path.join(root,'backend'),windowsHide:true});
   server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
   const base=`http://127.0.0.1:${port}`;let ready=false;
-  for(let i=0;i<100;i++){try{if((await fetch(base+'/health')).ok){ready=true;break;}}catch{}if(server.exitCode!==null)break;await new Promise(r=>setTimeout(r,250));}assert(ready,log);
+  const startupDeadline=Date.now()+60000;
+  while(Date.now()<startupDeadline&&server.exitCode===null){
+    try{if((await fetch(base+'/health',{signal:AbortSignal.timeout(1500)})).ok){ready=true;break;}}catch{}
+    await new Promise(r=>setTimeout(r,250));
+  }
+  assert(ready,`Transfer fixture did not become healthy (exit ${server.exitCode}): ${log}`);
   for(const engine of (process.env.ROTATION_STAFFING_ENGINES||'edge,webkit,firefox').split(',')){
     browser=await(engine==='webkit'?webkit:engine==='firefox'?firefox:chromium).launch(engine==='edge'?{channel:'msedge',headless:true}:{headless:true});
     const context=await browser.newContext({viewport:{width:1440,height:1000}}),request=context.request;

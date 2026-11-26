@@ -21,6 +21,7 @@ function context({realScheduling=false}={}) {
     window:{addEventListener(){}}, messages:[], run:null,
   });
   vm.runInContext(fs.readFileSync(path.join(root,'rotation-common.js'),'utf8'),ctx);
+  vm.runInContext(fs.readFileSync(path.join(root,'rotation-task-presentation.js'),'utf8'),ctx);
   vm.runInContext(fs.readFileSync(path.join(root,'rotation-workflow.js'),'utf8'),ctx);
   vm.runInContext(fs.readFileSync(path.join(root,'rotation.js'),'utf8'),ctx);
   vm.runInContext(`
