@@ -64,7 +64,6 @@ async function main(){try{
     const personal=await member.newPage();personal.on('pageerror',e=>errors.push(e.message));
     await personal.goto(base+'/?view=actionCenter');
     await personal.locator('[data-rotation-task=depart]').click();
-    await personal.locator('[data-modal-confirm]').click();
     // A later forecast may now select a different actual line while earlier
     // people remain unconfirmed. Preserve the required second confirmation.
     const changed=personal.getByRole('dialog',{name:'线路已改变，请重新确认',exact:true});

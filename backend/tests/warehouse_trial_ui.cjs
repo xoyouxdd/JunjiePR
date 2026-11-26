@@ -120,7 +120,7 @@ async function main() {
       await firstLayer.click();
       assert.equal(await firstLayer.getAttribute('aria-expanded'),'true');
       await quick.getByText('厕所卡',{exact:true}).waitFor();
-      await quick.getByText('6 箱',{exact:true}).waitFor();
+      await quick.getByText('本层 6 箱',{exact:true}).waitFor();
       assert.equal(await quick.getByRole('listitem').count(),2);
       assert(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'quick inventory overflow at ' + width);
       await owner.page.screenshot({path:path.join(artifacts,'home-' + width + '.png'),fullPage:true});
@@ -169,8 +169,8 @@ async function main() {
 
     const inbound = await selectItem(owner.page, first, 'WC卡', 3, 3, 10);
     const assignment = inbound.locator('[data-we-receipt-check]');
-    assert.equal(await assignment.textContent(),'已分配 3 / 10 箱 · 还差 7 箱');
-    await inbound.getByText('到货直用或收货异常',{exact:true}).click();
+    assert.equal(await assignment.textContent(),'已上架 3 / 10 箱 · 还差 7 箱');
+    await inbound.getByText('直用／破损',{exact:true}).click();
     await inbound.locator('[data-we-field="direct"]').fill('3');
     await inbound.locator('[data-we-field="destination"]').fill('现场使用');
     await inbound.locator('[data-we-field="note"]').fill('原收货说明');
@@ -179,14 +179,14 @@ async function main() {
     assert(await secondLocation.evaluate(element => document.activeElement === element),'new location should receive focus');
     const secondAllocation = inbound.locator('[data-we-allocation="1"]');
     await secondAllocation.fill('4');
-    assert.equal(await assignment.textContent(),'已分配 6 / 10 箱 · 有数量未选货位');
+    assert.equal(await assignment.textContent(),'上架 3 · 直用 3 · 破损 0，共 6 / 10 箱 · 有数量未选货位');
     await secondLocation.selectOption('3');
     assert.equal(await assignment.textContent(),'同一货位的数量请合并');
     await secondLocation.selectOption('24');
     await secondAllocation.fill('5');
-    assert.equal(await assignment.textContent(),'已分配 11 / 10 箱 · 超出 1 箱');
+    assert.equal(await assignment.textContent(),'上架 8 · 直用 3 · 破损 0，共 11 / 10 箱 · 超出 1 箱');
     await secondAllocation.fill('4');
-    assert.equal(await assignment.textContent(),'已分配 10 / 10 箱');
+    assert.equal(await assignment.textContent(),'上架 7 · 直用 3 · 破损 0，共 10 / 10 箱');
     await owner.page.setViewportSize({width:320,height:844});
     assert(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),'split allocation at 320px');
     await owner.page.setViewportSize({width:390,height:844});
@@ -220,7 +220,7 @@ async function main() {
     const postedInbound = owner.page.waitForResponse(response =>
       response.url().endsWith(prefix + '/transactions') && response.request().method() === 'POST');
     await owner.page.locator('[data-we-confirm]').click();
-    await owner.page.getByRole('heading',{name:'入库已确认'}).waitFor();
+    await owner.page.getByRole('heading',{name:'入库成功'}).waitFor();
     const savedInbound = await json(await owner.request.get(base + prefix + '/transactions/' + (await json(await postedInbound)).id));
     assert.deepEqual(savedInbound.receipts.map(row => [row.item_id,row.note]),[[first,'拍照时补记']]);
     assert.deepEqual(savedInbound.photos.map(row => row.item_id),[first]);
@@ -276,7 +276,7 @@ async function main() {
     await uploaded(picker.page,1);
     const before = (await state()).items.find(row => row.id === first).total;
     await picker.page.locator('[data-we-confirm]').click();
-    await picker.page.getByRole('heading',{name:'出库已确认'}).waitFor();
+    await picker.page.getByRole('heading',{name:'出库成功'}).waitFor();
     await picker.page.locator('[data-we-complete]').click();
     assert.equal((await state()).items.find(row => row.id === first).total,before - 2);
 
@@ -458,7 +458,7 @@ async function main() {
     await picker.page.getByRole('button',{name:'提交报错',exact:true}).click();
     await picker.page.getByText('已报告，仓库负责人可在待办跟进。',{exact:true}).waitFor();
     await open(owner);
-    await owner.page.getByRole('button',{name:'负责人待办',exact:true}).click();
+    await owner.page.getByRole('button',{name:/^负责人待办/}).click();
     const feedback = owner.page.getByRole('list',{name:'照片报错记录'});
     await feedback.getByText('货位标识不清楚',{exact:true}).waitFor();
     await feedback.getByText('补充：实际拍的是相邻层',{exact:true}).waitFor();
@@ -495,7 +495,7 @@ async function main() {
     await attach(owner.page,third);
     await uploaded(owner.page,third);
     await owner.page.locator('[data-we-confirm]').click();
-    await owner.page.getByRole('heading',{name:'入库已确认'}).waitFor();
+    await owner.page.getByRole('heading',{name:'入库成功'}).waitFor();
     await owner.page.locator('[data-we-complete]').click();
     const quickShelf = owner.page.locator('.wh-rack-level[data-wh-id="5"]');
     const quickPhoto = owner.page.getByRole('region',{name:'货位快捷物资'});
@@ -506,11 +506,11 @@ async function main() {
     await thumbnail.waitFor();
     await owner.page.waitForFunction(() => document.querySelector('#wh-quick-location img')?.naturalWidth);
     assert(await owner.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    const fullPhotoOpened = owner.context.waitForEvent('page');
+    assert.equal(await quickPhoto.locator('.wh-photo-position').textContent(),'B 架第 2 层');
     await quickPhoto.getByRole('link',{name:'B 架第 2 层现场照片'}).click();
-    const fullPhoto = await fullPhotoOpened;
-    await fullPhoto.locator('img').waitFor();
-    await fullPhoto.close();
+    await owner.page.locator('dialog .wh-photo-full img').waitFor();
+    assert.equal(await owner.page.locator('dialog .wh-photo-position').textContent(),'B 架第 2 层');
+    await owner.page.getByRole('button',{name:'关闭',exact:true}).click();
     await open(owner,'in');
     await selectItem(owner.page,third,'等候卡',6,1,1);
     await owner.page.locator('[data-we-next]').click();
@@ -601,7 +601,7 @@ async function main() {
     await attach(owner.page,19);
     await uploaded(owner.page,19);
     await owner.page.locator('[data-we-confirm]').click();
-    await owner.page.getByRole('heading',{name:'出库已确认'}).waitFor();
+    await owner.page.getByRole('heading',{name:'出库成功'}).waitFor();
     await owner.page.locator('[data-we-complete]').click();
     await dest.waitFor();
     assert.equal(await dest.getAttribute('data-stock-level'),'low');

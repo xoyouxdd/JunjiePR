@@ -133,6 +133,7 @@ function renderScreenCountdowns(n) {
 
 RT.render = () => {
   if (!RT.data||RT.editingPost) return;
+  RT.mode101StatusAllowed = true;
   renderClock();
   const day = RT.data.day;
   document.body.classList.toggle('rt-screen-flow', !!day && (day.readOnly || day.status !== 'ended'));

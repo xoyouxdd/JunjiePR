@@ -26,6 +26,79 @@ def batch_fixture(counts, ready):
     return eng
 
 
+def test_batch_presentation_expires_without_deleting_the_current_route():
+    eng = batch_fixture((5,), 2)
+    F.tick(eng, 807, advance_batches=True)
+    p = eng.P['late00']
+    snapshot = deepcopy(p['batchResult'])
+    assert API.batch_presentation(eng, p, 807)['notice']
+    assert API.batch_presentation(eng, p, 812 - 1/60)['notice']
+    assert API.batch_presentation(eng, p, 812) == {
+        'current': True, 'notice': False, 'at': 807, 'expiresAt': 812,
+    }
+    assert (p['pid'], 'batch') not in API.notices(eng, 812)
+    assert p['batchResult'] == snapshot
+
+
+def test_batch_presentation_is_superseded_by_rest_and_the_next_task():
+    eng = batch_fixture((5,), 2)
+    F.tick(eng, 807, advance_batches=True)
+    p = eng.P['late00']
+    original_posts = deepcopy(p['batchResult']['afterPosts'])
+    F.pool(eng, p['pid'], 'rest', 810, 'test', remaining=15)
+    assert not API.person_view(eng, p, 810)['batchPresentation']['current']
+    assert (p['pid'], 'batch') not in API.notices(eng, 810)
+    F.tick(eng, 825)
+    view = API.person_view(eng, p, 825)
+    assert view['task']
+    assert not view['batchPresentation']['current']
+    assert view['batchResult']['afterPosts'] == original_posts
+
+
+def test_batch_route_does_not_revive_after_swapping_back_at_the_same_paused_time():
+    eng = batch_fixture((5,), 2)
+    F.tick(eng, 807, advance_batches=True)
+    p = eng.P['late00']
+    line, original = eng.find_post(p['pid'])
+    other = (original + 1) % len(line['posts'])
+    F.manual_place(eng, p['pid'], line['id'], other, 'swap', 810, 'test')
+    F.manual_place(eng, p['pid'], line['id'], original, 'swap', 810, 'test')
+    assert eng.find_post(p['pid'])[1] == original
+    assert not API.batch_presentation(eng, p, 810)['current']
+    # Old persisted snapshots without the superseded flag still need their original batch marker.
+    p['batchResult'].pop('superseded')
+    assert not API.batch_presentation(eng, p, 810)['current']
+
+
+@pytest.mark.parametrize('previous', [600, 610])
+def test_expired_batch_notice_is_closed_by_an_otherwise_idle_tick(current, previous):
+    r = current
+    with r.factory() as db, S.transaction(db):
+        cfg = S.load_config(db, r.attraction_id)
+        row = S.day_row(db, r.attraction_id, DAY)
+        state = S.day_state(row)
+        eng, _ = S.engine_for(db, cfg, row, state)
+        p = eng.P['1']
+        line, index = eng.find_post(p['pid'])
+        for worker in eng.P.values():
+            worker['assign'] = None
+            if worker['state'] != 'onpost':
+                worker.update(state='other', manualPaused=True)
+        state['completedShiftBatches'] = {'36000': 600}
+        p['batchOnPost'] = 600
+        p['batchResult'] = {'start': 600, 'line': line['id'], 'post': line['posts'][index]['name'],
+                            'postKey': line['posts'][index]['key']}
+        S.save_day(db, row, state)
+        S.sync_notices(db, r.attraction_id, state, eng, 600)
+        db.flush()
+        assert db.query(RotationNotice).filter_by(kind='batch_result', status='open').count() == 1
+        state['lastTick'] = previous
+        S.advance(db, cfg, row, state, max(605, previous))
+        db.flush()
+        assert db.query(RotationNotice).filter_by(kind='batch_result', status='open').count() == 0
+        assert p['batchResult']
+
+
 @pytest.mark.parametrize('counts,expected', [
     ((2, 3), 'ABBAB'),
     ((1, 2, 3, 2, 3), 'ABCDECEBDCE'),
@@ -107,6 +180,8 @@ def test_batch_handoffs_keep_personal_instructions_and_share_the_lines_shift_end
     assert second['instruction'] == ('通知原上客一的A1去下协一。A1到岗后通知原下协一的A3去大出口。'
                                      'A3到岗后通知原大出口的A4下岗，回休息室')
     assert second['shiftEndPosts'] == first['shiftEndPosts']
+    assert {item['pid']: item['outcome'] for item in first['departures']} == {'A2': 'done', 'A4': 'pending'}
+    assert second['departures'] == first['departures']
     assert not any(part.get('emphasis') for part in second['instructionParts'])
 
 

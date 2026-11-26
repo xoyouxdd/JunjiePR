@@ -1,0 +1,48 @@
+'use strict';
+const assert=require('node:assert/strict'),{chromium}=require('./support/browser-runtime.cjs'),{openRotationPage}=require('./support/rotation-browser.cjs');
+const day={date:'2026-11-27',status:'live',ruleVersion:2,taskWorkflow:2,forecastSnapshot:'initial',mode101Active:false,persons:[],lines:[{id:'A1',group:'A',active:true,posts:[{key:'tower',name:'塔台',open:true,occ:null},{key:'guest',name:'上客1',open:true,occ:null}]}]};
+(async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{
+ const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await openRotationPage(page,'/rotation-board');
+ await page.evaluate(day=>{me={...me,capabilities:{can_operate:true,can_manage:true}};RT.data.day=day;RT.data.clock={date:day.date,minute:600,paused:true,mode:'sim'};tab='board';RT.render();},day);
+ let posts=0,held,release;const requestStarted=new Promise(r=>release=r);
+ await page.route('**/api/rotation-board/act',async route=>{posts++;held=route;release();await new Promise(r=>{globalThis.releasePost=r;});await route.fulfill({json:{ok:true,executed:true}});});
+ await page.evaluate(()=>{RT.load=async()=>{RT.data.day.mode101Active=true;RT.data.day.forecastSnapshot='updated';RT.render();};});
+ await page.locator('[data-mode101-toggle]').click();
+ assert.equal(posts,0,'Opening the confirmation never switches mode');
+ await page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();assert.equal(posts,0);
+ await page.locator('[data-mode101-toggle]').click();
+ await page.locator('[data-ok]').click();
+ await requestStarted;
+ await page.evaluate(()=>RT.render());
+ assert.equal(await page.locator('[data-mode101-toggle]').isDisabled(),true,'A pending 101 switch must stay disabled after a board refresh');
+ assert.equal(posts,1);
+ globalThis.releasePost();await page.waitForFunction(()=>RT.data.day.mode101Active);
+
+ await page.route('**/api/rotation-board/act',async route=>{posts++;await route.fulfill({json:{ok:true,executed:true}});});
+ await page.evaluate(()=>{RT.load=async()=>{throw new Error('injected read failure');};});
+ await page.locator('[data-mode101-toggle]').click();await page.locator('[data-ok]').click();
+ await page.waitForFunction(()=>RT.mode101SwitchNeedsSync&&!RT.mode101SwitchPending);
+ await page.getByRole('dialog').waitFor({state:'hidden'});
+ assert.match(await page.locator('#toast').innerText(),/已生效.*尚未同步/);
+ const writes=posts;
+ await page.evaluate(()=>{RT.load=async()=>{RT.data.day.mode101Active=false;RT.data.day.forecastSnapshot='synced';RT.render();};});
+ await page.locator('[data-mode101-toggle]').click();
+ await page.waitForFunction(()=>!RT.mode101SwitchNeedsSync);
+ assert.equal(posts,writes,'Syncing after a committed write only reads, never resubmits');
+ assert.equal(await page.locator('[data-mode101-toggle]').isDisabled(),false);
+ assert.equal(await page.locator('[data-mode101-toggle]').innerText(),'101 模式');
+
+ await page.route('**/api/rotation-board/act',async route=>{posts++;await route.abort('failed');});
+ await page.locator('[data-mode101-toggle]').click();await page.locator('[data-ok]').click();
+ await page.waitForFunction(()=>RT.mode101SwitchNeedsSync&&!RT.mode101SwitchPending);
+ await page.getByRole('dialog').waitFor({state:'hidden'});
+ const uncertainPosts=posts;
+ await page.evaluate(()=>{RT.load=async()=>{RT.data.day.mode101Active=true;RT.data.day.forecastSnapshot='recovered';RT.render();};});
+ await page.locator('[data-mode101-toggle]').click();await page.waitForFunction(()=>!RT.mode101SwitchNeedsSync);
+ assert.equal(posts,uncertainPosts,'An uncertain POST is reconciled with GET only');
+ await page.route('**/api/rotation-board/act',async route=>{posts++;await route.fulfill({status:409,json:{detail:'站位已变化'}});});
+ await page.locator('[data-mode101-toggle]').click();await page.locator('[data-ok]').click();
+ await page.getByRole('dialog').waitFor({state:'hidden'});
+ assert.equal(await page.locator('[data-mode101-toggle]').isDisabled(),false,'A rejected stale snapshot never freezes controls');
+ assert.deepEqual(errors,[]);console.log('101: cancel, confirmation, pending rerender lock, committed/read-failed recovery, uncertain POST GET-only recovery and stale rejection PASS');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -767,6 +767,7 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *,
         return result
     if not committed_only and "confirmationEpoch" not in state:
         save_day(db, row, state, notify=False)
+    from app.rotation.staffing import warnings as staffing_warnings
     projection = _read_projection_cache(db, cfg, row, now)
     if 'live' in projection:
         return deepcopy(projection['live'])
@@ -786,6 +787,10 @@ def live_view(db: Session, cfg: RotationConfig, row: RotationDay, now: float, *,
         "completedShiftBatches": state.get("completedShiftBatches", {}),
         "off": off_people_view(db, row.attraction_id, state),
         "rosterSickPoolMoves": state['status'] == 'live',
+        "exceptionReports": deepcopy(state.get("exceptionReports", [])),
+        "staffingWarnings": staffing_warnings(eng, now),
+        "postTransferAvailable": state["status"] == "live",
+        "postTransferFairnessAvailable": state["status"] == "live",
         "alerts": eng.alerts(now) if state["status"] == "live" else [],
         "notices": state.get("notices", [])[-10:],
         "plan": state["plan"],
@@ -872,6 +877,7 @@ def screen_payload(db: Session, attraction_id: int, *, committed_only: bool = Fa
         view.pop("alerts", None)
         view.pop("plan", None)
         view.pop("draftAlerts", None)
+        view.pop("exceptionReports", None)
         out["day"] = view
     return out
 
@@ -992,10 +998,10 @@ def confirmation_status(db: Session, attraction_id: int, work_date: str, token: 
         raise ActionError("只能查看自己的确认结果")
     return {"confirmed": bool(result) and result.get('status') not in ('reversed','superseded'), "result": result}
 
-SCREEN_ACTIONS = {"arrive", "depart", "batch_check_in", "correct_check_in"}
+SCREEN_ACTIONS = {"arrive", "depart", "batch_check_in", "correct_check_in", "resolve_exception"}
 LIVE_ACTIONS = SCREEN_ACTIONS | {
     "post", "line", "away", "back", "leave", "set_close", "add_person", "plan_place", "move",
-    "post_order", "post_create", "post_delete", "post_hold", "rename_post", "mode101", "mode101_target", "mode101_swap", "pool", "break_time",
+    "post_order", "post_transfer", "post_create", "post_delete", "post_hold", "rename_post", "mode101", "mode101_target", "mode101_swap", "pool", "break_time",
     "shift", "sort_time", "place", "sick",
 }
 DRAFT_ACTIONS = {"draft_generate", "draft_set", "draft_list", "draft_close", "draft_role", "draft_discard", "publish"}
@@ -1039,7 +1045,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict, *,
         raise ActionError('休息室大屏只可确认去休息或去轮岗')
     if act=='move' and body.get('force') is True and not body.get('expected_snapshot'):
         raise ActionError('强制安排必须先预览影响并确认')
-    if act not in {"post", "post_order", "post_create", "post_delete", "line", "set_close", "rename_post",
+    if act not in {"post", "post_order", "post_transfer", "post_create", "post_delete", "line", "set_close", "rename_post",
                    "mode101", "mode101_target", "mode101_swap", "sort_time", "add_person"}:
         _require(body, "pid")
         if not isinstance(body["pid"], str):
@@ -1068,7 +1074,7 @@ def do_live_action(db: Session, attraction_id: int, actor, body: dict, *,
         if row.status != "live":
             raise ActionError("今天的轮岗还没有发布")
         expected = body.get('expected_snapshot')
-        if act in {'post_create', 'post_delete', 'mode101', 'mode101_target', 'mode101_swap'} and not expected:
+        if act in {'post_transfer', 'post_create', 'post_delete', 'mode101', 'mode101_target', 'mode101_swap'} and not expected:
             raise ConfirmationConflict('请刷新看板后重新确认岗位安排')
         if expected:
             from app.rotation.manual import fingerprint

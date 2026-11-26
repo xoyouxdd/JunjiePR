@@ -35,6 +35,7 @@ function readGraph(file, ancestors = []) {
   const source = fs.readFileSync(file, 'utf8');
   const dependencies = [
     ...source.matchAll(/^import\s+.*?from\s+['"]([^'"]+)['"];?$/gm),
+    ...source.matchAll(/^import\s+['"]([^'"]+)['"];?$/gm),
     ...source.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
   ]
     .map(match => path.resolve(path.dirname(file), match[1]));
@@ -43,10 +44,13 @@ function readGraph(file, ancestors = []) {
 }
 readGraph(entry);
 const moduleFiles = [...graph.keys()].filter(file => file !== entry);
+const modulePaths = moduleFiles.map(file => '/static/' + path.relative(staticRoot, file).split(path.sep).join('/'));
 assert(moduleFiles.length > 1, 'Business code must be split into reachable modules');
-const onDiskModules = fs.readdirSync(path.join(staticRoot, 'js/app'))
-  .filter(name => name.endsWith('.js')).map(name => path.join(staticRoot, 'js/app', name));
-assert.deepEqual([...moduleFiles].sort(), onDiskModules.sort(), 'No orphaned business modules');
+const businessRoot = path.join(staticRoot, 'js/app');
+const onDiskModules = fs.readdirSync(businessRoot)
+  .filter(name => name.endsWith('.js')).map(name => path.join(businessRoot, name));
+assert.deepEqual(moduleFiles.filter(file => file.startsWith(businessRoot + path.sep)).sort(),
+  onDiskModules.sort(), 'No orphaned business modules');
 for (const file of moduleFiles) {
   const key = './static/' + path.relative(staticRoot, file).split(path.sep).join('/');
   assert.equal(importMap.imports[key], `${key}?v=__STATIC_CACHE_VERSION__`, `Version mapping missing for ${key}`);
@@ -223,7 +227,10 @@ async function main() {
         });
       });
       page.on('pageerror', error => errors.push(error.message));
-      page.on('request', request => {if (/\/static\/js\/app\/.*\.js/.test(request.url())) loadedModules.push(request.url());});
+      page.on('request', request => {
+        const pathname = new URL(request.url()).pathname;
+        if (modulePaths.some(modulePath => pathname.endsWith(modulePath))) loadedModules.push(request.url());
+      });
       await page.goto(`${origin}${pagePath}`);
       await page.locator('#app h2').filter({hasText: '今日工作'}).waitFor();
       assert.equal(await page.locator('#tabs [data-tab="changelog"]').count(),0);

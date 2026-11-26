@@ -181,6 +181,13 @@ def readiness(p):
     return float(p.get('readyAt') if p.get('readyAt') is not None else p['start'])
 
 
+def can_resolve_exception(eng, p, now):
+    entered = (p.get('exception') or {}).get('at')
+    return (eng.d.get('status') == 'live' and p.get('state') == 'exception'
+            and isinstance(entered, (int, float)) and entered <= now < entered + 5
+            and p['start'] <= now < p['end'] and eng.can_board(p, now, now))
+
+
 def save_boarding_deadline(p, value):
     p.update(timeoutAt=value, timeoutWindowMinutes=BOARDING_TIMEOUT_MINUTES)
 
@@ -578,6 +585,7 @@ def post_comparison(eng, line, now):
                       'occName': person.get('name') if person else None, 'open': post.get('open'),
                       'entrySortAt': person.get('entrySortAt') if person else None,
                       'hold': bool(post.get('hold')) or mode101.fixed(post),
+                      'mode101': deepcopy(post.get('mode101')),
                       'seven': bool(person and seven_target(person, opening_crew=True)),
                       'missedCheckIn': bool(person and missed_check_in(person, now))})
     return posts
@@ -683,6 +691,8 @@ def task_view(eng, p, now):
             'allowedAt': a.get('allowedAt', readiness(p)), 'deadlineAt': deadline(eng, p, now, a.get('notBefore', 0)),
             'timeoutWindowMinutes': BOARDING_TIMEOUT_MINUTES, 'status': 'forecast',
             'kind': a['kind'], 'mode': a['mode'], 'routes': route_view(eng, moves), 'beforePosts': before, 'afterPosts': after,
+            'departures': [{'pid': move['pid'], 'outcome': exit_outcome(eng, eng.P[move['pid']], move, at)}
+                           for move in moves if move['to'] is None],
             'routeSignature': route_signature([a['kind'], moves, handoff['instruction']]),
             'push7Route': route_signature(moves) if a['kind'] == 'push7' else None,
             **handoff,
@@ -696,6 +706,8 @@ def finish_continuous(p, now):
 
 
 def remove(eng, p, now):
+    if p.get('batchResult'):
+        p['batchResult']['superseded'] = True
     line, i = eng.find_post(p['pid'])
     if line is not None:
         eng._leave_line(p, line, i, max(now, p.get('lineStart') or now))
@@ -722,6 +734,20 @@ def cancel_active_absences(eng, p, now, actor):
             absence.update(done=True, cancelledByManual=True)
             eng.h.log('cancel_fixed_absence', actor, p['pid'], None, None,
                       {k: absence.get(k) for k in ('start', 'end', 'label')})
+
+
+def resolve_exception_report(eng, p, evidence, now):
+    """Close the original report for every manual exit from the exception pool."""
+    if not evidence or evidence.get('at') is None:
+        return
+    reports = eng.d.setdefault('exceptionReports', [])
+    report = next((r for r in reversed(reports) if r['pid'] == p['pid'] and r['at'] == evidence['at']), None)
+    if report is None:
+        report = {'pid': p['pid'], 'name': p['name'], 'at': evidence['at'],
+                  'line': evidence.get('assignment', {}).get('line')}
+        reports.append(report)
+    if report.get('status') != 'self_resolved':
+        report.update(status='manager_resolved', resolvedAt=now)
 
 
 def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, automatic=False):
@@ -761,6 +787,7 @@ def pool(eng, pid, destination, now, actor, remaining=None, repeat_meal=False, a
     if start_with_shift and destination == 'rest' and p['start'] == RELIEF_SHIFT and remaining is None:
         duration = MORNING_REST_END - RELIEF_SHIFT
     old_exception = p.pop('exception', None)
+    resolve_exception_report(eng, p, old_exception, now)
     if not automatic:
         cancel_active_absences(eng, p, now, actor)
     remove(eng, p, now)
@@ -803,6 +830,8 @@ def transfer_moves(eng, line, moves, now, stamp):
     locations = {post['key']: (L, i, post) for L in eng.d['lines'] for i, post in enumerate(L['posts'])}
     for move in moves:
         q = eng.P[move['pid']]
+        if q.get('batchResult'):
+            q['batchResult']['superseded'] = True
         if move['from']:
             oldline, i, post = locations[move['from']]
             if move['to'] and q.get('continuousStart') is None:
@@ -862,6 +891,7 @@ def execute_moves(eng, p, assignment, moves, now, actor, manual=False, source_ke
         p['entrySortAt'] = sort_time(line)
     filled_opening = settle_openings(line, moves, source_key)
     evidence = p.pop('exception', None)
+    resolve_exception_report(eng, p, evidence, now)
     detail = {'purpose': assignment['kind'], 'moves': moves, 'timeout': evidence, 'effectiveAt': stamp}
     if completion:
         detail.update(push7_execution=completion, target=assignment['target'])
@@ -1145,6 +1175,9 @@ def run_batch(eng, now, start, booked):
         p['batchResult'] = {'start': start, 'line': lid, 'post': post['name'], 'postKey': post['key'],
                             'handoff': first, 'handoffChain': handoffs,
                             'shiftEndPosts': shift_end_posts[lid], 'openingPosts': opening_posts[lid],
+                            'departures': [{'pid': item['occ'], 'outcome': eng.P[item['occ']]['state']}
+                                           for item in before[lid] if item['occ']
+                                           and not any(slot['occ'] == item['occ'] for slot in after[lid])],
                             'beforePosts': before[lid], 'afterPosts': after[lid]}
         if pid in morning_reporting:
             p['batchResult']['reportAt'] = MORNING_REST_END
@@ -1280,6 +1313,10 @@ def tick(eng, now, *, advance_batches=False, execute_batch=run_batch, batch_targ
                 p['exception'] = {'at': now, 'deadlineAt': expires, 'timeoutWindowMinutes': BOARDING_TIMEOUT_MINUTES,
                                   'assignment': deepcopy(p['assign']), 'allowedAt': readiness(p)}
                 p.update(state='exception', assign=None)
+                eng.d.setdefault('exceptionReports', []).append({
+                    'pid': p['pid'], 'name': p['name'], 'at': now,
+                    'line': p['exception']['assignment']['line'], 'status': 'pending',
+                })
                 eng.h.log('forecast_timeout', 'system', p['pid'], p['exception']['assignment']['line'], None, p['exception'])
         plan(eng, now)
     return initialized or before != json.dumps(eng.d, sort_keys=True, ensure_ascii=False)

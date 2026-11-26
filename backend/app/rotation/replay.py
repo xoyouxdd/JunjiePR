@@ -84,7 +84,7 @@ _PERSON_FIELDS = (
     'breakKind', 'breakStart', 'flags', 'tags', 'away', 'leaveReason', 'interruptedBreak', 'entryHold',
     'walkbackSince', 'arriveAt', 'ate', 'lastDeparture', 'downReason', 'after', 'visited', 'mark',
     'absences', 'continuousStart', 'entrySortAt', 'timingUnverified', 'sevenReplaced', 'requestedExit', 'initialPool', 'type',
-    'scheduledRestStart', 'batchCheckedIn', 'batchResult', 'awaitingShiftEntry',
+    'lineSegmentStart', 'scheduledRestStart', 'batchCheckedIn', 'batchResult', 'awaitingShiftEntry',
 )
 
 

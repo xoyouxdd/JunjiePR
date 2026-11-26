@@ -63,7 +63,7 @@ function departureEarly() {
 
 function canDepartNow(p, n) {
   if(rotationTaskPaused(p)||p.entryHold)return false;
-  if(rotationUsesTasks(p)&&p.task?.status!=='assigned')return false;
+  if(rotationUsesTasks(p)&&!['assigned','forecast'].includes(p.task?.status))return false;
   if(p.task&&(!p.canDepart||n<p.task.allowedAt-1e-8||n>p.task.deadlineAt+1e-8))return false;
   if(p.departureBlocked||p.assign?.blocked)return false;
   return departureTimeReady(p,n);
@@ -73,7 +73,7 @@ function rotationTaskPaused(p){return !!(p.timeoutCase||p.timeoutPending||p.task
 function rotationUsesTasks(p){return !!(formalRotation||RT.data?.taskWorkflow||RT.data?.day?.taskWorkflow||p.task);}
 function rotationAssignment(p){
   if(rotationTaskPaused(p)||p.entryHold)return null;
-  return rotationUsesTasks(p)?(p.task?.status==='assigned'?p.assign:null):p.assign;
+  return rotationUsesTasks(p)?(['assigned','forecast'].includes(p.task?.status)?p.assign:null):p.assign;
 }
 
 function departureTimeReady(p,n){
@@ -199,12 +199,42 @@ function nowMin() {
   return RT.data?.day?.ruleVersion===2?minute:Math.min(1440,minute);
 }
 
+function renderMode101Status(day, allowed) {
+  const header = document.querySelector('.rt-top');
+  if (!header) return;
+  let banner = document.getElementById('rtMode101Status');
+  if (!banner) {
+    banner = document.createElement('aside');
+    banner.id = 'rtMode101Status';
+    banner.className = 'rt-mode101-status';
+    banner.setAttribute('role', 'status');
+    banner.setAttribute('aria-live', 'polite');
+    banner.setAttribute('aria-atomic', 'true');
+    header.appendChild(banner);
+  }
+  const available = allowed && day && !day.readOnly && day.status !== 'ended';
+  const pending = available ? (day.lines || []).flatMap(line => line.posts || [])
+    .filter(post => post.occ && post.mode101?.phase === 'return').length : 0;
+  const active = available && day.mode101Active;
+  const key = active ? `active:${day.date}` : pending ? `return:${day.date}:${pending}` : '';
+  if (banner.dataset.mode101Key === key) return;
+  banner.dataset.mode101Key = key;
+  banner.hidden = !key;
+  document.body.classList.toggle('rt-has-mode101-status', !!key);
+  if (!key) { banner.replaceChildren(); return; }
+  banner.classList.toggle('rt-mode101-returning', !active);
+  const title = active ? '101 模式进行中' : `101 已结束 · 待恢复 ${pending} 人`;
+  const hint = active ? '塔台、塔协暂停参与顺推' : '人员尚未完成恢复，等待后续推岗';
+  banner.innerHTML = `<span class="rt-mode101-indicator" aria-hidden="true"></span><strong>${esc(title)}</strong><span class="rt-mode101-hint">${esc(day.date)} · ${hint}</span>`;
+}
+
 function renderClock() {
   const el = document.getElementById('rtClock');
   const clock = RT.data && RT.data.clock;
   if (!el || !clock) return;
   const sim = clock.mode === 'sim';
   el.innerHTML = `<span class="rt-date">${esc(clock.date)}</span><b>${hms(nowMin())}</b>${sim ? `<span class="rt-sim">${clock.paused ? '模拟 · 暂停' : `模拟 ×${clock.speed}`}</span>` : ''}`;
+  renderMode101Status(RT.data.day, RT.mode101StatusAllowed);
 }
 
 // ---------------------------------------------------------------- 弹窗
@@ -276,7 +306,7 @@ function confirmBox(title, message, okText, run, { warn = false, autoCancel = 0,
   if (previousOverlay) activeRotationConfirmation = previousConfirmation;
 }
 
-function formBox(title, fields, run, { warn = false, okText = '确定' } = {}) {
+function formBox(title, fields, run, { warn = false, okText = '确定', onOpen = null } = {}) {
   openModal(`<h3>${title}</h3><form class="form-stack" data-form>${fields}<div class="modal-actions"><button type="button" class="secondary" data-close>取消</button><button type="submit" class="${warn ? 'danger' : 'primary'}">${esc(okText)}</button></div></form>`, host => {
     host.querySelector('[data-form]').onsubmit = async event => {
       event.preventDefault();
@@ -284,6 +314,7 @@ function formBox(title, fields, run, { warn = false, okText = '确定' } = {}) {
       const values = Object.fromEntries(new FormData(form).entries());
       if (await run(values, form) !== false) closeModal();
     };
+    if (onOpen) onOpen(host);
   });
 }
 

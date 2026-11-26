@@ -66,7 +66,9 @@ function boardView() {
   }
   if(d.readOnly)return `<section class="panel rt-empty"><h2>${esc(d.date)} 旧版轮岗</h2><p class="rt-warn">当天记录仅供查看。${me.capabilities.can_manage?'可在「每日班表」回放当日状态。':''}</p></section>${workflowBoardContent(d,nowMin(),false,{readOnly:true})}`;
   if (d.status === 'ended') return `<section class="panel rt-empty"><h2>${esc(d.date)} 的轮岗已结束</h2><p>${me.capabilities.can_records?'可在「记录」查看当天的操作日志和个人轮岗记录。':'当天轮岗安排已结束。'}</p></section>`;
-  return workflowBoardView(nowMin(),isManager(),me.capabilities.can_manage);
+  const reports = me.capabilities.can_manage ? (d.exceptionReports || []) : [];
+  const reportPanel = reports.length ? `<section class="panel"><h2>异常汇报 · ${reports.length}</h2>${reports.map(report => `<article class="rt-notice"><strong>${esc(report.name)} · ${hm(report.at)} · ${esc(report.line || '')}</strong><p>${report.status === 'self_resolved' ? '本人已提交原因并恢复轮岗' : report.status === 'manager_resolved' ? '现场负责人已处理' : report.status === 'reported' ? '本人已提交原因，等待现场处理' : '已进入异常池，待提交原因'}${report.reason ? ' · ' + esc(report.reason) : ''}</p></article>`).join('')}</section>` : '';
+  return reportPanel + workflowBoardView(nowMin(),isManager(),me.capabilities.can_manage);
 }
 
 // ---------------------------------------------------------------- 初始化（草稿）
@@ -525,10 +527,10 @@ function bindRoster() {
 // ---------------------------------------------------------------- 记录
 
 const EVENT_NAME = {
-  post_create:'新建岗位',post_delete:'删除岗位',draft_post_create:'预排新建岗位',draft_post_delete:'预排删除岗位',
+  post_transfer:'跨线移岗',post_create:'新建岗位',post_delete:'删除岗位',draft_post_create:'预排新建岗位',draft_post_delete:'预排删除岗位',
   batch_check_in:'班前签到',correct_check_in:'补记已到',
   draft_fill_spares: '补齐备用岗位',draft_line:'预排线路启停',
-  workflow_checkpoint:'操作恢复点',workflow_restore:'恢复线路上一步',rename_post:'岗位改名',hold101:'101定岗',resume101:'取消101定岗',task_timeout:'任务超时',task_transfer:'任务转接',task_refresh:'任务刷新',
+  workflow_checkpoint:'操作恢复点',workflow_restore:'恢复线路上一步',rename_post:'岗位改名',hold101:'101定岗',resume101:'取消101定岗',exception_report:'异常原因汇报',forecast_timeout:'上岗超时',task_timeout:'任务超时',task_transfer:'任务转接',task_refresh:'任务刷新',
   force_place:'强制安排上岗',entry_group:'整组上岗',entry_ready:'本人确认到位',entry_solo:'调整单人上岗',entry_adjust:'调整协同组合',entry_return:'本人到场重新领取安排',
   post_hold:'设置持续定岗',post_resume:'结束定岗', publish: '发布', crew_start: '开园上岗', push: '推岗进线', push7: '推 7 点', chain_out: '推下班/推出圈', pushed_off: '下线', pushed_out: '被推出',
   arrive: '去休息', arrive_done: '去休息后下班', arrive_away: '去休息后转暂离', depart: '去轮岗', undo_arrive: '撤回去休息', away: '暂离/出圈', back: '回池',
@@ -553,6 +555,7 @@ function detailText(item) {
   if (d.flag) parts.push(`${d.on ? '标记' : '取消'}${d.flag}`);
   if(item.type==='force_place'&&d.previous)parts.push(`${({meal:'吃饭',meal_rest:'饭后休息',rest:'休息'})[d.previous.kind]||'休息'}中断，剩余 ${Math.ceil(d.previous.remaining||0)} 分钟${d.replaced?'，原人员下线待确认休息':''}`);
   if(item.type==='post_order'&&d.target_line)parts.push(`跨线至 ${d.target_line}`);
+  if(item.type==='post_transfer')parts.push(`${d.fromLine} 第${d.fromPosition}岗 → ${d.toLine} 第${d.toPosition}岗 · 岗位连人迁移，时间保留`);
   if(item.type==='post_order'&&d.mode)parts.push(d.mode==='posts'?'只交换岗位':d.mode==='with_people'?'岗位和人员一起交换':'调整岗位顺序');
   if(item.type==='draft_fill_spares')parts.push(Object.entries(d.added||{}).map(([line,count])=>`${line}线新增${count}个备用岗位`).join('，'));
   if(item.type==='draft_line')parts.push(d.active?'启用预排线路':'停用预排线路');
@@ -566,25 +569,16 @@ async function loadLog(day) {
   RT.render();
 }
 
-async function loadRecord(no) {
-  view.recordNo = no;
-  try { view.record = await rtApi(`/api/rotation-board/person?employee_no=${encodeURIComponent(no)}&date=${encodeURIComponent(view.logDate || RT.data.clock.date)}`); } catch (error) { toast(error.message, true); }
-  RT.render();
-}
+async function loadRecord(no) { return historyLoad(no); }
 
 function recordsView() {
-  const rec = view.record;
-  const recordBox = rec ? `<h3>${esc(rec.employee_no)}${rec.segments.some(s=>s.temporary)||rec.events.some(e=>e.temporary)?' · 含临时身份记录':''} 本周（${esc(rec.week[0])} 至 ${esc(rec.week[1])}）</h3>
-    <div class="rt-row">${Object.entries(rec.totals).sort().map(([line, m]) => `<span class="rt-pill">${esc(line)} ${Math.round(m)} 分钟</span>`).join('') || '<span class="field-hint">本周还没有在线记录</span>'}</div>
-    ${rec.duties.length ? `<p class="field-hint">本周任务：${rec.duties.map(d => `${esc(d.date)} ${d.kind === 'push7' ? '推 7 点' : '送失物'}`).join('；')}</p>` : ''}
-    <div class="rt-scroll"><table class="rt-table"><thead><tr><th>日期</th><th>线</th><th>开始</th><th>结束</th><th>分钟</th></tr></thead><tbody>${rec.segments.map(s => `<tr><td>${esc(s.date)}${(s.identity_labels?.length?s.identity_labels:s.temporary?['临时']:[]).map(label=>`（${esc(label)}）`).join('')}</td><td>${esc(s.line)}</td><td>${hm(s.start)}</td><td>${hm(s.end)}</td><td>${Math.round(s.minutes)}</td></tr>`).join('')}</tbody></table></div>` : '';
-  return `<section class="panel"><h2>个人轮岗记录</h2><form id="recordForm" class="rt-row"><label><span class="rt-label-text">工号</span><input name="no" value="${esc(view.recordNo)}" maxlength="50" required></label><button type="submit" class="primary">查询</button></form>${recordBox}</section>
+  return historyView()+`
     <section class="panel"><h2>操作日志</h2><div class="rt-row"><label><span class="rt-label-text">日期</span><input type="date" id="logDate" value="${esc(view.logDate || RT.data.clock.date)}"></label><button type="button" class="secondary" id="logLoad">查看</button></div>
     <div class="rt-scroll tall"><table class="rt-table"><thead><tr><th>时间</th><th>操作</th><th>人员</th><th>线/岗位</th><th>说明</th><th>操作人</th></tr></thead><tbody>${(view.log || []).map(item => `<tr><td>${esc(item.time)}</td><td>${esc(EVENT_NAME[item.type] || item.type)}</td><td>${esc(item.name || '')}${(item.identity_labels?.length?item.identity_labels:item.temporary?['临时']:[]).map(label=>`（${esc(label)}）`).join('')}</td><td>${esc([item.line, item.post].filter(Boolean).join(' '))}</td><td>${esc(detailText(item))}</td><td>${esc(item.actor)}${item.actor_temporary?'（临时）':''}</td></tr>`).join('') || '<tr><td colspan="6">暂无记录</td></tr>'}</tbody></table></div></section>`;
 }
 
 function bindRecords() {
-  document.getElementById('recordForm').onsubmit = event => { event.preventDefault(); const no = new FormData(event.target).get('no').trim(); if (no) loadRecord(no); };
+  historyBind();
   document.getElementById('logLoad').onclick = () => loadLog(document.getElementById('logDate').value);
 }
 
@@ -699,10 +693,12 @@ function memberView() {
   const done = d.notices.filter(x => x.status !== 'open');
   const action = p && (['walkback', 'pending'].includes(p.state)||opWaiting(p)) ? 'arrive' : assignment ? 'depart' : null;
   const can = action === 'arrive' || (action === 'depart' && canDepartNow(p, n));
-  const actionButton = action ? `<div class="rt-actions"><button type="button" class="primary" data-member-act="${action}" ${can && !confirmationBlocked() ? '' : 'disabled'}>${RT.pendingConfirmation ? '正在核实确认结果' : RT.submitting ? '正在提交' : action==='entry_return'?'确认知晓，重新领取':action === 'arrive' ? '确认已到休息室' : can ? '去轮岗' : '等待出发'}</button></div>` : '';
+  const departure = d.confirmations?.find(receipt=>receipt.action==='depart'&&!['reversed','superseded'].includes(receipt.status));
+  const routeReview = departure?.task ? '<button type="button" class="secondary" data-personal-route>查看推岗路线</button>' : '';
+  const actionButton = action ? `<div class="rt-actions"><button type="button" class="primary" data-member-act="${action}" ${can && !confirmationBlocked() ? '' : 'disabled'}>${RT.pendingConfirmation ? '正在核实确认结果' : RT.submitting ? '正在提交' : action==='entry_return'?'确认知晓，重新领取':action === 'arrive' ? '确认已到休息室' : can ? '确认上岗，开始推岗' : '等待出发'}</button></div>` : '';
   const todo = `<section class="panel rt-todo"><div class="rt-todo-head"><h2>待办</h2></div>
     ${open.length ? open.map(x => `<article class="rt-notice ${esc(x.kind)}"><strong>${esc(x.title)}</strong>${x.body ? `<p>${esc(x.body)}</p>` : ''}</article>`).join('') : '<p class="field-hint">当前没有轮岗待办。</p>'}
-    ${action === 'depart' ? `<div class="rt-route">${assignmentDescription(assignment)}${p.task?`<p>${taskTime(p.task.allowedAt)} 可出发 · ${taskTime(p.task.deadlineAt)} 前确认</p>${n<p.task.allowedAt?`<p>餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(p.task.allowedAt-n))} 分钟</p>`:''}`:''}</div>` : ''}${actionButton}
+    ${action === 'depart' ? `<div class="rt-route">${assignmentDescription(assignment)}${p.task?workflowComparison(p):''}${p.task?`<p>${taskTime(p.task.allowedAt)} 可出发 · ${taskTime(p.task.deadlineAt)} 前确认</p>${n<p.task.allowedAt?`<p>餐休剩 ${Math.max(0,Math.ceil((p.readyAt??n)-n))} 分钟 · 距允许出发 ${Math.max(0,Math.ceil(p.task.allowedAt-n))} 分钟</p>`:''}`:''}</div>` : ''}${actionButton}${routeReview}${p?.canReportException ? `<form data-exception-report><label>个人原因<textarea name="reason" maxlength="500" required></textarea></label><button type="submit" class="primary" ${confirmationBlocked()?'disabled':''}>${p.canResolveException?'提交异常并继续轮岗':'提交异常原因'}</button><p class="field-hint">进入异常池五分钟内可自行处理，异常汇报会保留给主管、经理。</p></form>` : ''}
     ${done.length ? `<details><summary>已完成 ${done.length} 项</summary>${done.map(x => `<p class="rt-notice-done">${esc(x.updated_at || '')} ${esc(x.title)}</p>`).join('')}</details>` : ''}</section>`;
   if (!p) return `${todo}<section class="panel rt-empty"><h2>今天没有你的轮岗</h2><p>名单发布后这里会显示你的状态和所在线。</p></section>`;
   const state = poolState(p, n);
@@ -733,8 +729,10 @@ function memberView() {
 
 RT.render = (fromTicker,forceDaily=false) => {
   if (!RT.data || !me || RT.dragging) return;
+  RT.mode101StatusAllowed = isManager() && !personalRotation;
   renderClock();
   if (personalRotation) {
+    if ($app.querySelector('[data-exception-report]')?.contains(document.activeElement)) return;
     const expanded = [...$app.querySelectorAll('details')].map(el => el.open);
     $app.innerHTML = memberView();
     [...$app.querySelectorAll('details')].forEach((el, i) => { el.open = expanded[i] || false; });
@@ -795,13 +793,73 @@ RT.load = async () => {
   }
 };
 
+$app.addEventListener('submit', async event => {
+  const form = event.target.closest('[data-exception-report]');
+  if (!form) return;
+  event.preventDefault();
+  const person = RT.data?.person;
+  if (!personalRotation || !person?.canReportException || confirmationBlocked()) return;
+  const reason = new FormData(form).get('reason')?.trim();
+  if (!reason) return;
+  RT.submitting = true;
+  form.querySelector('button').disabled = true;
+  try {
+    const result = await rtPost('/api/rotation-board/me/act', {action:'resolve_exception',pid:person.pid,
+      reason,confirmation_token:person.confirmationTokens.resolve_exception,attraction_id:RT.data.attraction_id});
+    toast(result.recovered?'异常已提交，已重新获取轮岗安排':'异常已提交，请等待现场负责人处理');
+    await RT.load();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    RT.submitting = false;
+    form.querySelector('button').disabled = false;
+  }
+});
+
+async function confirmPersonalDeparture(person, task=person.task, changed=false) {
+  if (confirmationBlocked() || !person.canDepart) return;
+  const token=person.confirmationTokens.depart;
+  const send=async()=>{
+    if(confirmationBlocked())return false;
+    RT.submitting=true;
+    storePendingConfirmation({token,pid:person.pid,date:RT.data.clock.date});
+    try{
+      const result=await rtPost('/api/rotation-board/me/act',{action:'depart',pid:person.pid,
+        confirmation_token:token,expected_line:task?.line||person.assign?.line,
+        expected_push7:task?.push7Route??null,expected_opening:task?.openingRoute??null,
+        expected_kind:task?.kind,expected_route:task?.routeSignature});
+      storePendingConfirmation(null);
+      if(result.line_changed){
+        setTimeout(()=>void confirmPersonalDeparture(person,result.task,true),0);
+        return true;
+      }
+      toast('已确认上岗，请按路线执行');
+      await RT.load();
+      return true;
+    }catch(error){if(!error.uncertain)storePendingConfirmation(null);toast(error.message,true);return false;}
+    finally{RT.submitting=false;}
+  };
+  if(changed)confirmBox('接替路线已改变，请重新确认',workflowComparison({task}),'确认上岗',send);
+  else await send();
+}
+
 $app.addEventListener('click', event => {
   if(event.target.closest('[data-opening-settings]')&&tab==='board'&&me.capabilities.can_manage&&RT.data?.day?.prestartPlanRevision){
     void openOpeningSettings();
     return;
   }
+  if(personalRotation&&event.target.closest('[data-personal-route]')){
+    const receipt=RT.data.confirmations?.find(r=>r.action==='depart'&&!['reversed','superseded'].includes(r.status));
+    if(receipt?.task){
+      const p=RT.data.person;
+      const adjusted=p?.line!==receipt.line||p?.post!==receipt.post||p?.confirmationSequence!==receipt.sequence;
+      openModal(`<h3>本次已确认推岗路线</h3>${adjusted?'<p role="alert">安排已调整，请核对当前岗位及现场最新指令。以下为本次已确认路线。</p>':''}${workflowComparison({task:receipt.task})}<button type="button" class="secondary" data-close>关闭</button>`);
+    }
+    return;
+  }
   const button = event.target.closest('[data-member-act]');
   if (!button || button.disabled || !personalRotation || RT.data?.readOnly || !RT.data?.person) return;
+  if(button.dataset.memberAct==='depart'){void confirmPersonalDeparture(RT.data.person);return;}
   confirmRotation(RT.data.person, button.dataset.memberAct, '/api/rotation-board/me/act');
 });
 

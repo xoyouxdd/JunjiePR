@@ -1255,3 +1255,37 @@ def test_stale_pool_drag_cannot_pull_someone_back_out_after_they_board(current):
     with pytest.raises(S.ConfirmationConflict):
         act(current, {'action': 'pool', 'pid': '5', 'pool': 'other', 'person_context': context})
     assert person(current)['state'] == 'onpost'
+
+
+@pytest.mark.parametrize('offset', [0, 4 + 59/60, 5])
+def test_personal_exception_recovery_requires_reason_and_preserves_report(current, offset):
+    r = current
+    with r.factory() as db, S.transaction(db):
+        cfg = S.load_config(db, r.attraction_id)
+        row = S.day_row(db, r.attraction_id, DAY)
+        state = S.day_state(row)
+        S.advance(db, cfg, row, state, 602)
+        S.set_sim_clock(cfg, DAY, 601 + offset, paused=True)
+    p = person(r)
+    assert p['state'] == 'exception'
+    member = SimpleNamespace(kind='member', member_employee_no='5', name='本人', actor_id=None)
+    assert p['canResolveException'] is (offset < 5)
+    token = p['confirmationTokens']['resolve_exception']
+    payload = {'action':'resolve_exception','pid':'5','confirmation_token':token,'reason':'个人原因耽误'}
+    with pytest.raises(S.ActionError, match='原因'):
+        act(r, {**payload, 'reason': ' '}, member)
+    with pytest.raises(S.ActionError, match='本人'):
+        act(r, payload, SimpleNamespace(kind='screen'))
+    result = act(r, payload, member)
+    assert result['executed']
+    assert act(r, payload, member)['duplicate']
+    if offset < 5:
+        assert person(r)['state'] in ('rest', 'ready') and not person(r).get('exception')
+    else:
+        assert person(r)['state'] == 'exception'
+    reports = board(r)['exceptionReports']
+    assert len(reports) == 1 and reports[0]['reason'] == '个人原因耽误'
+    assert reports[0]['status'] == ('self_resolved' if offset < 5 else 'reported')
+    with r.factory() as db:
+        assert db.query(RotationEvent).filter_by(employee_no='5', event_type='forecast_timeout').count() == 1
+        assert db.query(RotationEvent).filter_by(employee_no='5', event_type='exception_report').count() == 1

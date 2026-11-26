@@ -9,16 +9,12 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function ok(response){assert(response.ok(),await response.text());return response.json();}
 async function comparison(scope){
   const card=scope.locator('.rt-task-comparison');await card.waitFor();
-  assert.deepEqual(await card.locator('.rt-task-columns>div>p').allTextContents(),['执行前 · 当前站位','执行后 · 预计站位']);
-  assert.equal(await card.locator('.rt-task-line').count(),2);
-  const panes=await comparisonRows(card);
-  assert(panes[0].every(row=>!row.changed),'The before pane must keep its original neutral style');
-  assert(panes[1].some(row=>row.changed),'The after pane must highlight changed positions');
-  assert.equal(panes[0].length,panes[1].length,'Only actual post rows are shown');
-  panes[1].forEach((row,i)=>assert.equal(row.changed,row.name!==panes[0][i].name,'Only changed occupants are highlighted'));
-  assert.equal(await card.locator('.rt-task-extra').count(),0);
-  assertComparisonColors(panes);
-  return panes.map(rows=>rows.map(({post,name,changed})=>({post,name,changed})));
+  assert.equal(await card.locator('.rt-task-columns').count(),0,'Ordinary pushes use one movement list');
+  const rows=await card.locator('.rt-movement-row').evaluateAll(nodes=>nodes.map(node=>({pid:node.dataset.movementPid,name:node.querySelector('strong').textContent,from:node.querySelector('.rt-movement-from').textContent,to:node.querySelector('b').textContent})));
+  assert(rows.length>0);
+  assert(rows.some(row=>row.from==='待上岗'),'Include the incoming employee');
+  assert.equal(new Set(rows.map(row=>row.pid)).size,rows.length,'A person has exactly one destination');
+  return rows;
 }
 async function comparisonRows(card){
   return card.locator('.rt-task-line').evaluateAll(lines=>lines.map(line=>[...line.querySelectorAll('.rt-task-slot')].map(row=>{
@@ -86,9 +82,8 @@ async function main(){try{
     await page.getByRole('heading',{name:'线路已改变，请重新确认',exact:true}).waitFor();
     const dialog=page.getByRole('dialog');await redNotice(dialog,first.name);
     const desktop=await comparison(dialog);
-    assert(!desktop[0].some(row=>row.name===later.name),'Before pane shows current occupants, without an incoming extra row');
-    assert(desktop[1].some(row=>row.name===later.name&&row.changed));
-    assert(!desktop[1].some(row=>row.post.includes('下岗')),'After pane keeps the original post-only layout');
+    assert(desktop.some(row=>row.name===later.name&&row.from==='待上岗'));
+    assert(desktop.some(row=>row.to==='休息室'),'Show the outgoing person and rest destination');
     assert.deepEqual((await board()).lines.map(l=>l.posts.map(p=>p.occ)),before,'Reroute preview never executes');
     await page.screenshot({path:path.join(report,'desktop-'+engine+'.png'),animations:'disabled'});
     await page.getByRole('button',{name:'取消',exact:true}).click();
@@ -100,8 +95,7 @@ async function main(){try{
     }
     const mobile=await member.newPage();mobile.on('pageerror',e=>errors.push(e.message));await mobile.goto(base+'/?view=actionCenter');
     await comparison(mobile.locator('[data-formal-rotation-todo]'));
-    await mobile.locator('[data-rotation-task=depart]').click();await comparison(mobile.getByRole('dialog'));
-    await mobile.locator('[data-modal-confirm]').click();
+    await mobile.locator('[data-rotation-task=depart]').click();
     await mobile.getByRole('heading',{name:'线路已改变，请重新确认',exact:true}).waitFor();
     const reroute=mobile.getByRole('dialog',{name:'线路已改变，请重新确认',exact:true});
     await redNotice(reroute,first.name);
@@ -186,6 +180,39 @@ async function main(){try{
     assert(batchRows.length>=2);
     assert.deepEqual(batchRows,await comparisonRows(boardDialog));
     for(let i=0;i<batchRows.length;i+=2)assertComparisonColors(batchRows.slice(i,i+2));
+    await screen.screenshot({path:path.join(report,'batch-screen-'+engine+'.png'),animations:'disabled'});
+    const batchMember=await browser.newContext({viewport:{width:390,height:844}});
+    const batchPerson=(await board()).persons.find(p=>p.pid===checkingIn[0].pid);
+    await ok(await batchMember.request.post(base+'/api/login',{data:{employee_no:batchPerson.pid,password:'rotation-local-2026'}}));
+    const announcementBatch=await ok(await batchMember.request.get(base+'/api/changelog/announcement'));
+    if(announcementBatch.release&&!announcementBatch.read)await ok(await batchMember.request.post(base+'/api/changelog/announcement/read',{data:{version:announcementBatch.release.version}}));
+    const employeeBatch=await batchMember.newPage();employeeBatch.on('pageerror',e=>errors.push(e.message));
+    await employeeBatch.goto(base+'/?view=actionCenter');
+    assert.equal(await employeeBatch.locator('[data-formal-rotation-todo] .rt-batch-comparison').count(),0,'Batch details never auto-expand');
+    await employeeBatch.getByRole('button',{name:'查看推岗路线',exact:true}).click();
+    const employeeComparison=employeeBatch.getByRole('dialog').locator('.rt-batch-comparison');await employeeComparison.waitFor();
+    const lineComparison=screenDialog.locator('.rt-batch-comparison').filter({has:screen.locator('header').getByText(batchPerson.batchResult.line,{exact:true})});
+    assert.deepEqual(await comparisonRows(employeeComparison),await comparisonRows(lineComparison),'Employee and screen share the full batch standings and colors');
+    await employeeBatch.screenshot({path:path.join(report,'batch-employee-'+engine+'.png'),fullPage:true,animations:'disabled'});
+    await employeeBatch.setViewportSize({width:320,height:700});
+    assert.equal(await employeeBatch.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await employeeBatch.getByRole('dialog').locator('[data-modal-confirm]').click();
+    await employeeBatch.setViewportSize({width:390,height:844});
+    await employeeBatch.screenshot({path:path.join(report,'batch-home-after-'+engine+'.png'),fullPage:true,animations:'disabled'});
+    if(process.env.ROTATION_BATCH_BEFORE_SOURCE){
+      const oldPage=await batchMember.newPage();
+      await oldPage.route('**/static/js/app/rotation.js*',route=>route.fulfill({contentType:'text/javascript',body:fs.readFileSync(process.env.ROTATION_BATCH_BEFORE_SOURCE,'utf8')}));
+      await oldPage.goto(base+'/?view=actionCenter');
+      await oldPage.locator('[data-formal-rotation-todo] .rt-batch-comparison').waitFor();
+      const oldHeight=await oldPage.locator('.rt-personal-task').evaluate(el=>el.getBoundingClientRect().height);
+      const newHeight=await employeeBatch.locator('.rt-personal-task').evaluate(el=>el.getBoundingClientRect().height);
+      assert(newHeight<oldHeight*.65,JSON.stringify({oldHeight,newHeight}));
+      await oldPage.screenshot({path:path.join(report,'batch-home-before-'+engine+'.png'),fullPage:true,animations:'disabled'});
+      fs.writeFileSync(path.join(report,'batch-home-heights-'+engine+'.json'),JSON.stringify({oldHeight,newHeight},null,2));
+      await oldPage.close();
+    }
+    await employeeBatch.reload();await employeeBatch.locator('[data-view-batch-route]').waitFor();
+    assert.equal(await employeeBatch.locator('[data-formal-rotation-todo] .rt-batch-comparison').count(),0);
     await screen.setViewportSize({width:390,height:844});
     assert.equal(await screen.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await screenDialog.getByRole('button',{name:'关闭',exact:true}).click();
@@ -196,6 +223,36 @@ async function main(){try{
       notice(screen).waitFor({state:'hidden'}),
       notice(page).waitFor({state:'hidden'}),
     ]);
+    await employeeBatch.reload();await employeeBatch.locator('[data-view-batch-route]').waitFor();
+    assert.equal(await employeeBatch.locator('.rt-batch-summary').count(),0,'Five-minute expiry removes the notification');
+    assert.equal(await employeeBatch.locator('[data-formal-rotation-todo] .rt-batch-comparison').count(),0);
+    // Leaving the old post supersedes its batch result even if the clock is paused.
+    await post({action:'pool',pid:batchPerson.pid,pool:'pending'});
+    await employeeBatch.reload();await employeeBatch.locator('[data-rotation-task=arrive]').waitFor();
+    assert.equal(await employeeBatch.locator('[data-view-batch-route],.rt-batch-summary,.rt-batch-comparison').count(),0);
+    await employeeBatch.screenshot({path:path.join(report,'batch-next-arrival-'+engine+'.png'),fullPage:true,animations:'disabled'});
+    await employeeBatch.locator('[data-rotation-task=arrive]').click();
+    await employeeBatch.getByRole('dialog',{name:'确认已到休息室',exact:true}).locator('[data-modal-confirm]').click();
+    await employeeBatch.waitForFunction(()=>!document.querySelector('[data-rotation-task=arrive]'));
+    let next=(await board()).persons.find(p=>p.pid===batchPerson.pid);
+    assert(['rest','meal'].includes(next.state));
+    const seconds=Math.round(next.readyAt*60),time=[Math.floor(seconds/3600)%24,Math.floor(seconds/60)%60,seconds%60].map(v=>String(v).padStart(2,'0')).join(':');
+    await clock({action:'set',date:'2026-11-05',time});
+    await employeeBatch.reload();await employeeBatch.locator('[data-rotation-task=depart]:not([disabled])').waitFor();
+    assert.equal(await employeeBatch.locator('.rt-batch-summary,.rt-batch-comparison,[data-view-batch-route]').count(),0,'Only the new assignment is displayed');
+    assert.equal(await employeeBatch.locator('[data-formal-rotation-todo] .rt-route-comparison').count(),1);
+    await employeeBatch.screenshot({path:path.join(report,'batch-next-task-'+engine+'.png'),fullPage:true,animations:'disabled'});
+    await employeeBatch.locator('[data-rotation-task=depart]').click();
+    await employeeBatch.locator('[data-view-push-route]').waitFor();
+    assert.equal((await board()).persons.find(p=>p.pid===batchPerson.pid).state,'onpost');
+    assert.equal(await employeeBatch.locator('[data-formal-rotation-todo] .rt-task-comparison,.rt-batch-summary,[data-view-batch-route]').count(),0);
+    await batchMember.close();
+    const relogin=await browser.newContext({viewport:{width:390,height:844}});
+    await ok(await relogin.request.post(base+'/api/login',{data:{employee_no:batchPerson.pid,password:'rotation-local-2026'}}));
+    const restored=await relogin.newPage();restored.on('pageerror',e=>errors.push(e.message));await restored.goto(base+'/?view=actionCenter');
+    await restored.locator('[data-view-push-route]').waitFor();
+    assert.equal(await restored.locator('[data-formal-rotation-todo] .rt-task-comparison,.rt-batch-summary,[data-view-batch-route]').count(),0,'Old batch does not return after a new login');
+    await relogin.close();
     await screenContext.close();
     assert.deepEqual(errors,[]);await context.close();await browser.close();browser=null;
     console.log(engine+': manual and batch comparison colors match on board/screen; live batch highlight, notice expiry, mobile layout and route checks PASS');

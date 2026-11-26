@@ -144,6 +144,8 @@ def board(db: Session = Depends(formal_db), user: V2User = Depends(staff)):
     if not capabilities(user)['can_manage']:
         for key in ('roster','rosterDates','days','draft'): data.pop(key, None)
         data['settings']={'departEarly':data['settings']['departEarly']}
+        if data['day']:
+            data['day'].pop('exceptionReports', None)
     if data['day'] and not capabilities(user)['can_operate']:
         for p in data['day']['persons']: p.pop('confirmationTokens', None)
     return data
@@ -223,6 +225,12 @@ def me_act(payload: dict, request: Request, db: Session = Depends(formal_db), us
         except Exception:
             db.rollback()
             raise
+
+
+@router.post('/post-transfer-preview')
+def post_transfer_preview(payload: dict, db: Session = Depends(formal_db), user: V2User = Depends(operator)):
+    from app.rotation.transfer_preview import payload as build_preview
+    return call(build_preview, db, board_attraction_id(db, user), payload)
 
 
 @router.post('/act')
@@ -536,6 +544,18 @@ def log(date: str, db: Session = Depends(formal_db), user: V2User = Depends(mana
 @router.get('/person')
 def person(employee_no: str,date: str,db: Session = Depends(formal_db),user: V2User = Depends(manager)):
     return S.person_record(db,board_attraction_id(db,user),employee_number(employee_no),parse_iso_date(date).isoformat())
+
+
+@router.get('/record-people')
+def record_people(q: str, start: str, end: str, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
+    from app.rotation.person_insights import search
+    return {'items': call(search, db, board_attraction_id(db, user), q, start, end)}
+
+
+@router.get('/person-insights')
+def person_insights(employee_no: str, start: str, end: str, db: Session = Depends(formal_db), user: V2User = Depends(manager)):
+    from app.rotation.person_insights import payload
+    return call(payload, db, board_attraction_id(db, user), employee_number(employee_no), start, end)
 
 
 @router.get('/stream')

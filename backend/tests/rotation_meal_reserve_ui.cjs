@@ -95,7 +95,7 @@ async function main(){try{
     assert.equal((await own()).person.state,'rest','Finishing a meal still requires manual confirmation');
     const a=(await own()).person.task,managerTask=(await board()).persons.find(p=>p.pid===pid).task;
     assert.deepEqual(a.routes,managerTask.routes);
-    await phone.locator('[data-rotation-task=depart]').click();await phone.locator('[data-modal-confirm]').click();
+    await phone.locator('[data-rotation-task=depart]').click();
     await phone.locator('[data-formal-rotation-todo]').filter({hasText:'已确认安排'}).waitFor();
     for(const view of [page,screen])await view.waitForFunction(pid=>RT.data.day.persons.find(p=>p.pid===pid).state==='onpost',pid);
     person=(await own()).person;const final=await board();assert.equal(final.lines.find(l=>l.id===person.line).posts[0].occ,pid);assert.equal(final.lines.find(l=>l.id===person.line).sortAt,645);

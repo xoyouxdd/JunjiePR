@@ -96,12 +96,9 @@ async function main(){
       };
       renderWho();RT.render();renderSyncStatus();
     });
-    await page.getByRole('button',{name:'去轮岗',exact:true}).click();
-    const modal=page.getByRole('dialog');
-    await modal.waitFor();
-    assert.match(await modal.innerText(),/进入 B1 线.*塔台协助/s);
-    assert.match(await modal.innerText(),/测试目标.*原岗位 B1 · 分组2/s);
-    await modal.getByRole('button',{name:'确认去轮岗',exact:true}).click();
+    assert.match(await page.locator('#rtApp').innerText(),/进入 B1 线.*塔台协助/s);
+    assert.match(await page.locator('#rtApp').innerText(),/测试目标.*原岗位 B1 · 分组2/s);
+    await page.getByRole('button',{name:'确认上岗，开始推岗',exact:true}).click();
     await page.getByRole('heading',{name:'本次确认',exact:true}).waitFor();
     assert.match(await page.locator('.rt-confirmation').first().innerText(),/原岗位：B1 · 分组2/);
     assert.equal(await page.evaluate(()=>window.writes),1);

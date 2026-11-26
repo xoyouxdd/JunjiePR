@@ -401,7 +401,7 @@ function formIssue(work) {
 function allocationMarkup(work, item, row, index) {
   const options = locationsFor(work, item).map(position => {
     const available = presentBalance(work, item.id, position.id);
-    return `<option value="${position.id}" ${position.id === row.locationId ? 'selected' : ''}>${esc(position.label)}${work.outbound ? ` · 余 ${available} ${esc(item.unit)}` : ''}</option>`;
+    return `<option value="${position.id}" ${position.id === row.locationId ? 'selected' : ''}>${esc(position.label)}${work.outbound ? ` · 可领 ${available} ${esc(item.unit)}` : ''}</option>`;
   }).join('');
   return `<div class="we-allocation">
     <label>${work.outbound ? '取货层位' : '上架货位'}<select data-we-location="${index}"><option value="">${work.outbound ? '请选择实际层位' : '请选择实际上架货位'}</option>${options}</select></label>
@@ -417,18 +417,18 @@ function selectedMarkup(work, line) {
   const hasExtra = line.damaged || line.direct || line.destination || line.note;
   return `<article class="we-selection" data-we-item="${item.id}">
     <div class="we-card-head"><div><h4>${esc(item.name)}</h4>${item.spec ? `<p>${esc(item.spec)}</p>` : ''}</div><button class="we-text-button" type="button" data-we-remove-item>移除</button></div>
-    ${work.outbound ? '' : `<label class="we-received">实际收到（${esc(item.unit)}，含破损）${numberedInput(line.received, 'data-we-field="received"', 1)}</label>`}
+    ${work.outbound ? '' : `<label class="we-received">实收数量（${esc(item.unit)}，含破损）${numberedInput(line.received, 'data-we-field="received"', 1)}</label>`}
     <div class="we-allocations">${line.allocations.map((row, index) => allocationMarkup(work, item, row, index)).join('')}</div>
     ${work.outbound ? '<button class="we-text-button" type="button" data-we-add-allocation>＋ 加一个取货层</button>' :
       `<div class="we-allocation-tools">
         <button class="we-text-button we-add-location" type="button" data-we-add-allocation>＋ 添加货位</button>
         <p class="we-quantity-check" data-we-receipt-check data-state="${progress.state}" role="status">${esc(progress.text)}</p>
       </div>`}
-    ${work.outbound ? '' : `<details class="we-extra" ${hasExtra ? 'open' : ''}><summary>到货直用或收货异常</summary>
-      <div class="we-extra-fields"><label>直用数量${numberedInput(line.direct, 'data-we-field="direct"')}</label>
-      <label>实际去向<input maxlength="120" data-we-field="destination" value="${esc(line.destination)}" placeholder="例：交给当班使用"></label>
-      <label>破损数量${numberedInput(line.damaged, 'data-we-field="damaged"')}</label>
-      <label>少到、破损等说明<input maxlength="500" data-we-field="note" value="${esc(line.note)}"></label></div>
+    ${work.outbound ? '' : `<details class="we-extra" ${hasExtra ? 'open' : ''}><summary>直用／破损</summary>
+      <div class="we-extra-fields"><label>直用数量（${esc(item.unit)}）${numberedInput(line.direct, 'data-we-field="direct"')}</label>
+      <label>直用去向<input maxlength="120" data-we-field="destination" value="${esc(line.destination)}" placeholder="交给谁或用在哪里"></label>
+      <label>破损数量（${esc(item.unit)}）${numberedInput(line.damaged, 'data-we-field="damaged"')}</label>
+      <label>收货说明<input maxlength="500" data-we-field="note" value="${esc(line.note)}"></label></div>
     </details>`}
   </article>`;
 }
@@ -439,7 +439,9 @@ function receiptProgress(work, item, unit = item.expectedUnit || work.items.get(
   const filled = item.allocations.filter(row => quantity(row.quantity));
   const placed = filled.filter(row => work.positions.has(row.locationId));
   const {remaining} = receiptSummary(item,placed);
-  const text = `已分配 ${received - remaining} / ${received} ${unit}`;
+  const exceptions = quantity(item.direct) || quantity(item.damaged);
+  const text = exceptions ? `上架 ${receiptSummary(item,placed).shelved} · 直用 ${quantity(item.direct)} · 破损 ${quantity(item.damaged)}，共 ${received - remaining} / ${received} ${unit}`
+    : `已上架 ${received - remaining} / ${received} ${unit}`;
   if (new Set(placed.map(row => row.locationId)).size !== placed.length) {
     return {state:'invalid',text:'同一货位的数量请合并'};
   }
@@ -469,7 +471,7 @@ function renderMatches(work) {
     const selected = work.draft.items.some(line => line.id === item.id);
     return `<button type="button" class="we-result" data-we-add-item="${item.id}">
       <span><strong>${esc(item.name)}</strong><small>${esc([item.spec, item.category].filter(Boolean).join(' · '))}</small></span>
-      <span class="we-result-end"><small>${work.outbound ? `余 ${total} ${esc(item.unit)}` : esc(item.unit)}</small><span>${selected ? '已选' : '＋'}</span></span>
+      <span class="we-result-end"><small>${work.outbound ? `全仓 ${total} ${esc(item.unit)}` : esc(item.unit)}</small><span>${selected ? '已选' : '＋'}</span></span>
     </button>`;
   }).join('')}` || '<p class="we-empty">未找到符合条件的物资。可以换个关键词或切回全部类目。</p>';
   if (matches.length > 8 && !work.more) node.insertAdjacentHTML('beforeend', `<button class="we-text-button" type="button" data-we-more>展开结果（${matches.length} 项）</button>`);
@@ -486,8 +488,8 @@ function discrepancyMarkup(work, positionId, line) {
     <div class="we-check-item"><strong>${esc(item?.name)}</strong><span>取 ${esc(line.quantity)} ${esc(item?.unit)} · ${predicted < 0 ? `当前账面仅 ${booked} ${esc(item?.unit)}` : `预计剩 ${predicted} ${esc(item?.unit)}`}</span></div>
     <label class="we-check-label"><input type="checkbox" data-we-toggle-report ${report ? 'checked' : ''}> 实际与库存不符</label>
     <div class="we-extra-fields we-report-inputs" ${report ? '' : 'hidden'}>
-      <label>实见数量${numberedInput(report?.observed ?? '', 'data-we-observed placeholder="可选"')}</label>
-      <label>说明<input maxlength="500" data-we-report-note placeholder="可选" value="${esc(report?.note || '')}"></label>
+      <label>实见余量（${esc(item?.unit)}）${numberedInput(report?.observed ?? '', 'data-we-observed placeholder="可选"')}</label>
+      <label>说明<input maxlength="500" data-we-report-note placeholder="实见余量或说明至少填一项" value="${esc(report?.note || '')}"></label>
     </div>
   </div>`;
 }
@@ -495,7 +497,10 @@ function discrepancyMarkup(work, positionId, line) {
 function incomingLines(work, group) {
   const entry = work.draft.items.find(row => String(row.id) === group.id);
   const unit = entry.expectedUnit || work.items.get(entry.id)?.unit;
-  return `<div class="we-check-item"><strong>实收 ${esc(entry.received)} ${esc(unit)}</strong><span>上架 ${receiptSummary(entry).shelved} · 直用 ${quantity(entry.direct)} · 破损 ${quantity(entry.damaged)}</span></div>
+  const distribution = quantity(entry.direct) || quantity(entry.damaged) ?
+    `上架 ${receiptSummary(entry).shelved} · 直用 ${quantity(entry.direct)} · 破损 ${quantity(entry.damaged)}（${unit}）` :
+    `上架 ${receiptSummary(entry).shelved} ${unit}`;
+  return `<div class="we-check-item"><strong>实收 ${esc(entry.received)} ${esc(unit)}</strong><span>${esc(distribution)}</span></div>
     ${group.lines.map(row => `<p class="we-check-place">${esc(work.positions.get(row.locationId)?.label)} <strong>＋${esc(row.quantity)} ${esc(unit)}</strong></p>`).join('')}
     ${entry.destination ? `<p class="we-check-place">直用去向 <strong>${esc(entry.destination)}</strong></p>` : ''}
     <label class="we-checkout-note">${quantity(entry.damaged) ? '破损说明（必填）' : '收货说明（选填）'}
@@ -508,7 +513,7 @@ function evidenceMarkup(work, group) {
   const review = work.draft.review.includes(Number(group.id));
   const label = work.outbound ? `${group.title}取货后的现场` : group.title;
   return `<article class="we-evidence" data-we-group="${group.id}">
-    <div class="we-card-head"><div><h4>${esc(group.title)}</h4><p data-we-photo-only>${work.outbound ? `请拍摄${esc(label)}` : '请拍摄本项实收物资'}</p></div>
+    <div class="we-card-head"><div><h4>${esc(group.title)}</h4><p data-we-photo-only>${work.outbound ? '取货后拍照' : '拍摄本项实收物资'}</p></div>
       <div class="we-evidence-actions"><span data-we-photo-status data-we-photo-only class="we-photo-status"></span>${work.outbound ? '' : '<button type="button" class="we-text-button" data-we-remove-receipt>移出本单</button>'}</div></div>
     <div class="we-photo-row" data-we-photo-only>
       <a data-we-preview-link class="we-photo-preview" target="_blank" rel="noopener" aria-label="查看整张照片 · ${esc(label)}" hidden>
@@ -528,7 +533,7 @@ function evidenceMarkup(work, group) {
   </article>`;
 }
 
-const photoStates = { compressing: '压缩中', queued: '待上传', uploading: '上传中', failed: '上传失败', uploaded: '已完成', invalid: '请重拍' };
+const photoStates = { compressing: '照片处理中', queued: '照片待上传', uploading: '照片上传中', failed: '照片上传失败', uploaded: '照片已上传', invalid: '请重拍' };
 
 function refreshCheckout(work) {
   if (!work.root.isConnected || !work.draft.checkout) return;
@@ -631,7 +636,7 @@ function draw(work) {
   work.root.innerHTML = `<section class="we-page" data-direction="${outbound ? 'out' : 'in'}" aria-label="${title}登记">
     <header class="we-heading">
       ${work.onBack ? '<button type="button" class="we-back" data-we-back>‹ 物资管理</button>' : ''}
-      <h2 tabindex="-1">${work.draft.checkout ? `登记${title}` : title}</h2>
+      <h2 tabindex="-1">${title}</h2>
       <ol class="we-steps" aria-label="登记进度"><li ${work.draft.checkout ? 'class="is-complete"' : 'aria-current="step"'}>物资和数量</li><li ${work.draft.checkout ? 'aria-current="step"' : ''}>拍照与确认</li></ol>
     </header>
     ${work.draft.checkout ? `<div class="we-identity"><span>经办人 <strong>${esc(work.operator.name)}</strong></span><span>登记时间 <strong>${esc(formatTime())}</strong></span></div>
@@ -781,8 +786,12 @@ async function complete(work, result) {
   work = currentView(work);
   await clearWarehouseDraft(work.session);
   const pending = result.status === 'pending';
-  const title = pending ? '已提交差异，等待核对' : work.outbound ? '出库已确认' : '入库已确认';
+  const title = pending ? '已提交差异，等待核对' : work.outbound ? '出库成功' : '入库成功';
   if (work.root.isConnected) {
+    const booked = pending ? [] : work.outbound ? (result.lines ?? []).map(line => ({
+      item:work.items.get(line.item_id),place:work.positions.get(line.position_id),amount:line.quantity,
+    })) : (result.receipts ?? []).map(line => ({item:work.items.get(line.item_id),amount:line.received}));
+    const bookedSummary = booked.map(({item,place,amount}) => `<li><span>${esc(item?.name || '物资')}${place ? ` · ${esc(place.label)}` : ''}</span><strong>${work.outbound ? '出库' : '实收'} ${esc(amount)} ${esc(item?.unit || '')}</strong></li>`).join('');
     const balances = (result.balances || []).map(balance => {
       const item = work.items.get(balance.item_id);
       const position = work.positions.get(balance.position_id);
@@ -790,9 +799,10 @@ async function complete(work, result) {
     }).join('');
     work.root.innerHTML = `<section class="we-result-page" role="status"><span class="we-complete-mark" data-pending="${pending}">${pending ? '!' : '✓'}</span>
       <h3>${title}</h3><p>单据 ${esc(result.id)} · ${esc(result.actor_name || work.operator.name)}${result.posted_at ? ` · ${esc(formatTime(result.posted_at))}` : ''}</p>
+      ${bookedSummary ? `<ul class="we-result-balances" aria-label="本单收发数量">${bookedSummary}</ul>` : ''}
       ${result.deferred_photo_positions?.length ? `<p>${result.deferred_photo_positions.length} 个货位已列入补照待办</p>` : ''}
       ${pending ? '<p>照片和原出库记录已保留，负责人核实后统一补记。</p>' : balances ? `<ul class="we-result-balances">${balances}</ul>` : ''}
-      <button type="button" class="primary" data-we-complete>返回物资管理</button></section>`;
+      <button type="button" class="primary" data-we-complete>完成</button></section>`;
     work.root.querySelector('[data-we-complete]').onclick = () => work.onComplete?.(result);
   }
 }

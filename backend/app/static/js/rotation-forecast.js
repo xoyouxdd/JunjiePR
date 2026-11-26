@@ -57,14 +57,15 @@ function forecastLineCard(L,n,ops,{day=RT.data.day,viewOnly=false}={}){
     const checkIn=canCorrect
       ?`<button type="button" class="rt-badge rt-missed-attendance rt-post-check-in" data-f-correct-check-in="${esc(p.pid)}" title="补记已到">未答到</button>`
       :manage&&p?.canBatchCheckIn&&(p.state==='onpost'||post.pendingCheckIn)?`<button type="button" class="secondary rt-post-check-in" data-f-check-in="${esc(p.pid)}">已到</button>`:'';
-    const batch=p?.state==='onpost'&&p.batchOnPost!=null&&marker?.phase!=='fixed';
+    const continued=p?.state==='onpost'&&marker?.phase!=='fixed'&&rotationContinuedBatchPost(day,L,post);
+    const batch=!continued&&p?.state==='onpost'&&p.batchOnPost!=null&&marker?.phase!=='fixed';
     const entry=p?.state==='onpost'?rotationPostEntryTime(p):'';
     const end=rotationPostShiftEnd(p);
     const notices=rotationSevenBadge(p,p?.state==='notyet'&&p.start===420)+attendanceBadge+rotationMealBadge(p)
       +(p?.preparing?'<span class="rt-badge prep">'+preparingText(p.preparing)+'</span>':'')
       +(post.hold||post.plannedHold?`<span class="rt-badge post-hold">${post.hold?'定岗':'预予定岗'}</span>`:'');
     const addNotice=p&&addTime?`<span class="rt-badge prep">待加 ${esc(addTime)}</span>`:'';
-    const rowClass=`rt-post${post.open?'':' closed'}${adding?' pending-add':''}${p?.preparing?' prep':''}${batch?' rt-batch-on-post':''}${marker?.phase==='fixed'?' rt-mode101-fixed':''}${screen?'':' rt-post-compact'}`;
+    const rowClass=`rt-post${post.open?'':' closed'}${adding?' pending-add':''}${p?.preparing?' prep':''}${batch?' rt-batch-on-post':''}${continued?' rt-batch-continued':''}${marker?.phase==='fixed'?' rt-mode101-fixed':''}${screen?'':' rt-post-compact'}`;
     const rowAttrs=viewOnly?'':`data-f-slot="${esc(L.id)}#${i}" data-f-slot-key="${esc(post.key)}"`;
     const modeDrag=marker?.phase==='fixed'&&!post.hold&&p?.state==='onpost'?drag:'';
     const workerAttrs=modeControl?` type="button" data-mode101-post="${esc(post.key)}"${modeDrag}`:manage&&p?` type="button" data-f-person="${esc(p.pid)}"${drag}`:'';
@@ -439,10 +440,11 @@ function forecastHead(line){
   const lineContext={date:RT.data.day.date,active:L.active,planRevision:RT.data.day.prestartPlanRevision??null};
   const emptyPosts=L.posts.map((p,i)=>({p,i})).filter(({p})=>p.canDeletePost);
   const snapshot=RT.data.day.forecastSnapshot;
-  openModal(`<h3>${esc(line)} · 线路操作</h3><div class="rt-actions"><button type="button" class="secondary" data-f-sort>修改排序时间</button><button type="button" class="secondary" data-f-open>顺推加岗</button><button type="button" class="secondary" data-f-close>撤岗</button>${emptyPosts.length?'<button type="button" class="danger" data-f-delete-post>删除空岗</button>':''}<button type="button" class="secondary" data-f-line>${L.active?'停用':'启用'}线路</button><button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
+  openModal(`<h3>${esc(line)} · 线路操作</h3><div class="rt-actions"><button type="button" class="secondary" data-f-sort>修改排序时间</button><button type="button" class="secondary" data-f-open>顺推加岗</button><button type="button" class="secondary" data-f-close>撤岗</button>${RT.data.day.postTransferFairnessAvailable?'<button type="button" class="secondary" data-f-transfer>跨线移岗</button>':''}${emptyPosts.length?'<button type="button" class="danger" data-f-delete-post>删除空岗</button>':''}<button type="button" class="secondary" data-f-line>${L.active?'停用':'启用'}线路</button><button type="button" class="ghost" data-close>关闭</button></div>`,host=>{
     host.querySelector('[data-f-sort]').onclick=()=>formBox('修改排序时间',`<label>日期<select name="day_offset">${[0,1,2].map(day=>`<option value="${day}" ${Math.floor((L.sortAt||0)/1440)===day?'selected':''}>${['本工作日','次日','后日'][day]}</option>`).join('')}</select></label><label>排序时间<input type="time" name="time" step="1" value="${forecastClock(L.sortAt||0).split(' ').at(-1)}" required></label>`,v=>forecastRun({action:'sort_time',line,...v,day_offset:Number(v.day_offset)}));
     host.querySelector('[data-f-open]').onclick=()=>forecastPostSchedule(line,true);
     host.querySelector('[data-f-close]').onclick=()=>forecastPostSchedule(line,false);
+    host.querySelector('[data-f-transfer]')?.addEventListener('click',()=>forecastTransferForm(line));
     host.querySelector('[data-f-delete-post]')?.addEventListener('click',()=>formBox('删除空岗',
       `<label>岗位<select name="i">${emptyPosts.map(({p,i})=>`<option value="${i}">第 ${i+1} 岗 · ${esc(p.name)}</option>`).join('')}</select></label><p class="field-hint">删除当前工作日的岗位，有定时加撤岗安排的会一并取消。</p>`,
       v=>forecastRun({action:'post_delete',line,i:Number(v.i),post_key:L.posts[Number(v.i)].key,expected_snapshot:snapshot}),

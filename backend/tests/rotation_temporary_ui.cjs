@@ -23,7 +23,7 @@ let server,browser;
     assert.equal((await context.request.get(base+'/api/options')).status(),403);
     if(await page.locator('[data-rotation-task=depart]').count()){
       const submitted=page.waitForResponse(r=>r.url().endsWith('/api/rotation-board/me/act'));
-      await page.locator('[data-rotation-task=depart]').click();await page.locator('[data-modal-confirm]').click();
+      await page.locator('[data-rotation-task=depart]').click();
       assert((await submitted).ok());await page.getByText(/最近安排生效/).waitFor();
     }
     await page.getByRole('button',{name:'退出',exact:true}).click();await page.waitForURL('**/login');

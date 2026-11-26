@@ -108,7 +108,17 @@ def advance(db, cfg, row, state, target):
         changed = any((eng.preparing_shift_end(p, t) and not eng.preparing_shift_end(p, previous))
                       or (F.can_check_in(eng, p, t) != F.can_check_in(eng, p, previous))
                       or (F.preparing_shift_start(p, t) and not F.preparing_shift_start(p, previous))
+                      or (batch_presentation(eng, p, t)['notice'] != batch_presentation(eng, p, previous)['notice'])
                       for p in eng.P.values())
+    if not changed and state['status'] == 'live' and any(p.get('batchResult') for p in eng.P.values()):
+        # An older deployment may have left an expired notification open before lastTick.
+        Notice = tables_for(db).RotationNotice
+        active = [p['pid'] for p in eng.P.values() if batch_presentation(eng, p, t)['notice']]
+        changed = db.query(Notice.id).filter(
+            Notice.attraction_id == row.attraction_id, Notice.work_date == state['date'],
+            Notice.kind == 'batch_result', Notice.status == 'open',
+            Notice.employee_no.notin_(active),
+        ).first() is not None
     if changed:
         S.sync_notices(db, row.attraction_id, state, eng, t)
     if changed or t != previous:
@@ -159,6 +169,25 @@ def batch_result_view(result):
             'shiftEndPosts': shift_end_posts, 'specialTasks': special_tasks}
 
 
+def batch_presentation(eng, p, now):
+    """Keep historical snapshots; only the unchanged current placement is actionable UI."""
+    result = p.get('batchResult') or {}
+    at = eng.d.get('completedShiftBatches', {}).get(str(round(result.get('start', -1) * 60)))
+    current = (eng.d.get('status') == 'live' and isinstance(at, (int, float))
+               and now >= at and not result.get('superseded') and not p.get('assign'))
+    if current and result.get('line'):
+        line, index = eng.find_post(p['pid'])
+        current = (p['state'] == 'onpost' and p.get('batchOnPost') == result['start']
+                   and line is not None and line['id'] == result['line']
+                   and (line['posts'][index]['key'] == result['postKey'] if result.get('postKey')
+                        else line['posts'][index]['name'] == result.get('post')))
+    elif current:
+        current = (p['state'] in ('rest', 'notyet') and result.get('restUntil') is not None
+                   and p.get('readyAt') == result['restUntil'] and now < result['restUntil'])
+    until = at + 5 if isinstance(at, (int, float)) else None
+    return {'current': bool(current), 'notice': bool(current and now < until), 'at': at, 'expiresAt': until}
+
+
 def notices(eng, now):
     if eng.d.get('status') != 'live':
         return {}
@@ -168,7 +197,7 @@ def notices(eng, now):
         a = p.get('assign')
         if F.can_check_in(eng, p, now) and not F.attendance_recorded(p):
             out[(p['pid'], 'step')] = ('batch_check_in', '请确认已到', '请在班前三分钟截止前签到。')
-        if p.get('batchResult'):
+        if batch_presentation(eng, p, now)['notice']:
             result = batch_result_view(p['batchResult'])
             text = '。'.join(filter(None, (result['heading'], result['instruction']))) if result.get('line') else '本批岗位已排满，自动休息15分钟。'
             title = '07:30 上岗安排' if result.get('reportAt') else '批量上岗结果'
@@ -184,7 +213,10 @@ def notices(eng, now):
                                       ('可上岗 · ' if ready else '预计去 ') + a['line'],
                                       '确认时按最新站位重新计算，线路改变需再次确认。')
         elif state == 'exception':
-            out[(p['pid'], 'step')] = ('rest', '上岗超时 · 等待人工安排', '本人不可继续执行，由大屏、主管、TR或经理拖拽处理。')
+            can_resolve = F.can_resolve_exception(eng, p, now)
+            out[(p['pid'], 'step')] = ('resolve_exception' if can_resolve else 'rest', '上岗超时 · 请提交异常原因',
+                '进入异常池五分钟内可填写个人原因，提交后重新排岗。异常汇报保留给主管、经理。' if can_resolve
+                else '请联系现场负责人处理，异常记录继续保留。')
     return out
 
 
@@ -235,6 +267,9 @@ def person_view(eng, p, now):
                         and (L is not None or eng.find_post(p['pid'])[0] is not None))
     if correct_check_in:
         actions.append('correct_check_in')
+    resolve_exception = F.can_resolve_exception(eng, p, now)
+    if eng.d.get('status') == 'live' and p.get('state') == 'exception':
+        actions.append('resolve_exception')
     flags = [flag for flag in p.get('flags', []) if flag not in ('推7点', '7点岗')]
     if F.seven_target(p):
         flags.append('7点岗')
@@ -252,6 +287,7 @@ def person_view(eng, p, now):
         preview = projection['shift_previews'].get(p['pid'])
     return {**deepcopy(p), 'flags': flags, 'task': task, 'taskTimeout': None, 'timeoutCase': None, 'timeoutPending': None,
             'batchResult': batch_result_view(deepcopy(p['batchResult'])) if p.get('batchResult') else None,
+            'batchPresentation': batch_presentation(eng, p, now),
             'entryHold': None, 'entryGroup': None, 'assignmentLocked': False,
             'post': L['posts'][i]['name'] if L else None, 'postIndex': i,
             'postHold': L['posts'][i].get('hold') if L else None,
@@ -261,6 +297,8 @@ def person_view(eng, p, now):
             'awaitingShiftEntry': eng.d['status'] == 'live' and F.awaiting_shift_entry(p),
             'canBatchCheckIn': check_in,
             'canCorrectCheckIn': correct_check_in,
+            'canResolveException': resolve_exception,
+            'canReportException': eng.d.get('status') == 'live' and p.get('state') == 'exception',
             'batchCheckInDeadline': p['start'] - F.BATCH_LEAD_MINUTES if check_in else None,
             'batchCheckedIn': F.checked_in(p), 'arrivalOutcome': None,
             'missedCheckIn': eng.d['status'] == 'live' and F.missed_check_in(p, now),
@@ -328,6 +366,8 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
     from app.rotation import service as S, mode101
     act = body['action']
     pid = body.get('pid')
+    if act == 'resolve_exception' and getattr(actor, 'kind', None) != 'member':
+        raise ActionError('异常原因须由本人提交')
     if getattr(actor, 'kind', None) == 'screen' and act not in S.SCREEN_ACTIONS:
         raise ActionError('休息室大屏只可确认去休息或去轮岗')
     if getattr(actor, 'kind', None) == 'member':
@@ -353,7 +393,28 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         S.save_day(db, row, eng.d)
         return {'ok': True, 'executed': True, 'result': receipt}
     result = {'ok': True, 'executed': True}
-    if act == 'batch_check_in':
+    if act == 'resolve_exception':
+        if p.get('state') != 'exception' or not p.get('exception'):
+            raise S.ConfirmationConflict('当前没有待提交的异常，请刷新')
+        recover = F.can_resolve_exception(eng, p, now)
+        result['recovered'] = recover
+        reason = body.get('reason')
+        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
+            raise ActionError('请填写异常原因，最多500字')
+        evidence = deepcopy(p['exception'])
+        reports = eng.d.setdefault('exceptionReports', [])
+        report = next((item for item in reversed(reports) if item['pid'] == pid and item['at'] == evidence['at']), None)
+        if report is None:
+            report = {'pid': pid, 'name': p['name'], 'at': evidence['at'],
+                      'line': evidence.get('assignment', {}).get('line')}
+            reports.append(report)
+        report.update(reason=reason.strip(), status='self_resolved' if recover else 'reported', reportedAt=now)
+        if recover:
+            report['resolvedAt'] = now
+        eng.h.log('exception_report', actor, pid, report.get('line'), None, deepcopy(report))
+        if recover:
+            F.pool(eng, pid, 'rest', now, actor, remaining=0)
+    elif act == 'batch_check_in':
         if not F.can_check_in(eng, p, now) or F.attendance_recorded(p):
             raise ActionError('当前不在本班次签到时间内')
         p['batchCheckedInFor'] = p['start']
@@ -470,6 +531,13 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         if not prestart(eng.d, now) or eng.person(pid)['state'] != 'notyet':
             raise ActionError('运行中请使用顺推或交换安排人员')
         eng.act_plan_place(pid, body.get('line'), body.get('i'), now, actor)
+    elif act == 'post_transfer':
+        from app.rotation.post_transfer import transfer
+        if body.get('expected_preview'):
+            from app.rotation.transfer_preview import digest
+            if body['expected_preview'] != digest(eng, body):
+                raise S.ConfirmationConflict('移岗预览已变化，请重新核对')
+        transfer(eng, body, now, actor)
     elif act == 'post_delete':
         L, i, post = eng.post(body.get('line'), body.get('i'))
         if body.get('post_key') != post.get('key'):
@@ -608,7 +676,7 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
     else:
         raise ActionError('新预排流程不支持此旧任务操作')
     F.tick(eng, now)
-    if act in {'arrive', 'depart', 'batch_check_in'}:
+    if act in {'arrive', 'depart', 'batch_check_in', 'resolve_exception'}:
         if act != 'depart':
             eng.P[pid]['confirmationSequence'] = eng.P[pid].get('confirmationSequence', 0) + 1
         p = eng.P[pid]
@@ -622,7 +690,8 @@ def action(db, cfg, row, eng, body, now, actor, *, add_identity=None):
         if task:
             receipt['task'] = {key: task[key] for key in (
                 'status', 'line', 'entryPost', 'kind', 'reason', 'pushes', 'instruction', 'instructionParts',
-                'opening', 'shiftEndPosts', 'beforePosts', 'afterPosts')}
+                'opening', 'shiftEndPosts', 'beforePosts', 'afterPosts',
+                'routes', 'departures', 'handoffChain', 'openingPosts') if key in task}
         eng.d.setdefault('confirmations', {})[token] = receipt
         result['result'] = receipt
     eng.d['lastTick'] = now

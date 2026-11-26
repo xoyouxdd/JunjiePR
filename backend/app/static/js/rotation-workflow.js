@@ -14,21 +14,20 @@ function shortRotationShift(p){
   return part(p.end);
 }
 function rotationName(p){return `<span class="rt-name-row"><strong>${esc(p.name)}</strong><small>${shortRotationShift(p)}</small></span>`;}
-function workflowComparison({task:t},batch=false){
-  if(!t?.beforePosts||!t.afterPosts)return '';
-  const originalWorkers=new Set(t.beforePosts.map(post=>post.occ));
-  const group=RT.data?.day?.lines.find(line=>line.id===t.line)?.group||'';
-  const table=(posts,after)=>`<div class="rt-task-line"><header class="g-${esc(group)}">${esc(t.line)}</header>${posts.map((x,i)=>{
-    const changed=after&&x.occ!==t.beforePosts[i]?.occ;
-    const newWorker=changed&&x.occ&&!originalWorkers.has(x.occ);
-    const entryTime=showsPostRotationTime()&&
-      (Number.isFinite(t.beforePosts[i]?.entrySortAt)||Number.isFinite(t.afterPosts[i]?.entrySortAt));
-    return `<div class="rt-task-slot${changed?' changed':''}${newWorker?' new-worker':''}${entryTime?' entry-time-row':''}"><span>${esc(x.name)}</span><div class="rt-task-person"><span class="rt-task-name"><strong>${esc(x.occName||'空岗')}</strong>${rotationPostEntryTime(x)}</span></div></div>`;
-  }).join('')}</div>`;
-  return `<section class="rt-task-comparison">${batch?'':'<h4>执行本任务前后</h4>'}<div class="rt-task-columns"><div><p>执行前 · ${batch?'原站位':'当前站位'}</p>${table(t.beforePosts,false)}</div><div><p>执行后 · ${batch?'最终站位':'预计站位'}</p>${table(t.afterPosts,true)}</div></div>${batch?'':'<small>蓝字标记新上岗人员，底色标记岗位变化。</small>'}</section>`;
+function workflowComparison({task},batch=false){
+  const group=RT.data?.day?.lines.find(line=>line.id===task?.line)?.group||'';
+  return globalThis.RotationTaskPresentation.render(task,{batch,group,entryTime:rotationPostEntryTime});
 }
 
 const batchNoticeMinutes=5;
+function rotationContinuedBatchPost(day,line,post){
+  return day.persons.some(person=>{
+    const result=person.batchResult;
+    return result?.line===line.id&&result.beforePosts?.some(p=>p.occ===post.occ)&&
+      result.afterPosts?.some(p=>p.key===post.key&&p.occ===post.occ)&&
+      result.afterPosts.every(p=>line.posts.some(current=>current.key===p.key&&current.occ===p.occ));
+  });
+}
 function recentRotationBatch(day,n){
   const dispatches=day?.completedShiftBatches;
   if(!dispatches||day.readOnly||day.status!=='live')return null;
@@ -64,8 +63,8 @@ document.addEventListener('click',event=>{
   const lines=new Map(batch.people.filter(p=>p.batchResult.line).map(p=>[p.batchResult.line,p.batchResult]));
   const comparisons=day.lines.map(line=>workflowComparison({task:lines.get(line.id)},true)).join('');
   const resting=batch.people.filter(p=>!p.batchResult.line);
-  openModal(`<h3>${rotationBatchTitle(batch)}</h3>${comparisons?`<p class="field-hint">蓝字标记新上岗人员，底色标记岗位变化。</p>${comparisons}`:''}
-    ${resting.length?`<p>休息安排 · ${resting.map(p=>`${esc(p.name)}（${hm(p.batchResult.restUntil)} 可上岗）`).join('、')}</p>`:''}
+  openModal(`<h3>${rotationBatchTitle(batch)}</h3>${comparisons?`${comparisons}`:''}
+    ${resting.length?`<p class="rt-task-rest-note rt-tone-rest">休息安排 · ${resting.map(p=>`${esc(p.name)}（${hm(p.batchResult.restUntil)} 可上岗）`).join('、')}</p>`:''}
     <div class="modal-actions"><button type="button" class="secondary" data-close>关闭</button></div>`);
 });
 function workflowPools(n,view){
@@ -102,7 +101,42 @@ function workflowBoardView(n,ops,canManage=false){
   const d=RT.data.day,pre=d.persons.length&&n<Math.min(...d.persons.map(p=>p.start));
   const settings=ops&&d.prestartPlanRevision&&canManage
     ?'<button type="button" class="secondary" data-opening-settings>预排设置</button>':'';
-  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools">${settings}<button type="button" class="secondary" data-mode101-toggle aria-pressed="${!!d.mode101Active}">${d.mode101Active?'结束 101 模式':'101 模式'}</button></div>`:''}</div>${pre?`<p class="field-hint">首班到班前仅展示预排，尚未实际占岗或计时。${ops?'岗位名双击修改，人员及岗位通过拖拽交换。':''}</p>`:''}${rotationEndLabel(d)}${rotationBatchNotice(d,n)}${workflowBoardContent(d,n,ops)}</section>`;
+  return `<section class="rt-workflow-board"><div class="rt-workflow-heading"><h1>${esc(d.date)} · ${pre?'预排看板':'轮岗看板'}</h1>${ops?`<div class="rt-workflow-tools">${settings}<button type="button" class="secondary" data-mode101-toggle aria-pressed="${!!d.mode101Active}" ${RT.mode101SwitchPending||d.status!=='live'||d.readOnly?'disabled':''}>${RT.mode101SwitchPending?'正在切换…':RT.mode101SwitchNeedsSync?'同步101状态':d.mode101Active?'结束 101 模式':'101 模式'}</button></div>`:''}</div>${pre?`<p class="field-hint">首班到班前仅展示预排，尚未实际占岗或计时。${ops?'岗位名双击修改，人员及岗位通过拖拽交换。':''}</p>`:''}${rotationEndLabel(d)}${ops?staffingWarningView(d):''}${rotationBatchNotice(d,n)}${workflowBoardContent(d,n,ops)}</section>`;
+}
+
+async function workflowToggle101(){
+  if(RT.mode101SwitchPending||!forecastOperator())return;
+  const day=RT.data?.day;
+  if(!day||day.status!=='live'||day.readOnly)return;
+  if(RT.mode101SwitchNeedsSync){
+    RT.mode101SwitchPending=true;RT.render();
+    try{await RT.load();RT.mode101SwitchNeedsSync=false;toast('101 状态已同步，请按当前状态操作');}
+    catch(error){toast('暂未同步成功，请稍后再试；不会重复提交切换',true);}
+    finally{RT.mode101SwitchPending=false;RT.render();}
+    return;
+  }
+  const on=!day.mode101Active,date=day.date,snapshot=day.forecastSnapshot;
+  const names=day.lines.flatMap(line=>line.posts.filter(post=>post.mode101||['塔台','塔协','塔台协助'].includes(post.name.replace(/\s/g,''))).map(post=>`${line.id} · ${post.name}`));
+  confirmBox(on?'开启 101 模式？':'结束 101 模式？',`<p>${on?'塔台、塔协将暂停参与顺推，岗位人员置灰。':'置灰人员进入待恢复状态，等待后续推岗恢复。'}</p><p>${names.map(esc).join('、')}</p>`,on?'确认开启':'确认结束',async()=>{
+    if(RT.mode101SwitchPending)return false;
+    if(RT.data?.day?.date!==date||RT.data.day.forecastSnapshot!==snapshot){toast('站位已变化，请重新核对 101 模式',true);return true;}
+    RT.mode101SwitchPending=true;RT.render();
+    let committed=false;
+    try{
+      await rtPost(forecastPath(),{action:'mode101',on,expected_snapshot:snapshot});
+      committed=true;
+      await RT.load();
+      RT.mode101SwitchNeedsSync=false;
+      toast(on?'101 模式已开启':'101 模式已结束，人员按后续推岗恢复');
+    }catch(error){
+      RT.mode101SwitchNeedsSync=committed||!!error.uncertain;
+      if(committed)toast(`101 ${on?'开启':'结束'}已生效，画面尚未同步。请点“同步101状态”核对`,true);
+      else if(error.uncertain)toast('101 切换结果待核对，请点“同步101状态”；不要重复切换',true);
+      else{toast(error.message,true);try{await RT.load();}catch{RT.mode101SwitchNeedsSync=true;}}
+    }finally{RT.mode101SwitchPending=false;RT.render();}
+    // A completed or uncertain write is never retried by the confirmation dialog.
+    return true;
+  });
 }
 
 function workflow101Menu(key) {
@@ -146,9 +180,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     if(!forecastOperator()||!RT.data?.day)return;
     const toggle=event.target.closest('[data-mode101-toggle]');
     if(toggle){
-      toggle.disabled=true;
-      void forecastRun({action:'mode101',on:!RT.data.day.mode101Active,expected_snapshot:RT.data.day.forecastSnapshot})
-        .finally(()=>{toggle.disabled=false;});
+      void workflowToggle101();
       return;
     }
     const post=event.target.closest('[data-mode101-post]');

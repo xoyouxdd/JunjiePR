@@ -614,7 +614,8 @@ class Engine:
         if L['posts'][i].get('hold'):
             raise ActionError('该人员正在定岗，请先取消定岗')
         if p.get('lineStart') is not None:
-            self.h.segment(p['pid'], L['id'], p['lineStart'], max(now, p['lineStart']))
+            start = p.pop('lineSegmentStart', p['lineStart'])
+            self.h.segment(p['pid'], L['id'], start, max(now, start))
         p['lastDeparture'] = {'line': L['id'], 'post': L['posts'][i]['name']}
         p['line'] = None
         p['lineStart'] = None

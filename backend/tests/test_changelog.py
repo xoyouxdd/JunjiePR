@@ -20,7 +20,7 @@ from app.changelog import RELEASES, item_visible, visible_releases
 from app.version import APP_VERSION, STATIC_CACHE_VERSION
 
 
-CURRENT_RELEASE_NOTES = ["轮岗 01:00 预排与看板自动恢复"]
+CURRENT_RELEASE_NOTES = ["轮岗调岗预览与人员记录", "物资收发数量与库存提示"]
 WAREHOUSE_ADMIN_RELEASE_NOTE = "仓库负责人交接补照待办"
 
 
